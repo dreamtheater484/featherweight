@@ -1098,7 +1098,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
   // A value axis up the side has room for a label every 1.6 lines or so in Word, 1.2 in Excel
   // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels).
-  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook ? 1.2f : 1.6f)));
+  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
@@ -1353,6 +1353,9 @@ bool ReadChart(pugi::xml_node space, draw::Size extent, draw::ReadContext& ctx, 
   if (!(extent.width >= 1 && extent.height >= 1 && extent.width < 20000 && extent.height < 20000)) return false;
   Chart chart;
   if (!Read(space, ctx.colors, chart)) return false;
+  // PowerPoint keeps Office 2007's look for a chart without c14:style, as Excel does.
+  chart.presentation = ctx.resources.InPresentation();
+  if (chart.presentation && !chart.styled) chart.legacy = true;
   std::wstring font;
   if (ctx.theme) font = fw::Utf8ToWide(ctx.theme->MinorFont().latin);
   if (font.empty()) font = L"Calibri";
@@ -1371,7 +1374,8 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Color text = ch.textColor.value_or(kText);
   const float ts = std::clamp(ch.textSize, 1.0f, 72.0f), tts = std::clamp(ch.titleSize, 1.0f, 96.0f);
   const float corner = ch.roundedCorners ? std::min(10.0f, std::min(W, H) / 6) : 0;
-  b.Mark(corner > 0 ? Path::RoundedRect({0, 0, W, H}, corner, corner) : Path::FromRect({0, 0, W, H}), ch.area, kWhite, kGray, 0.75f);
+  b.Mark(corner > 0 ? Path::RoundedRect({0, 0, W, H}, corner, corner) : Path::FromRect({0, 0, W, H}), ch.area, kWhite,
+         ch.presentation ? std::nullopt : std::optional<Color>(kGray), 0.75f);
   // The room inside the chart area's padding; the title and legend take theirs from it unless
   // they overlay the plot.
   Rect r{kPad, kPad, W - kPad, H - kPad};

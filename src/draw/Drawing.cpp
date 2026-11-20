@@ -55,6 +55,24 @@ void Drawing::Draw(Painter& painter, const Rect& frame) const {
   painter.Restore();
 }
 
+void Drawing::Draw(Painter& painter, const Rect& frame, DrawHooks& hooks) const {
+  if (hidden_) return;
+  const float w = bounds_.Width(), h = bounds_.Height();
+  painter.Save();
+  painter.Transform(Matrix::Translate(-bounds_.left, -bounds_.top) *
+                    Matrix::Scale(w > 0 ? frame.Width() / w : 1, h > 0 ? frame.Height() / h : 1) *
+                    Matrix::Translate(frame.left, frame.top));
+  size_t text = 0;
+  DrawShape(painter, *root_, hooks, text);
+  painter.Restore();
+}
+
+std::vector<Drawing::Part> Drawing::Parts() const {
+  std::vector<Part> out;
+  if (!hidden_) CollectParts(*root_, Matrix::Translate(-bounds_.left, -bounds_.top), out);
+  return out;
+}
+
 std::unique_ptr<Drawing> Drawing::FromWordDrawing(pugi::xml_node node, DrawingResources& resources) {
   if (IsElement(node, kW, "drawing")) {
     pugi::xml_node inner;

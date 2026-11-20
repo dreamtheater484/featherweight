@@ -284,7 +284,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   // In a workbook (where `data` comes from), Excel rounds the corners when the chart doesn't say,
   // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
   out.roundedCorners = On(chartSpace, "roundedCorners", data != nullptr);
-  out.legacy = data && !HasC14Style(chartSpace);
+  out.styled = HasC14Style(chartSpace);
+  out.legacy = data && !out.styled;
   out.workbook = data != nullptr;
   out.plot = LookOf(C(plot, "spPr"), colors);
   float size = -1;  // stated by the chart, or else (below) by its axes or legend
