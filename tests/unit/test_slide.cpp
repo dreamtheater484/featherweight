@@ -436,6 +436,27 @@ TEST(SlideTableStyleApplied) {
   CHECK(deck->GetTable(deck->GetSlide(0)->shapes[0], *s) == nullptr);  // not a table
 }
 
+TEST(SlideTableStyleIdsAsPowerPointKnowsThem) {
+  // tables.pptx: Medium Style 2 in Accent 1 and 3, plain, No Grid and Table Grid as PowerPoint 2021
+  // draws them; {21E4AEA4-...} isn't a style PowerPoint knows (probed 2026-11-20): a black grid.
+  auto deck = OpenBytes(FileBytes(Generated().parent_path() / "presentations" / "tables.pptx"));
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  std::vector<const Table*> tables;
+  for (const Shape& sh : s->shapes) {
+    if (const Table* t = deck->GetTable(sh, *s)) tables.push_back(t);
+  }
+  CHECK_EQ(tables.size(), size_t{6});
+  if (tables.size() != 6) return;
+  const TableCell* unknown = tables[1]->Cell(0, 0);
+  CHECK(unknown->fill.kind == CellFill::Kind::None);
+  CHECK(unknown->borders[TableCell::Top].visible && Near(unknown->borders[TableCell::Top].color, 0, 0, 0));
+  CHECK(tables[0]->Cell(0, 0)->fill.kind == CellFill::Kind::Solid);  // Accent 1 header
+  CHECK(tables[4]->Cell(0, 0)->fill.kind == CellFill::Kind::None);   // No Grid
+  CHECK(!tables[4]->Cell(0, 0)->borders[TableCell::Top].visible);
+}
+
 TEST(SlideTableSpansAndOwnProperties) {
   std::string frame =
       "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/>"
@@ -462,7 +483,10 @@ TEST(SlideTableSpansAndOwnProperties) {
   CHECK_NEAR(wide->borders[TableCell::Bottom].width, 2.f, 0.01f);
   CHECK_NEAR(wide->marginLeft, 0.f, 0.001f);
   CHECK(wide->anchor == BodyProps::Anchor::Middle);
-  CHECK(!wide->borders[TableCell::Top].visible);  // no style: no borders
+  // No style: PowerPoint draws a black 1 pt grid (Table Grid's look).
+  CHECK(wide->borders[TableCell::Top].visible && Near(wide->borders[TableCell::Top].color, 0, 0, 0));
+  CHECK_NEAR(wide->borders[TableCell::Top].width, 1.f, 0.01f);
+  CHECK(t->Cell(1, 0)->fill.kind == CellFill::Kind::None);
   CHECK(t->Cell(1, 1) && !t->Cell(1, 1)->node);   // a missing cell is an empty one
   CHECK(wide->text && wide->text->paragraphs[0].runs[0].text == L"wide");
 }
