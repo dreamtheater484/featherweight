@@ -536,6 +536,22 @@ const TextBody* Presentation::Text(const Shape& shape, const SlideBase& shownOn)
   return it->second.get();
 }
 
+const TextBody* Presentation::TextOf(pugi::xml_node txBody, const SlideBase& owner, const SlideBase& shownOn) {
+  if (!txBody) return nullptr;
+  if (const Shape* s = owner.ShapeOfText(txBody)) return Text(*s, shownOn);
+  std::lock_guard lock(mutex_);
+  auto key = std::make_pair(static_cast<const void*>(txBody.internal_object()), static_cast<const void*>(&shownOn));
+  auto it = texts_.find(key);
+  if (it == texts_.end()) {
+    Shape standIn;
+    standIn.node = standIn.drawNode = txBody.parent();
+    standIn.textNode = txBody;
+    standIn.owner = &owner;
+    it = texts_.emplace(key, ResolveText(*this, standIn, owner, shownOn)).first;
+  }
+  return it->second.get();
+}
+
 const std::vector<EmbeddedFont>& Presentation::EmbeddedFonts() {
   std::lock_guard lock(mutex_);
   if (fontsDecoded_) return fonts_;

@@ -534,3 +534,30 @@ TEST(SlideBaseStylesAsPowerPointUsesThem) {
   const Table* blue = deck->GetTable(*s->FindShape(4), *s);
   CHECK(blue && blue->Cell(0, 0)->text && Near(blue->Cell(0, 0)->text->paragraphs[0].runs[0].props.color, 0, 0, 1));
 }
+
+TEST(SlideTextOfFreeBodies) {
+  // SmartArt's drawing (dsp:sp) isn't in the model: its text resolves as a text box's, with its
+  // dsp:style's fontRef.
+  auto deck = OpenGenerated("shapes-table-chart.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  pugi::xml_document doc;
+  const char* xml =
+      "<dsp:sp xmlns:dsp=\"http://schemas.microsoft.com/office/drawing/2008/diagram\" "
+      "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><dsp:style><a:lnRef idx=\"2\"/>"
+      "<a:fillRef idx=\"1\"/><a:effectRef idx=\"0\"/><a:fontRef idx=\"minor\"><a:schemeClr val=\"lt1\"/></a:fontRef>"
+      "</dsp:style><dsp:txBody><a:bodyPr anchor=\"ctr\"/><a:lstStyle/><a:p><a:r><a:rPr sz=\"2600\"/><a:t>Step</a:t></a:r>"
+      "</a:p></dsp:txBody></dsp:sp>";
+  CHECK(doc.load_string(xml));
+  pugi::xml_node body = doc.document_element().child("dsp:txBody");
+  const TextBody* t = deck->TextOf(body, *s, *s);
+  CHECK(t && t->paragraphs.size() == 1 && t->paragraphs[0].runs[0].text == L"Step");
+  CHECK(t && Near(t->paragraphs[0].runs[0].props.color, 1, 1, 1));
+  CHECK(t && std::fabs(t->paragraphs[0].runs[0].props.size - 26.f) < 0.01f);
+  CHECK(t && t->body.anchor == BodyProps::Anchor::Middle);
+  CHECK(deck->TextOf(body, *s, *s) == t);
+  // A body the model knows maps to its shape's text.
+  CHECK(deck->TextOf(s->shapes[0].textNode, *s, *s) == deck->Text(s->shapes[0], *s));
+  CHECK(deck->TextOf(pugi::xml_node(), *s, *s) == nullptr);
+}

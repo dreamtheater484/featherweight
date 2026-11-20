@@ -298,6 +298,10 @@ class Presentation {
   std::unique_ptr<draw::DrawingResources> Resources(const SlideBase& owner, const SlideBase& shownOn) const;
   // A shape's text, resolved for the slide it's shown on. Null when the shape has no text body.
   const TextBody* Text(const Shape& shape, const SlideBase& shownOn);
+  // Any other text body a Drawing of `owner`'s shapes finds (SmartArt's dsp:txBody, whose shapes
+  // aren't the model's): resolved as a shape's that isn't a placeholder (the default text style,
+  // its parent's style fontRef, its own list style), cached the same way. Null for a null body.
+  const TextBody* TextOf(pugi::xml_node txBody, const SlideBase& owner, const SlideBase& shownOn);
   // A table, with its style applied. Null when the shape isn't a table.
   const Table* GetTable(const Shape& shape, const SlideBase& shownOn);
   // The fonts the deck embeds, decoded on first use. Those that can't be decoded are left out.

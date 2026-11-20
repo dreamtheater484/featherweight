@@ -383,7 +383,9 @@ namespace detail {
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,
                                       const SlideBase& shownOn) {
   auto out = std::make_unique<TextBody>();
-  pugi::xml_node txBody = P(shape.node, "txBody");
+  // A shape's own text body (a placeholder's textNode is in its merged copy); SmartArt's dsp:txBody
+  // and the like come as a stand-in shape whose textNode is the body itself.
+  pugi::xml_node txBody = shape.drawNode == shape.node ? shape.textNode : P(shape.node, "txBody");
   out->node = txBody;
   out->body = ReadBody(A(shape.textNode, "bodyPr"));
   Ctx c{deck, owner, shownOn, ThemeOf(shownOn), {}};
@@ -431,7 +433,12 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
     const SlideBase& from = chain[i]->owner ? *chain[i]->owner : owner;
     ApplyListStyle(A(P(chain[i]->node, "txBody"), "lstStyle"), lv, c, from);
   }
-  ApplyFontRef(P(shape.drawNode, "style"), lv, c);
+  pugi::xml_node style;
+  ForEachChild(shape.drawNode, [&](pugi::xml_node n) {
+    if (LocalNameOf(n) == "style") style = n;  // p:style, dsp:style, wps:style
+    return !style;
+  });
+  ApplyFontRef(style, lv, c);
   ApplyListStyle(A(txBody, "lstStyle"), lv, c, owner);
   ReadParagraphs(txBody, lv, c, *out);
   return out;
