@@ -62,20 +62,41 @@ void PaintPage(Deck& deck, const PrintPage& page, const PrintSettings& settings,
                draw::Painter& p) {
   const draw::Size slide = deck.SlideSize();
   const bool framed = settings.what != PrintWhat::Slides && settings.frame;
-  for (const PageItem& it : page.items) {
-    if (it.slide >= deck.SlideCount() || slide.width <= 0 || slide.height <= 0) continue;
+  auto drawSlide = [&](size_t index, const draw::Rect& r) {
     p.Save();
-    p.ClipRect(it.rect);
-    const float s = it.rect.Width() / slide.width;
-    p.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.rect.left, it.rect.top));
-    deck.Paint(it.slide, p);
+    p.ClipRect(r);
+    const float s = r.Width() / slide.width;
+    p.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(r.left, r.top));
+    deck.Paint(index, p);
     p.Restore();
     if (framed) {
       draw::Pen pen;
       pen.brush = draw::Brush::Solid(kFrame);
       pen.width = 0.5f;
-      p.StrokePath(draw::Path::FromRect(it.rect), pen);
+      p.StrokePath(draw::Path::FromRect(r), pen);
     }
+  };
+  bool ownNumber = settings.what != PrintWhat::Slides;
+  for (const PageItem& it : page.items) {
+    if (it.slide >= deck.SlideCount() || slide.width <= 0 || slide.height <= 0) continue;
+    if (settings.what == PrintWhat::Notes) {
+      // The deck's own notes page (its notes master's placeholders, the notes in its fonts, its
+      // page number), fitted on the page, with the slide where its slide image goes.
+      const draw::Size ns = deck.NotesSize();
+      const draw::Rect fit = FitRect(ns, {0, 0, page.size.width, page.size.height});
+      const float k = ns.width > 0 ? fit.Width() / ns.width : 1;
+      p.Save();
+      p.Transform(draw::Matrix::Scale(k, k) * draw::Matrix::Translate(fit.left, fit.top));
+      draw::Rect box;
+      const bool drawn = deck.PaintNotesPage(it.slide, p, box);
+      if (drawn && box.Width() > 0 && box.Height() > 0) drawSlide(it.slide, FitRect(slide, box));
+      p.Restore();
+      if (drawn) {
+        ownNumber = false;
+        continue;
+      }
+    }
+    drawSlide(it.slide, it.rect);
     if (settings.what == PrintWhat::Notes && it.notes.Width() > 0) {
       const std::wstring notes = deck.Notes(it.slide);
       if (!notes.empty()) DrawPlainText(fonts, p, notes, it.notes, 12, L"Calibri", kInk);
@@ -94,7 +115,7 @@ void PaintPage(Deck& deck, const PrintPage& page, const PrintSettings& settings,
     }
   }
   // Handouts and notes pages carry their page number in the bottom right corner.
-  if (settings.what != PrintWhat::Slides && page.number > 0) {
+  if (ownNumber && page.number > 0) {
     const float h = page.size.height, w = page.size.width;
     const draw::Rect box{w * 0.55f, h - h * 0.06f, w * 0.9f, h - h * 0.02f};
     DrawPlainText(fonts, p, std::to_wstring(page.number), box, 10, L"Calibri", kInk, true);

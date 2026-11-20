@@ -5,7 +5,7 @@
 #  - fwslideview: the tab (a TabContent) on the app's shell; linked into the exe only.
 add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp)
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwslideviewcore PUBLIC fwslide fwpkg fwdraw fwtext fwcore)
+target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp)

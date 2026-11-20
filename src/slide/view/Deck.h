@@ -48,6 +48,10 @@ class Deck {
   // Draws the slide in slide points, its top left at the origin (whatever transform the painter
   // has: the screen, a thumbnail, a printed page, a PDF).
   virtual void Paint(size_t slide, draw::Painter& p) = 0;
+  // Draws the slide's notes page (notes size, its top left at the origin) as the deck's notes
+  // master lays it out, without the slide's picture, and says where the picture goes (notes page
+  // points). False when the deck can't (the tab then lays the page out itself).
+  virtual bool PaintNotesPage(size_t /*slide*/, draw::Painter& /*p*/, draw::Rect& /*slideBox*/) { return false; }
   // The rectangles of characters [from, from + length) of text block `block`, slide points, for
   // highlighting a find match; empty when the renderer can't tell (the block's bounds are used).
   virtual std::vector<draw::Rect> TextRects(size_t /*slide*/, size_t /*block*/, size_t /*from*/,
