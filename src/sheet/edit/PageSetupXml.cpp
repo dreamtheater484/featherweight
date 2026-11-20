@@ -140,7 +140,8 @@ std::string HeadersFooters(const HeaderFooter& hf, std::string_view existing, co
     if (text->empty()) continue;
     pugi::xml_node c = n.append_child((p + name).c_str());
     if (text->front() == ' ' || text->back() == ' ') c.append_attribute("xml:space").set_value("preserve");
-    c.text().set(text->c_str());
+    // As Excel: a CR as _x000D_ (XML reads a raw one back as a line feed), "_x0041_" as _x005F_x0041_.
+    c.text().set(xlsx::EncodeXstring(*text).c_str());
   }
   return n.first_attribute() || n.first_child() ? Print(n) : std::string();
 }

@@ -244,8 +244,8 @@ class Editor {
   Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
   // ---- Pictures and shapes (Insert > Pictures, Shapes; s3-data). Their XML: sheet/data/Shapes.h;
-  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects", in a
-  // workbook without a package (CSV) or on a sheet not saved yet.
+  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects". A
+  // worksheet read from CSV or not saved yet gets its part (SheetPart).
   // A picture (PNG, JPEG, GIF or BMP, the type read from its bytes) as Excel inserts it: moves but
   // doesn't size with cells, its aspect ratio locked, with its alt text. Stored once: a picture the
   // package has already with the same bytes is used again. `*id` gets its shape id.
@@ -280,9 +280,16 @@ class Editor {
 
   // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
   // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's part (/xl/worksheets/sheetN.xml). A worksheet that has none (read from CSV, or
+  // added since the workbook was opened) gets one when `create`, as a save would give it: the
+  // part, its relationship and content type, the text around its cells; it is then always written
+  // whole from the model. A workbook read from CSV gets its package first (kept), and the CSV
+  // writer still writes only the values (s4 friction W7). The step keeps what it was: undone,
+  // the sheet has no part again. Empty when it can't (not a worksheet; creating needs an open group).
+  std::string SheetPart(int sheet, bool create);
   // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
-  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
-  // (no package, a sheet not saved yet; creating needs an open group).
+  // its relationship, content type and the sheet's <drawing r:id> element (and the sheet's part,
+  // SheetPart). Empty when it can't (not a worksheet; creating needs an open group).
   std::string SheetDrawing(int sheet, bool create);
   // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
   uint32_t NextShapeId(std::string_view drawing) const;
@@ -342,8 +349,8 @@ class Editor {
   // from the cells (a header row of text names the series, a first column of text the categories;
   // series down the columns when there are at least as many rows as columns), written as Excel
   // writes a new chart (its drawing, chart part, relationships and content types). Refused on a
-  // protected sheet without "Edit objects", in a workbook without a package (CSV) or on a sheet
-  // not saved yet.
+  // protected sheet without "Edit objects". A worksheet read from CSV or not saved yet gets its part
+  // (SheetPart).
   Result InsertChart(int sheet, const NewChart& chart);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
@@ -401,6 +408,36 @@ class Editor {
   // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
   // its new page.
   Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
+
+  // ---- Pivot tables (S4 s4-pivot; sheet/pivot/Pivot.h). Refresh (journal 110): the caches read
+  // again from their source cells and every pivot table on them laid out again, as Excel does it:
+  // the cells (the old ones cleared), the cache, its records and the table's part. `which`: the
+  // pivot at `cell` of `sheet` (Refresh), every pivot (Refresh All), or the caches whose file asks
+  // for it (refreshOnLoad, after opening). Refused, nothing changed, for a pivot with features
+  // Featherweight keeps but doesn't refresh, a source it can't use, a pivot that would cover other
+  // cells, or a protected sheet.
+  enum class PivotRefresh : uint8_t { AtCell, All, OnLoad };
+  Result RefreshPivots(PivotRefresh which, int sheet = -1, CellAddr cell = {});
+  // Insert > PivotTable (journal 111): a pivot of `source` (its first row the header) on worksheet
+  // `sheet` at `at` (its page fields there, the table below them), written as Excel writes a new one
+  // (the cache with its records, the table, workbook.xml's pivotCaches) and laid out as a refresh
+  // does. Columns are the source's (0 its first); values' `func`: 0 sum, 1 count, 2 average, 3 max,
+  // 4 min. The sheet must be in the file already (a sheet added since opening has no part until
+  // it's saved); refused like Excel over cells that aren't empty.
+  struct NewPivotTable {
+    int sourceSheet = 0;
+    Range source;
+    std::string table;  // instead: a table's name (the pivot then follows the table's size)
+    int sheet = 0;
+    CellAddr at;
+    std::vector<uint32_t> rows, cols, filters;
+    struct Value {
+      uint32_t column = 0;
+      uint8_t func = 0;
+    };
+    std::vector<Value> values;
+  };
+  Result InsertPivot(const NewPivotTable& p);
 
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);

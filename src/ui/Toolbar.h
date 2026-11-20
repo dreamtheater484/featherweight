@@ -41,6 +41,11 @@ struct ToolItem {
   bool joinNext = false;   // no gap before the next item (a button and its arrow)
   bool sepBefore = false;  // a thin separator before this item
   int priority = 9;        // lower is dropped first when space is tight (left items only below 9)
+  // Its name in the overflow menu, when the window is too narrow for it (else the tooltip's name).
+  std::wstring menuLabel;
+  // A dropdown that shows a fixed label (Conditional, Chart): as wide as the label needs at the
+  // window's scale, `width` the least.
+  bool fitText = false;
 
   // The other kinds. Dropdowns, combo boxes and split buttons list `choices`, and `choice` is
   // the chosen one; `text` is what a combo box shows (or a dropdown, with nothing chosen).
@@ -117,6 +122,18 @@ class Toolbar {
   void Describe(uia::Tree& t, int parent, const std::function<bool(int)>& isMenu, int openMenu,
                 const std::function<void(TextBox*)>& focusBox);
 
+  // The items that didn't fit the last layout. The overflow button (») shows then: its menu has
+  // each of them, with a dropdown's choices, a box's or a color's in a submenu, so none of the
+  // tab's commands is out of reach in a narrow window.
+  const std::vector<ToolItem>& Overflow() const { return overflow_; }
+  // An item's name in that menu.
+  static std::wstring MenuName(const ToolItem& item);
+  void FillOverflowMenu(HMENU menu);
+  // A choice from that menu: makes it, and returns the command to run then (0 for none). Any
+  // other id is returned as it is.
+  int OverflowChoice(int id);
+  static constexpr int kOverflowFirst = 0xC000;  // the menu's own ids, from here (never commands)
+
   TextBox& PageBox() { return pageBox_; }
   bool HitPageBox(int x, int y) const { return pageBox_.rc.right > 0 && gfx::Contains(pageBox_.rc, (float)x, (float)y); }
   int Height() const { return rc_.bottom - rc_.top; }
@@ -127,12 +144,24 @@ class Toolbar {
   Button& ItemButton(const ToolItem& item);
   // The same for the other kinds of item.
   Control& ItemControl(const ToolItem& item);
+  // An item's width in DIPs: its own, or what its label needs (fitText).
+  float WidthOf(const ToolItem& item);
 
   RECT rc_{};
   float ui_ = 1;
   std::vector<Button*> all_;
   ButtonSet set_;
-  Button open_, prev_, next_, zoomOut_, zoom_, zoomIn_, more_;
+  Button open_, prev_, next_, zoomOut_, zoom_, zoomIn_, more_, overflowButton_;
+  std::vector<ToolItem> overflow_;
+  // The open overflow menu: what each of its ids does.
+  struct MenuPick {
+    enum What { Run, Choice, Automatic, Color, MoreColors } what;
+    size_t item;
+    int choice;
+    D2D1_COLOR_F color;
+  };
+  std::vector<ToolItem> menuItems_;
+  std::vector<MenuPick> menuPicks_;
   std::map<int, Button> items_;
   std::map<int, bool> toggles_;
   ControlGroup group_;  // before the controls, so it outlives them
@@ -142,5 +171,7 @@ class Toolbar {
   TextBox pageBox_;
   D2D1_RECT_F pageLabel_{};
   std::vector<D2D1_RECT_F> separators_;
+  std::map<std::wstring, float> textWidths_;  // fitText labels in DIPs, at textUi_
+  float textUi_ = 0;
   std::wstring pageLabelText_;
 };

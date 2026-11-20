@@ -164,6 +164,11 @@ class Printer {
     return s;
   }
 
+  // A reference that lost its cells, after its sheet's name ('Data'!#REF!). Its sheet deleted too
+  // (Sheets gave "#REF!"), it's #REF! once, as Excel writes it: #REF!#REF! isn't a formula, and
+  // Excel removes it as a damaged record (s4 final gate).
+  static std::string RefError(const std::string& pre) { return pre == "#REF!" ? pre : pre + "#REF!"; }
+
   std::string Sheets(const uint8_t* p, uint8_t flags) const {
     if (!(flags & kSheet)) return {};
     int s1 = Read<uint16_t>(p);
@@ -307,12 +312,12 @@ class Printer {
           bool ok = how_.map->MapTo(from, to, r, c, r2, c2, abs, false, false);
           pre = Prefix(p + 2, fl, from, to);
           if (!ok) {
-            stack_.push_back(pre + "#REF!");
+            stack_.push_back(RefError(pre));
             break;
           }
         }
         if (Off(r, fl & kRowAbs, at_.row, kMaxRows) || Off(c, fl & kColAbs, at_.col, kMaxCols)) {
-          stack_.push_back(pre + "#REF!");
+          stack_.push_back(RefError(pre));
           break;
         }
         stack_.push_back(pre + CellText(r, fl & kRowAbs, c, fl & kColAbs));
@@ -333,14 +338,14 @@ class Printer {
           bool ok = how_.map->MapTo(from, to, r1, c1, r2, c2, abs, fl & kWholeRows, fl & kWholeCols);
           pre = Prefix(p + 2, fl, from, to);
           if (!ok) {
-            stack_.push_back(pre + "#REF!");
+            stack_.push_back(RefError(pre));
             break;
           }
         }
         const bool rows = !(fl & kWholeCols), cols = !(fl & kWholeRows);
         if ((rows && (Off(r1, fl & kRowAbs, at_.row, kMaxRows) || Off(r2, fl & kRow2Abs, at_.row, kMaxRows))) ||
             (cols && (Off(c1, fl & kColAbs, at_.col, kMaxCols) || Off(c2, fl & kCol2Abs, at_.col, kMaxCols)))) {
-          stack_.push_back(pre + "#REF!");
+          stack_.push_back(RefError(pre));
           break;
         }
         std::string a, b;
@@ -359,7 +364,7 @@ class Printer {
         stack_.push_back(pre + (once ? a : a + ":" + b));
         break;
       }
-      case kRefErr: stack_.push_back(Sheets(p + 2, p[1]) + "#REF!"); break;
+      case kRefErr: stack_.push_back(RefError(Sheets(p + 2, p[1]))); break;
       case kName: {
         uint8_t fl = p[5];
         std::string name = names_.SlotName(Read<uint32_t>(p + 1));

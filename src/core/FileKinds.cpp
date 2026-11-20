@@ -8,8 +8,7 @@ namespace {
 constexpr const wchar_t* kPdf[] = {L".pdf"};
 constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".odt", L".ott"};
 constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt"};  // .rtf and .txt come in D2
-constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv"};
-constexpr const wchar_t* kWorkbookLater[] = {L".xls", L".ods"};
+constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv", L".xls", L".ods", L".ots"};
 constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx"};
 constexpr const wchar_t* kPresentationLater[] = {L".ppt", L".odp"};
 
@@ -20,7 +19,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", L"Document", L"Documents",
      kDocument, kDocumentLater, 1, true, true},
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
-     L"Spreadsheets", kWorkbook, kWorkbookLater, 2, true, false},
+     L"Spreadsheets", kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
      L"Presentation", L"Presentations", kPresentation, kPresentationLater, 3, false, false},
 };

@@ -146,7 +146,7 @@ class App : public PdfHost, public DropHost {
   // A tab for a file. Every file is a PDF for now; documents, spreadsheets and presentations come later.
   std::unique_ptr<TabContent> CreateTab(const std::wstring& path);
   void OpenFiles(const std::vector<std::wstring>& files);
-  void OpenDialog();
+  void OpenDialog(bool templates = false);  // templates: in the personal templates folder (S4)
   // A click, key or UI Automation action on the start screen.
   void OnStartScreen(EmptyState::Result res);
   // `copies`: more types to offer after `format`; `chosen` gets the type picked (0 for `format`,
@@ -313,6 +313,8 @@ class App : public PdfHost, public DropHost {
   std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
   int newDocuments_ = 0;
   int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)
+  static constexpr int kUserTemplateCount = 16;
+  std::vector<std::wstring> userTemplates_;  // as the last menu listed them (CmdUserTemplate)
   bool autosaveTimer_ = false;
 
   // Input state

@@ -11,6 +11,7 @@
 
 #include "core/Strings.h"
 #include "sheet/view/WorkbookFormat.h"
+#include "sheet/view/WorkbookPanels.h"
 #include "ui/Gfx.h"
 #include "ui/Theme.h"
 
@@ -75,6 +76,12 @@ class WorkbookView::FilterPanel : public PanelContent {
       op_[k].selected = 0;
       value_[k].label = L"Value";
       value_[k].autoComplete = false;
+      // A condition picked from the list hands the keyboard to its value, as Excel's dialog has the
+      // box ready for the number (the average conditions take none), and Enter there applies.
+      op_[k].onPicked = [this, k](int i) {
+        if (i > 0 && i < filter_detail::kFirstSpecial + 4) focusWanted_ = k + 1;
+      };
+      value_[k].onEnter = [this] { Apply(); };
     }
     and_.text = L"And";
     or_.text = L"Or";
@@ -142,6 +149,10 @@ class WorkbookView::FilterPanel : public PanelContent {
 
   void Draw(gfx::Canvas& c) override {
     for (const auto& [text, rc] : labels_) c.Text(text, rc, theme::P().textSecondary, 12 * ui_);
+    if (focusWanted_) {
+      value_[focusWanted_ - 1].TakeFocus();
+      focusWanted_ = 0;
+    }
   }
 
   void Open(uint32_t column) {
@@ -297,7 +308,8 @@ class WorkbookView::FilterPanel : public PanelContent {
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
   ListBox values_;
   Dropdown op_[2];
-  ComboBox value_[2];
+  FocusComboBox value_[2];
+  int focusWanted_ = 0;  // 1 + the condition whose value box takes the keyboard next
   PanelButton and_, or_, sortUp_, sortDown_, apply_, clear_;
 };
 

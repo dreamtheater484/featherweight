@@ -20,12 +20,14 @@
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Charts.h"
 #include "sheet/edit/Drawing.h"
+#include "sheet/edit/PivotEdit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/edit/PageSetupXml.h"
 #include "sheet/edit/Refs.h"
 #include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
+#include "sheet/xlsx/Xlsx.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "core/Strings.h"
 
@@ -99,6 +101,7 @@ enum SaveBit : uint32_t {
   kSaveBreaks = 1u << 12,   // row and column page breaks
   kSaveKept = 1u << 13,     // XML kept inside sheetData, and shared formulas' masters
   kSaveFormulas = 1u << 14, // every formula record (else `formulas` holds the ones changed in place)
+  kSavePart = 1u << 15,     // the sheet's part and its relationship id (SheetPart gave it one)
   kSavePage = 1u << 24,     // page setup and headers and footers (s3-print)
 };
 constexpr int kPieces = 7;  // SheetPiece bits
@@ -133,6 +136,7 @@ struct SheetSave {
   std::vector<detail::Kept> kept;
   std::vector<std::pair<uint32_t, CellAddr>> masters;
   std::vector<FormulaRec> allFormulas;
+  std::string part, relId;
 
   void Swap() {
     Sheet& s = *sheet;
@@ -149,6 +153,10 @@ struct SheetSave {
     for (auto& [id, rec] : formulas) std::swap(A::Formulas(s)[id], rec);
     if (saved & kSaveFormulas) std::swap(A::Formulas(s), allFormulas);
     if (saved & kSaveText) std::swap(A::Text(s), text);
+    if (saved & kSavePart) {
+      std::swap(A::Part(s), part);
+      std::swap(A::RelId(s), relId);
+    }
     if (saved & kSaveTables) std::swap(A::Tables(s), tables);
     if (saved & kSaveFilter) std::swap(A::Filter(s), filter);
     if (saved & kSaveBreaks) {
@@ -228,6 +236,10 @@ struct SheetSave {
     take(kSaveName, name, later.name);
     take(kSaveState, state, later.state);
     take(kSaveText, text, later.text);
+    if ((later.saved & kSavePart) && !(saved & kSavePart)) {
+      part = std::move(later.part);
+      relId = std::move(later.relId);
+    }
     take(kSaveTables, tables, later.tables);
     take(kSaveFilter, filter, later.filter);
     if ((later.saved & kSaveBreaks) && !(saved & kSaveBreaks)) {
@@ -805,6 +817,12 @@ struct Editor::State {
   void SaveText(SheetSave& sv) {
     SaveList(sv, kSaveText, kPieceOther | kPieceProps | kPieceViews | kPieceCols | kPieceMerges | kPieceLinks, sv.text,
              A::Text(*sv.sheet));
+  }
+  void SavePart(SheetSave& sv) {
+    if (sv.saved & kSavePart) return;
+    sv.saved |= kSavePart;
+    sv.part = A::Part(*sv.sheet);
+    sv.relId = A::RelId(*sv.sheet);
   }
   void SaveTables(SheetSave& sv) { SaveList(sv, kSaveTables, kPieceOther, sv.tables, A::Tables(*sv.sheet)); }
   void SaveFilter(SheetSave& sv) { SaveList(sv, kSaveFilter, kPieceOther, sv.filter, A::Filter(*sv.sheet)); }
@@ -3938,15 +3956,81 @@ namespace {
 
 constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
+// Whether an edit that needs the sheet's part can have it: it has one, or it's a worksheet, which
+// Editor::SheetPart gives one (read from CSV, or added since opening: s4 friction W7).
+bool PartOrWorksheet(const Workbook& book, const Sheet& s) {
+  const pkg::Package* p = book.GetPackage();
+  return s.Kind() == SheetKind::Worksheet || (p && !s.PartName().empty() && p->FindPart(s.PartName()));
+}
+
 }  // namespace
+
+std::string Editor::SheetPart(int sheet, bool create) {
+  State& st = *s_;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  pkg::Package* package = book_.GetPackage();
+  if (package && !s.PartName().empty() && package->FindPart(s.PartName())) return s.PartName();
+  if (!create || st.open.empty() || st.saving || s.Kind() != SheetKind::Worksheet || !s.Loaded()) return {};
+  // A workbook read from CSV: the smallest package first, kept, as its first save as .xlsx gives it.
+  if (!package) {
+    if (!xlsx::GiveBasePackage(book_).Ok()) return {};
+    package = book_.GetPackage();
+    if (!package) return {};
+  }
+  const std::string wb = book_.WorkbookPart();
+  const bool strict = PartBytes(wb).find(xlsx::kStrictMainNs) != std::string::npos;
+  const std::string relType = strict ? "http://purl.oclc.org/ooxml/officeDocument/relationships/worksheet"
+                                     : "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+  const std::string type = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+  // The text a save gives it; the part's bytes are never copied (the sheet is always written from
+  // the model, MustWrite), but they are a worksheet.
+  detail::PartText text = xlsx::NewSheetPartText(s, strict);
+  std::string bytes = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n" + text.rootStart +
+                      text.beforeData + "<sheetData/>" + text.afterData + text.rootEnd;
+  SheetSave& sv = st.Save(s);
+  st.SavePart(sv);
+  std::string part = s.PartName(), relId = s.RelId();
+  if (part.empty() || relId.empty()) {
+    // A name no sheet has (a save names the sheets it writes without keeping their parts), with no
+    // leftover relationships part either (its tables and drawings would be the sheet's).
+    for (int n = 1;; ++n) {
+      part = wb.substr(0, wb.rfind('/') + 1) + "worksheets/sheet" + std::to_string(n) + ".xml";
+      bool taken = package->FindPart(part) || package->FindPart(pkg::RelsPartFor(part));
+      for (size_t i = 0; i < book_.SheetCount() && !taken; ++i) taken = NameEqualsNoCase(book_.GetSheet(i).PartName(), part);
+      if (!taken) break;
+    }
+    relId = AddPart(wb, relType, part, type, std::move(bytes));
+    if (relId.empty()) return {};
+  } else {
+    // Named by a save that wrote it (the package doesn't keep the sheets a save writes): the
+    // workbook's relationship to it is there, the part again.
+    st.SetPart(part, std::move(bytes));
+    if (package->ContentTypeOf(part) != type) {
+      st.KeepTypes();
+      pkg::ContentTypes types = package->Types();
+      auto& o = types.overrides;
+      o.erase(std::remove_if(o.begin(), o.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, part); }), o.end());
+      o.emplace_back(part, type);
+      package->SetContentTypes(std::move(types));
+    }
+  }
+  st.SaveText(sv);
+  A::Part(s) = part;
+  A::RelId(s) = relId;
+  A::Text(s) = std::move(text);
+  st.mustWrite.insert(&s);
+  st.SaveBook(false, false);  // the workbook part names it
+  return part;
+}
 
 std::string Editor::SheetDrawing(int sheet, bool create) {
   State& st = *s_;
-  pkg::Package* package = book_.GetPackage();
-  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  const std::string sheetPart = s.PartName();
-  if (sheetPart.empty() || !package->FindPart(sheetPart)) return {};
+  const std::string sheetPart = SheetPart(sheet, create);
+  pkg::Package* package = book_.GetPackage();
+  if (sheetPart.empty() || !package) return {};
   const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
   if (const pkg::RelationshipSet* rels = package->RelationshipsOf(sheetPart))
     for (const pkg::Relationship& r : rels->items)
@@ -4099,15 +4183,14 @@ Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Pla
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
-      return Result::Fail(u"Save the workbook as an Excel workbook first, then paste the object.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"An object can't be pasted on this sheet.");
     std::string anchor = clip.anchor.empty() ? std::string() : drawing::Placed(clip.anchor, p);
     if (anchor.empty()) return Result::Fail(u"This object can't be pasted here.");
     return Run(*this, u"Paste", [&]() -> Result {
       State& st = *s_;
-      const std::string d = SheetDrawing(sheet, true);
-      if (d.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+      const std::string d = SheetDrawing(sheet, true);  // a workbook read from CSV gets its package
+      pkg::Package* package = book_.GetPackage();
+      if (d.empty() || !package) return Result::Fail(u"The object couldn't be added to this sheet.");
       const bool same = clip.book == &book_;
       // Relationship ids in `xml` from the old ones to the new (all at once: they may swap).
       auto renumber = [](std::string& xml, const std::vector<std::pair<std::string, std::string>>& ids) {
@@ -4342,9 +4425,7 @@ Result Editor::MoveChartToObject(int chartSheet, int toSheet, CellAddr at) {
       if (chart.empty()) chart = ChartPart(chartSheet, o.id);
     if (chart.empty()) return Result::Fail(u"This chart sheet has no chart to move.");
     if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-    Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));
-    if (s.PartName().empty() || !book_.GetPackage()->FindPart(s.PartName()))
-      return Result::Fail(u"Save the workbook as an Excel workbook first, then move the chart.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));  // a worksheet: SheetDrawing gives it its part
     return Run(*this, u"Move Chart", [&]() -> Result {
       const std::string d = SheetDrawing(toSheet, true);
       const std::string rel =
@@ -4449,9 +4530,7 @@ Result Editor::InsertChart(int sheet, const NewChart& c) {
     if (!Valid(c.data) || c.at.row >= kMaxRows || c.at.col >= kMaxCols || !c.cols || !c.rows) return BadRange();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
-      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the chart.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A chart can't be added to this sheet.");
     std::string xml = charts::NewChartXml(s, c.data, c.kind, c.title);
     if (xml.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
     return Run(*this, u"Insert Chart", [&]() -> Result {
@@ -5105,7 +5184,7 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
         out += '>';
         for (const std::string& v : c.values) {
           open("filter");
-          attr("val", v);
+          attr("val", xlsx::EncodeXstring(v));  // ST_Xstring, as a cell's text
           out += "/>";
         }
         close("filters");
@@ -5117,7 +5196,7 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
         for (const FilterColumn::Condition& k : c.conditions) {
           open("customFilter");
           if (k.op != "equal") attr("operator", k.op);
-          attr("val", k.val);
+          attr("val", xlsx::EncodeXstring(k.val));
           out += "/>";
         }
         close("customFilters");
@@ -5203,6 +5282,24 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   }());
 }
 
+namespace {
+
+// The formulas in a sheet's kept XML (conditional formats, validations, their x14 forms...), as
+// MoveSheetXml visits them.
+std::vector<std::string> SheetXmlFormulas(detail::PartText t, int sheet) {
+  std::vector<std::string> out;
+  refs::Context ctx{refs::Mover(Shift{}), -1, std::string(), {}, {}};
+  ctx.formula = [&](std::string_view text, int, uint32_t, uint32_t) {
+    out.emplace_back(text);
+    return std::string(text);
+  };
+  ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+  refs::MoveSheetXml(t, sheet, ctx);
+  return out;
+}
+
+}  // namespace
+
 Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
                              std::u16string stepName) {
   Guard guard(*this);
@@ -5214,12 +5311,23 @@ Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, c
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty())
-      return Result::Fail(u"Only a worksheet of an Excel workbook keeps these rules.");
+    // A sheet without a part yet (read from CSV, or added since opening) keeps them in its text,
+    // which its first save writes (s4 friction W7).
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only a worksheet keeps these rules.");
     const bool validations = kind == RuleKind::Validations;
     std::string oldXml, oldExt;
     xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
     if (oldXml == xml && oldExt == ext) return Result{};
+    // A rule's formula, as a cell's, can't name a sheet the workbook doesn't have: Excel takes no other
+    // workbook in a rule, and the file would name a sheet it hasn't (fuzz_xlsx). Rules it had keep theirs.
+    {
+      detail::PartText now = A::Text(s);
+      xlsx::PutSheetRules(now, validations, xml, ext);
+      const std::vector<std::string> before = SheetXmlFormulas(A::Text(s), sheet);
+      for (const std::string& f : SheetXmlFormulas(now, sheet))
+        if (std::find(before.begin(), before.end(), f) == before.end() && !MissingSheet(book_, f).empty())
+          return Result::Fail(u"The rule's formula names a sheet this workbook doesn't have.");
+    }
     return Run(*this, std::move(stepName), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
@@ -5263,12 +5371,13 @@ Result Editor::AddTable(int sheet, Table t) {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty() || !book_.GetPackage())
-      return Result::Fail(u"Tables need an Excel workbook: save this one as .xlsx first.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only a worksheet can hold a table.");
     if (Result r = TableShape(t); !r) return r;
     if (Result r = TableOverlap(s, t.ref, SIZE_MAX); !r) return r;
     return Run(*this, u"Create Table", [&]() -> Result {
       State& st = *s_;
+      // A sheet read from CSV or added since opening gets its part (s4 friction W7).
+      if (SheetPart(sheet, true).empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
       // Ids and names unique in the workbook: Excel's "Table1", "Table2"...
       uint32_t maxId = 0;
       bool idTaken = false;
@@ -5555,12 +5664,11 @@ Result Editor::InsertPicture(int sheet, const std::string& bytes, const drawing:
     if (!data::PictureType(bytes, extension, type)) return Result::Fail(u"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP.");
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
-      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the picture.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A picture can't be added to this sheet.");
     return Run(*this, u"Insert Picture", [&]() -> Result {
-      const std::string d = SheetDrawing(sheet, true);
-      if (d.empty()) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      const std::string d = SheetDrawing(sheet, true);  // a workbook read from CSV gets its package
+      pkg::Package* package = book_.GetPackage();
+      if (d.empty() || !package) return Result::Fail(u"The picture couldn't be added to this sheet.");
       // Stored once: a media part with the same bytes, and the drawing's own relationship to it.
       std::string media;
       for (const pkg::Part& part : package->Parts()) {
@@ -5604,9 +5712,7 @@ Result Editor::InsertShape(int sheet, data::ShapeKind kind, const drawing::Place
     if (!PlaceOk(p)) return BadRange();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
-      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the shape.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A shape can't be added to this sheet.");
     return Run(*this, u"Insert Shape", [&]() -> Result {
       const std::string d = SheetDrawing(sheet, true);
       if (d.empty()) return Result::Fail(u"The shape couldn't be added to this sheet.");
@@ -5903,9 +6009,10 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
     if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    // A sheet without a part yet (read from CSV, or added since opening) gets one in the step.
     pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
-      return Result::Fail(u"Comments can be added to this sheet once the workbook is saved.");
+    if (!PartOrWorksheet(book_, s) || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Comments can be added only to a worksheet.");
     if (thread) {
       if (thread->comments.empty()) return Result::Fail(u"A comment thread needs a comment.");
       for (const ThreadComment& c : thread->comments) {
@@ -5915,8 +6022,8 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
         if (Utf16Length(c.text) > 32767) return Result::Fail(u"A comment can hold at most 32,767 characters.");
       }
     }
-    const NoteParts parts = NotePartsOf(*package, s);
-    const std::string personsPart = PersonsPartOf(*package, book_.WorkbookPart());
+    const NoteParts parts = package ? NotePartsOf(*package, s) : NoteParts{};
+    const std::string personsPart = package ? PersonsPartOf(*package, book_.WorkbookPart()) : std::string();
     notes::ThreadParts old, now;
     old.threads = parts.threads.empty() ? std::string() : PartBytes(parts.threads);
     old.persons = personsPart.empty() ? std::string() : PartBytes(personsPart);
@@ -5937,6 +6044,7 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
       return Result{};
     return Run(*this, !thread ? u"Delete Comment" : had ? u"Edit Comment" : u"New Comment", [&]() -> Result {
       const Result failed = Result::Fail(u"The comment couldn't be stored in the workbook.");
+      if (SheetPart(sheet, true).empty()) return failed;
       const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
       const std::string ms = "http://schemas.microsoft.com/office/2017/10/relationships/";
       // A part written, added (from `source`) or removed as its new bytes say.
@@ -6003,13 +6111,14 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
     if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    // A sheet without a part yet (read from CSV, or added since opening) gets one in the step.
     pkg::Package* package = book_.GetPackage();
-    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
-      return Result::Fail(u"Notes can be added to this sheet once the workbook is saved.");
+    if (!PartOrWorksheet(book_, s) || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Notes can be added only to a worksheet.");
     if (note && (!XmlSafe(note->text) || !XmlSafe(note->author)))
       return Result::Fail(u"The note holds characters a workbook can't store.");
     if (note && Utf16Length(note->text) > 32767) return Result::Fail(u"A note can hold at most 32,767 characters.");
-    const NoteParts parts = NotePartsOf(*package, s);
+    const NoteParts parts = package ? NotePartsOf(*package, s) : NoteParts{};
     const std::string &commentsPart = parts.comments, &vmlPart = parts.vml;
     if (!parts.threads.empty() && notes::ReadThread(PartBytes(parts.threads), {}, cell))
       return Result::Fail(u"This cell has a comment thread. Reply to it, or delete it first.");
@@ -6022,6 +6131,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
     if (newComments == comments && newVml == vml) return Result{};
     return Run(*this, note ? u"Edit Note" : u"Delete Note", [&]() -> Result {
       const Result failed = Result::Fail(u"The note couldn't be stored in the workbook.");
+      if (SheetPart(sheet, true).empty()) return failed;
       const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
       if (newComments.empty()) {
         if (!commentsPart.empty() && !RemovePart(commentsPart)) return failed;
@@ -6093,11 +6203,10 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
     for (double v : {m.left, m.right, m.top, m.bottom, m.header, m.footer})
       if (!(v >= 0 && v < 49)) return Result::Fail(u"Margins must be between 0 and 49 inches.");
     if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(u"The first page number is too large.");
-    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter}) {
-      if (!XmlSafe(*t)) return Result::Fail(u"The header or footer holds characters a workbook can't store.");
+    // Any character: written as Excel does, a control character as _xHHHH_ (one read from a file comes back so).
+    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter})
       if (Utf16Length(*t) > 255)
         return Result::Fail(u"The text string you entered is too long. Reduce the number of characters used.");
-    }
     for (const std::string* t : {&page.paperWidth, &page.paperHeight})
       if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
     detail::PartText& t = A::Text(s);
@@ -6279,6 +6388,9 @@ Result Editor::SetName(const DefinedName& name) {
     if (!builtin && !ValidName(name.name)) return Result::Fail(u"That isn't a valid name.");
     if (name.sheet >= static_cast<int>(book_.SheetCount())) return NoSheet();
     if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(u"The name needs a reference or a formula.");
+    // As for a cell's formula: Excel would look for a workbook by that name, and a file can't name a
+    // sheet it doesn't have (fuzz_xlsx: Sheet1:Sheet2!A1 without a Sheet1).
+    if (!MissingSheet(book_, name.formula).empty()) return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
     return Run(*this, u"Define Name", [&]() -> Result {
       State& st = *s_;
       st.SaveBook(false, true);
@@ -6526,5 +6638,36 @@ bool Editor::StylesDirty() const {
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }
+
+// ---- Pivot tables (S4 s4-pivot): the work is in Pivots.cpp.
+Result Editor::RefreshPivots(PivotRefresh which, int sheet, CellAddr cell) {
+  Guard guard(*this);
+  for (size_t i = 0; i < book_.SheetCount(); ++i)
+    if (Result no = guard.Check(static_cast<int>(i), ProtectAct::Never); !no && (which != PivotRefresh::AtCell || static_cast<int>(i) == sheet))
+      return no;
+  Rec rec(*this, JournalOp::RefreshPivots, [&](JournalRecord& w) { w.U(static_cast<uint8_t>(which)).I(sheet).A(cell); });
+  return rec.Done([&]() -> Result {
+    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    return RefreshPivotsIn(*this, book_, which, sheet, cell);
+  }());
+}
+
+Result Editor::InsertPivot(const NewPivotTable& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(p.sheet, ProtectAct::Never); !no) return no;
+  Rec rec(*this, JournalOp::InsertPivot, [&](JournalRecord& w) {
+    w.I(p.sourceSheet).R(p.source).S(p.table).I(p.sheet).A(p.at);
+    for (const auto* list : {&p.rows, &p.cols, &p.filters}) {
+      w.U(list->size());
+      for (uint32_t c : *list) w.U(c);
+    }
+    w.U(p.values.size());
+    for (const NewPivotTable::Value& v : p.values) w.U(v.column).U(v.func);
+  });
+  return rec.Done([&]() -> Result {
+    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    return InsertPivotIn(*this, book_, p);
+  }());
+}
 
 }  // namespace fw::sheet::edit

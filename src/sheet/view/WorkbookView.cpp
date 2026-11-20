@@ -2,20 +2,26 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/ods/Ods.h"
+#include "sheet/view/Sparklines.h"
 #include "sheet/view/WorkbookFilter.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/view/WorkbookNames.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/xls/Xls.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -68,11 +74,63 @@ D2D1_RECT_F Clip(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
 }  // namespace
 
 WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
-    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()) {
+    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()),
+      pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
-WorkbookView::~WorkbookView() = default;
+struct WorkbookView::BigLoad {
+  std::unique_ptr<pkg::Snapshot> snapshot;  // CSV: the file's bytes, which the worker reads
+  Workbook book;                            // CSV: the whole file, once the worker is done
+  std::unique_ptr<Workbook> full;           // a workbook: read again, its sheet `sheet` whole
+  size_t sheet = SIZE_MAX;                  // a workbook: the sheet shown from its first rows
+  std::thread worker;
+};
+
+WorkbookView::~WorkbookView() {
+  if (bigLoad_ && bigLoad_->worker.joinable()) bigLoad_->worker.join();
+}
+
+// The worker read the whole file: its cells (a workbook: its sheet's) take the place of the first
+// rows shown (the same values, so the screen stays as it is), at once; the scroll bars now reach
+// the last row.
+void WorkbookView::WorkDone() {
+  if (!bigLoad_) return;
+  if (bigLoad_->worker.joinable()) bigLoad_->worker.join();
+  std::unique_ptr<BigLoad> load = std::move(bigLoad_);
+  const size_t i = load->sheet;
+  if (i == SIZE_MAX) {
+    book_->SwapCells(load->book);
+  } else if (load->full && i < book_->SheetCount() && i < load->full->SheetCount()) {
+    book_->SwapSheet(i, *load->full);
+    // What was worked out from the first rows is worked out again: the engine (it waited), the
+    // conditional formats and sparklines (they point at it), the sheet's objects and rules.
+    for (auto& r : rules_) r.reset();
+    rulesRead_.assign(rulesRead_.size(), false);
+    calc_.reset();
+    breakPages_.reset();
+    if (i < objects_.size()) objects_[i].reset();
+    validationsSheet_ = -1;
+    circles_.clear();
+    if (i == sheet_) {
+      grid_.Build(book_->GetSheet(i), book_->GetStyles(), *measure_);
+      BuildGroups();
+      if (i < objects_.size()) objects_[i] = SheetObjects::Load(*book_, i);
+      PlaceObjects();
+      LayoutParts();
+      ClampScroll();
+    }
+  } else {
+    partial_ = true;
+    host_.ViewMessage(BannerKind::Error,
+                      Title() + L" couldn't be read in full: only its first rows show, and it can't be saved.");
+  }
+  load.reset();
+  text_->Clear();
+  totals_ = Totals{};
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
 
 std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
   auto view = std::make_unique<WorkbookView>(host, std::wstring());
@@ -95,7 +153,7 @@ std::wstring WorkbookView::Title() const { return path_.empty() ? file_->Title()
 // ---------------------------------------------------------------------------
 // Loading
 
-OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
+OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error) {
   const std::wstring name = Title();
   pkg::Status st;
   if (newBook_) {
@@ -108,7 +166,9 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   }
   // A recovered workbook is read from its autosave, named as its tab is.
   std::unique_ptr<pkg::Snapshot> snapshot =
-      fromBytes_ ? pkg::Snapshot::FromBytes(std::move(bytes_)) : pkg::Snapshot::Open(path_, {}, st);
+      !protected_.empty() ? nullptr  // asked for its password: read already
+      : fromBytes_        ? pkg::Snapshot::FromBytes(std::move(bytes_))
+                          : pkg::Snapshot::Open(path_, {}, st);
   const std::wstring& named = fromBytes_ ? name : path_;
   if (EndsWithNoCase(named, L".csv") || EndsWithNoCase(named, L".tsv")) {
     // A text file of values: one sheet, named after the file as Excel names it.
@@ -123,21 +183,107 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
-    csv::Source source;
-    csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
-              *csvBook, source);
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const std::string utf8Name = WideToUtf8(sheetName);
+    // A large file: the rows of its first megabyte now (the last, perhaps cut, left out), the whole
+    // file on a worker, which then takes their place (WorkDone).
+    constexpr size_t kLarge = 4u << 20, kPrefix = 1u << 20;
+    bool background = false;
+    if (text.size() > kLarge) {
+      csv::Reader first(text.substr(0, kPrefix), o);
+      if (first.RowCount() > 1) {
+        Sheet& sheet = csv::NewSheet(*csvBook, utf8Name);
+        SheetBuilder builder(sheet);
+        first.AddRows(*csvBook, builder, 0, first.RowCount() - 1);
+        background = true;
+      }
+    }
+    if (!background) {
+      csv::Source source;
+      csv::Read(text, utf8Name, o, *csvBook, source);
+    }
     // Saving reads the file again to write it its own way (WorkbookFile).
     if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
-    snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    if (background) {
+      bigLoad_ = std::make_unique<BigLoad>();
+      BigLoad* load = bigLoad_.get();
+      load->snapshot = std::move(snapshot);
+      HWND hwnd = host_.ViewHwnd();
+      const LPARAM self = reinterpret_cast<LPARAM>(this);
+      load->worker = std::thread([load, text, o, utf8Name, hwnd, self] {
+        csv::Source source;
+        csv::Read(text, utf8Name, o, load->book, source);
+        PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+      });
+    } else {
+      snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    }
     return Opened(std::move(csvBook), error);
   }
-  if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
-    error = name + L" couldn't be opened — it is protected with a password, which workbooks don't support yet.";
-    return OpenResult::Failed;
+  // A password-protected workbook (an encrypted .xlsx) and an Excel 97-2003 workbook (.xls) are
+  // compound files: read whole, then decrypted or converted (Unlock). Without a password, or with a
+  // wrong one, the tab shows the password card.
+  bool locked = !protected_.empty();
+  if (!locked && snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
+    const auto bytes = snapshot->Bytes();
+    protected_.assign(bytes.begin(), bytes.end());
+    protectedStamp_ = snapshot->GetStamp();
+    locked = true;
   }
+  if (locked) {
+    snapshot.reset();
+    std::vector<uint8_t> plain;
+    if (OpenResult r = Unlock(password, plain, error); r != OpenResult::Ok) return r;
+    snapshot = pkg::Snapshot::FromBytes(std::move(plain));
+  } else if (!fromBytes_ && snapshot && (EndsWithNoCase(path_, L".ods") || EndsWithNoCase(path_, L".ots"))) {
+    // An OpenDocument spreadsheet is converted, and the tab is a copy that Save As saves as an
+    // .xlsx: the file itself is never written to. A template (.ots) makes a new workbook.
+    std::vector<uint8_t> xlsx;
+    st = ods::OdsToXlsx(snapshot->Bytes(), xlsx, pkg::Limits::Default(), [](const std::string& family, double points) {
+      // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
+      fw::text::Fonts fonts(fw::sheet::view::ExcelFontSubstitute);
+      fw::sheet::view::FontMeasure measure(fonts);
+      fw::sheet::Font f;
+      f.name = family;
+      f.size = points;
+      return measure.Of(f, f).digit;
+    });
+    if (!st.Ok()) {
+      error = st.code == pkg::Status::Code::Damaged || st.code == pkg::Status::Code::Unsupported
+                  ? name + L" couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."
+                  : OpenError(name, st);
+      return OpenResult::Failed;
+    }
+    snapshot = pkg::Snapshot::FromBytes(std::move(xlsx));
+    if (newNumber_ == 0) {
+      file_->Copy(name, path_.substr(0, path_.size() - 4) + L".xlsx", false);
+      imported_ = name;
+      path_.clear();
+    }
+  }
+  // A large workbook (S4): its active sheet's first rows now, the whole of it on a worker (WorkDone).
+  const bool large = !fromBytes_ && newNumber_ == 0 && !locked && imported_.empty() && snapshot &&
+                     snapshot->Size() > (16u << 20) && (EndsWithNoCase(path_, L".xlsx") || EndsWithNoCase(path_, L".xlsm"));
+  xlsx::ReadOptions readOptions;
+  bool partial = false;
+  if (large) readOptions.firstBytes = 4u << 20, readOptions.partial = &partial;
   auto package = snapshot ? pkg::Package::Open(std::move(snapshot), pkg::Limits::Default(), st) : nullptr;
-  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st) : nullptr;
+  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st, readOptions) : nullptr;
+  if (book && partial) {
+    bigLoad_ = std::make_unique<BigLoad>();
+    BigLoad* load = bigLoad_.get();
+    load->sheet = book->ActiveSheet();
+    HWND hwnd = host_.ViewHwnd();
+    const LPARAM self = reinterpret_cast<LPARAM>(this);
+    load->worker = std::thread([load, path = path_, hwnd, self] {
+      pkg::Status s;
+      auto snap = pkg::Snapshot::Open(path, {}, s);
+      auto whole = snap ? pkg::Package::Open(std::move(snap), pkg::Limits::Default(), s) : nullptr;
+      load->full = whole ? xlsx::Read(std::move(whole), s) : nullptr;
+      PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+    });
+  }
   if (!book) {
     error = OpenError(name, st);
     return OpenResult::Failed;
@@ -147,20 +293,116 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     // A template: a new workbook from it, saved with Save As.
     file_->OpenedTemplate(path_, newNumber_);
     path_.clear();
-  } else if (!fromBytes_) {
-    file_->Opened(path_, book->GetPackage()->GetSnapshot().GetStamp());
+  } else if (!fromBytes_ && imported_.empty()) {
+    // A protected file stands for the encrypted file on disk, not its decrypted package.
+    file_->Opened(path_, locked ? protectedStamp_ : book->GetPackage()->GetSnapshot().GetStamp());
   }
+  protected_.clear();  // open: the file as read isn't needed any more
+  protected_.shrink_to_fit();
   const OpenResult r = Opened(std::move(book), error);
   // Someone else has it open in Excel: changes can only be saved as a copy.
   if (r == OpenResult::Ok)
     if (std::wstring inUse = file_->InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
+  // An imported file says where saving goes.
+  if (r == OpenResult::Ok && !imported_.empty()) {
+    const bool odf = EndsWithNoCase(imported_, L".ods") || EndsWithNoCase(imported_, L".ots");
+    const size_t dot = imported_.find_last_of(L'.');
+    host_.ViewMessage(BannerKind::Info,
+                      imported_ + (odf ? L" is an OpenDocument spreadsheet" : L" is an Excel 97–2003 workbook") +
+                          L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
+                          L".xlsx and leaves it as it is.");
+  }
   return r;
+}
+
+// A compound file: a password-protected .xlsx (decrypted with the password, and saved again with
+// it) or an Excel 97-2003 workbook (converted: the tab is a copy saved as an .xlsx, encrypted with
+// the .xls's password when it had one, as Word does for a .doc).
+OpenResult WorkbookView::Unlock(const std::wstring& password, std::vector<uint8_t>& plain, std::wstring& error) {
+  namespace crypto = pkg::crypto;
+  const std::wstring name = Title();
+  auto cf = pkg::CompoundFile::Open(protected_);
+  if (!cf) {
+    error = name + L" couldn't be opened — it seems to be damaged or isn't an Excel workbook.";
+    return OpenResult::Failed;
+  }
+  crypto::Key key;
+  const xls::StreamFn streams = [&cf](std::string_view n) { return cf->Stream(n); };
+  if (xls::IsWorkbook(streams)) {
+    const bool locked = xls::NeedsPassword(streams);
+    if (locked && password.empty()) {
+      needPassword_ = true;
+      return OpenResult::NeedPassword;
+    }
+    pkg::Status st;
+    plain = xls::ToXlsx(streams, st, locked ? std::wstring_view(password) : std::wstring_view());
+    if (plain.empty()) {
+      if (locked && st.code == pkg::Status::Code::Rejected) {
+        needPassword_ = true;
+        return OpenResult::WrongPassword;
+      }
+      error = name + L" couldn't be opened — " + Utf8ToWide(st.message);
+      return OpenResult::Failed;
+    }
+    if (locked) key = crypto::NewKey(password);  // the .xlsx it's saved as keeps its password
+    if (!fromBytes_ && newNumber_ == 0) {
+      const size_t dot = path_.find_last_of(L'.');
+      file_->Copy(name, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".xlsx", false);
+      imported_ = name;
+      path_.clear();  // Save is Save As
+    }
+  } else if (crypto::IsEncryptedPackage(*cf)) {
+    if (password.empty()) {
+      needPassword_ = true;
+      return OpenResult::NeedPassword;
+    }
+    switch (crypto::Decrypt(*cf, password, plain, key)) {
+      case crypto::Result::Ok:
+        if (!plain.empty()) break;
+        [[fallthrough]];  // an empty package
+      case crypto::Result::Damaged:
+        error = name + L" couldn't be opened — it seems to be damaged.";
+        return OpenResult::Failed;
+      case crypto::Result::WrongPassword:
+        needPassword_ = true;
+        return OpenResult::WrongPassword;
+      case crypto::Result::Unsupported:
+        error = name + L" couldn't be opened — it's protected in a way Featherweight doesn't support.";
+        return OpenResult::Failed;
+    }
+  } else {
+    error = name + L" couldn't be opened — it isn't an Excel workbook Featherweight can open.";
+    return OpenResult::Failed;
+  }
+  needPassword_ = false;
+  if (!key.Empty()) file_->Protect(std::move(key));
+  return OpenResult::Ok;
+}
+
+void WorkbookView::SubmitPassword(const std::wstring& password) {
+  if (password.empty()) {
+    pw_.Wrong();
+    host_.ViewInvalidate();
+    return;
+  }
+  std::wstring error;
+  const OpenResult r = Load(password, error);
+  if (r == OpenResult::Ok) {
+    pw_.Accepted();
+    host_.ViewPasswordAccepted(this);
+  } else if (r == OpenResult::WrongPassword || r == OpenResult::NeedPassword) {
+    pw_.Wrong();
+  } else {
+    needPassword_ = true;  // the card stays, with why
+    pw_.Failed(error);
+  }
+  host_.ViewInvalidate();
 }
 
 OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {
   const std::wstring name = Title();
   book_ = std::move(book);
-  fonts_ = std::make_unique<text::Fonts>();
+  fonts_ = std::make_unique<text::Fonts>(ExcelFontSubstitute);
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
@@ -171,6 +413,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   rules_.clear();
   rules_.resize(book_->SheetCount());
   rulesRead_.assign(book_->SheetCount(), false);
+  pivotLooksRead_.clear();
   size_t first = book_->ActiveSheet();
   if (first >= book_->SheetCount() || !SheetShown(first)) first = NextShownSheet(book_->SheetCount() - 1, 1);
   if (book_->SheetCount() == 0 || first >= book_->SheetCount() || !SheetShown(first)) {
@@ -180,6 +423,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   }
   sheet_ = first;
   ShowSheet(first);
+  RefreshPivotsOnOpen();  // s4-pivot: the caches whose file asks for it (refreshOnLoad)
   return OpenResult::Ok;
 }
 
@@ -267,13 +511,25 @@ calc::WorkbookCalc& WorkbookView::Calc() {
   return *calc_;
 }
 
+const Sparklines* WorkbookView::SparklinesFor(size_t index) {
+  RulesFor(index);
+  return index < sparklines_.size() ? sparklines_[index].get() : nullptr;
+}
+
 condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
   if (!book_ || index >= rules_.size()) return nullptr;
   if (!rulesRead_[index]) {
     rulesRead_[index] = true;
     Sheet& sheet = book_->GetSheet(index);
     if (!sheet.Loaded()) book_->LoadSheet(index);
-    if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
+    const std::string kept = sheet.KeptXml();
+    if (sparklines_.size() < rules_.size()) sparklines_.resize(rules_.size());
+    sparklines_[index].reset();
+    if (kept.find("sparklineGroups") != std::string::npos) {
+      sparklines_[index] = std::make_unique<Sparklines>(*book_, index);
+      if (sparklines_[index]->Empty()) sparklines_[index].reset();
+    }
+    if (kept.find("conditionalFormatting") != std::string::npos) {
       condfmt::Options o;
       o.locale = &text_->Locale();
       o.calc = &Calc();
@@ -507,6 +763,13 @@ std::optional<CellAddr> WorkbookView::CellAt(int x, int y) const {
 void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   const D2D1_RECT_F all = RectF(full_);
+  if (needPassword_) {  // the password card until the file opens
+    c.PushClip(all);
+    c.Fill(all, p.docBg);
+    pw_.Draw(c, full_, ui_, Title());
+    c.PopClip();
+    return;
+  }
   c.PushClip(all);
   if (preview_) {
     DrawPreview(c, dc);
@@ -553,6 +816,8 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
   o.gridColor = gridColor_;
   o.showZeros = showZeros_;
   o.rules = RulesFor(sheet_);
+  o.sparklines = SparklinesFor(sheet_);
+  o.pivots = PivotLooksFor(sheet_);  // s4-pivot
   const double k = K();
   const float mirror = cells_.left + cells_.right;
   for (const Pane& pane : Panes()) {

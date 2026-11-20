@@ -312,23 +312,31 @@ void ColorPalette::Pick(int i) {
 }
 
 void ColorPalette::MoreColors() {
-  static COLORREF custom[16] = {};  // the dialog's own custom colors, for this session
   if (beforeDialog) beforeDialog();
+  D2D1_COLOR_F picked{};
+  if (ChooseMore(Window(), currentAutomatic ? Rgb(0x000000) : current, picked) && onPick) onPick(picked, false);
+}
+
+const std::vector<NamedColor>& ColorPalette::StandardColors() {
+  static const std::vector<NamedColor> colors(std::begin(kStandardColors), std::end(kStandardColors));
+  return colors;
+}
+
+bool ColorPalette::ChooseMore(HWND owner, D2D1_COLOR_F start, D2D1_COLOR_F& picked) {
+  static COLORREF custom[16] = {};  // the dialog's own custom colors, for this session
   CHOOSECOLORW cc{sizeof(cc)};
-  cc.hwndOwner = Window();
-  D2D1_COLOR_F start = currentAutomatic ? Rgb(0x000000) : current;
+  cc.hwndOwner = owner;
   cc.rgbResult = RGB(Byte(start.r), Byte(start.g), Byte(start.b));
   cc.lpCustColors = custom;
   cc.Flags = CC_FULLOPEN | CC_RGBINIT | CC_ANYCOLOR;
-  if (!ChooseColorW(&cc)) return;
-  D2D1_COLOR_F picked = D2D1::ColorF(GetRValue(cc.rgbResult) / 255.f, GetGValue(cc.rgbResult) / 255.f,
-                                     GetBValue(cc.rgbResult) / 255.f);
+  if (!ChooseColorW(&cc)) return false;
+  picked = D2D1::ColorF(GetRValue(cc.rgbResult) / 255.f, GetGValue(cc.rgbResult) / 255.f, GetBValue(cc.rgbResult) / 255.f);
   auto& recent = Recent();
   recent.erase(std::remove_if(recent.begin(), recent.end(), [&](const NamedColor& n) { return SameColor(n.color, picked); }),
                recent.end());
   recent.insert(recent.begin(), {picked, RgbName(picked)});
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
-  if (onPick) onPick(picked, false);
+  return true;
 }
 
 bool ColorPalette::OnKeyDown(UINT vk, bool, bool, bool alt) {

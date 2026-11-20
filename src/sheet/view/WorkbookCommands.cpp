@@ -170,6 +170,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // New Comment, as in Word (S3, s3-review).
   if (ctrl && alt && !shift && vk == 'M') return editor_.Active() || preview_ ? 0 : CmdNewComment;
+  // Refresh and Refresh All, as Excel (S4, s4-pivot).
+  if (alt && !shift && vk == VK_F5) return editor_.Active() || preview_ ? 0 : ctrl ? CmdPivotRefreshAll : CmdPivotRefresh;
   if (ctrl && !alt && !shift) {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
@@ -245,6 +247,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
   if (RulesCommandState(cmd, s)) return s;
+  if (PivotsCommandState(cmd, s)) return s;  // s4-pivot
   if (ShapesCommandState(cmd, s)) return s;  // s3-data: pictures and shapes
   if (NamesCommandState(cmd, s)) return s;
   if (ChartsCommandState(cmd, s)) return s;  // s3-charts
@@ -318,13 +321,26 @@ std::vector<int> WorkbookView::Commands() {
   ids.push_back(CmdPageSetup);  // s3-print
   for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
   for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
-  ids.push_back(CmdChartCombo);
+  for (int cmd : {CmdChartCombo, CmdDeleteObject, CmdChartPanel, CmdMoveChart}) ids.push_back(cmd);
   for (int cmd = CmdObjectPicture; cmd <= CmdFormatObject; ++cmd) ids.push_back(cmd);  // s3-data
+  // Editing, formats, sort and filter, conditional formats, validation, tables, names and pivots
+  // (S2-S4), as Word's list has its own. The toolbar's boxes that only open their list, or repeat
+  // one of these, aren't commands of their own here.
+  for (int cmd : {CmdUndo, CmdRedo, CmdCut, CmdPaste, CmdBold, CmdItalic, CmdUnderline, CmdAlignLeft, CmdAlignCenter,
+                  CmdAlignRight, CmdFontColor, CmdFormatPainter})
+    ids.push_back(cmd);
+  for (int cmd = CmdFormatCells; cmd <= CmdRemoveDuplicates; ++cmd)
+    if (cmd != CmdMergeBox && cmd != CmdBordersBox && cmd != CmdCellStyles) ids.push_back(cmd);
+  for (int cmd = CmdCondFormat; cmd <= CmdTableTotalRow; ++cmd)
+    if (cmd != CmdCondFormatBox) ids.push_back(cmd);
+  for (int cmd = CmdNameManager; cmd <= CmdPasteNames; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdPivotRefresh; cmd <= CmdPivotRefreshAll; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
 bool WorkbookView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (bigLoad_) WorkDone();  // a large file still being read: all of it first (print, find, sort...)
   if (PageSetupCommand(cmd)) return true;  // s3-print (in print preview too)
   if (preview_ && cmd != CmdPrintPreview && cmd != CmdCopy && cmd != CmdNextSheet && cmd != CmdPrevSheet &&
       !(cmd >= CmdSheetPick && cmd <= CmdSheetPickLast))
@@ -344,6 +360,7 @@ bool WorkbookView::Execute(int cmd) {
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
   if (RulesCommand(cmd)) return true;
+  if (PivotsCommand(cmd)) return true;  // s4-pivot
   if (ShapesCommand(cmd)) return true;  // s3-data: pictures and shapes
   if (NamesCommand(cmd)) return true;
   if (ChartsCommand(cmd)) return true;  // s3-charts
@@ -414,7 +431,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
-  if (preview_) m.left.push_back(item(CmdPageSetup, icon::Settings, L"Page setup"));  // s3-print
+  AddPageSetupToolbar(m);  // s3-print: in the grid too (W3)
   AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
   AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
@@ -925,6 +942,11 @@ constexpr SaveFormat kXltm{L"Excel macro-enabled template", L"*.xltm", L"xltm"};
 
 bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
+  if (bigLoad_) WorkDone();
+  if (partial_) {
+    error = Title() + L" can't be saved: it couldn't be read in full.";
+    return false;
+  }
   // What is being typed is part of what's saved, as in Excel's Ctrl+S; a formula that can't be
   // entered stops the save with its reason.
   if (editor_.Active() && !renaming_ && !CommitEdit(false)) {
@@ -970,6 +992,7 @@ void WorkbookView::SaveDone() {
 
 void WorkbookView::Autosave() {
   if (Ready() && file_->Dirty()) file_->Autosave(*book_, Ed());
+  else if (!Ready() && !protected_.empty()) file_->AutosaveProtected(protected_);  // recovered, still locked
 }
 
 // A recovered journal: its edits made again through the editor (the engine follows them, and the
@@ -1055,6 +1078,7 @@ void WorkbookView::ApplyState(const FileState& s) {
 }
 
 void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
+  if (needPassword_) pw_.DescribeUia(t, parent);
   if (!Ready()) return;
   const int grid = t.Add(parent, 1, UIA_DataGridControlTypeId, Utf8ToWide(Current().Name()), cells_);
   t[grid].hasValue = true;
@@ -1078,7 +1102,7 @@ void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
 // Idle work: the other sheets, and find
 
 bool WorkbookView::HasIdleWork() const {
-  if (!Ready()) return false;
+  if (!Ready() || bigLoad_) return false;  // a large file still being read: nothing until it is
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
@@ -1087,7 +1111,7 @@ bool WorkbookView::HasIdleWork() const {
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
-  if (!Ready()) return false;
+  if (!Ready() || bigLoad_) return false;
   if (!searchDone_) {
     SearchIdle(deadlineMs);
     return true;

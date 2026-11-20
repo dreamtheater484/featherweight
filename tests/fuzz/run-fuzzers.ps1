@@ -60,6 +60,8 @@ $all = [ordered]@{
   fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
   # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
   fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
+  # OpenDocument spreadsheet import (S4): every .ods converts to a workbook that opens, passes the check and is read, or is refused.
+  fuzz_ods     = @{ Seeds = @("$seeds\ods", "$regressions\ods"); MaxLen = 65536 }
   # Workbooks (S1): the model and its .xlsx reader; every part it writes back says what it said.
   fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
   # Number formats and value parsing (S1): spans stay inside the text; an exact parse shows as written.
@@ -68,6 +70,9 @@ $all = [ordered]@{
   fuzz_csv     = @{ Seeds = @("$office\csv", "$regressions\csv"); MaxLen = 16384 }
   # Conditional formats (S1): a worksheet's rules evaluated with the formula engine and without.
   fuzz_condfmt = @{ Seeds = @("$seeds\condfmt", "$regressions\condfmt"); MaxLen = 16384 }
+  # Excel 97-2003 workbooks (S4): every .xls converts to an .xlsx that opens, passes the check and reads, or is refused.
+  fuzz_xls     = @{ Seeds = @("$seeds\xls", "$regressions\xls"); MaxLen = 131072 }
+  fuzz_pivot = @{ Seeds = @("$seeds\pivot", "$regressions\pivot"); MaxLen = 262144 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

@@ -3,7 +3,9 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <atomic>
+#include <iterator>
 #include <new>
 #include <thread>
 
@@ -35,7 +37,7 @@ WorkbookFile::~WorkbookFile() {
 }
 
 bool WorkbookFile::IsTemplate(const std::wstring& path) {
-  return fw::EndsWithNoCase(path, L".xltx") || fw::EndsWithNoCase(path, L".xltm");
+  return fw::EndsWithNoCase(path, L".xltx") || fw::EndsWithNoCase(path, L".xltm") || fw::EndsWithNoCase(path, L".ots");
 }
 
 void WorkbookFile::OpenedTemplate(const std::wstring& path, int number) {
@@ -54,6 +56,19 @@ FileFormat WorkbookFile::FormatOf(const std::wstring& path, FileFormat current) 
   if (fw::EndsWithNoCase(path, L".xltm")) return FileFormat::Xltm;
   if (fw::EndsWithNoCase(path, L".csv") || fw::EndsWithNoCase(path, L".tsv")) return FileFormat::Csv;
   return current;
+}
+
+bool WorkbookFile::RecoveredAsWorkbook(std::span<const uint8_t> bytes, std::wstring& name, std::wstring& suggested) {
+  auto csv = [](const std::wstring& s) { return fw::EndsWithNoCase(s, L".csv") || fw::EndsWithNoCase(s, L".tsv"); };
+  // A zip with a workbook part: never a CSV file's text.
+  constexpr uint8_t kZip[] = {'P', 'K', 3, 4};
+  constexpr std::string_view kPart = "xl/workbook.";
+  if (!csv(name) || bytes.size() < sizeof kZip || !std::equal(std::begin(kZip), std::end(kZip), bytes.begin()) ||
+      std::search(bytes.begin(), bytes.end(), kPart.begin(), kPart.end()) == bytes.end())
+    return false;
+  name = name.substr(0, name.size() - 4) + L".xlsx";
+  if (csv(suggested)) suggested = suggested.substr(0, suggested.size() - 4) + L".xlsx";
+  return true;
 }
 
 bool WorkbookFile::SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path,
@@ -231,7 +246,10 @@ void WorkbookFile::Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& 
     return;
   }
   try {
-    if (book.Format() == FileFormat::Csv) {
+    // A CSV file's values as CSV. One that holds more than CSV keeps (a chart, a table, rules,
+    // formats, another sheet: csv::Loses) is written as the workbook it is, as an .xlsx tab's is,
+    // and recovered as an unsaved .xlsx named after the file (RecoveredAsWorkbook; s4).
+    if (book.Format() == FileFormat::Csv && !fw::sheet::csv::Loses(book)) {
       fw::sheet::csv::Options o = csv_;
       o.delimiter = 0;
       const std::string bytes = fw::sheet::csv::WriteNew(book, o);
@@ -241,12 +259,15 @@ void WorkbookFile::Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& 
   } catch (const std::bad_alloc&) {
     return;
   }
+  // A workbook read from CSV without a package yet gets the one its first save as .xlsx gives it.
+  if (!book.GetPackage() && !fw::sheet::xlsx::GiveBasePackage(book).Ok()) return;
+  const FileFormat format = book.Format() == FileFormat::Csv ? FileFormat::Xlsx : book.Format();
   fw::sheet::xlsx::SavePlan plan;
   pkg::MemorySink sink;
   bool ok = false;
   editor.BeginSave();
   try {
-    ok = fw::sheet::xlsx::PrepareSave(book, editor, plan).Ok() && fw::sheet::xlsx::WriteSave(book, plan, sink).Ok();
+    ok = fw::sheet::xlsx::PrepareSave(book, editor, plan, format).Ok() && fw::sheet::xlsx::WriteSave(book, plan, sink).Ok();
   } catch (const std::bad_alloc&) {
   }
   editor.EndSave();  // not committed: the workbook still stands for its file

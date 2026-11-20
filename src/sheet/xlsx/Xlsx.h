@@ -19,6 +19,12 @@ namespace fw::sheet::xlsx {
 struct ReadOptions {
   // Read every sheet now instead of the active one only (tools, tests, fuzzing).
   bool loadAll = false;
+  // S4, a large workbook's first screen: the active sheet is read from its part's first
+  // `firstBytes` only, cut after the last whole row (a sheet that fits is read whole). `*partial`
+  // tells whether it was cut: such a workbook is for showing only (never saved), until the sheet
+  // is read in full elsewhere (Workbook::SwapSheet).
+  size_t firstBytes = 0;
+  bool* partial = nullptr;
 };
 
 // Reads a workbook (.xlsx, .xlsm, .xltx, .xltm) from an opened package: the workbook part, the
@@ -92,5 +98,11 @@ std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status);
 // every sheet, the styles and the strings from the model while its format is still CSV. A book
 // that has a package keeps it.
 pkg::Status GiveBasePackage(Workbook& book);
+
+// The text a save gives a worksheet that has no part yet (one read from CSV, or added since the
+// workbook was opened) around its cells. Editor::SheetPart gives such a sheet its part with it when
+// an edit needs one (a chart, a table, a note), as a save would. `strict`: the workbook is Strict
+// Open XML.
+detail::PartText NewSheetPartText(const Sheet& s, bool strict);
 
 }  // namespace fw::sheet::xlsx

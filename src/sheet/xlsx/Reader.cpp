@@ -1,6 +1,7 @@
 // The .xlsx reader: the workbook part, styles, theme and shared strings (plan §7.3). Sheets are
 // read by SheetReader.cpp.
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstring>
@@ -439,7 +440,7 @@ void ReadRichString(std::string_view raw, StringTable& table, std::string& text,
     std::string_view k = Local(c);
     if (k == "t") {
       if (!runs.empty() && runs.back().font != kNone) runs.push_back({static_cast<uint32_t>(text.size()), kNone});
-      text += TextOf(c);
+      text += DecodeXstring(TextOf(c));  // Excel's _x000D_ for a CR
     } else if (k == "r") {
       pugi::xml_node rPr = Child(c, "rPr");
       uint32_t font = rPr ? table.AddFont(ReadFont(rPr)) : kNone;
@@ -448,7 +449,7 @@ void ReadRichString(std::string_view raw, StringTable& table, std::string& text,
         runs.push_back({static_cast<uint32_t>(text.size()), font});
       }
       for (pugi::xml_node t = c.first_child(); t; t = t.next_sibling())
-        if (t.type() == pugi::node_element && Local(t) == "t") text += TextOf(t);
+        if (t.type() == pugi::node_element && Local(t) == "t") text += DecodeXstring(TextOf(t));
     }
   }
   // A single run in the cell's font is plain text.
@@ -556,6 +557,7 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
     std::string_view raw = src.substr(before, pull.Offset() - before);
     if (!table.HasRoom(raw.size() * 2)) return Status::Fail(Status::Code::TooLarge, "The shared strings are too large.");
     if (plain) {
+      DecodeXstringIn(text);  // Excel's _x000D_ for a CR, _x005F_x0041_ for the text _x0041_
       table.AddRead(text, preserve ? StringTable::kPreserve : 0, {}, {});
     } else {
       ReadRichString(raw, table, text, runs);
@@ -574,13 +576,9 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
   return {};
 }
 
-// ---- Tables
+// ---- ST_Xstring
 
-namespace {
-
-// ST_Xstring's escapes (_x000A_ for a line break, _x005F_ for "_"), as Excel writes table
-// column names.
-std::string Unescape(std::string_view s) {
+std::string DecodeXstring(std::string_view s) {
   std::string out;
   out.reserve(s.size());
   for (size_t i = 0; i < s.size(); ++i) {
@@ -603,7 +601,41 @@ std::string Unescape(std::string_view s) {
   return out;
 }
 
-}  // namespace
+std::string EncodeXstring(std::string_view s) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  auto escape = [&](std::string& out, unsigned v) {
+    out += "_x";
+    for (int shift = 12; shift >= 0; shift -= 4) out += kHex[(v >> shift) & 15];
+    out += '_';
+  };
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c == '_' && i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
+        std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); })) {
+      escape(out, '_');  // "_x0041_" as text: its "_" escaped, so it doesn't read back as "A"
+    } else if (c < 0x20 && c != '\t' && c != '\n') {
+      escape(out, c);  // XML can't hold it, or reads a CR back as a line feed
+    } else if (c == 0xEF && i + 2 < s.size() && static_cast<unsigned char>(s[i + 1]) == 0xBF &&
+               (static_cast<unsigned char>(s[i + 2]) & 0xFE) == 0xBE) {
+      escape(out, 0xFFFE + (static_cast<unsigned char>(s[i + 2]) - 0xBE));  // U+FFFE, U+FFFF: not XML characters
+      i += 2;
+    } else {
+      out += static_cast<char>(c);
+    }
+  }
+  return out;
+}
+
+void AppendXstringText(std::string& out, std::string_view s) {
+  const bool plain = s.find("_x") == std::string_view::npos && s.find("\xEF\xBF") == std::string_view::npos &&
+                     std::none_of(s.begin(), s.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20 && c != '\t' && c != '\n'; });
+  if (plain) pkg::AppendEscapedText(out, s);
+  else pkg::AppendEscapedText(out, EncodeXstring(s));
+}
+
+// ---- Tables
 
 Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& t) {
   pkg::XmlDom dom;
@@ -632,7 +664,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
       TableColumn col;
       col.id = UIntAttr(c, "id", 0);
-      col.name = Unescape(Attr(c, "name"));
+      col.name = DecodeXstring(Attr(c, "name"));
       col.totalsFunction = Attr(c, "totalsRowFunction");
       if (col.totalsFunction == "none") col.totalsFunction.clear();
       col.totalsLabel = Attr(c, "totalsRowLabel");
@@ -880,7 +912,7 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
         d.name = Attr(n, "name");
         d.sheet = IntAttr(n, "localSheetId", -1);
         d.hidden = BoolAttr(n, "hidden", false);
-        d.formula = TextOf(n);
+        d.formula = DecodeXstring(TextOf(n));  // Excel: "_x005F_x0041_" for the text _x0041_
         loader.Names().push_back(std::move(d));
       }
     } else if (k == "calcPr") {
@@ -960,7 +992,13 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
   loader.SetPackage(std::move(package));
   loader.SetLoader([](Workbook& b, size_t i) { return LoadSheetPart(b, i); });
   // The active sheet now; the others when asked.
-  if (count && !(status = book->LoadSheet(book->ActiveSheet())).Ok()) return nullptr;
+  if (count) {
+    bool cut = false;
+    if (options.firstBytes && !(status = LoadSheetStart(*book, book->ActiveSheet(), options.firstBytes, cut)).Ok())
+      return nullptr;
+    if (!cut && !(status = book->LoadSheet(book->ActiveSheet())).Ok()) return nullptr;
+    if (options.partial) *options.partial = cut;
+  }
   if (options.loadAll && !(status = book->LoadAll()).Ok()) return nullptr;
   return book;
 }

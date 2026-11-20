@@ -1,5 +1,7 @@
 #include "sheet/calc/Bind.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -85,6 +87,24 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
   s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m, true);
   auto& e = extents_[static_cast<size_t>(sheet)];
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
+}
+
+void WorkbookCalc::BeginShared(int sheet, int32_t r1, int32_t r2) {
+  if (sheet < 0 || sheet >= SheetCount() || r2 < 0) return;
+  book_.GetSheet(static_cast<size_t>(sheet)).OwnBlocks(static_cast<uint32_t>(std::max(0, r1)), static_cast<uint32_t>(r2));
+}
+
+int WorkbookCalc::StoreShared(int sheet, int32_t row, int32_t col, const Value& v) {
+  if (sheet < 0 || sheet >= SheetCount() || row < 0 || col < 0) return 0;
+  sheet::Value m;
+  switch (v.type()) {
+    case Type::Number: m = sheet::Value::Number(v.number()); break;
+    case Type::Bool: m = sheet::Value::Bool(v.boolean()); break;
+    case Type::Error: m = sheet::Value::Error(ToModel(v.error())); break;
+    default: return -1;
+  }
+  // A formula's cell lies within the extent already (it was read or stored before).
+  return book_.GetSheet(static_cast<size_t>(sheet)).SetResultShared(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m);
 }
 
 // The file says how far a dynamic array spills (its formula's ref): else Excel takes the cells it
@@ -345,6 +365,13 @@ bool WorkbookCalc::CircularCell(int& sheet, int32_t& row, int32_t& col) const {
 bool WorkbookCalc::Manual() { return book_.Calc().mode == CalcMode::Manual; }
 
 int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {
+  static_assert(sizeof(SRWLOCK) == sizeof(void*));
+  auto* lock = reinterpret_cast<SRWLOCK*>(&formatsLock_);
+  AcquireSRWLockExclusive(lock);
+  struct Unlock {
+    SRWLOCK* l;
+    ~Unlock() { ReleaseSRWLockExclusive(l); }
+  } unlock{lock};
   auto it = formats_.find(std::string(format));
   if (it == formats_.end()) {
     if (formats_.size() > 4096) formats_.clear();

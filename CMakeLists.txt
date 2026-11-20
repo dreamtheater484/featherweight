@@ -80,7 +80,8 @@ if(FW_BUILD_TESTS)
   add_test(NAME unit COMMAND fw_tests)
   # File kinds, settings and file associations: temporary settings files, and registry dry runs only.
   target_sources(fw_tests PRIVATE tests/unit/test_filekinds.cpp tests/unit/test_settings.cpp
-    tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp)
+    tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp
+    tests/unit/test_usertemplates.cpp src/UserTemplates.cpp)
   target_link_libraries(fw_tests PRIVATE bcrypt shell32 ole32 advapi32 user32)
 endif()
 

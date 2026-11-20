@@ -14,6 +14,7 @@
 
 #include "Commands.h"
 #include "FileAssoc.h"
+#include "UserTemplates.h"
 #include "Util.h"
 #include "Version.h"
 #include "chart/Chart.h"
@@ -724,6 +725,10 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       for (auto& t : tabs_)
         if (reinterpret_cast<LPARAM>(t.get()) == lp) t->SaveDone();
       return 0;
+    case kWorkDoneMessage:
+      for (auto& t : tabs_)
+        if (reinterpret_cast<LPARAM>(t.get()) == lp) t->WorkDone();
+      return 0;
     case WM_COMMAND:
       if (HIWORD(wp) == 0 && lp == 0) {
         Execute(LOWORD(wp));
@@ -1314,6 +1319,17 @@ void App::Execute(int cmd) {
     if (fw::EditorShipped(fw::FileKind::Document)) NewDocument(cmd - CmdNewTemplate + 1);
     return;
   }
+  if (cmd >= CmdUserTemplate && cmd < CmdUserTemplate + kUserTemplateCount) {
+    // One of the user's templates: opening it makes a new document or workbook (CreateTab).
+    if (userTemplates_.empty()) userTemplates_ = usertemplates::List(kUserTemplateCount);  // a script, no menu yet
+    if (const size_t i = static_cast<size_t>(cmd - CmdUserTemplate); i < userTemplates_.size())
+      OpenFiles({userTemplates_[i]});
+    return;
+  }
+  if (cmd == CmdUserTemplatesFolder) {
+    OpenDialog(true);
+    return;
+  }
   if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
     MakeDefaultApp(static_cast<fw::FileKind>(act - kActMakeDefault));
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1421,6 +1437,7 @@ void App::Execute(int cmd) {
     case CmdZoomMenu:
     case CmdViewMenu:
     case CmdSaveMenu:
+    case CmdToolbarOverflow:
     case CmdMoreMenu: ShowMenu(cmd); break;
     case CmdToggleCover:
       settings_.coverAlone = !settings_.coverAlone;
@@ -1494,11 +1511,23 @@ static std::wstring NewLabel(const fw::FileKindInfo& k) {
   return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
 }
 
-// "New from template": the built-in templates, once the Word editor ships.
-static void AppendTemplates(HMENU m) {
-  if (!fw::EditorShipped(fw::FileKind::Document)) return;
+// "New from template": the built-in templates, once the Word editor ships, and the user's own
+// (S4): the templates in their personal templates folder, and the Open dialog there for the rest.
+static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
+  const bool docs = fw::EditorShipped(fw::FileKind::Document);
+  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook)) return;
   HMENU sub = CreatePopupMenu();
-  for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+  if (docs)
+    for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+  if (docs && !mine.empty()) AppendSeparator(sub);
+  for (size_t i = 0; i < mine.size(); ++i) {
+    std::wstring name = fw::FileNameOf(mine[i]), shown;
+    name = name.substr(0, name.find_last_of(L'.'));
+    for (wchar_t c : name) shown += c == L'&' ? std::wstring(L"&&") : std::wstring(1, c);  // no accelerator
+    AppendItem(sub, CmdUserTemplate + static_cast<int>(i), shown);
+  }
+  AppendSeparator(sub);
+  AppendItem(sub, CmdUserTemplatesFolder, L"More templates\u2026");
   AppendSubmenu(m, sub, L"New from template");
 }
 
@@ -1511,7 +1540,8 @@ void App::ShowMenu(int which) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind))
         AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
-    AppendTemplates(m);
+    userTemplates_ = usertemplates::List(kUserTemplateCount);
+    AppendTemplates(m, userTemplates_);
     AppendSeparator(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
@@ -1521,7 +1551,8 @@ void App::ShowMenu(int which) {
     alignRight = true;
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
-    AppendTemplates(m);
+    userTemplates_ = usertemplates::List(kUserTemplateCount);
+    AppendTemplates(m, userTemplates_);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
     HMENU recent = CreatePopupMenu();
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
@@ -1539,6 +1570,10 @@ void App::ShowMenu(int which) {
       AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
+    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is with its Paragraph… below
+      const CommandState setup = v->QueryCommand(CmdPageSetup);
+      if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);
+    }
     AppendSeparator(m);
     AppendItem(m, CmdPresentation, L"Present\tF5", ready);
     AppendItem(m, CmdFullScreen, fullscreen_ ? L"Exit full screen\tF11" : L"Full screen\tF11");
@@ -1585,6 +1620,8 @@ void App::ShowMenu(int which) {
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
     AppendItem(m, CmdAbout, L"About Featherweight");
+  } else if (which == CmdToolbarOverflow) {
+    toolbar_.FillOverflowMenu(m);  // what doesn't fit a narrow window
   } else if (ready) {
     v->FillMenu(which, m);  // zoom, page layout
   }
@@ -1596,6 +1633,7 @@ void App::ShowMenu(int which) {
     int cmd = TrackMenu(m, anchor, alignRight);
     openMenu_ = 0;
     title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
+    if (cmd && which == CmdToolbarOverflow) cmd = toolbar_.OverflowChoice(cmd);
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
@@ -1691,7 +1729,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void App::OpenDialog() {
+void App::OpenDialog(bool templates) {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
   // Everything the viewers open first, then each kind on its own.
@@ -1704,16 +1742,32 @@ void App::OpenDialog() {
       if (k.kind == fw::FileKind::Workbook) books += (books.empty() ? L"*" : L";*") + std::wstring(ext);
     }
   }
-  COMDLG_FILTERSPEC filters[] = {{L"Files Featherweight opens", all.c_str()},
+  // Templates (S4): those a shipped editor opens, as a new document or workbook.
+  std::wstring tmpl;
+  if (fw::EditorShipped(fw::FileKind::Document)) tmpl += L"*.dotx;*.dotm;*.ott";
+  if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
+  if (tmpl.empty()) templates = false;
+  COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
+                                 {L"Files Featherweight opens", all.c_str()},
                                  {L"PDF documents", L"*.pdf"},
                                  {L"Word documents", docs.c_str()},
                                  {L"Excel workbooks", books.c_str()},
                                  {L"All files", L"*.*"}};
-  dlg->SetFileTypes(5, filters);
+  dlg->SetFileTypes(templates ? 6 : 5, templates ? filters : filters + 1);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-  if (TabContent* v = Active()) {
+  if (templates) {
+    // The personal templates folder: the first that exists (Office makes the default one when it
+    // first saves a template; Featherweight doesn't).
+    for (const std::wstring& f : usertemplates::Folders()) {
+      ComPtr<IShellItem> folder;
+      if (SUCCEEDED(SHCreateItemFromParsingName(f.c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
+        dlg->SetFolder(folder.Get());
+        break;
+      }
+    }
+  } else if (TabContent* v = Active()) {
     ComPtr<IShellItem> folder;
     if (SUCCEEDED(SHCreateItemFromParsingName(fw::DirOf(v->Path()).c_str(), nullptr, IID_PPV_ARGS(&folder))))
       dlg->SetFolder(folder.Get());
@@ -1913,9 +1967,11 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
     const size_t dot = path.rfind(L'.');
     std::wstring ext = dot == std::wstring::npos ? std::wstring() : path.substr(dot + 1);
     for (wchar_t& c : ext) c = static_cast<wchar_t>(towupper(c));
+    // A CSV file: keep the workbook (Save As .xlsx), or write the data only (s4 friction W7).
+    const bool data = ext == L"CSV" || ext == L"TSV";
     banner_.Show(BannerKind::Warning, loss,
-                 {{kActSaveAs, std::wstring(L"Save as .") + v->SaveAsFormat().ext, true},
-                  {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
+                 {{kActSaveAs, std::wstring(data ? L"Keep as ." : L"Save as .") + v->SaveAsFormat().ext, true},
+                  {kActKeepFormat, data ? L"Save as " + ext : ext.empty() ? L"Keep it" : L"Keep " + ext}});
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
@@ -2660,6 +2716,28 @@ void App::RunScript(const std::wstring& script) {
         ImmReleaseContext(hwnd_, imc);
       }
       fwprintf(stderr, L"caret: %d,%d ime: %d,%d\n", caret.x, caret.y, cf.ptCurrentPos.x, cf.ptCurrentPos.y);
+    } else if (op == L"dumptoolbar") {
+      // The toolbar as laid out: each item of the tab's that shows, then those in the overflow menu
+      // (the window too narrow), for checks.
+      const ToolbarModel tm = CurrentToolbar();
+      auto inOverflow = [&](const ToolItem& it) {
+        return std::any_of(toolbar_.Overflow().begin(), toolbar_.Overflow().end(),
+                           [&](const ToolItem& o) { return o.cmd == it.cmd; });
+      };
+      for (const std::vector<ToolItem>* items : {&tm.left, &tm.right})
+        for (const ToolItem& it : *items)
+          if (!inOverflow(it)) fwprintf(stderr, L"toolbar: shown %d %s\n", it.cmd, Toolbar::MenuName(it).c_str());
+      for (const ToolItem& it : toolbar_.Overflow())
+        fwprintf(stderr, L"toolbar: overflow %d %s (%d choices)\n", it.cmd, Toolbar::MenuName(it).c_str(),
+                 static_cast<int>(it.choices.size()));
+    } else if (op == L"dumpcommands") {
+      // What command search (Alt+Q) lists for `arg`, best first, as "label|shortcut|enabled".
+      std::vector<std::pair<int, CommandEntry>> found;
+      for (const CommandEntry& e : SearchableCommands())
+        if (const int score = CommandSearch::Match(e.label, arg); score >= 0) found.push_back({score, e});
+      std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+      for (const auto& [score, e] : found)
+        fwprintf(stderr, L"commands[%s]: %s|%s|%d\n", arg.c_str(), e.label.c_str(), e.shortcut.c_str(), e.enabled ? 1 : 0);
     } else if (op == L"dumpselection") {
       // The selected text, as copying would give it (without touching the clipboard).
       if (TabContent* v = Active()) fwprintf(stderr, L"selection: [%s]\n", v->SelectedText().c_str());

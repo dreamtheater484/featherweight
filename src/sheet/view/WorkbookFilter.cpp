@@ -320,10 +320,10 @@ bool WorkbookView::DataCommandState(int cmd, CommandState& s) {
       if (const int i = cells ? TableIndexAt(active_) : -1; i >= 0) s.checked = Current().Tables()[static_cast<size_t>(i)].autoFilter;
       else s.checked = cells && Current().Filter().has_value();
       return true;
-    case CmdDataBox: s.label = L"Sort and filter"; s.enabled = cells; return true;
+    case CmdDataBox: s.label = L"Custom sort…"; s.enabled = cells; return true;  // the Sort panel
     case CmdSortAscending: s.label = L"Sort A to Z"; s.enabled = cells; return true;
     case CmdSortDescending: s.label = L"Sort Z to A"; s.enabled = cells; return true;
-    case CmdRemoveDuplicates: s.label = L"Remove duplicates"; s.enabled = cells; return true;
+    case CmdRemoveDuplicates: s.label = L"Remove duplicates…"; s.enabled = cells; return true;
   }
   return false;
 }

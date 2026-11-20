@@ -36,6 +36,17 @@ class Host {
   virtual void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) = 0;
   // A formula's new value, after the engine calculated it (each cell of an array formula's range).
   virtual void Store(int sheet, int32_t row, int32_t col, const Value& v) { (void)sheet, (void)row, (void)col, (void)v; }
+  // Multi-threaded recalculation (S4) stores values from several threads at once: BeginShared on
+  // the engine's thread for the rows of each sheet about to be stored, then StoreShared from the
+  // workers (each cell once, nothing else changing the workbook meanwhile), then EndShared with
+  // how many changed. StoreShared: 1 when the value changed, 0 when not, -1 when it can't be stored
+  // that way (Store is then called for it). The default stores nothing that way.
+  virtual void BeginShared(int sheet, int32_t r1, int32_t r2) { (void)sheet, (void)r1, (void)r2; }
+  virtual int StoreShared(int sheet, int32_t row, int32_t col, const Value& v) {
+    (void)sheet, (void)row, (void)col, (void)v;
+    return -1;
+  }
+  virtual void EndShared(size_t changed) { (void)changed; }
   // A dynamic array at (row, col) spills over `out` now (calculated again; the cell alone when
   // blocked), after its cells were stored.
   virtual void SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) { (void)sheet, (void)row, (void)col, (void)out; }

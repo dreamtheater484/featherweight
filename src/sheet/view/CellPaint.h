@@ -3,11 +3,16 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include "draw/Painter.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
+
+namespace fw::sheet::pivot {
+struct Look;
+}
 
 namespace fw::sheet::condfmt {
 class SheetRules;
@@ -16,6 +21,8 @@ class SheetRules;
 // Drawing cells through draw::Painter (plan §4.5): the same code draws the screen, printed pages
 // and print preview, so they look alike.
 namespace fw::sheet::view {
+
+class Sparklines;
 
 // Where cells go in the painter's coordinates. The screen gives whole device pixels at the zoom;
 // a printed page gives points. In a right-to-left sheet column A is at the right.
@@ -54,6 +61,8 @@ struct PaintOptions {
   // Conditional formats over the cells' own formats (null: none); table styles under them.
   condfmt::SheetRules* rules = nullptr;
   bool tables = true;
+  const Sparklines* sparklines = nullptr;  // the sheet's sparklines (S4); null: none
+  const std::vector<pivot::Look>* pivots = nullptr;  // the sheet's PivotTables' styles, like tables'
 };
 
 

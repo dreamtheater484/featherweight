@@ -1144,7 +1144,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     return true;
   };
   switch (cmd) {
-    case CmdFormatCells: return set(L"Format cells", L"Ctrl+1");
+    case CmdFormatCells: return set(L"Format cells…", L"Ctrl+1");
     case CmdBold: return set(L"Bold", L"Ctrl+B", f && f->bold);
     case CmdItalic: return set(L"Italic", L"Ctrl+I", f && f->italic);
     case CmdUnderline: return set(L"Underline", L"Ctrl+U", f && f->underline != Underline::None);
@@ -1156,7 +1156,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdFillColor: return set(L"Fill color", L"");
     case CmdBordersBox: return set(L"Borders", L"");
     case CmdMergeBox: return set(L"Merge", L"");
-    case CmdNumberFormatBox: return set(L"Number format", L"");
+    case CmdNumberFormatBox: return set(L"More number formats…", L"");  // Format cells' Number page
     case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
     case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
     case CmdNumGeneral: return set(L"General format", L"Ctrl+Shift+~");
@@ -1384,7 +1384,8 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   merge.cmd = CmdMergeBox;
   merge.width = 84;
   merge.priority = 3;
-  merge.text = L"Merge";
+  merge.text = merge.menuLabel = L"Merge";
+  merge.fitText = true;
   merge.tooltip = L"Merge and center, merge across, merge or unmerge cells";
   merge.choices = {L"Merge and center", L"Merge across", L"Merge cells", L"Unmerge cells"};
   merge.onChange = [this](const ToolValue& v) {
@@ -1399,6 +1400,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   styles.priority = 2;
   styles.maxRows = 20;
   styles.text = L"Styles";
+  styles.fitText = true;
   styles.tooltip = L"Cell styles";
   for (const BuiltinStyle& s : Gallery()) styles.choices.push_back(s.name);
   styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
@@ -1410,16 +1412,20 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   data.cmd = CmdDataBox;
   data.width = 72;
   data.priority = 2;
-  data.text = L"Data";
+  data.text = data.menuLabel = L"Data";
+  data.fitText = true;
   data.tooltip = L"Sort, filter and remove duplicates";
   data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
                   L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",
-                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)"};
+                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)",
+                  L"PivotTable…", L"Refresh PivotTable (Alt+F5)", L"Refresh all PivotTables"};
   data.onChange = [this](const ToolValue& v) {
     static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending,   CmdDataBox,       CmdFilter,
-                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable};
+                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable,
+                                    CmdPivotTable, CmdPivotRefresh, CmdPivotRefreshAll};
     if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
     else if (v.index >= 5 && v.index < 9) RulesCommand(kCmds[v.index]);
+    else if (v.index >= 9 && v.index < 12) PivotsCommand(kCmds[v.index]);  // s4-pivot
   };
   m.left.push_back(data);
   // Conditional formatting (WorkbookData.cpp).
@@ -1429,6 +1435,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   rules.width = 104;
   rules.priority = 3;
   rules.text = L"Conditional";
+  rules.fitText = true;
   rules.tooltip = L"Conditional formatting";
   rules.choices = {L"New rule…", L"Manage rules…", L"Clear rules from selected cells", L"Clear rules from entire sheet"};
   rules.onChange = [this](const ToolValue& v) {

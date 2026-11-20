@@ -200,7 +200,7 @@ const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, 
     cache_.clear();
     cacheSheet_ = &sheet;
   }
-  if (cache_.size() > 40000) cache_.clear();
+  if (cache_.size() > 40000 && !held_) cache_.clear();  // not under a paint's layouts (a crash)
   const uint64_t key = (static_cast<uint64_t>(cell.row) << 14) | cell.col;
   auto& slot = cache_[key];
   if (!slot) slot = std::make_unique<Layout>();

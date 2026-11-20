@@ -786,7 +786,7 @@ std::string StringsXml(const StringTable& table, bool strict) {
           AttrXml("uniqueCount", std::to_string(table.Size())) + ">";
     for (uint32_t id = 0; id < table.Size(); ++id) {
       out += (table.Flags(id) & StringTable::kPreserve) ? "<si><t xml:space=\"preserve\">" : "<si><t>";
-      pkg::AppendEscapedText(out, table.Text(id));
+      AppendXstringText(out, table.Text(id));
       out += "</t></si>";
     }
     return out + "</sst>";
@@ -1367,7 +1367,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     if (names)
       for (pugi::xml_node n : names.children()) {
         if (n.type() != pugi::node_element || Local(n) != "definedName") continue;
-        fileNames.push_back(DefinedName{std::string(Attr(n, "name")), IntAttr(n, "localSheetId", -1), TextOf(n),
+        fileNames.push_back(DefinedName{std::string(Attr(n, "name")), IntAttr(n, "localSheetId", -1), DecodeXstring(TextOf(n)),
                                         BoolAttr(n, "hidden", false)});
       }
     bool sameNames = fileNames.size() == book.Names().size() &&
@@ -1406,7 +1406,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
         SetAttr(e, "name", n.name);
         SetAttr(e, "localSheetId", n.sheet >= 0 ? std::to_string(n.sheet) : "");
         SetAttr(e, "hidden", n.hidden ? "1" : "");
-        e.append_child(pugi::node_pcdata).set_value(n.formula.c_str());
+        e.append_child(pugi::node_pcdata).set_value(EncodeXstring(n.formula).c_str());  // as Excel: _x005F_x0041_
       }
     } else if (names) {
       root.remove_child(names);
@@ -1665,6 +1665,11 @@ pkg::Status GiveBasePackage(Workbook& book) {
     if (Sheet& s = book.GetSheet(i); s.SheetId() == 0)
       WorkbookLoader::SetSheetInfo(s, s.Kind(), s.State(), ++last, s.PartName(), s.RelId());
   return {};
+}
+
+detail::PartText NewSheetPartText(const Sheet& s, bool strict) {
+  // Not the selected tab: the save marks the active sheet's (a stale mark would group the tabs).
+  return NewSheetText(s, false, strict, {});
 }
 
 }  // namespace fw::sheet::xlsx

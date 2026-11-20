@@ -10,6 +10,7 @@
 #include "core/Strings.h"
 #include "pkg/Backups.h"
 #include "pkg/Recovery.h"
+#include "sheet/view/WorkbookFile.h"
 #include "sheet/view/WorkbookView.h"
 #include "word/DocView.h"
 
@@ -125,12 +126,13 @@ void App::RecoverDocuments(bool open) {
       continue;
     }
     // Saved with Save As, starting where the document was: the original is never replaced unasked.
-    std::wstring name = entry.title;
+    std::wstring name = entry.title, suggested = entry.originalPath;
+    // A CSV file's autosave that holds a workbook (a chart, a table...): an unsaved .xlsx named after it.
+    WorkbookFile::RecoveredAsWorkbook(bytes, name, suggested);
     const fw::FileKind kind = fw::KindOfPath(name);
     const bool workbook = kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes));
     if (workbook && kind != fw::FileKind::Workbook) name += L".xlsx";
     if (!workbook && kind != fw::FileKind::Document) name += L".docx";
-    std::wstring suggested = entry.originalPath;
     if (suggested.empty()) {  // never saved: the Documents folder, as for a new document
       PWSTR docs = nullptr;
       if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {

@@ -65,6 +65,8 @@ class ViewHost {
 // Posted to the window by a tab's save worker when the file is written; lParam is the tab, whose
 // SaveDone the window calls if the tab is still open.
 constexpr UINT kSaveDoneMessage = WM_APP + 21;
+// A tab's background worker finished (a large CSV file read): the tab's WorkDone runs (lParam: the tab).
+constexpr UINT kWorkDoneMessage = WM_APP + 22;
 
 // The window's own state, for the parts of a tab's toolbar that show it.
 struct ToolbarContext {
@@ -194,6 +196,8 @@ class TabContent {
     return Save(path, error) ? SaveStart::Saved : SaveStart::Failed;
   }
   virtual void SaveDone() {}
+  // kWorkDoneMessage arrived for this tab: take what its worker made.
+  virtual void WorkDone() {}
   virtual SaveFormat SaveAsFormat() const = 0;
   // More types the tab can become with Save As (a workbook as a template), after SaveAsFormat.
   virtual std::vector<SaveFormat> OtherSaveFormats() const { return {}; }

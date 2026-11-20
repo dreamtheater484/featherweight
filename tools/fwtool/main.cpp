@@ -10,6 +10,10 @@
 #include "core/Strings.h"
 #include "doc/msdoc/MsDoc.h"
 #include "pkg/CompoundFile.h"
+#include "sheet/ods/Ods.h"
+#include "sheet/view/Grid.h"
+#include "text/Fonts.h"
+#include "sheet/xls/Xls.h"
 
 namespace fwtool {
 namespace {
@@ -54,6 +58,9 @@ constexpr const char* kUsage =
     "  fwtool lines [--out DIR] <reference folder or PDF>...\n"
     "      Word's lines in its reference PDFs: page sizes, and each line's story, position and\n"
     "      text. With --out, writes them as layout dumps (docs/layout-dump.md).\n"
+    "  fwtool formulas --threads [--locale en-NL] <file or folder>...\n"
+    "      S4: each workbook recalculated in full on one thread and on four (the parallel phase\n"
+    "      forced however few formulas it has; NOW and RAND fixed); fails when a value differs.\n"
     "  fwtool formulas [--locale en-NL] [--regions R,...] [--report FILE] [--min-match M]\n"
     "                  <workbooks or folders>...\n"
     "      Workbooks (S1): recalculates every formula and compares it with the value Excel saved\n"
@@ -63,10 +70,12 @@ constexpr const char* kUsage =
     "      --excel <reference folder>: compares instead with the values this PC's Excel gave each\n"
     "      formula after opening and after a full recalculation (the cells files under it), in\n"
     "      the region it recorded: what the app recalculates on opening, and everything.\n"
-    "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
+    "  fwtool compare --cells [--json FILE] [--min-cells C] [--folders xls,ods] <reference folder>\n"
     "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
     "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
     "      that only the column width decides (\"####\", General shortened) are counted apart.\n"
+    "      --folders: only the workbooks in those top folders of the manifest (S4: Excel's .xls\n"
+    "      and .ods copies of the corpus are xls/ and ods/).\n"
     "  fwtool compare [--dumps DIR] [--json FILE] [--report FILE] [--min-pages P] [--min-lines L]\n"
     "                 <reference folder>...\n"
     "      Layout fidelity (plan §10): for each Word document in the reference manifest, does\n"
@@ -162,8 +171,8 @@ constexpr const char* kUsage =
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
     "  fwtool convert <file.doc> <file.docx>\n"
-    "      Writes the .docx a Word 97-2003 document is read as. Every other command reads .doc\n"
-    "      files this way too.\n"
+    "      Writes the .docx a Word 97-2003 document is read as (or the .xlsx an Excel 97-2003\n"
+    "      workbook, .xls, is read as). Every other command reads .doc and .xls files this way too.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -175,7 +184,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
        it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
-    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm",
+    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls", L".ods", L".ots",
                                  L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
       if (ext == known) files.push_back(it->path());
   }
@@ -222,18 +231,38 @@ std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Stat
     std::fclose(f);
   }
   auto cf = fw::pkg::CompoundFile::Open(bytes);
+  // An Excel 97-2003 workbook: the .xlsx it's read as.
+  if (cf && fw::sheet::xls::IsWorkbook([&cf](std::string_view name) { return cf->Stream(name); }))
+    return fw::sheet::xls::ToXlsx([&cf](std::string_view name) { return cf->Stream(name); }, status);
   if (!cf || !cf->Stream("WordDocument")) {
-    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document");
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document or Excel 97-2003 workbook");
     return {};
   }
   return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
 }
 
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
-  if (fw::ToLower(file.extension().wstring()) == L".doc") {
+  if (fw::ToLower(file.extension().wstring()) == L".doc" || fw::ToLower(file.extension().wstring()) == L".xls") {
     std::vector<uint8_t> docx = ConvertDoc(file, status);
     if (docx.empty()) return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
+  }
+  if (const std::wstring ext = fw::ToLower(file.extension().wstring()); ext == L".ods" || ext == L".ots") {
+    // S4: an OpenDocument spreadsheet, converted as the app converts it.
+    auto source = fw::pkg::Snapshot::Open(file.wstring(), {}, status);
+    std::vector<uint8_t> xlsx;
+    const fw::sheet::ods::DigitWidth digit = [](const std::string& family, double points) {
+    // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
+    fw::text::Fonts fonts(fw::sheet::view::ExcelFontSubstitute);  // as the app's grid
+    fw::sheet::view::FontMeasure measure(fonts);
+    fw::sheet::Font f;
+    f.name = family;
+    f.size = points;
+    return measure.Of(f, f).digit;
+  };
+    if (!source || !(status = fw::sheet::ods::OdsToXlsx(source->Bytes(), xlsx, fw::pkg::Limits::Default(), digit)).Ok())
+      return nullptr;
+    return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(xlsx)), fw::pkg::Limits::Default(), status);
   }
   fw::pkg::Snapshot::Options options;
   std::error_code ec;
@@ -298,6 +327,7 @@ int wmain(int argc, wchar_t** argv) {
       }
     }
     else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
+    else if (arg == L"--threads") options.threads = true;
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
@@ -306,6 +336,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--values") options.values = true;
     else if (arg == L"--resave") options.resave = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
+    else if (arg == L"--folders" && i + 1 < argc) options.folders = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;

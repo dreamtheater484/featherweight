@@ -93,8 +93,13 @@ std::string WriteNew(const Workbook& book, const Options& options);
 // Whether saving as CSV loses something the workbook holds (S2 plan: the "CSV keeps only the values
 // of the first sheet" banner): another sheet, a formula, formatting beyond number formats (fonts,
 // fills, borders, alignment, cell styles), merged cells, column widths or row heights, hidden rows
-// or columns, hyperlinks, a filter. Number formats aren't: the values are written as shown.
+// or columns, hyperlinks, a filter, a table, conditional formats or validations, charts, pictures,
+// shapes, notes or comments. Number formats aren't: the values are written as shown.
 bool Loses(const Workbook& book);
+
+// The sheet a CSV file is read into, as Read makes it: the workbook's format, default styles and
+// one sheet named `sheetName` (for reading in steps with Reader::AddRows).
+Sheet& NewSheet(Workbook& book, const std::string& sheetName);
 
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).
 void Read(std::string_view bytes, const std::string& sheetName, const Options& options, Workbook& book,

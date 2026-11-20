@@ -481,7 +481,7 @@ std::vector<RichParagraph> NoteText(pugi::xml_node text, const Styles& styles, s
     } else if (k != "t") {
       continue;
     }
-    const std::wstring t = Utf8ToWide(k == "t" ? c.text().get() : xlsx::Child(c, "t").text().get());
+    const std::wstring t = Utf8ToWide(xlsx::DecodeXstring(k == "t" ? c.text().get() : xlsx::Child(c, "t").text().get()));
     plain += t;
     AddText(out, t, s, chars);
   }
@@ -642,7 +642,7 @@ void SheetObjects::ReadNotes() {
     std::vector<std::wstring> authors;
     for (pugi::xml_node a = xlsx::Child(dom.Root(), "authors").first_child(); a && authors.size() < kMaxNotes;
          a = a.next_sibling())
-      if (xlsx::Local(a) == "author") authors.push_back(Utf8ToWide(a.text().get()));
+      if (xlsx::Local(a) == "author") authors.push_back(Utf8ToWide(xlsx::DecodeXstring(a.text().get())));
     for (pugi::xml_node c = xlsx::Child(dom.Root(), "commentList").first_child(); c; c = c.next_sibling()) {
       CellAddr a;
       if (xlsx::Local(c) != "comment" || !ParseA1(c.attribute("ref").value(), a)) continue;

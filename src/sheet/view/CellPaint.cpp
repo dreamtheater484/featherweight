@@ -1,5 +1,7 @@
 #include "sheet/view/CellPaint.h"
 
+#include "sheet/view/Sparklines.h"
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -7,6 +9,7 @@
 
 #include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/TableStyles.h"
+#include "sheet/pivot/Pivot.h"
 
 namespace fw::sheet::view {
 
@@ -134,6 +137,7 @@ class Painting {
     if (o_.gridlines) Gridlines();
     Fills();
     BarsAndIcons();
+    DrawSparklines();
     Borders();
     DrawText();
   }
@@ -145,13 +149,16 @@ class Painting {
     bool cf = false;        // a conditional format holds:
     condfmt::Style st;      // over it
   };
-  bool Looks() const { return o_.rules || (o_.tables && !sheet_.Tables().empty()); }
+  bool Looks() const {
+    return o_.rules || (o_.tables && !sheet_.Tables().empty()) || (o_.pivots && !o_.pivots->empty());
+  }
   const Look& LookAt(uint32_t row, uint32_t col) {
     const uint64_t key = (uint64_t{row} << 15) | col;
     auto it = looks_.find(key);
     if (it != looks_.end()) return it->second;
     Look& lk = looks_[key];
     if (o_.tables && !sheet_.Tables().empty()) lk.table = TableFormatAt(styles_, sheet_, row, col);
+    if (o_.pivots && !o_.pivots->empty() && lk.table.Empty()) lk.table = pivot::LookFormatAt(*o_.pivots, row, col);
     if (o_.rules) lk.cf = o_.rules->At(row, col, lk.st);
     return lk;
   }
@@ -228,6 +235,13 @@ class Painting {
     side(b.top, lk.table.top, lk.st.top);
     side(b.bottom, lk.table.bottom, lk.st.bottom);
     return b;
+  }
+
+  // ---- Sparklines (S4): over the fills and data bars, under the borders and text.
+  void DrawSparklines() {
+    if (!o_.sparklines) return;
+    for (const RowData& rd : rows_)
+      for (uint32_t col : cols_) o_.sparklines->Draw(p_, g_, rd.row, col, Outer(rd.row, col, rd.row, col));
   }
 
   // ---- Data bars and icons (conditional formats): over the fills, under the borders and text.
@@ -1036,7 +1050,9 @@ class Painting {
 
 void PaintCells(draw::Painter& p, const Sheet& sheet, CellText& text, const Grid& grid, const Geometry& g,
                 const Range& area, const PaintOptions& options) {
+  text.Hold(true);  // the paint keeps the layouts it places until it draws them
   Painting(p, sheet, text, grid, g, area, options).Run();
+  text.Hold(false);
 }
 
 }  // namespace fw::sheet::view

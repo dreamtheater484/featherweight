@@ -51,11 +51,11 @@ TEST(FileKinds_KindOfPath) {
   CHECK(KindOfPath(L"") == FileKind::Unknown);
 }
 
-TEST(FileKinds_ThePdfReaderTheDocumentEditorAndTheSpreadsheetViewerHaveShipped) {
+TEST(FileKinds_ThePdfReaderTheDocumentEditorAndTheSpreadsheetEditorHaveShipped) {
   // Update this when a viewer or an editor ships: file associations and the start screen follow.
   CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document, FileKind::Workbook}));
   CHECK(EditorShipped(FileKind::Document) && AnyEditorShipped());
-  CHECK(!EditorShipped(FileKind::Workbook) && !EditorShipped(FileKind::Presentation));
+  CHECK(EditorShipped(FileKind::Workbook) && !EditorShipped(FileKind::Presentation));  // 3.0 (S4)
   CHECK(ViewerShipped(FileKind::Pdf));
   CHECK(ViewerShipped(FileKind::Document));
   CHECK(ViewerShipped(FileKind::Workbook));  // S1
@@ -67,7 +67,9 @@ TEST(FileKinds_ThePdfReaderTheDocumentEditorAndTheSpreadsheetViewerHaveShipped) 
   CHECK(Opens(L"Report.docx") && Opens(L"Template.DOTM") && Opens(L"Notes.odt") && Opens(L"Form.OTT"));
   CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && Opens(L"old.doc"));  // .doc is imported (D5)
   CHECK(Opens(L"Budget.xlsx") && Opens(L"export.CSV") && Opens(L"data.tsv"));  // S1
-  CHECK(!Opens(L"old.xls") && !Opens(L"sheet.ods") && !Opens(L"Deck.pptx") && !Opens(L"photo.png"));
+  CHECK(Opens(L"old.XLS"));  // .xls is imported (S4)
+  CHECK(Opens(L"sheet.ods") && Opens(L"Form.OTS"));  // .ods is imported (S4)
+  CHECK(!Opens(L"Deck.pptx") && !Opens(L"photo.png"));
 }
 
 TEST(FileKinds_EditorsForTesting) {
@@ -80,6 +82,6 @@ TEST(FileKinds_EditorsForTesting) {
   CHECK(!EditorShipped(FileKind::Pdf));
   SetEditorShippedForTesting(FileKind::Presentation, false);
   CHECK(!EditorShipped(FileKind::Presentation));
-  CHECK(!EditorShipped(FileKind::Workbook));  // S1 is a viewer
+  CHECK(EditorShipped(FileKind::Workbook));  // shipped in 3.0 (S4), not only for testing
   CHECK(EditorShipped(FileKind::Document));  // shipped, not only for testing
 }

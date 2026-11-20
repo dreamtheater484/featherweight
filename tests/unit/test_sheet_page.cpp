@@ -13,6 +13,7 @@
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
 #include "sheet/view/PrintLayout.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "text/Fonts.h"
 
@@ -263,6 +264,48 @@ TEST(sheet_page_scaled_rows_as_excel) {
   if (layout.PageCount() == 3) CHECK(layout.Page(0).body.lastRow == 49 && layout.Page(1).body.lastRow == 99);
 }
 
+// Without a print area Excel prints its used range and leaves out the pages at the end with nothing
+// on them; merged cells count, empty as they are (s4-ods's pages check: poi-57893's 50,000 merges
+// print 1,064 pages). Excel 2021's counts (scratchpad excel_used.py): A1 "x" and, at row 200, an
+// empty cell with a number format 1 page; A200:B200 merged 5; a space 5; AD200:AE200 merged 20.
+TEST(sheet_page_used_range_merges_as_excel) {
+  const std::string a1 = "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>";
+  auto book = OpenZip(test::MakeZip(WorkbookParts(
+      {"<sheetData>" + a1 + "<row r=\"200\"><c r=\"A200\" s=\"1\"/></row></sheetData>",
+       "<sheetData>" + a1 + "</sheetData><mergeCells count=\"1\"><mergeCell ref=\"A200:B200\"/></mergeCells>",
+       "<sheetData>" + a1 + "<row r=\"200\"><c r=\"A200\" t=\"inlineStr\"><is><t xml:space=\"preserve\"> </t></is></c></row></sheetData>",
+       "<sheetData>" + a1 + "<row r=\"200\"><c r=\"AD200\" s=\"1\"/><c r=\"AE200\" s=\"1\"/></row></sheetData>"
+       "<mergeCells count=\"1\"><mergeCell ref=\"AD200:AE200\"/></mergeCells>"})));
+  if (!book) return;
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const size_t excel[] = {1, 5, 5, 20};
+  for (size_t i = 0; i < std::size(excel); ++i) {
+    const Sheet& s = book->GetSheet(i);
+    view::Grid grid;
+    grid.Build(s, book->GetStyles(), measure);
+    view::PrintLayout layout(*book, s, i, grid, text, view::PrintInfo{});
+    CHECK(layout.PageCount() == excel[i]);
+    if (layout.PageCount() != excel[i]) std::printf("    sheet %zu: %zu pages, Excel %zu\n", i + 1, layout.PageCount(), excel[i]);
+  }
+  // FW_PRINT_KINDS=excel_used.py's kinds.xlsx: each sheet's pages, to set beside Excel's.
+  wchar_t path[MAX_PATH];
+  if (DWORD n = GetEnvironmentVariableW(L"FW_PRINT_KINDS", path, MAX_PATH); n && n < MAX_PATH) {
+    std::ifstream in(path, std::ios::binary);
+    auto kinds = OpenZip(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+    if (!kinds) return;
+    view::CellText kindText(*kinds, fonts, measure, locale);
+    for (size_t i = 0; i < kinds->SheetCount(); ++i) {
+      view::Grid grid;
+      grid.Build(kinds->GetSheet(i), kinds->GetStyles(), measure);
+      view::PrintLayout layout(*kinds, kinds->GetSheet(i), i, grid, kindText, view::PrintInfo{});
+      std::printf("    %-13s pages %3zu\n", kinds->GetSheet(i).Name().c_str(), layout.PageCount());
+    }
+  }
+}
+
 // s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again
 // (the undo takes its text back to before its first save); margins the edit didn't change keep
 // their value (Excel's 17 digits).
@@ -315,6 +358,36 @@ TEST(sheet_page_setup_print_quality_notes_errors) {
   if (!again) return;
   const PageSetup& q = again->GetSheet(0).Page();
   CHECK(q.blackAndWhite && q.draft && q.cellComments == CellComments::AtEnd && q.errors == PrintErrors::Dash);
+}
+
+// A header's or footer's CR, control characters and a literal "_xHHHH_" as Excel writes them
+// (ST_Xstring: _x000D_, _x0001_, _x005F_x0041_), read back as they were (s4-corpus: a CR written raw
+// read back as a line feed; Excel's own _x000D_ was read as text).
+TEST(sheet_page_header_xstring) {
+  CHECK(xlsx::EncodeXstring("a\r\nb\x01\t_x0041_ _x00ZZ_ _x12_ \xEF\xBF\xBE") ==
+        "a_x000D_\nb_x0001_\t_x005F_x0041_ _x00ZZ_ _x12_ _xFFFE_");
+  for (const char* s : {"a\r\nb\x01\t_x0041_ _x005F_ _x00ZZ_ _x", "_x000d_", "\xEF\xBF\xBF\xEF\xBF\xBE end"})
+    CHECK(xlsx::DecodeXstring(xlsx::EncodeXstring(s)) == s);
+  // Excel's own: decoded as read, and written again as it was by a setup that leaves the text alone.
+  const std::string excel = "<headerFooter><oddHeader>&amp;CA_x000D_\nB</oddHeader><oddFooter>&amp;L_x005F_x0041_</oddFooter></headerFooter>";
+  auto book = OpenParts({"<sheetData/><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>" + excel});
+  if (!book) return;
+  CHECK(book->GetSheet(0).HeadersFooters().oddHeader == "&CA\r\nB" && book->GetSheet(0).HeadersFooters().oddFooter == "&L_x0041_");
+  Editor ed(*book);
+  PageSetup p = book->GetSheet(0).Page();
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(0, p, book->GetSheet(0).HeadersFooters(), false));
+  CHECK(Has(PartText(SavePage(*book, ed), "/xl/worksheets/sheet1.xml"), excel));
+  // Set in the dialog: written as Excel would, read back as set.
+  HeaderFooter h;
+  h.oddHeader = "&CTop\rLine";
+  h.oddFooter = "&L_x0041_ and _x00ZZ_ \x01";
+  CHECK(ed.SetPageSetup(0, p, h, false));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  CHECK(Has(PartText(zip, "/xl/worksheets/sheet1.xml"),
+            "<headerFooter><oddHeader>&amp;CTop_x000D_Line</oddHeader><oddFooter>&amp;L_x005F_x0041_ and _x00ZZ_ _x0001_</oddFooter></headerFooter>"));
+  auto again = OpenZip(zip);
+  if (again) CHECK(again->GetSheet(0).HeadersFooters().oddHeader == h.oddHeader && again->GetSheet(0).HeadersFooters().oddFooter == h.oddFooter);
 }
 
 // Printed and exported text can be searched and copied: each glyph run says what it shows, for the

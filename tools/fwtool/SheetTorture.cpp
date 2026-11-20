@@ -64,6 +64,7 @@ constexpr struct {
     {Op::Thread, "thread"},         {Op::Table, "table"},             {Op::Rule, "rule"},
     {Op::Validation, "validation"}, {Op::Chart, "chart"},             {Op::Object, "object"},
     {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},     {Op::Shape, "shape"},
+    {Op::Pivot, "pivot"},
 };
 
 // The S3 edits whose text goes after the arg, quoted.
@@ -225,6 +226,7 @@ std::string FormatEdit(const Edit& e) {
       break;
     case Op::PageSetup: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
     case Op::PageBreak: s += at(e.sheet, e.range) + " " + e.arg; break;
+    case Op::Pivot: s += at(e.sheet, e.range) + " " + e.arg; break;
   }
   if (!e.target.empty()) s += "  # " + e.target;
   return s;
@@ -334,6 +336,10 @@ bool ParseEdit(std::string_view line, Edit& e) {
       e.arg = std::string(NextWord(s));
       return !e.arg.empty();
     case Op::PageBreak:
+      if (!sheetRange(e.sheet, e.range)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::Pivot:
       if (!sheetRange(e.sheet, e.range)) return false;
       e.arg = std::string(NextWord(s));
       return !e.arg.empty();
@@ -677,6 +683,17 @@ class EditApiTarget : public SheetTarget {
         return Applied::Refused;
       }
       case Op::PageSetup: return PageSetup(s, e.arg, why);
+      case Op::Pivot: {
+        if (e.arg == "refresh") return done(ed_.RefreshPivots(sh::edit::Editor::PivotRefresh::AtCell, s, {r.firstRow, r.firstCol}));
+        if (e.arg == "refresh-all") return done(ed_.RefreshPivots(sh::edit::Editor::PivotRefresh::All));
+        sh::edit::Editor::NewPivotTable p;
+        p.sourceSheet = p.sheet = s;
+        p.source = r;
+        p.at = {r.firstRow, std::min<uint32_t>(r.lastCol + 2, 16383)};
+        p.rows = {0};
+        if (r.lastCol > r.firstCol) p.values = {{r.lastCol - r.firstCol, 0}};
+        return done(ed_.InsertPivot(p));
+      }
       case Op::PageBreak: {
         const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
         std::vector<sh::PageBreak> rows = sheet.RowBreaks(), cols = sheet.ColBreaks();
@@ -1591,7 +1608,7 @@ class Generator {
   }
 
   // Charts and the drawing's objects (s3-charts), pictures and shapes (s3-data), page setup and page
-  // breaks (s3-print). `roll`: 0-25.
+  // breaks (s3-print), PivotTables (s4-pivot). `roll`: 0-25.
   void ObjectEdit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, uint32_t roll, Edit& e) {
     static const char* kTexts[] = {"", "Torture", "line one\nline two", "<&> \"quoted\"", "D\xC3\xA9penses \xE6\x97\xA5\xE6\x9C\xAC"};
     if (roll < 8) {
@@ -1630,11 +1647,16 @@ class Generator {
       static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",
                                     "margins=narrow", "margins=wide", "center", "header", "gridlines", "headings", "order"};
       e.arg = rng_.Pick(kWhat);
-    } else {
+    } else if (roll < 25 || rng_.Chance(50)) {
       e.op = Op::PageBreak;
       e.range = Cell(area);
       const uint32_t k = rng_.Below(20);
       e.arg = k < 12 ? "insert" : k < 17 ? "remove" : "reset";
+    } else {
+      e.op = Op::Pivot;
+      e.range = area;
+      const uint32_t k = rng_.Below(10);
+      e.arg = k < 5 ? "insert" : k < 8 ? "refresh" : "refresh-all";
     }
   }
 
@@ -2231,6 +2253,13 @@ int ReplaySheet(const std::filesystem::path& repro, const std::filesystem::path&
   return r.failure ? 1 : 0;
 }
 
+// A workbook that isn't an Office Open XML package: read through a converter (S4: .xls, .ods; the
+// readers hook into OpenPackage), saved as .xlsx.
+bool IsConvertedWorkbook(const fs::path& file) {
+  const std::wstring ext = fw::ToLower(file.extension().wstring());
+  return ext == L".xls" || ext == L".ods";
+}
+
 int RunSheetTorture(const Options& options, const std::vector<std::filesystem::path>& files, bool appendPairs) {
   const uint64_t baseSeed = options.seed ? options.seed : 1;
   const uint32_t edits = static_cast<uint32_t>(options.edits), rounds = options.rounds;
@@ -2256,8 +2285,33 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
     std::string fileJson = "\n    {\"file\": " + JsonText(fw::WideToUtf8(fs::absolute(file).generic_wstring())) + ", \"failures\": [";
     uint32_t done = 0, refused = 0, failures = 0, unsavedRounds = 0;
     bool unread = false;
-    std::string note, savedPath, unsaved;
-    for (uint32_t round = 0; round < rounds; ++round) {
+    std::string note, savedPath, unsaved, convertedPath;
+    // A workbook read through a converter (S4: .xls, .ods) is saved as .xlsx. Its Save As with no
+    // edits is the baseline the edited copies are measured against (the validator can't read the
+    // original), and a file of its own for Excel's open check.
+    const bool converted = IsConvertedWorkbook(file);
+    if (converted) {
+      const std::vector<Edit> none;
+      Round base = RunRound(file, 0, 0, &none, {});
+      if (base.failure && base.failure->category == "open") {
+        unread = true;
+        note = base.failure->message;
+      } else if (base.failure) {
+        const fs::path repro = out / "repro" / (SafeName(file) + "-converted.txt");
+        WriteEdits(repro, file, 0, 0, base.failure->category + ": " + base.failure->message, {});
+        std::printf("[FAIL] %s: Save As .xlsx with no edits: %s: %s\n       reproducer (0 edits): %s\n", name.c_str(),
+                    base.failure->category.c_str(), base.failure->message.c_str(), Display(repro).c_str());
+        fileJson += "\n      {\"round\": 0, \"seed\": 0, \"category\": " + JsonText("converted " + base.failure->category) +
+                    ", \"message\": " + JsonText(base.failure->message) + ", \"edits\": 0, \"reproducer\": " +
+                    JsonText(fw::WideToUtf8(fs::absolute(repro).generic_wstring())) + "}";
+        ++failures;
+      } else if (!base.saved.empty()) {
+        const fs::path c = out / "saved" / (SafeName(file) + ".converted.xlsx");
+        WriteBytes(c, base.saved);
+        convertedPath = fw::WideToUtf8(fs::absolute(c).generic_wstring());
+      }
+    }
+    for (uint32_t round = 0; round < rounds && !unread; ++round) {
       const uint64_t seed = RoundSeed(baseSeed, fw::WideToUtf8(file.filename().wstring()), round);
       Round r = RunRound(file, seed, edits, nullptr, out / "current-edits.txt", only);
       done += r.done, refused += r.refused;
@@ -2273,13 +2327,15 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
           if (auto book = sh::xlsx::Read(std::move(pkg), st)) targetName = OpenSheetTarget(std::move(book), st)->Name();
       }
       if (!r.saved.empty() && savedPath.empty()) {
-        const fs::path saved = out / "saved" / (SafeName(file) + file.extension().string());
+        const fs::path saved = out / "saved" / (SafeName(file) + (converted ? std::string(".xlsx") : file.extension().string()));
         WriteBytes(saved, r.saved);
         // Its edits, so that what the validator or Excel finds in it can be replayed.
         WriteEdits(out / "saved" / (SafeName(file) + ".edits.txt"), file, seed, round,
                    r.failure ? r.failure->category + ": " + r.failure->message : "none", r.applied);
         savedPath = fw::WideToUtf8(fs::absolute(saved).generic_wstring());
-        pairs << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\t" << savedPath << "\n";
+        // original (a converted one: its Save As with no edits), saved copy: for the validator.
+        if (!converted || !convertedPath.empty())
+          pairs << (converted ? convertedPath : fw::WideToUtf8(fs::absolute(file).generic_wstring())) << "\t" << savedPath << "\n";
       }
       if (!r.failure) continue;
       std::vector<Edit> kept = Minimize(file, seed, r.applied, r.failure->category);
@@ -2310,7 +2366,8 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
                 std::to_string(refused) + ", \"unsavedRounds\": " + std::to_string(unsavedRounds) +
                 ", \"unsaved\": " + (unsaved.empty() ? "null" : JsonText(unsaved)) +
                 ", \"skipped\": " + (unread ? JsonText(note) : "null") +
-                ", \"saved\": " + (savedPath.empty() ? "null" : JsonText(savedPath)) + "}";
+                ", \"saved\": " + (savedPath.empty() ? "null" : JsonText(savedPath)) +
+                ", \"converted\": " + (convertedPath.empty() ? "null" : JsonText(convertedPath)) + "}";
     json += fileJson + (fi + 1 < files.size() ? "," : "");
   }
   json += "\n  ]\n}\n";

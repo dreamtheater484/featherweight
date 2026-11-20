@@ -268,6 +268,15 @@ Featherweight edits workbooks. Check it next to Excel on the same file, keystrok
 
 - [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.
 
+### Fewer steps (S4's friction fixes)
+
+`tests\workbook-friction-checks.ps1` checks these off-screen; the menus are Windows' own, so try them by hand too.
+
+- [ ] Narrow the window to about 1366, 1280 and 1024 pixels: the toolbar ends in **›** where items no longer fit. Its menu has each of them: Merge, Styles and Data with their choices, the colors (Automatic, the theme's, the standard ones, More colors…), the format painter. Each works as on the bar. In a document the same: Insert table opens the Table panel, Page layout's menu opens under **›**.
+- [ ] Alt+Q finds Sort, Filter, Table, Conditional formatting, Data validation, Format cells, Name Manager and Refresh PivotTable, with their shortcuts.
+- [ ] A filter's **Condition** picked from its list puts the caret in the Value box; type the number and press Enter: the filter applies, without a click on Apply.
+- [ ] Ctrl+T, and in a table **Table design…**: the styles show as small tables under Light, Medium and Dark, as Excel's gallery (in the workbook's theme colors); a click picks one, the arrows move between them, and the wheel scrolls when the panel is short.
+
 ## Protection, links and notes (S3)
 
 Check next to Excel on copies of your own workbooks. Every change is one undo step.
@@ -301,6 +310,8 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 Check next to Excel on copies of your own workbooks, with sheets long and wide enough for several pages.
 
 - [ ] Right-click a sheet tab, **Page setup…** (or the gear in print preview): the Page tab (portrait or landscape, paper size, no scaling or fit sheet, all columns or all rows on one page, adjust to %, fit to pages wide by tall, first page number), Margins (Normal, Wide, Narrow, or each margin in your units, centered horizontally and vertically), Header (Excel's presets, or left, center and right with &[Page], &[Pages], &[Date], &[File], &[Tab]; different odd and even, different first page) and Sheet (print area, rows and columns to repeat, gridlines, headings, page order). Each change shows at once in print preview beside it; each is one undo step.
+- [ ] From the sheet (no print preview): the toolbar's gear beside Print opens Page setup, and its arrow offers No scaling, Fit sheet on one page, Fit all columns on one page and Fit all rows on one page, the sheet's own marked; ⋯ › Page setup… and Alt+Q ("fit all", "page setup") reach the same. Fit all columns on one page, then Ctrl+P, Print: the columns print on one page wide.
+- [ ] A header or footer holding a carriage return (Excel writes it as `_x000D_`; some .xls files have one): opened, set up (say landscape) and saved, Excel shows the same header text; print preview never shows "_x000D_".
 - [ ] In print preview, Print: Active sheet, Entire workbook (one job: page numbers and &[Pages] through all sheets) or Selection; printing and Export PDF follow the choice and the setup.
 - [ ] Set print area, Add to print area, Clear print area (cell menu and command search); Insert page break above and left of the active cell, Remove page break, Reset all page breaks.
 - [ ] Page break preview (sheet tab menu): what doesn't print is grey, each page shows "Page N", automatic breaks are dashed blue lines and manual ones solid; dragging a break moves it (it becomes manual). Saved, Excel opens in Page Break Preview with the same pages.
@@ -383,3 +394,55 @@ Check next to Excel on copies of your own workbooks.
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`, see `tests\budgets\README.md`): ___ MB, at most 1.35 MB more than S2's 7.91 MB (so ≤ 9.26 MB).
 - [ ] `fuzz_xlsx` (with S3's edits, undo, redo and save) and `fuzz_formula` 60 s each: no findings.
 - [ ] Make a workbook with a table, a chart, a few rules, a list validation, a note, a comment, a link, a name and a protected sheet; save it; open it in Excel: no repair, and everything is there and looks the same.
+
+## More files, pivots and big files (S4)
+
+Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies of ten of the S1 test workbooks), the corpus copies in `D:\Documents\Codex\FeatherweightCorpus\xls` and `\ods` (Excel saved the real-world `.xlsx` corpus as `.xls` and `.ods`), `tests\office\sheet\pivots`, `tests\office\sparklines\sparklines.xlsx`, and the big files from `.venv\Scripts\python tests\office\make_budget_files.py` (`build\budgets`, now with `fifty-mb.xlsx`).
+
+### .xls and .ods
+
+- [ ] Open an `.xls` and an `.ods` from Explorer, by dragging and with Ctrl+O. Each opens in a workbook tab as a copy, with the banner "… is an Excel 97–2003 workbook. Saving makes a new ….xlsx and leaves it as it is." (for `.ods`, "… is an OpenDocument spreadsheet."). Ctrl+S asks where to save the `.xlsx`.
+- [ ] Open a few `.xls` from `tests\fuzz\seeds\xls` next to their `.xlsx` originals in `tests\office\excel`, and a few corpus `.xls` and `.ods` next to Excel: values, number formats, fonts (a font that isn't installed shows in Arial, as in Excel), text with several formats in one cell, fills, borders, merged cells, widths and heights, frozen panes, hidden rows and sheets, conditional formats, pictures, notes and print preview look the same.
+- [ ] Edit an `.xls` and an `.ods` (a value, a formula, a format), save them as `.xlsx`, and open the result in Excel: no repair, and the edits are there. The original `.xls` or `.ods` is unchanged.
+- [ ] An `.ots` (OpenDocument template) opens as a new workbook.
+- [ ] A damaged file (rename a `.txt` to `.ods`) says it "seems to be damaged or isn't an OpenDocument spreadsheet" and nothing else happens.
+- [ ] An `.xls` with pictures, text boxes and shapes shows them where Excel does; one with a chart sheet keeps the sheet in its place, with an empty chart where Excel draws its chart, and prints a page for it.
+- Known: an `.xls`'s charts aren't read (a chart sheet keeps an empty chart), its macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read. Printed, the `.xls` copies pass about as many pages as their `.xlsx` originals (19.15 % against 18.68 %, one workbook Excel prints differently left out), but by workbook they're behind on average (17.15 % against 19.42 %): a follow-up.
+
+### Password-protected workbooks
+
+- [ ] Open `tests\fuzz\seeds\xls\text-password-feather1.xls`: the password card says it's protected and asks for the password. A wrong one: "That password isn't right. Try again."; `Feather1` opens it. Save it: the `.xlsx` is encrypted with the same password (Excel asks for it, and opens it without a repair).
+- [ ] Encrypt a copy of one of your own workbooks in Excel (File › Info › Protect Workbook › Encrypt with Password). Featherweight asks for the password, opens it, and after an edit and Ctrl+S Excel still asks for the same password and opens it without a repair.
+
+### New workbooks and templates
+
+- [ ] The + menu and the … menu have **New spreadsheet** (a blank "Book1"); the start screen has Spreadsheet under New.
+- [ ] Save an Excel template (`.xltx`) into `Documents\Custom Office Templates` (or your own templates folder, as Word and Excel have it). **New from template** lists it; picking it opens a new workbook named after it ("Budget1") with its contents and formats; Ctrl+S asks where (as `.xlsx`; `.xlsm` from an `.xltm`). **More templates…** opens that folder.
+
+### PivotTables
+
+- [ ] Open `tests\office\sheet\pivots\pivots-stale.xlsx` in Featherweight and in Excel. The toolbar's **Data** list: **Refresh all PivotTables** (Ctrl+Alt+F5) in Featherweight, Data › Refresh All in Excel: the pivots show the same values. **Refresh PivotTable** (Alt+F5) refreshes the one the cursor is in.
+- [ ] Select a block with a header row, **Data** › **PivotTable…**: the Create PivotTable panel takes the range (or a table), where to put it (New worksheet), and each field as Rows, Columns, Filters, Sum, Count or Average. **Create PivotTable** adds a sheet before the active one with the filters at A1 and the pivot at A3, in Excel's default style; it's one undo step. Saved, Excel opens it without a repair, and Refresh All gives the same values.
+- [ ] Change a value in the pivot's source and refresh: the pivot follows. A pivot with features Featherweight keeps but doesn't refresh (calculated fields, grouping, slicers) says so instead.
+- Known: pivot labels sit about 11 pixels left of Excel's (no room is left for the expand and collapse buttons); custom pivot styles aren't drawn.
+
+### Sparklines
+
+- [ ] Open `tests\office\sparklines\sparklines.xlsx` next to Excel: line, column and win/loss sparklines, markers, high, low, first and last points, negative points, gaps, the axis, custom minimum and maximum, right to left, weights and colors look the same, in the grid and in print preview. Insert rows above them: they move with their cells. (Featherweight shows sparklines; it doesn't create or edit them.)
+
+### Big files and speed (record the numbers)
+
+- [ ] `fifty-mb.xlsx` (384,000 rows, 52 MB): first screen in ___ s (target < 1.5 s), fully loaded in ___ s (target < 5 s), memory ___ MB. Scroll while it loads; when it's loaded, Ctrl+End reaches row 384,000. Edit a cell and save: the window doesn't freeze.
+- [ ] `100mb.csv`: first screen in ___ s (target < 1 s), fully loaded in ___ s. `million-cells.xlsx`: first screen in ___ s (target < 1.5 s).
+- [ ] A workbook with many formulas (`million-cells.xlsx`, or one of yours): editing a value that feeds them recalculates without a noticeable pause; Task Manager shows several cores busy during a full recalculation (Ctrl+Alt+F9), then nothing when idle.
+
+## S4's gate (record the numbers)
+
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 249 `.xlsx` (44 public, 205 real-world), the 204 `.xls` and the 171 `.ods` copies: ___ failures, ___ new validator errors, ___ Excel repairs (target 0 each); the converted `.xls` and `.ods` saved as `.xlsx` with no edits: ___ validator errors, ___ Excel repairs (target 0 each).
+- [ ] `fwtool compare --cells --folders xls <corpus>\reference` and the same for `ods`: ___ % and ___ % of the cells show Excel's text (target ≥ 99 %).
+- [ ] Printed pages (`scripts\sheet-pages.ps1`): the public set (`-Reference tests\office\reference -Folders excel`) ___ of 239 (target ≥ 90 %); the real-world `.xlsx` (`-Folders xlsx`) ___ % (recorded); the `.xls` and `.ods` copies (`-Folders xls,ods -Originals <the xlsx run's summary.json>`) ___ % and ___ % against their originals' ___ % and ___ % on the same workbooks (target: at least the originals'; `govuk-english-indices-of-deprivation-2019-file-8` is left out of the `.xls` comparison, as the plan says, because Excel prints its own `.xls` differently from its `.xlsx`).
+- [ ] PivotTables: every corpus pivot refreshes to Excel's values; the created ones open in Excel without a repair and refresh to the same values.
+- [ ] `fwtool bench --sheet-edits`: full recalculation of 100,000 formulas ___ ms on 1 thread, ___ ms on 4 (speed-up ___×, target ≥ 3×, 0 values differ).
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target < 11 MB, 3.0's budget).
+- [ ] On a quiet PC with no Featherweight open (the script won't start its copies beside one): `scripts\budgets.ps1 -Build build-release -Timings` (launch, ready, memory, idle) and `fwtool bench-app build-release\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv build\budgets\fifty-mb.xlsx`: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000), fifty-mb on screen in ___ ms (< 1,500) and loaded in ___ ms (< 5,000); then record them (`-Timings -Record "…"`) before release 3.0.
+- [ ] `fuzz_xls`, `fuzz_ods`, the pivot cache, and `fuzz_xlsx` with pivots, 60 s each: no findings.

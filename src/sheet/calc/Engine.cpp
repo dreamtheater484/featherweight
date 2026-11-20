@@ -16,11 +16,13 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <climits>
 #include <cmath>
 
 #include "sheet/calc/Bytecode.h"
+#include "sheet/calc/Workers.h"
 
 namespace fw::sheet::calc {
 
@@ -100,15 +102,18 @@ class Engine::DirtyCells {
 
   void Set(int s, int32_t r, int32_t c, bool on) {
     uint32_t key = (static_cast<uint32_t>(s) << 16) | static_cast<uint32_t>(c);
-    auto it = cols_.find(key);
-    if (it == cols_.end()) {
-      if (!on) return;
-      it = cols_.emplace(key, Bits()).first;
-      if (sheetCols_.size() <= static_cast<size_t>(s)) sheetCols_.resize(static_cast<size_t>(s) + 1);
-      auto& v = sheetCols_[static_cast<size_t>(s)];
-      v.insert(std::upper_bound(v.begin(), v.end(), c), c);
+    if (key != lastKey_ || !last_) {  // the column's bits (runs of cells usually share one)
+      auto it = cols_.find(key);
+      if (it == cols_.end()) {
+        if (!on) return;
+        it = cols_.emplace(key, Bits()).first;
+        if (sheetCols_.size() <= static_cast<size_t>(s)) sheetCols_.resize(static_cast<size_t>(s) + 1);
+        auto& v = sheetCols_[static_cast<size_t>(s)];
+        v.insert(std::upper_bound(v.begin(), v.end(), c), c);
+      }
+      lastKey_ = key, last_ = &it->second;  // map nodes stay put
     }
-    Bits& b = it->second;
+    Bits& b = *last_;
     size_t w = static_cast<size_t>(r) >> 6;
     if (w >= b.w.size()) {
       if (!on) return;
@@ -159,10 +164,21 @@ class Engine::DirtyCells {
     return true;
   }
 
+  // Every cell unmarked at once (nothing is dirty any more).
+  void Reset() {
+    for (auto& [key, b] : cols_) {
+      std::fill(b.w.begin(), b.w.end(), 0);
+      std::fill(b.sum.begin(), b.sum.end(), 0);
+    }
+    count = 0;
+  }
+
  private:
   struct Bits {
     std::vector<uint64_t> w, sum;
   };
+  uint32_t lastKey_ = 0;
+  Bits* last_ = nullptr;
   std::unordered_map<uint32_t, Bits> cols_;
   std::vector<std::vector<int32_t>> sheetCols_;
 };
@@ -307,7 +323,6 @@ class Engine::Graph {
 
 Engine::Engine(Host& host)
     : host_(host), ev_(host, this), graph_(std::make_unique<Graph>()), dirtyCells_(std::make_unique<DirtyCells>()) {}
-Engine::~Engine() = default;
 
 void Engine::SetSheets(std::vector<std::string> names) { sheets_ = std::move(names); }
 
@@ -369,6 +384,7 @@ uint32_t Engine::NodeAt(int sheet, int32_t row, int32_t col) const {
 }
 
 void Engine::SetFormula(const Cell& at, std::shared_ptr<const Formula> f, bool cached, const Area* range, bool dynamic) {
+  PlanChanged();
   ClearFormula(at);
   uint32_t id;
   if (!free_.empty()) {
@@ -398,6 +414,7 @@ void Engine::SetFormula(const Cell& at, std::shared_ptr<const Formula> f, bool c
 void Engine::ClearFormula(const Cell& at) {
   uint32_t id = NodeAt(at.sheet, at.row, at.col);
   if (id == UINT32_MAX) return;
+  PlanChanged();
   Node& n = nodes_[id];
   if (n.state != kClean) Clean(id);
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
@@ -439,6 +456,7 @@ bool Engine::FirstCircular(Cell& out) const {
 }
 
 void Engine::GraphChanged() {
+  PlanChanged();
   graphStale_ = true;
   graph_->Abandon();
 }
@@ -528,6 +546,7 @@ void Engine::Precedents(const Node& n, std::vector<Area>& out, bool* volatileNam
 void Engine::MarkDirty(uint32_t id) {
   Node& n = nodes_[id];
   if (n.state != kClean || (n.flags & kFree)) return;
+  PlanChanged(false);
   n.state = kDirty;
   ++dirtyCount_;
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
@@ -593,6 +612,7 @@ void Engine::MarkAllDirty() {
 }
 
 bool Engine::Ready(const Area& a) {
+  if (InWorker()) return Blocked(), false;  // the parallel phase: this formula goes serial
   if (dirtyCells_->count == 0) return true;
   bool ready = true;
   uint32_t self = stack_.empty() ? UINT32_MAX : stack_.back().node;
@@ -706,6 +726,7 @@ void Engine::StoreSpill(uint32_t id, Value v) {
   const Area old = n.out;
   bool moved = old.r1 != want.r1 || old.r2 != want.r2 || old.c1 != want.c1 || old.c2 != want.c2;
   if (moved) {
+    PlanChanged();
     bool dirty = n.state != kClean;
     for (int32_t r = old.r1; r <= old.r2; ++r)
       for (int32_t c = old.c1; c <= old.c2; ++c) {
@@ -797,6 +818,7 @@ bool Engine::Iterate() {
 bool Engine::Recalculate(double budgetMs) {
   Propagate();
   double start = Seconds();
+  if (stack_.empty() && !Parallel(start + budgetMs / 1000)) return false;
   int sinceCheck = 0;
   std::vector<Area> areas;
   for (;;) {
@@ -911,6 +933,7 @@ void Engine::CalculateSheet(int sheet) {
 void Engine::CalculateCell(const Cell& at) {
   uint32_t id = NodeAt(at.sheet, at.row, at.col);
   if (id == UINT32_MAX) return;
+  PlanChanged(false);
   Node& n = nodes_[id];
   Value v;
   needed_ = UINT32_MAX;
@@ -957,5 +980,331 @@ size_t Engine::StaleCount() const {
   for (const Node& node : nodes_) n += (node.flags & kStale) && !(node.flags & kFree) ? 1 : 0;
   return n;
 }
+
+}  // namespace fw::sheet::calc
+
+// --- multi-threaded recalculation (S4) ---
+//
+// Level by level: the dirty formulas that can run anywhere (no volatile function or name, no
+// reference made at run time, no dynamic array or #, not on a circular reference) and whose dirty
+// precedents all can too are put in levels (Kahn's algorithm: a formula comes one level after its
+// last precedent). Each level is calculated on the workers, each with its own Evaluator: static
+// references never ask Resolver::Ready, so they only read the workbook, which is safe from several
+// threads. The values are then stored, from the workers too where the host allows it, before the
+// next level reads them. What the plan leaves (and a formula that unexpectedly asked Ready) goes
+// to the serial walk, which sees the planned formulas as calculated.
+
+namespace fw::sheet::calc {
+
+namespace {
+constexpr size_t kChunk = 65536;       // formulas between deadline checks
+constexpr uint8_t kStoreHere = 200;    // a result the workers couldn't store
+thread_local bool tWorker = false;     // calculating in the parallel phase
+thread_local bool tBlocked = false;    // ...and the formula asked Ready (it then goes serial)
+}  // namespace
+
+struct Engine::Plan {
+  bool valid = false;  // `order` may be followed
+  bool retry = true;   // something changed since the last plan finished or failed
+  std::vector<uint32_t> order;  // formulas, level by level
+  std::vector<size_t> levels;   // where each level starts in `order`, then order.size()
+  size_t next = 0, level = 0;   // the next formula and its level
+  std::vector<Value> values;    // the chunk's results
+  std::vector<uint8_t> results;
+  size_t flushed = 0;            // order[flushed, next): calculated, cells still marked dirty (Flush)
+  // The dirty formulas the plan was made for: the same ones dirty again, with no formula, name or
+  // spill changed since (`reusable`), follow the same plan (F9 again, the same cell edited again).
+  std::vector<uint32_t> made;
+  bool reusable = false;
+};
+
+bool Engine::InWorker() { return tWorker; }
+void Engine::Blocked() { tBlocked = true; }
+
+void Engine::PlanChanged(bool structure) {
+  if (!plan_) return;
+  plan_->valid = false, plan_->retry = true;
+  if (structure) plan_->reusable = false;
+}
+
+void Engine::SetThreads(int n) {
+  threads_ = n;
+  workers_.reset();
+  evaluators_.clear();
+  PlanChanged();
+}
+
+bool Engine::BuildPlan() {
+  Plan& p = *plan_;
+  p.valid = false;
+  p.next = p.level = p.flushed = 0;
+  std::vector<uint32_t> dirty;
+  dirty.reserve(dirtyCount_);
+  for (uint32_t id = 0; id < nodes_.size(); ++id)
+    if (nodes_[id].state == kDirty && !(nodes_[id].flags & kFree)) dirty.push_back(id);
+  const size_t n = dirty.size();
+  if (n < parallelMin_) return false;
+  if (p.reusable && dirty == p.made) return !p.order.empty();
+  p.reusable = false;
+  p.made = dirty;
+  p.order.clear();
+  p.levels.clear();
+  std::vector<uint32_t> slot(nodes_.size(), UINT32_MAX);
+  for (size_t i = 0; i < n; ++i) slot[dirty[i]] = static_cast<uint32_t>(i);
+  // Each formula's dirty precedents, on the workers (reading only).
+  const size_t w = static_cast<size_t>(workers_->Count());
+  std::vector<std::vector<std::pair<uint32_t, uint32_t>>> edges(w);  // (precedent, formula)
+  std::vector<std::vector<Area>> areas(w);
+  std::vector<uint8_t> eligible(n, 0);
+  // Areas of many rows (SUM(B:B) over a column of dirty formulas) are scanned in slabs afterwards,
+  // on all the workers, rather than by the one worker that has the formula.
+  struct Heavy {
+    uint32_t i;
+    int s;
+    Area a;
+  };
+  constexpr int32_t kSlab = 8192;
+  std::vector<std::vector<Heavy>> heavy(w);
+  std::vector<std::vector<uint32_t>> bad(w);
+  const size_t cap = std::max<size_t>(4'000'000, 8 * n);
+  std::atomic<size_t> total{0};
+  std::atomic<bool> tooMany{false};
+  constexpr uint16_t kNoF = Formula::kVolatile | Formula::kDynamicRefs | Formula::kSpills;
+  constexpr uint8_t kNoN = kVolatileNode | kDynamicArray | kCircularNode | kAfterCircular;
+  workers_->Run(n, 256, [&](int wk, size_t b, size_t e) {
+    auto& out = edges[static_cast<size_t>(wk)];
+    auto& ar = areas[static_cast<size_t>(wk)];
+    for (size_t i = b; i < e && !tooMany.load(std::memory_order_relaxed); ++i) {
+      const uint32_t id = dirty[i];
+      const Node& nd = nodes_[id];
+      bool ok = !(nd.f->flags & kNoF) && !(nd.flags & kNoN);
+      const size_t before = out.size();
+      if (ok) {
+        ar.clear();
+        Precedents(nd, ar);
+        for (const Area& a : ar)
+          for (int s = a.s1; s <= a.s2 && ok; ++s) {
+            if (a.Rows() > kSlab) {
+              heavy[static_cast<size_t>(wk)].push_back({static_cast<uint32_t>(i), s, a});
+              continue;
+            }
+            dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
+              const uint32_t m = NodeAt(s, r, c);
+              if (m == UINT32_MAX) return true;
+              if (m == id || slot[m] == UINT32_MAX) return ok = false;  // itself, or not plannable
+              out.emplace_back(slot[m], static_cast<uint32_t>(i));
+              return true;
+            });
+          }
+      }
+      eligible[i] = ok;
+      const size_t added = out.size() - before;
+      if (added && total.fetch_add(added, std::memory_order_relaxed) + added > cap) tooMany = true;
+    }
+  });
+  std::vector<Heavy> slabs;
+  for (const auto& v : heavy)
+    for (const Heavy& h : v)
+      for (int64_t r = h.a.r1; r <= h.a.r2; r += kSlab) {
+        Heavy part = h;
+        part.a.r1 = static_cast<int32_t>(r);
+        part.a.r2 = static_cast<int32_t>(std::min<int64_t>(h.a.r2, r + kSlab - 1));
+        slabs.push_back(part);
+      }
+  if (!tooMany && !slabs.empty())
+    workers_->Run(slabs.size(), 1, [&](int wk, size_t b, size_t e) {
+      auto& out = edges[static_cast<size_t>(wk)];
+      for (size_t k = b; k < e && !tooMany.load(std::memory_order_relaxed); ++k) {
+        const Heavy& h = slabs[k];
+        const uint32_t id = dirty[h.i];
+        const size_t before = out.size();
+        dirtyCells_->Each(h.s, h.a, [&](int32_t r, int32_t c) {
+          const uint32_t m = NodeAt(h.s, r, c);
+          if (m == UINT32_MAX) return true;
+          if (m == id || slot[m] == UINT32_MAX) return bad[static_cast<size_t>(wk)].push_back(h.i), false;
+          out.emplace_back(slot[m], h.i);
+          return true;
+        });
+        const size_t added = out.size() - before;
+        if (added && total.fetch_add(added, std::memory_order_relaxed) + added > cap) tooMany = true;
+      }
+    });
+  if (tooMany) return false;
+  for (const auto& v : bad)
+    for (uint32_t i : v) eligible[i] = 0;
+  // Levels.
+  std::vector<uint32_t> start(n + 1, 0), indeg(n, 0);
+  for (const auto& v : edges)
+    for (const auto& [a, b] : v) ++start[a + 1], ++indeg[b];
+  for (size_t i = 1; i <= n; ++i) start[i] += start[i - 1];
+  std::vector<uint32_t> adj(start[n]);
+  {
+    std::vector<uint32_t> fill(start.begin(), start.end() - 1);
+    for (auto& v : edges) {
+      for (const auto& [a, b] : v) adj[fill[a]++] = b;
+      v = {};
+    }
+  }
+  std::vector<uint32_t>& order = p.order;
+  order.reserve(n);
+  for (uint32_t i = 0; i < n; ++i)
+    if (eligible[i] && indeg[i] == 0) order.push_back(i);
+  for (size_t lb = 0; lb < order.size();) {
+    const size_t le = order.size();
+    p.levels.push_back(lb);
+    for (size_t k = lb; k < le; ++k)
+      for (uint32_t j = start[order[k]]; j < start[order[k] + 1]; ++j)
+        if (--indeg[adj[j]] == 0 && eligible[adj[j]]) order.push_back(adj[j]);
+    lb = le;
+  }
+  p.levels.push_back(order.size());
+  for (uint32_t& o : order) o = dirty[o];
+  p.reusable = true;
+  return order.size() >= parallelMin_;
+}
+
+void Engine::RunChunk(size_t begin, size_t end) {
+  Plan& p = *plan_;
+  const size_t n = end - begin;
+  p.values.resize(n);
+  p.results.assign(n, 0);
+  auto single = [](const Node& nd) { return nd.out.r1 == nd.out.r2 && nd.out.c1 == nd.out.c2; };
+  auto calc = [&](int wk, size_t b, size_t e) {
+    Evaluator& ev = wk == 0 ? ev_ : *evaluators_[static_cast<size_t>(wk)];
+    tWorker = true;
+    for (size_t k = b; k < e; ++k) {
+      const Node& nd = nodes_[p.order[begin + k]];
+      tBlocked = false;
+      Value v;
+      EvalResult r = ev.Evaluate(*nd.f, nd.at, v);
+      if (tBlocked) r = EvalResult::kRetry;
+      p.results[k] = static_cast<uint8_t>(r);
+      p.values[k] = std::move(v);
+    }
+    tWorker = false;
+  };
+  const bool many = n >= levelMin_ && workers_->Count() > 1;
+  if (many) workers_->Run(n, 64, calc);
+  else calc(0, 0, n);
+  // The results: flags, and the values stored from the workers where the host can take them that
+  // way (one cell each); the rest here.
+  if (many) {
+    std::vector<std::pair<int32_t, int32_t>> span(sheets_.size() + 1, {INT32_MAX, -1});
+    for (size_t k = 0; k < n; ++k) {
+      const Node& nd = nodes_[p.order[begin + k]];
+      if (p.results[k] != static_cast<uint8_t>(EvalResult::kDone) || !single(nd)) continue;
+      if (static_cast<size_t>(nd.at.sheet) >= span.size())
+        span.resize(static_cast<size_t>(nd.at.sheet) + 1, {INT32_MAX, -1});
+      auto& sp = span[static_cast<size_t>(nd.at.sheet)];
+      sp.first = std::min(sp.first, nd.at.row), sp.second = std::max(sp.second, nd.at.row);
+    }
+    for (size_t s = 0; s < span.size(); ++s)
+      if (span[s].second >= 0) host_.BeginShared(static_cast<int>(s), span[s].first, span[s].second);
+  }
+  std::atomic<size_t> changed{0}, done{0};
+  auto finish = [&](int, size_t b, size_t e) {
+    size_t mine = 0, cleaned = 0;
+    for (size_t k = b; k < e; ++k) {
+      const uint8_t r = p.results[k];
+      if (r == static_cast<uint8_t>(EvalResult::kRetry)) continue;  // stays dirty: the serial walk
+      Node& nd = nodes_[p.order[begin + k]];
+      nd.flags &= static_cast<uint8_t>(~kFresh);
+      if (r == static_cast<uint8_t>(EvalResult::kUnsupported)) {
+        nd.flags |= kStale;  // keeps its cached value
+      } else {
+        nd.flags &= static_cast<uint8_t>(~kStale);
+        Value& v = p.values[k];
+        if (!many || !single(nd)) {
+          p.results[k] = kStoreHere;
+          continue;
+        }
+        if (v.IsArray()) v = Value(v.array().at(0, 0));
+        if (v.IsEmpty() || v.IsMissing()) v = Value::Number(0);
+        const int st = host_.StoreShared(nd.at.sheet, nd.at.row, nd.at.col, v);
+        if (st < 0) {
+          p.results[k] = kStoreHere;
+          continue;
+        }
+        mine += static_cast<size_t>(st);
+        v = Value();
+      }
+      nd.state = kClean;  // its cells' dirty marks go in Flush, all at once when nothing is left
+      ++cleaned;
+    }
+    changed.fetch_add(mine, std::memory_order_relaxed);
+    done.fetch_add(cleaned, std::memory_order_relaxed);
+  };
+  if (many) {
+    workers_->Run(n, 256, finish);
+    host_.EndShared(changed.load());
+  } else {
+    finish(0, 0, n);
+  }
+  size_t cleaned = done.load(), retries = 0;
+  for (size_t k = 0; k < n; ++k) {
+    if (p.results[k] == static_cast<uint8_t>(EvalResult::kRetry)) {
+      ++retries;
+    } else if (p.results[k] == kStoreHere) {
+      const uint32_t id = p.order[begin + k];
+      Store(id, std::move(p.values[k]));
+      p.values[k] = Value();
+      nodes_[id].state = kClean;
+      ++cleaned;
+    }
+  }
+  dirtyCount_ -= cleaned;
+  evaluations_ += n - retries, parallelEvaluations_ += n - retries;
+  if (retries) p.valid = p.retry = p.reusable = false;
+}
+
+void Engine::Flush() {
+  Plan& p = *plan_;
+  if (dirtyCount_ == 0) {
+    dirtyCells_->Reset();
+  } else {
+    for (size_t k = p.flushed; k < p.next; ++k) {
+      const Node& n = nodes_[p.order[k]];
+      if (n.state != kClean) continue;  // asked Ready: still dirty
+      for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
+        for (int32_t c = n.out.c1; c <= n.out.c2; ++c) dirtyCells_->Set(n.at.sheet, r, c, false);
+    }
+  }
+  p.flushed = p.next;
+}
+
+bool Engine::Parallel(double deadline) {
+  if (threads_ == 1 || onlySheet_ >= 0 || !stack_.empty() || dirtyCount_ < parallelMin_ || !loopNodes_.empty())
+    return true;
+  if (!plan_) plan_ = std::make_unique<Plan>();
+  Plan& p = *plan_;
+  if (!p.valid) {
+    if (!p.retry) return true;
+    if (!workers_) {
+      const int count =
+          threads_ > 0 ? threads_ : std::min(8, static_cast<int>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)));
+      if (count <= 1) return threads_ = 1, true;
+      workers_ = std::make_unique<Workers>(count);
+      evaluators_.clear();
+      evaluators_.push_back(nullptr);  // worker 0 is this thread: ev_
+      for (int i = 1; i < workers_->Count(); ++i) evaluators_.push_back(std::make_unique<Evaluator>(host_, this));
+    }
+    p.retry = false;
+    if (!BuildPlan()) return true;
+    p.valid = true;
+  }
+  while (p.valid && p.next < p.order.size()) {
+    const size_t levelEnd = p.levels[p.level + 1];
+    const size_t end = std::min(levelEnd, p.next + kChunk);
+    RunChunk(p.next, end);
+    p.next = end;
+    if (p.next == levelEnd) ++p.level;
+    if (p.valid && p.next < p.order.size() && Seconds() > deadline) return Flush(), false;
+  }
+  Flush();
+  p.valid = false;
+  return true;
+}
+
+Engine::~Engine() = default;
 
 }  // namespace fw::sheet::calc

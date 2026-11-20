@@ -285,7 +285,7 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   if (cmd < CmdInsertChart || cmd > CmdChartCombo) return false;
   static const wchar_t* const kNames[] = {L"Column chart",   L"Bar chart",  L"Line chart",    L"Pie chart",
                                           L"Doughnut chart", L"Area chart", L"Scatter chart", L"Combo chart"};
-  s.enabled = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
+  s.enabled = Ready() && !preview_ && !ChartSheet() && (Current().Kind() == SheetKind::Worksheet || !Current().PartName().empty());
   if (cmd == CmdMoveChart && ChartSheet()) {  // Move Chart > Object in
     s.label = L"Move chart onto a sheet";
     s.enabled = Ready() && !preview_ && FirstWorksheet() >= 0;
@@ -391,7 +391,8 @@ void WorkbookView::AddChartTools(ToolbarModel& m) {
   chart.cmd = CmdChartBox;
   chart.width = 64;
   chart.priority = 3;
-  chart.text = L"Chart";
+  chart.text = chart.menuLabel = L"Chart";
+  chart.fitText = true;
   chart.tooltip = L"Insert a chart of the selected cells";
   chart.choices = {L"Column (Alt+F1)", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
   chart.onChange = [this](const ToolValue& v) {

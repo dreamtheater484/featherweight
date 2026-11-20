@@ -289,6 +289,7 @@ void WorkbookView::OnWheel(int delta, bool horizontal, UINT mods, int x, int y) 
 }
 
 void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) {
+  if (needPassword_) pw_.OnMouseDown(x, y, mods, doubleClick, ui_);
   if (!Ready()) return;
   if (preview_) {
     if (ScrollbarMouseDown(x, y, button)) return;
@@ -451,6 +452,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
 }
 
 void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
+  if (needPassword_) pw_.OnMouseMove(x, y, ui_);
   if (!Ready()) return;
   if (preview_) {
     if (!ScrollDragMove(x, y)) UpdateScrollbarHover(x, y);
@@ -538,6 +540,10 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
 void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
   (void)button;
   (void)mods;
+  if (needPassword_) {
+    pw_.OnMouseUp(x, y);
+    return;
+  }
   if (preview_) {
     drag_ = Drag::None;
     return;
@@ -576,6 +582,7 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
 }
 
 void WorkbookView::OnMouseLeave() {
+  if (needPassword_) pw_.OnMouseLeave();
   hover_ = {-1, -1};
   note_.reset();
   hoverTab_ = -1;
@@ -584,6 +591,7 @@ void WorkbookView::OnMouseLeave() {
 }
 
 HCURSOR WorkbookView::CursorAt(int x, int y) {
+  if (needPassword_) return pw_.CursorAt(x, y);
   if (Ready() && !preview_ && !ChartSheet()) {
     const float fx = static_cast<float>(x), fy = static_cast<float>(y);
     EditBox b;

@@ -62,6 +62,16 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// ST_Xstring (table column names, headers and footers): _xHHHH_ for a character, as Excel writes a
+// CR (_x000D_), other control characters, U+FFFE/U+FFFF, and the "_" of a literal "_xHHHH_" (_x005F_).
+std::string DecodeXstring(std::string_view s);
+std::string EncodeXstring(std::string_view s);
+// The same for text read into a string (left as it is when it holds no "_x"), and text written as an
+// element's content (XML's escapes too), without copies when there's nothing to escape.
+inline void DecodeXstringIn(std::string& s) {
+  if (s.find("_x") != std::string::npos) s = DecodeXstring(s);
+}
+void AppendXstringText(std::string& out, std::string_view s);
 // An element without its children, with its attributes as they are: "<name a="v"/>" (the workbook
 // keeps workbookProtection so, and saving compares it with the file's).
 std::string EmptyElementXml(pugi::xml_node n);
@@ -118,6 +128,9 @@ pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std
 pkg::Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_view label, StringTable& table);
 // Reads a sheet's part into it (rows, cells and what it shows).
 pkg::Status LoadSheetPart(Workbook& book, size_t index);
+// The sheet's first rows only, from the part's first `bytes` (ReadOptions::firstBytes); `cut`
+// false when the part was read whole.
+pkg::Status LoadSheetStart(Workbook& book, size_t index, size_t bytes, bool& cut);
 
 // The writer (Writer.cpp): a sheet's part with `text` around its sheetData (Sheet::Text(), or one
 // with elements the model rewrote), and the shared strings part.

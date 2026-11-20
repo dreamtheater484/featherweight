@@ -361,6 +361,7 @@ void WorkbookView::DrawEditLine(Canvas& c, std::wstring_view line, int lineAt, f
 }
 
 edit::Editor& WorkbookView::Ed() {
+  if (bigLoad_) WorkDone();  // a large file still being read: all of it first
   if (!edit_) {
     edit_ = std::make_unique<edit::Editor>(*book_);
     edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });
@@ -682,6 +683,9 @@ bool WorkbookView::CommitEdit(bool fill) {
 }
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
+  // s4-pivot: read the PivotTables' parts again when painting. In place: print layouts hold
+  // pointers to the sheets' looks.
+  std::fill(pivotLooksRead_.begin(), pivotLooksRead_.end(), false);
   SyncEngine(changes);
   // The unsaved dot and the owner file; undoing back to what was saved makes the tab clean again.
   const bool wasDirty = file_->Dirty();
