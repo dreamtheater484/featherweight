@@ -175,6 +175,8 @@ std::shared_ptr<const Bitmap> PatternBitmap(uint8_t pattern, Color foreground, C
 Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
 // The width of `text`'s glyphs' advances, as TextOutline lays them out; far cheaper than its outline.
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
+// A run of shaped glyphs' outlines, its origin on the baseline at (0, 0): outlined text.
+Path GlyphRunOutline(const GlyphRun& run);
 
 // ---- Readers (DrawingML.cpp, Vml.cpp) ----
 

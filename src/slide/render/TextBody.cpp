@@ -6,6 +6,7 @@
 #include <deque>
 
 #include "core/Strings.h"
+#include "draw/Shapes.h"
 #include "draw/Xml.h"
 #include "text/Fonts.h"
 #include "text/LineLayout.h"
@@ -64,6 +65,8 @@ std::wstring AutoNumber(std::string_view scheme, int n) {
 
 struct RunDraw {
   std::optional<draw::Color> color;  // none: not drawn (noFill)
+  std::optional<draw::Color> outline;  // the glyphs' outline (a:ln), `outlineWidth` points wide
+  float outlineWidth = 0;
   std::optional<draw::Color> highlight, underlineColor;
   uint8_t underline = 0;  // 0 none, 1 single, 2 double, 3 heavy
   uint8_t strike = 0;     // 0 none, 1 single, 2 double
@@ -157,6 +160,10 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
   auto runDraw = [&](const RunProps& r, const text::TextStyle& s) {
     RunDraw d;
     if (!r.noFill) d.color = r.color;
+    if (r.outline && !A(r.outline, "noFill")) {
+      d.outline = draw::ReadColor(A(r.outline, "solidFill"), extras.colors);
+      d.outlineWidth = std::max(0.25f, EmuToPt(Number(r.outline, "w", 9525)) * (fontScale < 1 ? fontScale : 1.f));
+    }
     d.highlight = r.highlight;
     d.underlineColor = r.underlineColor;
     using U = fw::slide::Underline;
@@ -408,15 +415,26 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
       for (const text::GlyphPiece& g : line.pieces) {
         if (g.glyphs.empty() || g.run >= para.runs.size()) continue;
         const RunDraw& rd = para.runs[g.run];
-        if (!rd.color) continue;
-        const draw::Brush brush = draw::Brush::Solid(*rd.color);
+        if (!rd.color && !rd.outline) continue;
+        const draw::Brush brush = draw::Brush::Solid(rd.color ? *rd.color : *rd.outline);
         draw::GlyphRun run = g.Run();
         if (wantText && g.textEnd > g.textStart && g.textEnd <= para.text.size()) {
           run.text = reinterpret_cast<const char16_t*>(para.text.data() + g.textStart);
           run.textLength = g.textEnd - g.textStart;
         }
         const float baseline = o.y - g.rise;
-        p.DrawGlyphs({o.x + g.OriginX(), baseline}, run, brush);
+        if (rd.color) p.DrawGlyphs({o.x + g.OriginX(), baseline}, run, brush);
+        if (rd.outline) {
+          // Outlined text: the glyphs' outlines stroked, over their fill.
+          draw::Pen pen;
+          pen.brush = draw::Brush::Solid(*rd.outline);
+          pen.width = rd.outlineWidth;
+          pen.join = draw::LineJoin::Round;
+          p.Save();
+          p.Transform(draw::Matrix::Translate(o.x + g.OriginX(), baseline));
+          p.StrokePath(draw::GlyphRunOutline(run), pen);
+          p.Restore();
+        }
         if (rd.underline && !g.leader) {
           const draw::Brush ub = rd.underlineColor ? draw::Brush::Solid(*rd.underlineColor) : brush;
           const float top = o.y + rd.ulPos - rd.ulThick / 2;

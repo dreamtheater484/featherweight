@@ -960,6 +960,15 @@ Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, 
   return path;
 }
 
+Path GlyphRunOutline(const GlyphRun& run) {
+  Path path;
+  if (!run.face || run.count == 0) return path;
+  PathSink sink(path);
+  run.face->GetGlyphRunOutline(run.emSize, run.indices, run.advances, run.offsets, run.count, run.sideways,
+                               run.bidiLevel & 1, &sink);
+  return path;
+}
+
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size) {
   ComPtr<IDWriteFontFace> face;
   std::vector<UINT16> glyphs;
