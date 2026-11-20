@@ -562,6 +562,10 @@ void PresentationView::StartShow(bool fromCurrent) {
 }
 
 void PresentationView::ReadOnlyBanner() {
+  if (deck_ && deck_->HasMacros()) {
+    host_.ViewMessage(BannerKind::Info, L"This presentation is read-only, and its macros are kept but never run.");
+    return;
+  }
   host_.ViewMessage(BannerKind::Info, L"This presentation is read-only: Featherweight shows and presents decks, "
                                       L"and editing comes in a later version.");
 }

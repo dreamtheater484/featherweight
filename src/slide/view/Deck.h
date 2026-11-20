@@ -42,6 +42,8 @@ class Deck {
   virtual std::vector<SlideLink> Links(size_t slide) const = 0;
   // A slide show file (.ppsx): it opens straight into the show.
   virtual bool StartsAsShow() const { return false; }
+  // The deck carries macros (.pptm, .potm): kept, never run.
+  virtual bool HasMacros() const { return false; }
   // The deck's title (docProps' title), or empty: the PDF's title.
   virtual std::wstring Title() const { return {}; }
 

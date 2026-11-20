@@ -53,6 +53,7 @@ class ModelDeck : public Deck {
   }
   std::vector<SlideLink> Links(size_t i) const override;
   bool StartsAsShow() const override { return deck_->StartsInShow(); }
+  bool HasMacros() const override { return deck_->HasMacros(); }
   void Paint(size_t i, draw::Painter& p) override {
     if (render::SlideRender* r = Render(i)) {
       const draw::Size s = deck_->SlideSize();

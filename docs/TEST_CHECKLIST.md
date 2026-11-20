@@ -457,7 +457,9 @@ Decks to open: the public set in `tests\office\presentations` (one per feature, 
 - [ ] `show.ppsx` opens straight into the slide show; Esc leaves it to the tab.
 - [ ] The thumbnails pane fills in while you look at the first slide; scrolling it is smooth; clicking a thumbnail shows that slide; hidden slides (`hidden-slides.pptx`) are marked and dimmed.
 - [ ] Page Up/Down, arrows, Home and End move between slides; zoom (Ctrl+wheel, fit slide) keeps the slide sharp; the notes pane shows `notes.pptx`'s notes, and the slide with none shows an empty pane.
-- [ ] Find (Ctrl+F) finds text on slides and in notes, and jumps to the slide; Copy (Ctrl+C) copies a shape's text.
+- [ ] Find (Ctrl+F) finds text on slides and in notes, jumps to the slide and marks the paragraph (and the words in the notes); Copy (Ctrl+C) copies the slide: paste into Word gives its picture, into Notepad its text. Right-click has Copy slide text, Copy slide as picture and Copy speaker notes.
+- [ ] `hyperlinks.pptx` in the tab: the pointer becomes a hand over a link, its tooltip says where it goes; Ctrl+click opens a web link in the browser and jumps to a linked slide.
+- [ ] The notes pane: drag its top edge to size it; the toolbar's notes button (or a double-click on the edge) hides and shows it.
 - [ ] Each public deck looks like PowerPoint's PDF: layouts and placeholders (an empty placeholder shows nothing), the theme's colors and fonts and the dark slide, autofit text at PowerPoint's size, bullets and numbering, tables and their styles, every chart kind, pictures (crop, rotation, flips, transparency, the SVG), groups, effects, backgrounds (master, layout, slide, picture, pattern), WordArt.
 - [ ] `embedded-fonts.pptx` shows its text in the pixel font (blocky 5×7 letters), not in Calibri; a real-world deck that embeds a font shows it too.
 - [ ] Slide sizes: 4:3, 16:9 and the portrait `hidden-slides.pptx` each fit the view.
@@ -474,7 +476,7 @@ Decks to open: the public set in `tests\office\presentations` (one per feature, 
 
 ### Printing and PDF
 
-- [ ] Print (Ctrl+P): slides, handouts (1, 2, 3, 4, 6, 9 per page) and notes pages, hidden slides left out unless asked; the preview matches the printout.
+- [ ] Print (Ctrl+P), with the toolbar's print layout box: full page slides (landscape for a wide deck), handouts (1, 2, 3, 4, 6, 9 per page; 3 with lines beside the slides) and notes pages (portrait), hidden slides left out unless ⋯ Print hidden slides is on; the dialog's page range picks slides ("2-4" prints those slides in the chosen layout), Current page prints the shown slide.
 - [ ] Export PDF: the same layouts; the PDF opens in Featherweight's PDF reader and in another reader, with the slides' text selectable and the links working.
 
 ### Never damage a file
