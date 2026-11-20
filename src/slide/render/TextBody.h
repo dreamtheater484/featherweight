@@ -1,44 +1,29 @@
 #pragma once
 
-#include <pugixml.hpp>
-
-#include <deque>
+#include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
 #include "draw/Drawing.h"
 #include "draw/Painter.h"
 #include "draw/Theme.h"
+#include "slide/Text.h"
 #include "slide/render/SlideRender.h"
-#include "text/LineLayout.h"
 
 namespace fw::text {
 class Fonts;
 }
 
-// DrawingML text bodies (a:txBody, p:txBody) as PowerPoint lays them out: the list-style chain
-// (presentation, master text styles, the master's, the layout's and the shape's own a:lstStyle),
-// bullets and automatic numbering, spacing, insets, anchoring, columns, vertical text and the
-// stored autofit scale, on fwtext's line breaker. Internal to the slide renderer.
+// A resolved text body (fwslide's TextBody) laid out as PowerPoint lays it out: bullets and
+// automatic numbers, indents, tabs, line and paragraph spacing, anchoring, columns, vertical
+// text and the stored autofit scale, on fwtext's line breaker. Internal to the slide renderer.
 namespace fw::slide::render {
 
-// What a text body inherits.
-struct TextContext {
-  // List-style containers, lowest priority first: p:defaultTextStyle, the master's p:titleStyle,
-  // p:bodyStyle or p:otherStyle, then the master's and layout's placeholder a:lstStyle. The body's
-  // own a:lstStyle comes last, from the body itself.
-  std::vector<pugi::xml_node> lists;
-  draw::ColorContext colors;
-  std::optional<draw::Color> fontColor;  // p:style/a:fontRef's color
-  std::string fontFace;                  // p:style/a:fontRef: "+mj-lt" or "+mn-lt"; empty: none
-  int slideNumber = 1;
-  draw::DrawingResources* resources = nullptr;  // picture bullets
-  // Overrides for table cells: the table style's text (bold, italic, color, font).
-  std::optional<bool> bold, italic;
-  std::optional<draw::Color> color;
-  std::string face;
+struct TextExtras {
+  draw::ColorContext colors;  // the slide's: hyperlinks take its hlink color
+  // A picture bullet: the image of relationship `rel` of part `part`; null when there's none.
+  std::function<std::shared_ptr<const draw::Image>(const std::string& part, const std::string& rel)> picture;
 };
 
 class TextBlock {
@@ -48,23 +33,22 @@ class TextBlock {
   TextBlock(TextBlock&&) noexcept;
   TextBlock& operator=(TextBlock&&) noexcept;
 
-  // Lays out the text box's body (box.content, box.properties, box.rect).
-  void Build(text::Fonts& fonts, const draw::TextBox& box, const TextContext& ctx);
+  // Lays `body` out in the text box (its rect, flow, anchor, columns and autofit).
+  void Build(text::Fonts& fonts, const draw::TextBox& box, const fw::slide::TextBody& body, const TextExtras& extras);
   // Draws it with the painter in the box's coordinates (its shape's own). Paragraphs the filter
   // turns down are left out.
   void Draw(draw::Painter& painter, DrawFilter* filter, uint32_t shape) const;
 
   // The height the text needs (insets not included), for table rows.
   float ContentHeight() const;
-  bool Empty() const;
-  // Each paragraph's box and each link's, in the box's coordinates (before the shape's
-  // transform), and the plain text.
+  // Each paragraph's box, in the box's coordinates.
   std::vector<draw::Rect> ParagraphBounds() const;
   struct Link {
-    draw::Rect bounds;
-    std::string relId, action;
+    draw::Rect bounds;  // the box's coordinates
+    fw::slide::Hyperlink link;
   };
   std::vector<Link> Links() const;
+  // The text without bullets: paragraphs and line breaks as '\n'.
   std::wstring PlainText() const;
 
  private:
@@ -72,7 +56,9 @@ class TextBlock {
   std::unique_ptr<Impl> impl_;
 };
 
-// "+mj-lt", "+mn-ea"… through the theme; other names as they are.
-std::wstring ThemeFace(std::string_view typeface, const draw::Theme* theme);
+// A text body no model shape owns (SmartArt's stored drawing): its own paragraph and run
+// properties over the defaults, and the shape style's font reference.
+std::unique_ptr<fw::slide::TextBody> PlainTextBody(pugi::xml_node txBody, const draw::TextBox& box,
+                                                   const draw::ColorContext& colors);
 
 }  // namespace fw::slide::render

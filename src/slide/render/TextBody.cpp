@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <deque>
 
 #include "core/Strings.h"
 #include "draw/Xml.h"
 #include "text/Fonts.h"
+#include "text/LineLayout.h"
 
 namespace fw::slide::render {
 
@@ -14,184 +16,7 @@ using namespace draw::xml;
 
 namespace {
 
-constexpr size_t kMaxParagraphs = 5000;
 constexpr size_t kMaxChars = 200000;
-constexpr int kLevels = 9;
-
-float Pct(pugi::xml_node n, const char* attr, double def) { return static_cast<float>(Number(n, attr, def) / 100000.0); }
-
-// spcPct (thousandths of a percent of a line) or spcPts (hundredths of a point).
-struct Spacing {
-  bool percent = true;
-  float value = 0;
-};
-
-Spacing ReadSpacing(pugi::xml_node n, Spacing def) {
-  if (pugi::xml_node pct = A(n, "spcPct")) return {true, std::clamp(Pct(pct, "val", 100000), 0.f, 132.f)};
-  if (pugi::xml_node pts = A(n, "spcPts")) return {false, std::clamp(static_cast<float>(Number(pts, "val", 0) / 100), 0.f, 1584.f)};
-  return def;
-}
-
-struct RunProps {
-  float size = 18;
-  bool bold = false, italic = false;
-  std::string underline = "none";
-  std::string strike = "noStrike";
-  text::Caps caps = text::Caps::None;
-  float spacing = 0;   // points added after each character
-  float baseline = 0;  // fraction of the size, up
-  float kern = 0;      // smallest size kerned; 0: none
-  std::string latin, ea, cs;
-  std::optional<draw::Color> color;
-  bool noFill = false;
-  std::optional<draw::Color> highlight;
-  std::string lang;
-  pugi::xml_node link;  // a:hlinkClick
-};
-
-void ApplyRun(RunProps& r, pugi::xml_node rPr, const draw::ColorContext& colors) {
-  if (!rPr) return;
-  if (pugi::xml_attribute a = rPr.attribute("sz")) r.size = std::clamp(static_cast<float>(a.as_double(1800) / 100), 0.5f, 4000.f);
-  if (rPr.attribute("b")) r.bold = Bool(rPr, "b", false);
-  if (rPr.attribute("i")) r.italic = Bool(rPr, "i", false);
-  if (pugi::xml_attribute a = rPr.attribute("u")) r.underline = a.value();
-  if (pugi::xml_attribute a = rPr.attribute("strike")) r.strike = a.value();
-  if (pugi::xml_attribute a = rPr.attribute("cap")) {
-    std::string_view v = a.value();
-    r.caps = v == "all" ? text::Caps::All : v == "small" ? text::Caps::Small : text::Caps::None;
-  }
-  if (pugi::xml_attribute a = rPr.attribute("spc")) r.spacing = std::clamp(static_cast<float>(a.as_double(0) / 100), -400.f, 4000.f);
-  if (rPr.attribute("baseline")) r.baseline = std::clamp(Pct(rPr, "baseline", 0), -10.f, 10.f);
-  if (pugi::xml_attribute a = rPr.attribute("kern")) r.kern = std::clamp(static_cast<float>(a.as_double(0) / 100), 0.f, 4000.f);
-  if (pugi::xml_attribute a = rPr.attribute("lang")) r.lang = a.value();
-  ForEachChild(rPr, [&](pugi::xml_node c) {
-    if (NamespaceOf(c) != kA) return true;
-    std::string_view k = LocalNameOf(c);
-    if (k == "solidFill") {
-      if (auto col = draw::ReadColor(c, colors)) {
-        r.color = col;
-        r.noFill = false;
-      }
-    } else if (k == "gradFill") {
-      // Text in a gradient: its first stop's color (a gradient per glyph run isn't drawn yet).
-      if (pugi::xml_node gs = A(A(c, "gsLst"), "gs"))
-        if (auto col = draw::ReadColor(gs, colors)) {
-          r.color = col;
-          r.noFill = false;
-        }
-    } else if (k == "pattFill") {
-      if (auto col = draw::ReadColor(A(c, "fgClr"), colors)) {
-        r.color = col;
-        r.noFill = false;
-      }
-    } else if (k == "noFill") {
-      r.noFill = true;
-    } else if (k == "highlight") {
-      r.highlight = draw::ReadColor(c, colors);
-    } else if (k == "latin") {
-      r.latin = c.attribute("typeface").value();
-    } else if (k == "ea") {
-      r.ea = c.attribute("typeface").value();
-    } else if (k == "cs") {
-      r.cs = c.attribute("typeface").value();
-    } else if (k == "hlinkClick") {
-      r.link = c;
-    }
-    return true;
-  });
-}
-
-struct ParaProps {
-  float marL = 0, marR = 0, indent = 0;
-  std::string algn = "l";
-  float defTab = 72;
-  bool rtl = false;
-  Spacing line{true, 1}, before{true, 0}, after{true, 0};
-  enum class Bullet : uint8_t { None, Char, Number, Picture };
-  Bullet bullet = Bullet::None;
-  std::wstring bulletChar;
-  std::string scheme = "arabicPeriod";
-  int startAt = 1;
-  std::string bulletRel;
-  bool bulletFontText = true;
-  std::string bulletFont;
-  int bulletSizeMode = 0;  // 0: the text's, 1: percent of it, 2: points
-  float bulletSize = 1;
-  bool bulletColorText = true;
-  draw::Color bulletColor;
-  std::vector<text::TabStop> tabs;
-  RunProps run;
-};
-
-void ApplyPara(ParaProps& p, pugi::xml_node pPr, const draw::ColorContext& colors) {
-  if (!pPr) return;
-  if (pPr.attribute("marL")) p.marL = std::clamp(EmuToPt(Number(pPr, "marL", 0)), 0.f, 4000.f);
-  if (pPr.attribute("marR")) p.marR = std::clamp(EmuToPt(Number(pPr, "marR", 0)), 0.f, 4000.f);
-  if (pPr.attribute("indent")) p.indent = std::clamp(EmuToPt(Number(pPr, "indent", 0)), -4000.f, 4000.f);
-  if (pugi::xml_attribute a = pPr.attribute("algn")) p.algn = a.value();
-  if (pPr.attribute("defTabSz")) p.defTab = std::clamp(EmuToPt(Number(pPr, "defTabSz", 914400)), 1.f, 4000.f);
-  if (pPr.attribute("rtl")) p.rtl = Bool(pPr, "rtl", false);
-  ForEachChild(pPr, [&](pugi::xml_node c) {
-    if (NamespaceOf(c) != kA) return true;
-    std::string_view k = LocalNameOf(c);
-    if (k == "lnSpc") p.line = ReadSpacing(c, p.line);
-    else if (k == "spcBef") p.before = ReadSpacing(c, p.before);
-    else if (k == "spcAft") p.after = ReadSpacing(c, p.after);
-    else if (k == "buClrTx") p.bulletColorText = true;
-    else if (k == "buClr") {
-      if (auto col = draw::ReadColor(c, colors)) {
-        p.bulletColorText = false;
-        p.bulletColor = *col;
-      }
-    } else if (k == "buSzTx") p.bulletSizeMode = 0;
-    else if (k == "buSzPct") {
-      p.bulletSizeMode = 1;
-      p.bulletSize = std::clamp(Pct(c, "val", 100000), 0.25f, 4.f);
-    } else if (k == "buSzPts") {
-      p.bulletSizeMode = 2;
-      p.bulletSize = std::clamp(static_cast<float>(Number(c, "val", 1800) / 100), 1.f, 4000.f);
-    } else if (k == "buFontTx") p.bulletFontText = true;
-    else if (k == "buFont") {
-      p.bulletFontText = false;
-      p.bulletFont = c.attribute("typeface").value();
-    } else if (k == "buNone") p.bullet = ParaProps::Bullet::None;
-    else if (k == "buChar") {
-      p.bullet = ParaProps::Bullet::Char;
-      p.bulletChar = Utf8ToWide(c.attribute("char").value()).substr(0, 4);
-    } else if (k == "buAutoNum") {
-      p.bullet = ParaProps::Bullet::Number;
-      p.scheme = c.attribute("type").value();
-      p.startAt = std::clamp(static_cast<int>(Number(c, "startAt", 1)), 1, 32767);
-    } else if (k == "buBlip") {
-      p.bullet = ParaProps::Bullet::Picture;
-      p.bulletRel = std::string(RelId(A(c, "blip"), "embed"));
-    } else if (k == "tabLst") {
-      p.tabs.clear();
-      ForEachChild(c, [&](pugi::xml_node tab) {
-        text::TabStop t;
-        t.position = std::clamp(EmuToPt(Number(tab, "pos", 0)), 0.f, 4000.f);
-        std::string_view a = tab.attribute("algn").value();
-        t.align = a == "ctr" ? text::TabAlign::Center : a == "r" ? text::TabAlign::End : a == "dec" ? text::TabAlign::Decimal
-                                                                                                    : text::TabAlign::Start;
-        p.tabs.push_back(t);
-        return p.tabs.size() < 64;
-      });
-      std::sort(p.tabs.begin(), p.tabs.end(), [](const text::TabStop& a, const text::TabStop& b) { return a.position < b.position; });
-    } else if (k == "defRPr") {
-      ApplyRun(p.run, c, colors);
-    }
-    return true;
-  });
-}
-
-// One level of a list-style container: a:defPPr first, then a:lvlNpPr.
-void ApplyLevel(ParaProps& p, pugi::xml_node list, int level, const draw::ColorContext& colors) {
-  if (!list) return;
-  ApplyPara(p, A(list, "defPPr"), colors);
-  char name[16] = "lvl1pPr";
-  name[3] = static_cast<char>('1' + level);
-  ApplyPara(p, A(list, name), colors);
-}
 
 bool IsSymbolFont(std::wstring_view f) {
   std::wstring l(f);
@@ -217,20 +42,19 @@ std::wstring Roman(int n, bool upper) {
   return out;
 }
 
-std::wstring Alpha(int n, bool upper) {
-  // a..z, then aa..zz, as PowerPoint counts.
-  n = std::max(n, 1);
-  const wchar_t c = static_cast<wchar_t>((upper ? L'A' : L'a') + (n - 1) % 26);
-  return std::wstring(static_cast<size_t>((n - 1) / 26 + 1), c);
-}
-
-// ST_TextAutonumberScheme: the common ones; others count in arabic numerals with a period.
+// ST_TextAutonumberScheme: the common ones; the rest count in arabic numerals with a period.
 std::wstring AutoNumber(std::string_view scheme, int n) {
   std::wstring body;
-  if (scheme.starts_with("roman")) body = Roman(n, scheme.starts_with("romanUc"));
-  else if (scheme.starts_with("alpha")) body = Alpha(n, scheme.starts_with("alphaUc"));
-  else if (scheme.starts_with("circleNum") && n >= 1 && n <= 20) return std::wstring(1, static_cast<wchar_t>(0x2460 + n - 1));
-  else body = std::to_wstring(n);
+  if (scheme.starts_with("roman")) {
+    body = Roman(n, scheme.starts_with("romanUc"));
+  } else if (scheme.starts_with("alpha")) {
+    n = std::max(n, 1);
+    body.assign(static_cast<size_t>((n - 1) / 26 + 1), static_cast<wchar_t>((scheme.starts_with("alphaUc") ? L'A' : L'a') + (n - 1) % 26));
+  } else if (scheme.starts_with("circleNum") && n >= 1 && n <= 20) {
+    return std::wstring(1, static_cast<wchar_t>(0x2460 + n - 1));
+  } else {
+    body = std::to_wstring(n);
+  }
   if (scheme.ends_with("ParenBoth")) return L"(" + body + L")";
   if (scheme.ends_with("ParenR")) return body + L")";
   if (scheme.ends_with("Period")) return body + L".";
@@ -240,23 +64,27 @@ std::wstring AutoNumber(std::string_view scheme, int n) {
 
 struct RunDraw {
   std::optional<draw::Color> color;  // none: not drawn (noFill)
-  std::optional<draw::Color> highlight;
+  std::optional<draw::Color> highlight, underlineColor;
   uint8_t underline = 0;  // 0 none, 1 single, 2 double, 3 heavy
   uint8_t strike = 0;     // 0 none, 1 single, 2 double
   float ulPos = 0, ulThick = 0, stPos = 0, stThick = 0;
   int link = -1;
 };
 
-}  // namespace
-
-std::wstring ThemeFace(std::string_view typeface, const draw::Theme* theme) {
-  if (typeface.starts_with("+mn-") || typeface.starts_with("+mj-")) {
-    if (!theme) return {};
-    const draw::ThemeFont& f = typeface.starts_with("+mj") ? theme->MajorFont() : theme->MinorFont();
-    return Utf8ToWide(typeface.ends_with("-ea") ? f.eastAsian : typeface.ends_with("-cs") ? f.complexScript : f.latin);
-  }
-  return Utf8ToWide(typeface);
+// Whether a hyperlink keeps its text's color (a14's hlinkClr val="tx").
+bool LinkKeepsTextColor(pugi::xml_node run) {
+  bool keep = false;
+  ForEachChild(A(A(A(run, "rPr"), "hlinkClick"), "extLst"), [&](pugi::xml_node ext) {
+    ForEachChild(ext, [&](pugi::xml_node c) {
+      if (LocalNameOf(c) == "hlinkClr" && std::string_view(c.attribute("val").value()) == "tx") keep = true;
+      return !keep;
+    });
+    return !keep;
+  });
+  return keep;
 }
+
+}  // namespace
 
 struct TextBlock::Impl {
   struct Para {
@@ -266,7 +94,7 @@ struct TextBlock::Impl {
     std::vector<uint32_t> runStart;  // per run: its first offset in text
     std::vector<RunDraw> runs;
     std::vector<text::Line> lines;
-    std::vector<draw::Point> origins;           // per line: x of column coordinates' 0, baseline y
+    std::vector<draw::Point> origins;           // per line: where column coordinates' 0 is, and the baseline
     std::vector<std::pair<float, float>> rows;  // per line: top and bottom
     std::shared_ptr<const draw::Image> picture;  // a picture bullet, at its U+FFFC
     bool empty = true;
@@ -275,13 +103,12 @@ struct TextBlock::Impl {
   struct LinkRun {
     size_t para;
     uint32_t start, end;
-    std::string relId, action;
+    fw::slide::Hyperlink link;
   };
   std::vector<Para> paras;
   std::vector<LinkRun> links;
   draw::Matrix toBox;  // text coordinates → the box's
   float height = 0;
-  bool wantMirror = true;
   draw::Rect rect;
 };
 
@@ -290,14 +117,13 @@ TextBlock::~TextBlock() = default;
 TextBlock::TextBlock(TextBlock&&) noexcept = default;
 TextBlock& TextBlock::operator=(TextBlock&&) noexcept = default;
 
-void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextContext& ctx) {
+void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::slide::TextBody& body, const TextExtras& extras) {
+  using fw::slide::Bullet;
+  using fw::slide::RunProps;
+  using fw::slide::TextAlign;
   Impl& m = *impl_;
   m = Impl{};
   m.rect = box.rect;
-  pugi::xml_node body = box.content;
-  if (!body) return;
-  const draw::ColorContext& colors = ctx.colors;
-  const pugi::xml_node own = A(body, "lstStyle");
   const float fontScale = box.autofit == draw::TextBox::Autofit::ShrinkText ? box.fontScale : 1.f;
   const float lineReduction = box.autofit == draw::TextBox::Autofit::ShrinkText ? box.lineSpacingReduction : 0.f;
   const bool vertical = box.flow != draw::TextBox::Flow::Horizontal;
@@ -308,33 +134,11 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
   const float colW = std::max(1.f, (boxW - colGap * (columns - 1)) / columns);
   const float layoutW = box.wrap ? colW : 100000.f;
 
-  // The levels' properties, resolved once.
-  ParaProps levels[kLevels];
-  for (int l = 0; l < kLevels; ++l) {
-    ParaProps& p = levels[l];
-    for (pugi::xml_node list : ctx.lists) ApplyLevel(p, list, l, colors);
-    if (ctx.fontColor) {
-      p.run.color = ctx.fontColor;
-      p.run.noFill = false;
-    }
-    if (!ctx.fontFace.empty()) p.run.latin = ctx.fontFace;
-    if (ctx.color) {
-      p.run.color = ctx.color;
-      p.run.noFill = false;
-    }
-    if (ctx.bold) p.run.bold = *ctx.bold;
-    if (ctx.italic) p.run.italic = *ctx.italic;
-    if (!ctx.face.empty()) p.run.latin = ctx.face;
-    ApplyLevel(p, own, l, colors);
-  }
-
-  const draw::Theme* theme = colors.theme;
   auto styleOf = [&](const RunProps& r) {
     text::TextStyle s;
-    s.family = ThemeFace(r.latin.empty() ? "+mn-lt" : r.latin, theme);
-    if (s.family.empty()) s.family = L"Calibri";
-    s.eastAsiaFamily = ThemeFace(r.ea.empty() ? "+mn-ea" : r.ea, theme);
-    s.complexFamily = ThemeFace(r.cs.empty() ? "+mn-cs" : r.cs, theme);
+    s.family = r.latin.empty() ? std::wstring(L"Calibri") : r.latin;
+    s.eastAsiaFamily = r.eastAsian;
+    s.complexFamily = r.complexScript;
     float size = r.size * fontScale;
     if (r.baseline != 0) {
       s.baselineShift = r.baseline * size;
@@ -343,7 +147,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
     s.size = std::max(0.5f, size);
     s.bold = s.complexBold = r.bold;
     s.italic = s.complexItalic = r.italic;
-    s.caps = r.caps;
+    s.caps = r.caps == fw::slide::Caps::All ? text::Caps::All : r.caps == fw::slide::Caps::Small ? text::Caps::Small : text::Caps::None;
     s.letterSpacing = r.spacing;
     s.kerningMinSize = r.kern;
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
@@ -351,11 +155,17 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
   };
   auto runDraw = [&](const RunProps& r, const text::TextStyle& s) {
     RunDraw d;
-    if (!r.noFill) d.color = r.color.value_or(draw::Color{0, 0, 0, 1});
+    if (!r.noFill) d.color = r.color;
     d.highlight = r.highlight;
-    std::string_view u = r.underline;
-    d.underline = u == "none" || u.empty() ? 0 : u.starts_with("dbl") ? 2 : u.starts_with("heavy") ? 3 : 1;
-    d.strike = r.strike == "sngStrike" ? 1 : r.strike == "dblStrike" ? 2 : 0;
+    d.underlineColor = r.underlineColor;
+    using U = fw::slide::Underline;
+    d.underline = r.underline == U::None ? 0 : r.underline == U::Double || r.underline == U::WavyDouble ? 2
+                  : r.underline == U::Heavy || r.underline == U::DottedHeavy || r.underline == U::DashHeavy ||
+                          r.underline == U::DashLongHeavy || r.underline == U::DotDashHeavy || r.underline == U::DotDotDashHeavy ||
+                          r.underline == U::WavyHeavy
+                      ? 3
+                      : 1;
+    d.strike = r.strike == fw::slide::Strike::Single ? 1 : r.strike == fw::slide::Strike::Double ? 2 : 0;
     if (d.underline || d.strike) {
       if (const text::Face* f = fonts.FaceFor(s.family, s.bold, s.italic)) {
         const text::FontMetrics fm = f->Metrics(s.size);
@@ -373,114 +183,17 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
     return d;
   };
 
-  // Automatic numbering: a counter per level, reset by a shallower paragraph.
-  int counters[kLevels] = {};
-  std::string counterScheme[kLevels];
   size_t chars = 0;
-  float y = 0;
+  float y = 0, maxBottom = 0;
   int column = 0;
-  float columnTop = 0;
   bool first = true;
-  float maxBottom = 0;
-  ForEachChild(body, [&](pugi::xml_node pn) {
-    if (LocalNameOf(pn) != "p" || NamespaceOf(pn) != kA) return true;
-    pugi::xml_node pPr = A(pn, "pPr");
-    const int level = std::clamp(static_cast<int>(Number(pPr, "lvl", 0)), 0, kLevels - 1);
-    ParaProps pp = levels[level];
-    ApplyPara(pp, pPr, colors);
+  for (const fw::slide::Paragraph& src : body.paragraphs) {
+    const fw::slide::ParagraphProps& pp = src.props;
     Impl::Para& para = m.paras.emplace_back();
-    // Runs.
-    struct Piece {
-      std::wstring text;
-      RunProps props;
-      pugi::xml_node link;
-    };
-    std::vector<Piece> pieces;
-    RunProps markProps = pp.run;
-    ForEachChild(pn, [&](pugi::xml_node r) {
-      if (NamespaceOf(r) != kA) return true;
-      const std::string_view k = LocalNameOf(r);
-      if (k == "r" || k == "fld" || k == "br") {
-        Piece piece;
-        piece.props = pp.run;
-        ApplyRun(piece.props, A(r, "rPr"), colors);
-        if (k == "br") piece.text = L"\u000B";
-        else if (k == "fld" && std::string_view(r.attribute("type").value()) == "slidenum") piece.text = std::to_wstring(ctx.slideNumber);
-        else piece.text = Utf8ToWide(A(r, "t").text().get());
-        // Line feeds inside a run break lines as a:br does; other control characters go.
-        for (wchar_t& c : piece.text)
-          if (c == L'\n' || c == L'\r') c = L'\u000B';
-          else if (c < 0x20 && c != L'\t' && c != L'\u000B') c = L' ';
-        piece.link = piece.props.link;
-        if (!piece.text.empty() && chars < kMaxChars) {
-          chars += piece.text.size();
-          pieces.push_back(std::move(piece));
-        }
-      } else if (k == "endParaRPr") {
-        ApplyRun(markProps, r, colors);
-      }
-      return true;
-    });
-    para.empty = pieces.empty();
-    para.mark = styleOf(markProps);
-    // Hyperlinks: the theme's hyperlink color and an underline, unless the run says to keep its own
-    // color (a14's hlinkClr "tx").
-    for (Piece& pc : pieces) {
-      if (!pc.link || (RelId(pc.link, "id").empty() && std::string_view(pc.link.attribute("action").value()).empty())) continue;
-      bool textColor = false;
-      ForEachChild(A(pc.link, "extLst"), [&](pugi::xml_node ext) {
-        ForEachChild(ext, [&](pugi::xml_node c) {
-          if (LocalNameOf(c) == "hlinkClr" && std::string_view(c.attribute("val").value()) == "tx") textColor = true;
-          return true;
-        });
-        return true;
-      });
-      if (!textColor) {
-        if (auto c = draw::SchemeColor("hlink", colors)) pc.props.color = c;
-        if (pc.props.underline == "none") pc.props.underline = "sng";
-      }
-    }
-    // The bullet: a character, a number or a picture, then a tab to the text.
-    std::wstring bulletText;
-    RunProps bulletProps = pieces.empty() ? markProps : pieces.front().props;
-    if (pp.bullet == ParaProps::Bullet::Number) {
-      if (counterScheme[level] != pp.scheme || counters[level] == 0) counters[level] = pp.startAt - 1;
-      counterScheme[level] = pp.scheme;
-    }
-    if (!para.empty) {
-      for (int l = level + 1; l < kLevels; ++l) counters[l] = 0;
-      if (pp.bullet != ParaProps::Bullet::Number) counters[level] = 0;
-    }
-    if (!para.empty && pp.bullet != ParaProps::Bullet::None) {
-      if (!pp.bulletColorText) {
-        bulletProps.color = pp.bulletColor;
-        bulletProps.noFill = false;
-      }
-      if (pp.bulletSizeMode == 1) bulletProps.size *= pp.bulletSize;
-      else if (pp.bulletSizeMode == 2) bulletProps.size = pp.bulletSize;
-      bulletProps.underline = "none";
-      bulletProps.strike = "noStrike";
-      bulletProps.baseline = 0;
-      bulletProps.spacing = 0;
-      if (pp.bullet == ParaProps::Bullet::Char) {
-        if (!pp.bulletFontText) bulletProps.latin = bulletProps.ea = bulletProps.cs = pp.bulletFont;
-        bulletText = pp.bulletChar;
-        const std::wstring face = ThemeFace(bulletProps.latin.empty() ? "+mn-lt" : bulletProps.latin, theme);
-        if (IsSymbolFont(face))
-          for (wchar_t& c : bulletText)
-            if (c >= 0x20 && c < 0x100) c = static_cast<wchar_t>(0xF000 + c);
-      } else if (pp.bullet == ParaProps::Bullet::Number) {
-        bulletText = AutoNumber(pp.scheme, ++counters[level]);
-        if (!pp.bulletFontText) bulletProps.latin = pp.bulletFont;
-      } else if (pp.bullet == ParaProps::Bullet::Picture && ctx.resources && !pp.bulletRel.empty()) {
-        para.picture = ctx.resources->GetImage(pp.bulletRel);
-        if (para.picture) bulletText = L"￼";
-      }
-      if (!bulletText.empty()) bulletText += L'\t';
-    }
-    // The paragraph for fwtext.
+    para.empty = src.runs.empty();
+    para.mark = styleOf(src.endProps);
     std::vector<text::TextRun> runs;
-    auto add = [&](const std::wstring& t, const RunProps& props, pugi::xml_node link) {
+    auto add = [&](const std::wstring& t, const RunProps& props, const fw::slide::Hyperlink* link) {
       para.runStart.push_back(static_cast<uint32_t>(para.text.size()));
       para.text += t;
       text::TextStyle& st = para.styles.emplace_back(styleOf(props));
@@ -492,96 +205,135 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
       para.runs.push_back(runDraw(props, st));
       if (link) {
         para.runs.back().link = static_cast<int>(m.links.size());
-        m.links.push_back({m.paras.size() - 1, para.runStart.back(), static_cast<uint32_t>(para.text.size()),
-                           std::string(RelId(link, "id")), link.attribute("action").value()});
+        m.links.push_back({m.paras.size() - 1, para.runStart.back(), static_cast<uint32_t>(para.text.size()), *link});
       }
       runs.push_back({static_cast<uint32_t>(t.size()), &st});
     };
-    if (!bulletText.empty()) {
-      add(bulletText, bulletProps, {});
-      para.bullet = true;
+    // The bullet: a character, a number or a picture, then a tab to the text. Its font, size and
+    // color follow the first run unless the paragraph says otherwise.
+    if (!para.empty && pp.bullet.kind != Bullet::Kind::None) {
+      RunProps bp = src.runs.front().props;
+      const Bullet& b = pp.bullet;
+      if (b.color) {
+        bp.color = *b.color;
+        bp.noFill = false;
+      }
+      bp.size = b.sizePoints > 0 ? b.sizePoints : bp.size * b.sizePercent;
+      bp.underline = fw::slide::Underline::None;
+      bp.strike = fw::slide::Strike::None;
+      bp.baseline = bp.spacing = 0;
+      bp.highlight.reset();
+      std::wstring t;
+      if (b.kind == Bullet::Kind::Char) {
+        if (!b.font.empty()) bp.latin = bp.eastAsian = bp.complexScript = b.font;
+        t = b.character;
+        if (IsSymbolFont(bp.latin))
+          for (wchar_t& c : t)
+            if (c >= 0x20 && c < 0x100) c = static_cast<wchar_t>(0xF000 + c);
+      } else if (b.kind == Bullet::Kind::AutoNumber) {
+        if (!b.font.empty()) bp.latin = b.font;
+        t = AutoNumber(b.scheme, std::max(src.number, 1));
+      } else if (b.kind == Bullet::Kind::Picture && extras.picture) {
+        para.picture = extras.picture(b.picturePart, b.pictureRel);
+        if (para.picture) t = L"￼";
+      }
+      if (!t.empty()) {
+        add(t + L'\t', bp, nullptr);
+        para.bullet = true;
+      }
     }
-    for (const Piece& pc : pieces) add(pc.text, pc.props, pc.link);
+    for (const fw::slide::TextRun& r : src.runs) {
+      std::wstring t = r.kind == fw::slide::TextRun::Kind::Break ? std::wstring(L"\u000B") : r.text;
+      // Line feeds in a run break lines as a:br does; other control characters show as spaces.
+      for (wchar_t& c : t)
+        if (c == L'\n' || c == L'\r') c = L'\u000B';
+        else if (c < 0x20 && c != L'\t' && c != L'\u000B') c = L' ';
+      if (t.empty() || chars >= kMaxChars) continue;
+      chars += t.size();
+      RunProps props = r.props;
+      const fw::slide::Hyperlink* link = r.props.click ? &r.props.click : nullptr;
+      if (link && !LinkKeepsTextColor(r.node)) {
+        if (std::optional<draw::Color> c = draw::SchemeColor("hlink", extras.colors)) {
+          props.color = *c;
+          props.noFill = false;
+        }
+        if (props.underline == fw::slide::Underline::None) props.underline = fw::slide::Underline::Single;
+      }
+      add(t, props, link);
+    }
 
     text::Paragraph tp;
     tp.text = para.text;
     tp.runs = runs;
     tp.markStyle = &para.mark;
     text::ParagraphFormat& f = tp.format;
-    std::string_view algn = pp.algn;
-    f.rightToLeft = pp.rtl;
     using text::Alignment;
-    Alignment a = algn == "ctr"                         ? Alignment::Center
-                  : algn == "r"                         ? Alignment::End
-                  : algn == "just" || algn == "justLow" ? Alignment::Justify
-                  : algn == "dist" || algn == "thaiDist" ? Alignment::Distribute
-                                                         : Alignment::Start;
+    Alignment a = pp.align == TextAlign::Center                                      ? Alignment::Center
+                  : pp.align == TextAlign::Right                                     ? Alignment::End
+                  : pp.align == TextAlign::Justify || pp.align == TextAlign::JustifyLow ? Alignment::Justify
+                  : pp.align == TextAlign::Distributed || pp.align == TextAlign::ThaiDistributed ? Alignment::Distribute
+                                                                                     : Alignment::Start;
+    // DrawingML's alignment is visual (left, right); fwtext's logical.
     if (pp.rtl && (a == Alignment::Start || a == Alignment::End)) a = a == Alignment::Start ? Alignment::End : Alignment::Start;
+    f.rightToLeft = pp.rtl;
     f.alignment = box.wrap ? a : (pp.rtl ? Alignment::End : Alignment::Start);
-    f.startIndent = pp.marL;
-    f.endIndent = pp.marR;
+    f.startIndent = pp.marginLeft;
+    f.endIndent = pp.marginRight;
     f.firstLineIndent = pp.indent;
-    f.tabs = pp.tabs;
-    f.defaultTabStop = pp.defTab;
+    for (const fw::slide::TabStop& t : pp.tabs) {
+      text::TabStop ts;
+      ts.position = t.position;
+      ts.align = t.kind == fw::slide::TabStop::Kind::Center    ? text::TabAlign::Center
+                 : t.kind == fw::slide::TabStop::Kind::Right   ? text::TabAlign::End
+                 : t.kind == fw::slide::TabStop::Kind::Decimal ? text::TabAlign::Decimal
+                                                               : text::TabAlign::Start;
+      f.tabs.push_back(ts);
+    }
+    f.defaultTabStop = std::max(1.f, pp.defaultTab);
     f.squeezeSpaces = false;
-    f.hangPunctuation = false;
+    f.hangPunctuation = pp.hangingPunctuation;
     para.lines = text::Layout(fonts, tp, layoutW);
 
-    // Vertical placement. Percent line spacing scales each line's height (its font's ascent,
-    // descent and gap); the lines' share of the stored autofit's reduction is taken off it.
-    float largest = para.mark.size;
-    if (!para.lines.empty()) {
-      largest = 0;
+    // Vertical placement. Percent line spacing scales each line's height (its fonts' ascent,
+    // descent and gap), less the stored autofit's reduction; paragraph spacing in percent is of
+    // the first line's largest font.
+    float largest = 0;
+    if (!para.lines.empty())
       for (const text::GlyphPiece& g : para.lines.front().pieces) largest = std::max(largest, g.emSize);
-      if (largest <= 0) largest = para.mark.size;
-    }
-    auto spacing = [&](const Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
-    if (!first) y += spacing(pp.before);
-    const float lineFactor = pp.line.percent ? std::max(0.f, pp.line.value - lineReduction) : 0.f;
+    if (largest <= 0) largest = para.mark.size;
+    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
+    if (!first) y += spacing(pp.spaceBefore);
+    const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
       const float natural = line.ascent + line.descent + line.lineGap;
-      const float pitch = pp.line.percent ? natural * lineFactor : pp.line.value * fontScale;
-      // The baseline: the line's share above it, scaled like the line.
+      const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
       const float above = natural > 0 ? pitch * (line.ascent + line.lineGap) / natural : 0;
-      if (columns > 1 && column + 1 < columns && y + pitch > boxH + 0.01f && y > columnTop) {
+      if (column + 1 < columns && y + pitch > boxH + 0.01f && y > 0) {
         ++column;
         y = 0;
       }
-      const float colX = column * (colW + colGap);
       float shift = 0;
       if (!box.wrap) {
-        const float w = line.contentRight - line.contentLeft;
-        const float left = pp.marL, right = boxW - pp.marR;
-        if (a == Alignment::Center) shift = (left + right) / 2 - (line.contentLeft + w / 2);
+        // Lines that don't wrap are aligned in the box as wide as they are.
+        const float left = pp.marginLeft, right = boxW - pp.marginRight;
+        if (a == Alignment::Center) shift = (left + right) / 2 - (line.contentLeft + line.contentRight) / 2;
         else if (a == Alignment::End) shift = right - line.contentRight;
       }
-      para.origins.push_back({colX + shift, y + above});
+      para.origins.push_back({column * (colW + colGap) + shift, y + above});
       para.rows.emplace_back(y, y + pitch);
       y += pitch;
       maxBottom = std::max(maxBottom, y);
     }
-    y += spacing(pp.after);
+    y += spacing(pp.spaceAfter);
     first = false;
-    return m.paras.size() < kMaxParagraphs;
-  });
-  // The block's height: the last line's bottom (the last paragraph's space after doesn't count).
+  }
+  // The block's height: down to the last line (the last paragraph's space after doesn't count).
   m.height = maxBottom;
 
-  // Anchoring and the box: text coordinates (0, 0 at the top left of the text area, x along the
-  // lines) to the box's.
+  // Anchoring, then text coordinates (x along the lines from the text area's top left) to the box's.
   float dy = 0;
-  switch (box.anchor) {
-    case draw::TextBox::Anchor::Middle:
-    case draw::TextBox::Anchor::Justified:
-    case draw::TextBox::Anchor::Distributed:
-      dy = (boxH - m.height) / 2;
-      break;
-    case draw::TextBox::Anchor::Bottom:
-      dy = boxH - m.height;
-      break;
-    default:
-      break;
-  }
+  if (box.anchor == draw::TextBox::Anchor::Bottom) dy = boxH - m.height;
+  else if (box.anchor != draw::TextBox::Anchor::Top) dy = (boxH - m.height) / 2;
   float dx = 0;
   if (box.anchorCenter) {
     float lo = 1e9f, hi = -1e9f;
@@ -593,25 +345,25 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const TextCo
     if (lo <= hi) dx = (boxW - (hi - lo)) / 2 - lo;
   }
   const draw::Rect& r = box.rect;
-  draw::Matrix toArea = draw::Matrix::Translate(dx, dy);
-  if (box.flow == draw::TextBox::Flow::Vertical270) toArea = toArea * draw::Matrix{0, -1, 1, 0, r.left, r.bottom};
-  else if (vertical) toArea = toArea * draw::Matrix{0, 1, -1, 0, r.right, r.top};
-  else toArea = toArea * draw::Matrix::Translate(r.left, r.top);
+  draw::Matrix t = draw::Matrix::Translate(dx, dy);
+  if (box.flow == draw::TextBox::Flow::Vertical270) t = t * draw::Matrix{0, -1, 1, 0, r.left, r.bottom};
+  else if (vertical) t = t * draw::Matrix{0, 1, -1, 0, r.right, r.top};
+  else t = t * draw::Matrix::Translate(r.left, r.top);
   if (box.rotation != 0) {
     const float cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
-    toArea = toArea * draw::Matrix::Translate(-cx, -cy) * draw::Matrix::Rotate(box.rotation) * draw::Matrix::Translate(cx, cy);
+    t = t * draw::Matrix::Translate(-cx, -cy) * draw::Matrix::Rotate(box.rotation) * draw::Matrix::Translate(cx, cy);
   }
-  m.toBox = toArea;
+  m.toBox = t;
 }
 
 void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const {
   const Impl& m = *impl_;
   if (m.paras.empty()) return;
   p.Save();
-  // PowerPoint doesn't mirror text when its shape is flipped: a horizontal flip leaves it as it
-  // is, a vertical one turns it upside down.
-  const draw::Matrix t = p.CurrentTransform();
-  if (t.m11 * t.m22 - t.m12 * t.m21 < 0) {
+  // PowerPoint doesn't mirror text with its shape: a horizontal flip leaves it as it is, a
+  // vertical one turns it upside down.
+  const draw::Matrix ct = p.CurrentTransform();
+  if (ct.m11 * ct.m22 - ct.m12 * ct.m21 < 0) {
     const float cx = (m.rect.left + m.rect.right) / 2;
     p.Transform({-1, 0, 0, 1, 2 * cx, 0});
   }
@@ -623,14 +375,10 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
     for (size_t li = 0; li < para.lines.size(); ++li) {
       const text::Line& line = para.lines[li];
       const draw::Point o = para.origins[li];
-      const auto runOf = [&](uint32_t offset) {
-        size_t k = std::upper_bound(para.runStart.begin(), para.runStart.end(), offset) - para.runStart.begin();
-        return k == 0 ? size_t{0} : k - 1;
-      };
-      // Highlights behind the text.
       for (size_t ri = 0; ri < para.runs.size(); ++ri) {
         if (!para.runs[ri].highlight) continue;
-        const uint32_t s = para.runStart[ri], e = ri + 1 < para.runStart.size() ? para.runStart[ri + 1] : uint32_t(para.text.size());
+        const uint32_t s = para.runStart[ri];
+        const uint32_t e = ri + 1 < para.runStart.size() ? para.runStart[ri + 1] : static_cast<uint32_t>(para.text.size());
         for (const auto& [x0, x1] : line.Ranges(s, e))
           p.FillRect({o.x + x0, para.rows[li].first, o.x + x1, para.rows[li].second}, draw::Brush::Solid(*para.runs[ri].highlight));
       }
@@ -647,10 +395,10 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
         const float baseline = o.y - g.rise;
         p.DrawGlyphs({o.x + g.OriginX(), baseline}, run, brush);
         if (rd.underline && !g.leader) {
+          const draw::Brush ub = rd.underlineColor ? draw::Brush::Solid(*rd.underlineColor) : brush;
           const float top = o.y + rd.ulPos - rd.ulThick / 2;
-          p.FillRect({o.x + g.x, top, o.x + g.x + g.width, top + rd.ulThick}, brush);
-          if (rd.underline == 2)
-            p.FillRect({o.x + g.x, top + 2 * rd.ulThick, o.x + g.x + g.width, top + 3 * rd.ulThick}, brush);
+          p.FillRect({o.x + g.x, top, o.x + g.x + g.width, top + rd.ulThick}, ub);
+          if (rd.underline == 2) p.FillRect({o.x + g.x, top + 2 * rd.ulThick, o.x + g.x + g.width, top + 3 * rd.ulThick}, ub);
         }
         if (rd.strike) {
           const float top = baseline - rd.stPos - rd.stThick / 2;
@@ -658,13 +406,11 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
           if (rd.strike == 2) p.FillRect({o.x + g.x, top - 2 * rd.stThick, o.x + g.x + g.width, top - rd.stThick}, brush);
         }
       }
-      if (para.picture)
+      if (para.picture && para.bullet)
         for (const text::InlineObject& obj : line.objects) {
-          if (runOf(obj.offset) != 0) continue;
-          if (std::shared_ptr<const draw::Bitmap> px = para.picture->Pixels(64, 64)) {
-            const float h = obj.ascent + obj.descent;
-            p.DrawBitmap(*px, {o.x + obj.x, o.y - obj.ascent, o.x + obj.x + obj.width, o.y - obj.ascent + h});
-          }
+          if (obj.run != 0) continue;
+          if (std::shared_ptr<const draw::Bitmap> px = para.picture->Pixels(64, 64))
+            p.DrawBitmap(*px, {o.x + obj.x, o.y - obj.ascent, o.x + obj.x + obj.width, o.y + obj.descent});
         }
     }
   }
@@ -673,23 +419,13 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
 
 float TextBlock::ContentHeight() const { return impl_->height; }
 
-bool TextBlock::Empty() const {
-  for (const Impl::Para& p : impl_->paras)
-    if (!p.empty) return false;
-  return true;
-}
-
 namespace {
 draw::Rect Transformed(const draw::Matrix& m, const draw::Rect& r) {
   const draw::Point pts[4] = {m.Apply({r.left, r.top}), m.Apply({r.right, r.top}), m.Apply({r.left, r.bottom}),
                               m.Apply({r.right, r.bottom})};
   draw::Rect out{pts[0].x, pts[0].y, pts[0].x, pts[0].y};
-  for (const draw::Point& q : pts) {
-    out.left = std::min(out.left, q.x);
-    out.top = std::min(out.top, q.y);
-    out.right = std::max(out.right, q.x);
-    out.bottom = std::max(out.bottom, q.y);
-  }
+  for (const draw::Point& q : pts)
+    out = {std::min(out.left, q.x), std::min(out.top, q.y), std::max(out.right, q.x), std::max(out.bottom, q.y)};
   return out;
 }
 }  // namespace
@@ -698,15 +434,13 @@ std::vector<draw::Rect> TextBlock::ParagraphBounds() const {
   std::vector<draw::Rect> out;
   for (const Impl::Para& p : impl_->paras) {
     draw::Rect r{};
-    bool any = false;
     for (size_t i = 0; i < p.lines.size(); ++i) {
       const draw::Rect line{p.origins[i].x + p.lines[i].contentLeft, p.rows[i].first, p.origins[i].x + p.lines[i].contentRight,
                             p.rows[i].second};
-      if (!any) r = line;
-      r = {std::min(r.left, line.left), std::min(r.top, line.top), std::max(r.right, line.right), std::max(r.bottom, line.bottom)};
-      any = true;
+      r = i == 0 ? line : draw::Rect{std::min(r.left, line.left), std::min(r.top, line.top), std::max(r.right, line.right),
+                                     std::max(r.bottom, line.bottom)};
     }
-    out.push_back(any ? Transformed(impl_->toBox, r) : draw::Rect{});
+    out.push_back(p.lines.empty() ? draw::Rect{} : Transformed(impl_->toBox, r));
   }
   return out;
 }
@@ -717,8 +451,7 @@ std::vector<TextBlock::Link> TextBlock::Links() const {
     const Impl::Para& p = impl_->paras[l.para];
     for (size_t i = 0; i < p.lines.size(); ++i)
       for (const auto& [x0, x1] : p.lines[i].Ranges(l.start, l.end))
-        out.push_back({Transformed(impl_->toBox, {p.origins[i].x + x0, p.rows[i].first, p.origins[i].x + x1, p.rows[i].second}),
-                       l.relId, l.action});
+        out.push_back({Transformed(impl_->toBox, {p.origins[i].x + x0, p.rows[i].first, p.origins[i].x + x1, p.rows[i].second}), l.link});
   }
   return out;
 }
@@ -727,10 +460,75 @@ std::wstring TextBlock::PlainText() const {
   std::wstring out;
   for (const Impl::Para& p : impl_->paras) {
     if (!out.empty()) out += L'\n';
-    // Leave the bullet out: it is the first run when the text starts with one.
     const size_t from = p.bullet && p.runStart.size() > 1 ? p.runStart[1] : 0;
     for (size_t i = from; i < p.text.size(); ++i) out += p.text[i] == L'\u000B' ? L'\n' : p.text[i];
   }
+  return out;
+}
+
+// ---- Text no model shape owns ----
+
+std::unique_ptr<fw::slide::TextBody> PlainTextBody(pugi::xml_node txBody, const draw::TextBox& box, const draw::ColorContext& colors) {
+  auto out = std::make_unique<fw::slide::TextBody>();
+  out->node = txBody;
+  auto face = [&](std::string_view t) -> std::wstring {
+    if ((t.starts_with("+mn-") || t.starts_with("+mj-")) && colors.theme) {
+      const draw::ThemeFont& f = t.starts_with("+mj") ? colors.theme->MajorFont() : colors.theme->MinorFont();
+      return Utf8ToWide(t.ends_with("-ea") ? f.eastAsian : t.ends_with("-cs") ? f.complexScript : f.latin);
+    }
+    return Utf8ToWide(t);
+  };
+  fw::slide::RunProps base;
+  base.latin = face(box.fontFace.empty() ? "+mn-lt" : box.fontFace);
+  if (box.fontColor) base.color = *box.fontColor;
+  else if (auto c = draw::SchemeColor("tx1", colors)) base.color = *c;
+  auto run = [&](pugi::xml_node rPr, fw::slide::RunProps& r) {
+    if (!rPr) return;
+    if (rPr.attribute("sz")) r.size = std::clamp(static_cast<float>(Number(rPr, "sz", 1800) / 100), 1.f, 4000.f);
+    if (rPr.attribute("b")) r.bold = Bool(rPr, "b", false);
+    if (rPr.attribute("i")) r.italic = Bool(rPr, "i", false);
+    if (rPr.attribute("u")) r.underline = std::string_view(rPr.attribute("u").value()) == "none" ? fw::slide::Underline::None : fw::slide::Underline::Single;
+    if (rPr.attribute("baseline")) r.baseline = static_cast<float>(Number(rPr, "baseline", 0) / 100000);
+    if (pugi::xml_node f = A(rPr, "solidFill"))
+      if (auto c = draw::ReadColor(f, colors)) r.color = *c;
+    if (A(rPr, "noFill")) r.noFill = true;
+    if (pugi::xml_node l = A(rPr, "latin")) r.latin = face(l.attribute("typeface").value());
+    if (rPr.attribute("lang")) r.lang = rPr.attribute("lang").value();
+  };
+  run(A(A(A(txBody, "lstStyle"), "lvl1pPr"), "defRPr"), base);
+  ForEachChild(txBody, [&](pugi::xml_node p) {
+    if (!Is(p, kA, "p")) return true;
+    fw::slide::Paragraph& para = out->paragraphs.emplace_back();
+    para.node = p;
+    pugi::xml_node pPr = A(p, "pPr");
+    std::string_view algn = pPr.attribute("algn").value();
+    para.props.align = algn == "ctr" ? fw::slide::TextAlign::Center : algn == "r" ? fw::slide::TextAlign::Right
+                       : algn == "just"                                        ? fw::slide::TextAlign::Justify
+                                                                               : fw::slide::TextAlign::Left;
+    para.props.marginLeft = EmuToPt(Number(pPr, "marL", 0));
+    para.props.indent = EmuToPt(Number(pPr, "indent", 0));
+    if (pugi::xml_node pct = A(A(pPr, "lnSpc"), "spcPct")) para.props.lineSpacing = {true, static_cast<float>(Number(pct, "val", 100000) / 100000)};
+    if (pugi::xml_node pct = A(A(pPr, "spcBef"), "spcPct")) para.props.spaceBefore = {true, static_cast<float>(Number(pct, "val", 0) / 100000)};
+    if (pugi::xml_node pts = A(A(pPr, "spcBef"), "spcPts")) para.props.spaceBefore = {false, static_cast<float>(Number(pts, "val", 0) / 100)};
+    if (pugi::xml_node pct = A(A(pPr, "spcAft"), "spcPct")) para.props.spaceAfter = {true, static_cast<float>(Number(pct, "val", 0) / 100000)};
+    if (pugi::xml_node pts = A(A(pPr, "spcAft"), "spcPts")) para.props.spaceAfter = {false, static_cast<float>(Number(pts, "val", 0) / 100)};
+    para.endProps = base;
+    ForEachChild(p, [&](pugi::xml_node r) {
+      const std::string_view k = LocalNameOf(r);
+      if (k == "r" || k == "fld" || k == "br") {
+        fw::slide::TextRun& tr = para.runs.emplace_back();
+        tr.node = r;
+        tr.kind = k == "br" ? fw::slide::TextRun::Kind::Break : k == "fld" ? fw::slide::TextRun::Kind::Field : fw::slide::TextRun::Kind::Text;
+        tr.props = base;
+        run(A(r, "rPr"), tr.props);
+        if (k != "br") tr.text = Utf8ToWide(A(r, "t").text().get());
+      } else if (k == "endParaRPr") {
+        run(r, para.endProps);
+      }
+      return para.runs.size() < 10000;
+    });
+    return out->paragraphs.size() < 5000;
+  });
   return out;
 }
 

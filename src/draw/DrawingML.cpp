@@ -59,6 +59,11 @@ std::vector<float> PresetDash(std::string_view v) {
   return {};
 }
 
+void ClearIds(Shape& s) {
+  s.id = 0;
+  for (Shape& c : s.children) ClearIds(c);
+}
+
 class Reader {
  public:
   explicit Reader(ReadContext& ctx) : ctx_(ctx) {}
@@ -496,6 +501,7 @@ class Reader {
       const Size size{s.bounds.Width(), s.bounds.Height()};
       if (ReadGraphicData(A(A(el, "graphic"), "graphicData"), size, ctx_, inner)) {
         inner.bounds = s.bounds;
+        inner.id = s.id;
         inner.rotation = s.rotation;
         inner.flipH = s.flipH;
         inner.flipV = s.flipV;
@@ -563,6 +569,8 @@ class Reader {
       Shape child;
       std::string_view k = LocalNameOf(c);
       if ((k == "sp" || k == "grpSp" || k == "pic" || k == "cxnSp") && ReadShape(c, child, nullptr)) {
+        // Its shapes' ids are the drawing part's own: the graphic frame's is the one that counts.
+        ClearIds(child);
         s.children.push_back(std::move(child));
       }
       return ctx_.shapes <= ReadContext::kMaxShapes;

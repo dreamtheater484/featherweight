@@ -14,7 +14,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace fw::slide::render {
 
-std::shared_ptr<const draw::Bitmap> RenderBitmap(const SlideRender& slide, int width, int height) {
+std::shared_ptr<const draw::Bitmap> RenderBitmap(const SlideRender& slide, int width, int height, DrawFilter* filter) {
   if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return nullptr;
   // One factory per thread: making them costs more than drawing a thumbnail.
   thread_local ComPtr<ID2D1Factory1> factory;
@@ -37,7 +37,7 @@ std::shared_ptr<const draw::Bitmap> RenderBitmap(const SlideRender& slide, int w
   dc->Clear(D2D1::ColorF(1, 1, 1, 1));
   {
     draw::D2DPainter p(dc.Get());
-    slide.Draw(p, {0, 0, static_cast<float>(width), static_cast<float>(height)});
+    slide.Draw(p, {0, 0, static_cast<float>(width), static_cast<float>(height)}, filter);
   }
   if (FAILED(dc->EndDraw())) return nullptr;
   WICRect all{0, 0, width, height};
