@@ -16,6 +16,7 @@
 #include <dwrite.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -217,10 +218,19 @@ class Show final : public anim::FrameSource {
   void Click(int x, int y);
   void Follow(const Hyperlink& link);
   const Hyperlink* LinkAt(int x, int y, uint32_t* trigger);
+  // The mouse moved: a shape's mouse-over action runs when the mouse comes onto it.
+  void Hover(int x, int y);
+  // The item under a point of the window (topmost first, from `below`), with the point in slide
+  // points; -1 for none.
+  int ItemAt(int x, int y, int below, draw::Point* pt) const;
+  // The deck's custom show `id` starts; false when there's no such show.
+  bool StartCustom(uint32_t id, size_t returnTo, bool loop);
   void Blank(int kind);
   void Key(UINT vk);
   void ContextMenu(int x, int y);
   void ShowCursorNow();
+  // The next slide, with its transition (a custom show past its last slide ends there).
+  void Advance();
 
   // The bench.
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
@@ -248,6 +258,8 @@ class Show final : public anim::FrameSource {
 
   std::unique_ptr<Scene> cur_, next_;
   std::vector<size_t> history_;  // slides shown, for "last viewed"
+  SlideOrder order_;  // hidden slides, the loop, custom shows
+  int hoverItem_ = -1;  // the item the mouse is over whose mouse-over action has run
   size_t lastShown_ = 0;
 
   bool transition_ = false;
@@ -346,6 +358,14 @@ bool Show::Create() {
   fw_ = static_cast<UINT>(std::max(1.f, std::ceil(slideW_)));
   fh_ = static_cast<UINT>(std::max(1.f, std::ceil(slideH_)));
   bench_ = !opts_.benchReport.empty();
+  Presentation* deck = &deck_;
+  order_ = SlideOrder(
+      deck_.SlideCount(),
+      [deck](size_t i) {
+        const Slide* s = deck->GetSlide(i);
+        return s && s->hidden;
+      },
+      deck_.Show().loop && !bench_);
   gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                   DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
   if (endFormat_) endFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -370,6 +390,12 @@ bool Show::Create() {
   ShowCursorNow();
   // The first slide's transition plays from black, as in PowerPoint.
   size_t first = std::min(opts_.first, deck_.SlideCount() ? deck_.SlideCount() - 1 : 0);
+  if (opts_.first == 0) {
+    // From the beginning: the deck's own custom show if it has one (Set Up Slide Show), else the
+    // first slide that isn't hidden.
+    if (deck_.Show().hasCustomShow) StartCustom(deck_.Show().customShow, kEnd, deck_.Show().loop && !bench_);
+    first = FirstIndex();
+  }
   if (deck_.SlideCount() == 0) first = kEnd;
   GoTo(first, true, false);
   anim::SetFrameSource(this);
@@ -979,44 +1005,22 @@ void Show::AfterSettle(double now) {
 
 // ---- Navigation -----------------------------------------------------------------------------
 
-size_t Show::FirstIndex() const {
-  for (size_t i = 0; i < deck_.SlideCount(); ++i) {
-    const Slide* s = const_cast<Presentation&>(deck_).GetSlide(i);
-    if (!s || !s->hidden) return i;
-  }
-  return kEnd;
-}
+size_t Show::FirstIndex() const { return order_.First(); }
+size_t Show::NextIndex(size_t from) const { return order_.Next(from); }
+size_t Show::PrevIndex(size_t from) const { return order_.Prev(from); }
 
-size_t Show::NextIndex(size_t from) const {
-  const size_t n = deck_.SlideCount();
-  if (from == kEnd) return kEnd;
-  for (size_t i = from + 1; i < n; ++i) {
-    const Slide* s = const_cast<Presentation&>(deck_).GetSlide(i);
-    if (!s || !s->hidden) return i;
-  }
-  if (deck_.Show().loop && !bench_) {
-    for (size_t i = 0; i <= from && i < n; ++i) {
-      const Slide* s = const_cast<Presentation&>(deck_).GetSlide(i);
-      if (!s || !s->hidden) return i;
-    }
-  }
-  return kEnd;
-}
-
-size_t Show::PrevIndex(size_t from) const {
-  size_t i = from == kEnd ? deck_.SlideCount() : from;
-  while (i > 0) {
-    --i;
-    const Slide* s = const_cast<Presentation&>(deck_).GetSlide(i);
-    if (!s || !s->hidden) return i;
-  }
-  return kEnd;
+bool Show::StartCustom(uint32_t id, size_t returnTo, bool loop) {
+  for (const CustomShow& cs : deck_.CustomShows())
+    if (cs.id == id) return order_.StartCustom(cs.slides, returnTo, loop);
+  return false;
 }
 
 void Show::GoTo(size_t index, bool transition, bool built) {
   const double now = Now();
   KillTimer(hwnd_, kTimerAdvance);
   if (index != kEnd && index >= deck_.SlideCount()) return;
+  order_.Moved(index);
+  hoverItem_ = -1;
   if (cur_ && cur_->animator.Running(now)) {
     cur_->animator.Finish();
     Settle(*cur_);
@@ -1087,8 +1091,10 @@ void Show::Next(bool fromClick) {
     }
     return;
   }
-  GoTo(NextIndex(cur_->index), true, false);
+  Advance();
 }
+
+void Show::Advance() { GoTo(order_.Advance(cur_->index), true, false); }
 
 void Show::Previous() {
   if (blank_) {
@@ -1104,18 +1110,17 @@ void Show::Previous() {
     Redraw();
     return;
   }
-  size_t prev = cur_->index == kEnd ? lastShown_ : PrevIndex(cur_->index);
+  size_t prev = cur_->index == kEnd ? lastShown_ : order_.Back(cur_->index);
   if (prev == kEnd) return;
   GoTo(prev, false, true);
 }
 
-const Hyperlink* Show::LinkAt(int x, int y, uint32_t* trigger) {
-  if (trigger) *trigger = 0;
-  if (!cur_ || cur_->index == kEnd || transition_ || blank_) return nullptr;
-  draw::Point pt{(x - ox_) / scale_, (y - oy_) / scale_};
+int Show::ItemAt(int x, int y, int below, draw::Point* pt) const {
+  if (!cur_ || cur_->index == kEnd || transition_ || blank_) return -1;
+  *pt = {(x - ox_) / scale_, (y - oy_) / scale_};
   const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
   draw::Size size = renderer_.SlideSize();
-  for (size_t i = items.size(); i-- > 0;) {
+  for (size_t i = std::min(items.size(), static_cast<size_t>(below)); i-- > 0;) {
     const ItemInfo& it = items[i];
     draw::Rect b = it.bounds;
     const ItemTargets& t = cur_->targets[i];
@@ -1125,7 +1130,33 @@ const Hyperlink* Show::LinkAt(int x, int y, uint32_t* trigger) {
       b = {b.left + p.dx * size.width, b.top + p.dy * size.height, b.right + p.dx * size.width,
            b.bottom + p.dy * size.height};
     }
-    if (pt.x < b.left || pt.x > b.right || pt.y < b.top || pt.y > b.bottom) continue;
+    if (pt->x >= b.left && pt->x <= b.right && pt->y >= b.top && pt->y <= b.bottom) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void Show::Hover(int x, int y) {
+  draw::Point pt;
+  int found = -1;
+  for (int i = ItemAt(x, y, INT_MAX, &pt); i >= 0; i = ItemAt(x, y, i, &pt)) {
+    const Hyperlink* h = renderer_.Items(cur_->index)[static_cast<size_t>(i)].hover;
+    if (h && h->action != Hyperlink::Action::None) {
+      found = i;
+      break;
+    }
+  }
+  if (found == hoverItem_) return;
+  hoverItem_ = found;
+  if (found >= 0) Follow(*renderer_.Items(cur_->index)[static_cast<size_t>(found)].hover);
+}
+
+const Hyperlink* Show::LinkAt(int x, int y, uint32_t* trigger) {
+  if (trigger) *trigger = 0;
+  draw::Point pt;
+  const std::vector<ItemInfo>* all = cur_ && cur_->index != kEnd ? &renderer_.Items(cur_->index) : nullptr;
+  for (int found = ItemAt(x, y, INT_MAX, &pt); found >= 0; found = ItemAt(x, y, found, &pt)) {
+    const size_t i = static_cast<size_t>(found);
+    const ItemInfo& it = (*all)[i];
     if (it.spid && trigger) {
       for (const Sequence& seq : cur_->timing.triggers)
         if (seq.triggerSpid == it.spid) {
@@ -1177,9 +1208,9 @@ void Show::Follow(const Hyperlink& link) {
     return SUCCEEDED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr)) && pressed == IDOK;
   };
   switch (link.action) {
-    case A::NextSlide: GoTo(NextIndex(cur_->index), true, false); break;
+    case A::NextSlide: Advance(); break;
     case A::PreviousSlide: {
-      size_t p = PrevIndex(cur_->index);
+      size_t p = order_.Back(cur_->index);
       if (p != kEnd) GoTo(p, true, false);
       break;
     }
@@ -1192,13 +1223,12 @@ void Show::Follow(const Hyperlink& link) {
       break;
     }
     case A::Slide:
+      if (link.slide >= 0 && static_cast<size_t>(link.slide) < deck_.SlideCount())
+        GoTo(static_cast<size_t>(link.slide), true, false);
+      break;
     case A::CustomShow: {
-      // A custom show plays from its first slide (P1: then on through the deck).
-      int target = link.slide;
-      if (link.action == A::CustomShow)
-        for (const CustomShow& cs : deck_.CustomShows())
-          if (cs.id == link.customShow && !cs.slides.empty()) target = static_cast<int>(cs.slides.front());
-      if (target >= 0 && static_cast<size_t>(target) < deck_.SlideCount()) GoTo(static_cast<size_t>(target), true, false);
+      // Its slides, then back to this slide (Show and return) or on to the end of the show.
+      if (StartCustom(link.customShow, link.returns ? cur_->index : kEnd, false)) GoTo(FirstIndex(), true, false);
       break;
     }
     case A::LastViewed:
@@ -1507,6 +1537,7 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
       if (l != lastPos) {
         lastPos = l;
         ShowCursorNow();
+        Hover(static_cast<short>(LOWORD(l)), static_cast<short>(HIWORD(l)));
       }
       return 0;
     }

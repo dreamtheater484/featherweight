@@ -125,6 +125,7 @@ class DeckRenderer final : public SlideRenderer {
       float m = 6 + 0.06f * std::max(si.bounds.Width(), si.bounds.Height());
       info.ink = {si.bounds.left - m, si.bounds.top - m, si.bounds.right + m, si.bounds.bottom + m};
       info.click = si.shape->click ? &si.shape->click : nullptr;
+      info.hover = si.shape->hover ? &si.shape->hover : nullptr;
       p.itemOfId[si.id] = p.items.size();
       p.items.push_back(info);
     }

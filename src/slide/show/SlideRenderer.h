@@ -37,6 +37,7 @@ struct ItemInfo {
   draw::Rect ink;        // what it paints (shadows, text past the box), slide points
   int paragraphs = 0;    // in its text
   const Hyperlink* click = nullptr;  // the shape's own link
+  const Hyperlink* hover = nullptr;  // what the mouse moving onto it does
 };
 
 class SlideRenderer {
