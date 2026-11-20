@@ -269,6 +269,51 @@ TEST(xls_drawings) {
   CHECK(some.find("<xdr:pic>") != std::string::npos && some.find("<xdr:sp ") == std::string::npos);
 }
 
+TEST(xls_chart_sheet_kept) {
+  // A worksheet and a chart sheet: the chart sheet stays in its place (its chart isn't read; an empty
+  // one stands in, which Excel opens), and prints its page.
+  std::vector<uint8_t> globals, sheet, chart;
+  Rec(globals, 0x0809, {0x0600, 0x0005, 0, 0, 0, 0}, {2, 2, 2, 2, 4, 4});
+  Rec(globals, 0x0031, {220, 0, 0x7FFF, 400, 0, 0, 0, 0, 0, 5, 0, 'A', 'r', 'i', 'a', 'l'}, {2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1});
+  for (int i = 0; i < 15; ++i) Rec(globals, 0x00E0, {0, 0, 0xFFF5, 0x20, 0, 0, 0, 0x20C0}, {2, 2, 2, 2, 4, 2, 4, 2});
+  Rec(globals, 0x00E0, {0, 0, 0x0001, 0x20, 0, 0, 0, 0x20C0}, {2, 2, 2, 2, 4, 2, 4, 2});
+  const size_t first = globals.size();
+  Rec(globals, 0x0085, {0, 0, 0, 1, 0, 'S'}, {4, 1, 1, 1, 1, 1});
+  const size_t second = globals.size();
+  Rec(globals, 0x0085, {0, 0, 2, 1, 0, 'C'}, {4, 1, 1, 1, 1, 1});  // dt 2: a chart sheet
+  Rec(globals, 0x000A, {}, {});
+  Rec(sheet, 0x0809, {0x0600, 0x0010, 0, 0, 0, 0}, {2, 2, 2, 2, 4, 4});
+  Rec(sheet, 0x0203, {0, 0, 15, 0, 0x3FF00000}, {2, 2, 2, 4, 4});
+  Rec(sheet, 0x000A, {}, {});
+  Rec(chart, 0x0809, {0x0600, 0x0020, 0, 0, 0, 0}, {2, 2, 2, 2, 4, 4});  // a chart's substream
+  Rec(chart, 0x00A1, {9, 100, 1, 1, 1, 0, 600, 600, 0, 0, 0, 0, 1}, {2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 2});  // A4, landscape
+  Rec(chart, 0x000A, {}, {});
+  auto put = [&](size_t at, size_t value) {
+    for (int i = 0; i < 4; ++i) globals[at + 4 + i] = static_cast<uint8_t>(value >> (8 * i));
+  };
+  put(first, globals.size());
+  put(second, globals.size() + sheet.size());
+  std::vector<uint8_t> stream = globals;
+  stream.insert(stream.end(), sheet.begin(), sheet.end());
+  stream.insert(stream.end(), chart.begin(), chart.end());
+  const xls::StreamFn streams = [&](std::string_view n) -> std::optional<std::vector<uint8_t>> {
+    if (n == "Workbook") return stream;
+    return std::nullopt;
+  };
+  pkg::Status st;
+  std::vector<uint8_t> xlsx = xls::ToXlsx(streams, st);
+  CHECK(st.Ok() && !xlsx.empty());
+  if (xlsx.empty()) return;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(xlsx)), pkg::Limits::Default(), st);
+  CHECK(package && pkg::CheckPackage(*package).Ok());
+  if (!package) return;
+  auto book = xlsx::Read(std::move(package), st, {.loadAll = true});
+  CHECK(book && book->SheetCount() == 2);
+  if (!book || book->SheetCount() != 2) return;
+  CHECK(book->GetSheet(0).Kind() == SheetKind::Worksheet && book->GetSheet(1).Kind() == SheetKind::Chartsheet);
+  CHECK(book->GetSheet(1).Name() == "C" && book->GetSheet(1).Page().orientation == Orientation::Landscape);
+}
+
 TEST(xls_row_formats_print) {
   // Excel's .xls writer keeps a row's format on its ROW record, and Excel prints the .xls down to the
   // last such row within DIMENSIONS: the used range reaches it (a blank cell in the row's format).
