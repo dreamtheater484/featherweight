@@ -236,3 +236,38 @@ TEST(sheet_edit_sheets_and_names) {
   CHECK(ed.Undo() && book->FindName("Rate"));
   CHECK(ed.WorkbookDirty());
 }
+
+// A reference that lost its cells ('Mental Health'!#REF!, its rows deleted) whose sheet is deleted
+// too is #REF! once, as Excel writes it: #REF!#REF! isn't a formula, and Excel removes it as a
+// damaged record (s4 final gate). The same in a name, a 3-D range and a conditional format; a
+// rename keeps the sheet's name in front of it.
+TEST(sheet_edit_lost_reference_on_a_deleted_sheet) {
+  auto book = OpenParts({"<sheetData><row r=\"24\"><c r=\"D24\"><v>5</v></c></row></sheetData>",
+                         "<sheetData><row r=\"1\"><c r=\"A1\"><f>Sheet1!D24</f><v>5</v></c></row></sheetData>",
+                         "<sheetData><row r=\"1\"><c r=\"A1\"><f>SUM(Sheet1:Sheet2!#REF!)+1</f><v>0</v></c></row></sheetData>"
+                         "<conditionalFormatting sqref=\"A1\"><cfRule type=\"expression\" priority=\"1\">"
+                         "<formula>Sheet1!D24&gt;0</formula></cfRule></conditionalFormatting>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.RenameSheet(0, "Mental Health"));
+  CHECK(ed.SetName(DefinedName{"Fee", -1, "'Mental Health'!$D$24", false}));
+  CHECK(ed.DeleteRows(0, 22, 2));  // rows 23:24
+  CHECK_EQ(FormulaText(book->GetSheet(1), 0, 0), std::string("'Mental Health'!#REF!"));
+  CHECK(book->FindName("Fee") && book->FindName("Fee")->formula == "'Mental Health'!#REF!");
+  CHECK(book->GetSheet(2).Text().afterData.find("<formula>'Mental Health'!#REF!&gt;0</formula>") != std::string::npos);
+  CHECK(ed.RenameSheet(0, "MH"));
+  CHECK_EQ(FormulaText(book->GetSheet(1), 0, 0), std::string("MH!#REF!"));
+  CHECK_EQ(FormulaText(book->GetSheet(2), 0, 0), std::string("SUM(MH:Sheet2!#REF!)+1"));
+  // Its sheet deleted: #REF! once; the 3-D range gives way to the sheet left in it.
+  CHECK(ed.DeleteSheet(0));
+  CHECK_EQ(FormulaText(book->GetSheet(0), 0, 0), std::string("#REF!"));
+  CHECK(book->FindName("Fee") && book->FindName("Fee")->formula == "#REF!");
+  CHECK_EQ(FormulaText(book->GetSheet(1), 0, 0), std::string("SUM(Sheet2!#REF!)+1"));
+  CHECK(book->GetSheet(1).Text().afterData.find("<formula>#REF!&gt;0</formula>") != std::string::npos);
+  // The 3-D range's last sheet deleted too: #REF! once.
+  CHECK(ed.DeleteSheet(0));
+  CHECK_EQ(FormulaText(book->GetSheet(0), 0, 0), std::string("SUM(#REF!)+1"));
+  CHECK(book->GetSheet(0).Text().afterData.find("#REF!#REF!") == std::string::npos);
+  CHECK(ed.Undo(2));
+  CHECK_EQ(FormulaText(book->GetSheet(1), 0, 0), std::string("MH!#REF!"));
+}
