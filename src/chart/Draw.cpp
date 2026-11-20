@@ -602,9 +602,9 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     lines |= e.line;
   }
   // With a line among them, every key is a line's length: 1.92 text sizes, at most 19.2 points, and
-  // the gap after it at most 2.9 (Excel's PDFs at 10 points, PowerPoint's at 18).
+  // the gap after it at most 2 (Excel's PDFs at 10 points, PowerPoint's at 18).
   const float box = kKey * ts, keyW = lines ? std::min(1.92f * ts, 19.2f) : box,
-              lead = keyW + (lines ? std::min(0.212f * ts, 2.9f) : 0.245f * ts);
+              lead = keyW + (lines ? std::min(0.212f * ts, 2.0f) : 0.245f * ts);
   const auto key = [&](const Entry& e, float x, float cy) {
     if (e.line) {
       Path p;
@@ -658,7 +658,9 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   }
   // Top or bottom: rows of entries, centered; an entry at most about 90 % of the chart's width
   // (Excel), a row as tall as its tallest entry.
-  const float gap = 0.976f * ts;
+  // Entries in a row 0.976 text sizes apart (from the ink), less past 10 points (PowerPoint's PDFs:
+  // 15.8 points with 18-point text).
+  const float gap = 0.976f * std::min(ts, 10.0f) + 0.75f * std::max(0.0f, ts - 10);
   const float avail = r.right - r.left;
   wrap(0.9f * (avail + 2 * kPad) - lead, (r.bottom - r.top) / 2);
   std::vector<std::vector<size_t>> rows(1);
@@ -691,7 +693,8 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   for (size_t k = 0; k < rows.size(); ++k) {
     float total = -gap;
     for (size_t i : rows[k]) total += lead + wide[i] + gap;
-    float x = (r.left + r.right) / 2 - total / 2;
+    // Centred, a little right of the middle past 10-point text (PowerPoint's PDFs: 3 points with 18).
+    float x = (r.left + r.right) / 2 - total / 2 + 0.38f * beyond;
     for (size_t i : rows[k]) {
       key(entries[i], x, baseline - kMiddle * ts + (names[i].size() - 1) * lp / 2);
       for (size_t j = 0; j < names[i].size(); ++j) b.Place(names[i][j], x + lead, baseline + j * lp, 0, text);
