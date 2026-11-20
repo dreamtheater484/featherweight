@@ -398,7 +398,8 @@ class Converter {
   void XfExt(const Record& r);
   void Name(const Record& r);
   void Formulas();
-  std::string SheetXml(const SheetEntry& entry, size_t outIndex, std::string& rels, std::vector<Note>& notes);
+  std::string SheetXml(const SheetEntry& entry, size_t outIndex, std::string& rels, std::vector<Note>& notes,
+                       std::string& drawing, std::string& drawingRels);
   std::string StylesXml();
   std::string FontXml(const FontRec& f, bool rich);
   std::string XfXml(const XfRec& x, bool cell);
@@ -437,9 +438,15 @@ class Converter {
   std::map<int, std::array<uint32_t, 4>> filterRanges_;  // by 1-based sheet: _FilterDatabase's area
   std::vector<std::string> dxfs_;  // conditional formats' differential formats, for styles.xml
   std::string DxfXml(Bytes& b);
+  std::vector<uint8_t> dgg_;       // MSODRAWINGGROUP's data: the BLIP store
+  std::map<uint32_t, std::string> mediaTarget_;  // BLIP -> its part from a drawing ("../media/image1.png"; empty: none)
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> media_;  // the pictures' parts
+  std::set<std::string> mediaExts_;
+  std::string MediaTarget(uint32_t pib);
   std::vector<uint8_t> themeZip_;  // THEME: the workbook's theme as a package (.thmx)
   bool theme2007_ = false;
   std::string NotesParts(const std::vector<Note>& notes, size_t sheet, std::string& comments, std::string& vml);
+  std::string ChartSheetXml(const SheetEntry& entry);
   std::string ThemeXml();
 };
 
@@ -638,6 +645,9 @@ bool Converter::Globals(pkg::Status& status) {
       case 0x0012: wbProtect_ = b.U16() != 0; break;
       case 0x0013: wbPassword_ = b.U16(); break;
       case 0x01C1: b.Skip(4); recalcId_ = b.U32(); break;  // RECALCID
+      case 0x00EB:  // MSODRAWINGGROUP: the drawings' pictures
+        if (dgg_.size() + r.data.size() <= (256u << 20)) dgg_.insert(dgg_.end(), r.data.begin(), r.data.end());
+        break;
       case 0x003D:                                         // WINDOW1
         b.Skip(10);
         activeTab_ = b.U16();
@@ -766,8 +776,9 @@ void Converter::Formulas() {
   std::vector<std::string> used;
   for (SheetEntry& s : sheets_) {
     if (s.type != 0 && s.type != 1 && s.type != 2 && s.type != 6) s.type = 0;  // treat unknown as a worksheet
-    // Worksheets (and dialog sheets) only: chart sheets, macro sheets and VBA modules are left out.
-    if (s.type != 0 || s.pos + 4 > stream_.size()) {
+    // Worksheets (and dialog sheets), and chart sheets without their charts (in their places, a page
+    // each); macro sheets and VBA modules are left out.
+    if ((s.type != 0 && s.type != 2) || s.pos + 4 > stream_.size()) {
       ctx_.sheets.emplace_back();
       continue;
     }
@@ -1218,8 +1229,25 @@ std::string UriEscape(std::string_view s) {
   return o;
 }
 
-std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::string& rels, std::vector<Note>& notes) {
+std::string Converter::MediaTarget(uint32_t pib) {
+  auto it = mediaTarget_.find(pib);
+  if (it != mediaTarget_.end()) return it->second;
+  std::string ext, target;
+  std::vector<uint8_t> bytes;
+  if (detail::BlipPicture(dgg_, pib, ext, bytes)) {
+    const std::string name = "image" + std::to_string(media_.size() + 1) + "." + ext;
+    media_.emplace_back("xl/media/" + name, std::move(bytes));
+    mediaExts_.insert(ext);
+    target = "../media/" + name;
+  }
+  mediaTarget_[pib] = target;
+  return target;
+}
+
+std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::string& rels, std::vector<Note>& notes,
+                                std::string& drawing, std::string& drawingRels) {
   std::vector<Cell> cells;
+  detail::DrawingSheet drawn;  // its MSODRAWING, OBJ and TXO records
   std::vector<std::string> texts(1);
   std::map<uint32_t, RowRec> rows;
   std::vector<ColRec> cols;
@@ -1624,23 +1652,57 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         if (b.Ok()) tips.emplace_back(row << 16 | col, Utf8(u));
         break;
       }
+      case 0x00EC:  // MSODRAWING: the shapes, its OBJ and TXO records after it
+        if (drawn.dg.size() + r.data.size() <= (64u << 20)) drawn.dg.insert(drawn.dg.end(), r.data.begin(), r.data.end());
+        break;
       case 0x005D: {  // OBJ: its first subrecord, ftCmo, gives the kind and the id
         const uint16_t ft = b.U16(), cb = b.U16(), ot = b.U16(), id = b.U16();
         lastObjNote = b.Ok() && ft == 0x15 && cb >= 4 && ot == 0x19;
         lastObjId = id;
+        drawn.objs.push_back(b.Ok() && ft == 0x15 ? ot : 0xFFFF);
+        // Some writers continue the drawing in CONTINUE records after an OBJ or a TXO.
+        if (!r.breaks.empty()) drawn.dg.insert(drawn.dg.end(), r.data.begin() + r.breaks[0], r.data.end());
         break;
       }
-      case 0x01B6: {  // TXO: a note's text in its CONTINUE records
-        if (!lastObjNote) break;
-        b.Skip(10);
-        const uint16_t cch = b.U16();
-        if (!b.Ok() || r.breaks.empty() || cch == 0) break;
-        ContinuedText t(r.data, r.breaks);
-        t.Skip(r.breaks[0]);
-        const bool high = t.U8() & 1;
-        std::vector<uint16_t> u;
-        if (t.Ok() && t.Chars(cch, high, u)) noteText[lastObjId] = Utf8(u);
+      case 0x01B6: {  // TXO: the text (a note's or a text box's) and its fonts in its CONTINUE records
+        const uint16_t grbit = b.U16();
+        b.Skip(8);
+        const uint16_t cch = b.U16(), cbRuns = b.U16();
+        detail::DrawingSheet::Text text;
+        text.grbit = grbit;
+        // Its CONTINUE records: the text, then the runs, then (from some writers) more of the drawing.
+        auto breakFrom = [&](size_t at) {
+          for (size_t k : r.breaks)
+            if (k >= at) return k;
+          return r.data.size();
+        };
+        size_t next = r.breaks.empty() ? r.data.size() : r.breaks[0];
+        if (b.Ok() && cch != 0 && next < r.data.size()) {
+          ContinuedText t(r.data, r.breaks);
+          t.Skip(next);
+          const bool high = t.U8() & 1;
+          if (t.Ok() && t.Chars(cch, high, text.chars)) {
+            if (lastObjNote) noteText[lastObjId] = Utf8(text.chars);
+          } else {
+            text.chars.clear();
+          }
+          next = breakFrom(t.Pos());
+        }
+        if (b.Ok() && cbRuns >= 16 && next < r.data.size()) {
+          // TxORuns: (character, font) pairs of 8 bytes, the last one the end.
+          Bytes runs(std::span(r.data).subspan(next, std::min<size_t>(cbRuns, r.data.size() - next)));
+          for (uint32_t k = 0; k + 1 < cbRuns / 8u && runs.Left() >= 8; ++k) {
+            const uint16_t ich = runs.U16(), ifnt = runs.U16();
+            runs.Skip(4);
+            text.runs.emplace_back(ich, ifnt);
+          }
+          next = breakFrom(next + cbRuns);
+        } else if (b.Ok() && cbRuns != 0 && next < r.data.size()) {
+          next = breakFrom(next + cbRuns);
+        }
+        if (next < r.data.size()) drawn.dg.insert(drawn.dg.end(), r.data.begin() + next, r.data.end());
         lastObjNote = false;
+        drawn.texts.push_back(std::move(text));
         break;
       }
       case 0x001C: {  // NOTE
@@ -2328,6 +2390,40 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   breaks("rowBreaks", rowBreaks, 16383);
   breaks("colBreaks", colBreaks, 1048575);
   (void)outIndex;
+
+  // Pictures, text boxes and shapes, placed by the columns' widths (at 7 pixels a character, as
+  // Arial 10 and Calibri 11 have them) and the rows' heights.
+  if (!drawn.dg.empty()) {
+    detail::DrawingEnv env;
+    env.colPx.assign(256, std::ceil((defColWidth * 7 + 5) / 8.0) * 8);
+    for (const ColRec& c : cols)
+      for (uint32_t k = c.first; k <= c.last && k < 256; ++k) env.colPx[k] = c.hidden ? 0 : std::floor(c.width * 7 + 0.5);
+    env.rowPt = [&](uint32_t row) {
+      auto it = rows.find(row);
+      return it == rows.end() ? defaultHeight : it->second.hidden ? 0 : it->second.height;
+    };
+    env.icvRgb = [&](uint32_t icv) -> uint32_t {
+      if (icv < 64) return palette_.rgb[icv < 8 ? icv : icv - 8] & 0xFFFFFF;
+      return icv == 65 ? 0xFFFFFF : 0;
+    };
+    env.runProps = [&](uint16_t ifnt) {
+      const uint32_t i = ifnt < 4 ? ifnt : ifnt == 4 ? 0 : ifnt - 1u;
+      const FontRec& f = fonts_.empty() ? FontRec() : fonts_[i < fonts_.size() ? i : 0];
+      std::string p = "<a:rPr lang=\"en-US\" sz=\"" + std::to_string(std::clamp<long>(std::lround(f.size * 100), 100, 400000)) + "\"";
+      if (f.bold) p += " b=\"1\"";
+      if (f.italic) p += " i=\"1\"";
+      if (f.underline == 1 || f.underline == 0x21) p += " u=\"sng\"";
+      if (f.underline == 2 || f.underline == 0x22) p += " u=\"dbl\"";
+      if (f.strike) p += " strike=\"sngStrike\"";
+      if (f.script == 1) p += " baseline=\"30000\"";
+      if (f.script == 2) p += " baseline=\"-25000\"";
+      char rgb[8];
+      std::snprintf(rgb, sizeof rgb, "%06X", f.icv < 64 ? palette_.rgb[f.icv < 8 ? f.icv : f.icv - 8] & 0xFFFFFF : 0u);
+      return p + "><a:solidFill><a:srgbClr val=\"" + rgb + "\"/></a:solidFill><a:latin typeface=\"" + Esc(f.name) + "\"/></a:rPr>";
+    };
+    env.image = [&](uint32_t pib) { return MediaTarget(pib); };
+    drawing = detail::DrawingXml(drawn, env, drawingRels);
+  }
   return o;
 }
 
@@ -2477,6 +2573,89 @@ std::string Converter::NotesParts(const std::vector<Note>& notes, size_t sheet, 
   return {};
 }
 
+// A chart sheet's part: its page as its substream sets it up, and its drawing (rIdDr1, without the
+// chart: .xls charts aren't read).
+std::string Converter::ChartSheetXml(const SheetEntry& entry) {
+  double margins[4] = {0.75, 0.75, 1, 1}, headerMargin = 0.5, footerMargin = 0.5;
+  std::string header, footer;
+  bool setup = false;
+  uint16_t paper = 0, start = 1, grbit = 0, hres = 0, vres = 0, copies = 1;
+  Records rs(stream_, entry.pos);
+  Record r;
+  int depth = 0;
+  while (rs.Next(r)) {
+    if (r.type == 0x0809) {
+      ++depth;
+      continue;
+    }
+    if (r.type == 0x000A) {
+      if (--depth <= 0) break;
+      continue;
+    }
+    if (depth != 1) continue;
+    Bytes b(r.data);
+    switch (r.type) {
+      case 0x0026: case 0x0027: case 0x0028: case 0x0029: {
+        const double v = b.F64();
+        if (b.Ok() && std::isfinite(v) && v >= 0 && v < 50) margins[r.type - 0x26] = v;
+        break;
+      }
+      case 0x00A1: {  // SETUP
+        paper = b.U16();
+        b.Skip(2);
+        start = b.U16();
+        b.Skip(4);
+        grbit = b.U16();
+        hres = b.U16();
+        vres = b.U16();
+        const double h = b.F64(), f = b.F64();
+        copies = b.U16();
+        setup = b.Ok();
+        if (setup && std::isfinite(h) && h >= 0 && h < 50) headerMargin = h;
+        if (setup && std::isfinite(f) && f >= 0 && f < 50) footerMargin = f;
+        break;
+      }
+      case 0x0014: header.clear(); if (r.data.size() > 2) detail::ReadString(b, header); break;
+      case 0x0015: footer.clear(); if (r.data.size() > 2) detail::ReadString(b, footer); break;
+    }
+  }
+  std::string o = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+                  "<chartsheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+                  "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+                  "<sheetViews><sheetView workbookViewId=\"0\" zoomToFit=\"1\"/></sheetViews><pageMargins";
+  AttrNum(o, "left", margins[0]);
+  AttrNum(o, "right", margins[1]);
+  AttrNum(o, "top", margins[2]);
+  AttrNum(o, "bottom", margins[3]);
+  AttrNum(o, "header", headerMargin);
+  AttrNum(o, "footer", footerMargin);
+  o += "/>";
+  if (setup) {
+    o += "<pageSetup";
+    if (!(grbit & 4)) {  // fNoPls: the printer settings aren't there
+      if (paper >= 1 && paper <= 118) Attr(o, "paperSize", paper);
+      if ((grbit & 0x80) && static_cast<int16_t>(start) != 1) Attr(o, "firstPageNumber", static_cast<int16_t>(start));
+    }
+    if (!(grbit & 0x44)) o += (grbit & 2) ? " orientation=\"portrait\"" : " orientation=\"landscape\"";
+    if (!(grbit & 4)) {
+      if (grbit & 0x80) o += " useFirstPageNumber=\"1\"";
+      if (grbit & 8) o += " blackAndWhite=\"1\"";
+      if (grbit & 0x10) o += " draft=\"1\"";
+      if (hres && hres <= 4800) Attr(o, "horizontalDpi", hres);
+      if (vres && vres <= 4800) Attr(o, "verticalDpi", vres);
+      if (copies > 1 && copies < 1000) Attr(o, "copies", copies);
+    }
+    o += "/>";
+  }
+  if (!header.empty() || !footer.empty()) {
+    o += "<headerFooter>";
+    if (!header.empty()) o += "<oddHeader>" + EscXstring(header) + "</oddHeader>";
+    if (!footer.empty()) o += "<oddFooter>" + EscXstring(footer) + "</oddFooter>";
+    o += "</headerFooter>";
+  }
+  return o + "<drawing r:id=\"rIdDr1\"/></chartsheet>";
+}
+
 // The theme's part from THEME's package, when it is a well-formed theme; empty otherwise (Office's
 // theme then applies).
 std::string Converter::ThemeXml() {
@@ -2567,11 +2746,59 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
   for (size_t i = 0; i < sheets_.size(); ++i) {
     const SheetEntry& s = sheets_[i];
     if (s.out < 0) continue;
+    if (s.type == 2) {  // a chart sheet: its page, with an empty chart in place of its own (not read)
+      const std::string n = std::to_string(s.out + 1);
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+      const std::string relsHead = head + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
+      parts.push_back({"xl/chartsheets/sheet" + n + ".xml", ChartSheetXml(s)});
+      parts.push_back({"xl/chartsheets/_rels/sheet" + n + ".xml.rels",
+                       relsHead + "<Relationship Id=\"rIdDr1\" Type=\"" + rel + "drawing\" Target=\"../drawings/drawing" + n + ".xml\"/></Relationships>"});
+      parts.push_back({"xl/drawings/drawing" + n + ".xml",
+                       head + "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                              "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/>"
+                              "<xdr:ext cx=\"8666922\" cy=\"6293304\"/><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"2\" "
+                              "name=\"Chart 1\"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp=\"1\"/></xdr:cNvGraphicFramePr>"
+                              "</xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic>"
+                              "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart "
+                              "xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"" + rel.substr(0, rel.size() - 1) +
+                              "\" r:id=\"rId1\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"});
+      parts.push_back({"xl/drawings/_rels/drawing" + n + ".xml.rels",
+                       relsHead + "<Relationship Id=\"rId1\" Type=\"" + rel + "chart\" Target=\"../charts/chart" + n + ".xml\"/></Relationships>"});
+      parts.push_back({"xl/charts/chart" + n + ".xml",
+                       head + "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" "
+                              "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:autoTitleDeleted val=\"1\"/>"
+                              "<c:plotArea><c:layout/><c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>"
+                              "<c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart><c:catAx><c:axId val=\"1\"/><c:scaling><c:orientation "
+                              "val=\"minMax\"/></c:scaling><c:delete val=\"1\"/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/></c:catAx><c:valAx>"
+                              "<c:axId val=\"2\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"1\"/><c:axPos val=\"l\"/>"
+                              "<c:crossAx val=\"1\"/></c:valAx></c:plotArea><c:plotVisOnly val=\"1\"/></c:chart></c:chartSpace>"});
+      types += "<Override PartName=\"/xl/chartsheets/sheet" + n +
+               ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml\"/>"
+               "<Override PartName=\"/xl/drawings/drawing" + n + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>"
+               "<Override PartName=\"/xl/charts/chart" + n + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawingml.chart+xml\"/>";
+      wbRels += "<Relationship Id=\"rId" + n +
+                "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet\" Target=\"chartsheets/sheet" + n +
+                ".xml\"/>";
+      continue;
+    }
     ++kept;
-    std::string rels;
+    std::string rels, drawing, drawingRels;
     std::vector<Note> notes;
-    std::string xml = SheetXml(s, s.out, rels, notes);
+    std::string xml = SheetXml(s, s.out, rels, notes, drawing, drawingRels);
     const std::string n = std::to_string(s.out + 1);
+    if (!drawing.empty()) {
+      xml += "<drawing r:id=\"rIdDr1\"/>";
+      rels += "<Relationship Id=\"rIdDr1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" "
+              "Target=\"../drawings/drawing" + n + ".xml\"/>";
+      parts.push_back({"xl/drawings/drawing" + n + ".xml", std::move(drawing)});
+      types += "<Override PartName=\"/xl/drawings/drawing" + n + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>";
+      if (!drawingRels.empty())
+        parts.push_back({"xl/drawings/_rels/drawing" + n + ".xml.rels",
+                         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+                         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                             drawingRels + "</Relationships>"});
+    }
     if (!notes.empty()) {
       std::string comments, vml;
       NotesParts(notes, s.out, comments, vml);
@@ -2602,17 +2829,18 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
     status = pkg::Status::Fail(pkg::Status::Code::Unsupported, "it has no worksheets Featherweight can show.");
     return {};
   }
-  const std::string base = std::to_string(kept);
-  wbRels += "<Relationship Id=\"rId" + std::to_string(kept + 1) +
+  int sheetRels = 0;  // the sheets' relationships are rId1..rIdN, chart sheets among them
+  for (const SheetEntry& s : sheets_) sheetRels += s.out >= 0;
+  wbRels += "<Relationship Id=\"rId" + std::to_string(sheetRels + 1) +
             "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
-            "<Relationship Id=\"rId" + std::to_string(kept + 2) +
+            "<Relationship Id=\"rId" + std::to_string(sheetRels + 2) +
             "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>" +
             [&] {
               std::string theme = ThemeXml();
               if (theme.empty()) return std::string();
               parts.push_back({"xl/theme/theme1.xml", std::move(theme)});
               types += "<Override PartName=\"/xl/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>";
-              return "<Relationship Id=\"rId" + std::to_string(kept + 3) +
+              return "<Relationship Id=\"rId" + std::to_string(sheetRels + 3) +
                      "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>";
             }() +
             "</Relationships>";
@@ -2648,8 +2876,15 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
   }
   for (const std::string& t : extraStrings_) sst += "<si>" + textXml(t) + "</si>";
   sst += "</sst>";
-  (void)base;
 
+  for (const std::string& ext : mediaExts_) {
+    static const std::pair<const char*, const char*> kTypes[] = {{"png", "image/png"},   {"jpeg", "image/jpeg"}, {"bmp", "image/bmp"},
+                                                                 {"tiff", "image/tiff"}, {"emf", "image/x-emf"}, {"wmf", "image/x-wmf"}};
+    for (const auto& [e, type] : kTypes)
+      if (ext == e) types += "<Default Extension=\"" + ext + "\" ContentType=\"" + type + "\"/>";
+  }
+  for (auto& [name, bytes] : media_) parts.push_back({name, std::string(bytes.begin(), bytes.end())});
+  media_.clear();
   types += "</Types>";
   parts.insert(parts.begin(), {"[Content_Types].xml", types});
   parts.push_back({"_rels/.rels",
