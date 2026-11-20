@@ -225,6 +225,11 @@ class Show final : public anim::FrameSource {
   // The bench.
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
   void WriteBench();
+  // The bench takes the screen of someone who may come back: any input since it started (anywhere,
+  // not only in the show) or another program taking the focus stops it at once.
+  bool BenchInterrupted() const;
+  // Ends the show and deletes it: the caller returns at once, touching nothing of it.
+  void AbortBench(const char* why);
 
   Presentation& deck_;
   SlideRenderer& renderer_;
@@ -264,6 +269,10 @@ class Show final : public anim::FrameSource {
     double worstMs = 0;
   };
   bool bench_ = false;
+  const char* benchAborted_ = nullptr;  // why the bench stopped early, or null
+  DWORD benchInput_ = 0;                // GetLastInputInfo's time when the bench started
+  POINT benchCursor_{};
+  bool awake_ = false;  // the display and the PC kept on while the show runs
   bool capture_ = false;
   double clock_ = 1000;  // capture_: the show's own time
   double periodMs_ = 1000.0 / 60;
@@ -292,6 +301,7 @@ class Show final : public anim::FrameSource {
 
 Show* g_show = nullptr;
 bool g_benchPassed = false;
+bool g_benchAborted = false;
 
 bool Show::Create() {
   static bool registered = [] {
@@ -345,6 +355,15 @@ bool Show::Create() {
     return false;
   }
   if (capture_) return true;  // CaptureAll drives it
+  // A show keeps the display and the PC awake while it runs (the power settings stay as they are).
+  SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+  awake_ = true;
+  if (bench_) {
+    LASTINPUTINFO li{sizeof(li)};
+    GetLastInputInfo(&li);
+    benchInput_ = li.dwTime;
+    GetCursorPos(&benchCursor_);
+  }
   ShowWindow(hwnd_, SW_SHOW);
   SetForegroundWindow(hwnd_);
   SetFocus(hwnd_);
@@ -908,6 +927,10 @@ void Show::EndTransition(double now) {
 }
 
 void Show::Frame() {
+  if (BenchInterrupted()) {
+    AbortBench("input");
+    return;
+  }
   if (!EnsureDevice()) return;
   // While something moves, the show's frames come before other programs' work (a build, a sync):
   // a frame takes well under a millisecond, so this costs them nothing.
@@ -1413,6 +1436,7 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     size_t last = self->cur_ && self->cur_->index != kEnd ? self->cur_->index : self->lastShown_;
     std::wstring file = std::move(self->fileToOpen_);
     if (self->boosted_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    if (self->awake_) SetThreadExecutionState(ES_CONTINUOUS);
     self->hwnd_ = nullptr;
     self->DropDevice();
     if (g_show == self) g_show = nullptr;
@@ -1425,6 +1449,41 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
+  if (bench_) {
+    switch (m) {
+      case WM_KEYDOWN:
+      case WM_SYSKEYDOWN:
+      case WM_LBUTTONDOWN:
+      case WM_RBUTTONDOWN:
+      case WM_MBUTTONDOWN:
+      case WM_XBUTTONDOWN:
+      case WM_MOUSEWHEEL:
+      case WM_MOUSEHWHEEL: AbortBench("input"); return 0;
+      case WM_MOUSEMOVE: {  // also sent when nothing moved (the window appearing under the cursor)
+        POINT pt;
+        GetCursorPos(&pt);
+        if (pt.x != benchCursor_.x || pt.y != benchCursor_.y) AbortBench("input");
+        return 0;
+      }
+      case WM_ACTIVATE: {
+        DWORD pid = 0;
+        if (l) GetWindowThreadProcessId(reinterpret_cast<HWND>(l), &pid);
+        if (LOWORD(w) == WA_INACTIVE && pid != GetCurrentProcessId()) {
+          AbortBench("another window took the focus");
+          return 0;
+        }
+        break;
+      }
+      case WM_TIMER:
+      case kMsgPrerender:
+        if (BenchInterrupted()) {
+          AbortBench("input");
+          return 0;
+        }
+        break;
+      default: break;
+    }
+  }
   switch (m) {
     case WM_PAINT: {
       PAINTSTRUCT ps;
@@ -1567,6 +1626,17 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
   dxgiHave_ = inTransition;
 }
 
+bool Show::BenchInterrupted() const {
+  if (!bench_) return false;
+  LASTINPUTINFO li{sizeof(li)};
+  return GetLastInputInfo(&li) && li.dwTime != benchInput_;
+}
+
+void Show::AbortBench(const char* why) {
+  benchAborted_ = why;
+  DestroyWindow(hwnd_);  // writes the report and deletes the show
+}
+
 void Show::WriteBench() {
   int frames = 0, dropped = 0;
   double worst = 0;
@@ -1587,11 +1657,13 @@ void Show::WriteBench() {
            "  \"dxgiSamples\": %d,\n  \"dxgiFailures\": %d,\n  \"waitMsMax\": %.2f,\n  \"drawMsMax\": %.2f,\n"
            "  \"presentMsMax\": %.2f,\n"
            "  \"worstIntervalMs\": %.2f,\n  \"animationFrames\": %d,\n  \"animationDropped\": %d,\n"
-           "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n",
+           "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n"
+           "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n",
            refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, vblankMissed_, dropped,
            dxgiMissed_, dxgiSamples_, dxgiFailures_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
            pct(0.99), cpu.empty() ? 0.0 : cpu.back(), gpu::IsWarp() ? "true" : "false",
-           vblankMissed_ == 0 && frames > 0 ? "true" : "false");
+           !benchAborted_ && vblankMissed_ == 0 && frames > 0 ? "true" : "false", benchAborted_ ? "true" : "false",
+           benchAborted_ ? benchAborted_ : "");
   json += buf;
   json += "  \"lateFrames\": [\n";
   for (size_t i = 0; i < slow_.size(); ++i) {
@@ -1614,7 +1686,8 @@ void Show::WriteBench() {
   }
   json += "  ]\n}\n";
   util::WriteFileAtomic(opts_.benchReport, json);
-  g_benchPassed = vblankMissed_ == 0 && frames > 0;
+  g_benchPassed = !benchAborted_ && vblankMissed_ == 0 && frames > 0;
+  g_benchAborted = benchAborted_ != nullptr;
 }
 
 }  // namespace
@@ -1683,6 +1756,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
     if (g_show->Animating()) g_show->Frame();
     else MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
+  if (g_benchAborted) return 3;  // stopped on someone's input: no result
   return benchReport.empty() || g_benchPassed ? 0 : 2;
 }
 
