@@ -258,7 +258,9 @@ class Builder {
       m.line.fill.kind = draw::Fill::Kind::Solid;
       m.line.fill.color = *line;
       m.line.width = width;
-      m.line.cap = draw::LineCap::Round;
+      // Axes, gridlines, ticks and outlines end flat, their corners round (Office's PDFs).
+      m.line.cap = draw::LineCap::Flat;
+      m.line.join = draw::LineJoin::Round;
     }
     art_.marks.push_back(std::move(m));
   }
@@ -268,6 +270,12 @@ class Builder {
     if (!look.noFill) f = look.fill.value_or(fill);
     std::optional<Color> l = look.noLine ? std::nullopt : look.line ? look.line : line;
     Add(std::move(p), f, l, look.lineWidth >= 0 ? look.lineWidth : width);
+  }
+  // A series' line (and its legend key): round ends too.
+  void Stroke(Path p, Color line, float width) {
+    const size_t n = art_.marks.size();
+    Add(std::move(p), std::nullopt, line, width);
+    if (art_.marks.size() > n) art_.marks.back().line.cap = draw::LineCap::Round;
   }
   void Line(Point a, Point b, Color c, float width) {
     Path p;
@@ -593,13 +601,16 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     widest = std::max(widest, labels.back().width);
     lines |= e.line;
   }
-  // With a line among them, every key is a line's length: 1.92 text sizes, at most 20 points, and
+  // With a line among them, every key is a line's length: 1.92 text sizes, at most 19.2 points, and
   // the gap after it at most 2.9 (Excel's PDFs at 10 points, PowerPoint's at 18).
-  const float box = kKey * ts, keyW = lines ? std::min(1.92f * ts, 20.0f) : box,
+  const float box = kKey * ts, keyW = lines ? std::min(1.92f * ts, 19.2f) : box,
               lead = keyW + (lines ? std::min(0.212f * ts, 2.9f) : 0.245f * ts);
   const auto key = [&](const Entry& e, float x, float cy) {
     if (e.line) {
-      b.Line({x, cy}, {x + keyW, cy}, e.color, e.width);
+      Path p;
+      p.MoveTo({x, cy});
+      p.LineTo({x + keyW, cy});
+      b.Stroke(std::move(p), e.color, e.width);
       DrawMarker(b, e.symbol, {x + keyW / 2, cy}, e.markerSize, e.markerFill, e.color);
     } else if (e.circle) {
       b.Add(Path::Ellipse({x, cy - box / 2, x + keyW, cy + box / 2}), e.color, std::nullopt, 0);
@@ -1020,8 +1031,11 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
             const std::optional<Color> key = ShowsKey(g, s) ? std::optional<Color>((look ? *look : s.look).fill.value_or(fill)) : std::nullopt;
             const float off = 0.95f * ts;  // outside the end: Excel's PDFs
             const float cy = (rect.top + rect.bottom) / 2, cx = (rect.left + rect.right) / 2;
+            // Above a column, the baseline 3 points over its end with 10-point text, further with
+            // larger (PowerPoint's PDFs: 8.9 with 18-point).
+            const float above = 3 + 0.74f * std::max(0.0f, ts - 10);
             if (stacked) labels.push_back({text(s, i), {cx, cy}, 1, key});
-            else if (!p.bar) labels.push_back({text(s, i), {cx, top >= 0 ? rect.top - 3 - kLabelMiddle * ts : rect.bottom + 3 + kLabelMiddle * ts}, 1, key});
+            else if (!p.bar) labels.push_back({text(s, i), {cx, top >= 0 ? rect.top - above - kLabelMiddle * ts : rect.bottom + above + kLabelMiddle * ts}, 1, key});
             else labels.push_back({text(s, i), {top >= 0 ? rect.right + off : rect.left - off, cy}, top >= 0 ? 0 : 2, key});
           }
         }
@@ -1065,7 +1079,7 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
       if (ShowsLabels(g, s))
         labels.push_back({text(s, i), {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, ShowsKey(g, s) ? std::optional<Color>(color) : std::nullopt});
     }
-    if (!s.look.noLine) b.Add(Polyline(runs, s.smooth), std::nullopt, color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
+    if (!s.look.noLine) b.Stroke(Polyline(runs, s.smooth), color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
     const std::string symbol = MarkerSymbol(s, g.marker, first + j);
     for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), color);
   }
@@ -1095,7 +1109,7 @@ void DrawScatter(Builder& b, const Group& g, size_t first, const Rect& r, const 
                           {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, std::nullopt});
     }
     const Color line = s.look.line.value_or(color);
-    if (g.lines && !s.look.noLine) b.Add(Polyline(runs, s.smooth), std::nullopt, line, s.look.lineWidth >= 0 ? s.look.lineWidth : width);
+    if (g.lines && !s.look.noLine) b.Stroke(Polyline(runs, s.smooth), line, s.look.lineWidth >= 0 ? s.look.lineWidth : width);
     const std::string symbol = MarkerSymbol(s, true, first + j);
     for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), line);
   }
@@ -1247,7 +1261,8 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const bool across = bar ? !vlabels.empty() : !clabels.empty();  // labels across the bottom
   p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : leftSide);
   p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : rightSide);
-  p.r.top = r.top + margin;
+  // At the top too, unless value labels up a side, centred on the top gridline, need more.
+  p.r.top = r.top + ((!vlabels.empty() && !bar) || !slabels.empty() ? margin : side);
   p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts : margin);
   // Labels centred on the plot's left and right edges (values across the bottom, categories on the
   // tick marks) stay inside the room.
@@ -1274,10 +1289,12 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
       const float x = static_cast<float>(P.left + Clamp01(xscale.At(v)) * (P.right - P.left));
       stroke({x, P.top}, {x, P.bottom}, ch.category.grid);
     }
-  // Tick marks across an axis line at `at`, `out` the way out of the plot (4 points long, as Office).
+  // Tick marks across an axis line at `at`, `out` the way out of the plot (4 points long, as Office,
+  // longer past 10-point text: PowerPoint's PDFs, 5.7 with 18-point).
+  const float tickLength = 4 + 0.21f * std::max(0.0f, ts - 10);
   const auto tick = [&](Point at, Point out, const Axis& ax) {
     if (ax.line.noLine || ax.ticks == Axis::Tick::None) return;
-    const float o = ax.ticks == Axis::Tick::In ? 0.0f : 4.0f, i = ax.ticks == Axis::Tick::Out ? 0.0f : 4.0f;
+    const float o = ax.ticks == Axis::Tick::In ? 0.0f : tickLength, i = ax.ticks == Axis::Tick::Out ? 0.0f : tickLength;
     stroke({at.x - out.x * i, at.y - out.y * i}, {at.x + out.x * o, at.y + out.y * o}, ax.line);
   };
   if (scatter) {
@@ -1417,7 +1434,7 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
     if (points.size() < 2) continue;
     p.Close();
     if (g.filled) b.Mark(std::move(p), s.look, color, std::nullopt, 0.75f);
-    else if (!s.look.noLine) b.Add(std::move(p), std::nullopt, color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
+    else if (!s.look.noLine) b.Stroke(std::move(p), color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
     const std::string symbol = g.filled ? std::string("none") : MarkerSymbol(s, g.marker, j);
     for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), color);
   }
@@ -1467,9 +1484,7 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Rect inner = r;
   // A title or legend over the plot is drawn after it, on top.
   const auto title = [&] {
-    // The top of the title's first line (Excel's PDFs; PowerPoint's put it higher: its baseline 0.9
-    // title sizes below the padding).
-    const float top = ch.presentation ? kPad + 0.15f * tts : kPad + 1 + 0.206f * tts;
+    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's first line (Excel's PDFs)
     // Excel wraps a title wider than about 80 % of the chart, and keeps it to about half its
     // height; each line after the first takes a line's room from the plot.
     const float pitch = kLine * tts;

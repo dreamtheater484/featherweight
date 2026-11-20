@@ -435,14 +435,13 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     out.titleOverlay = On(t, "overlay", false);
     if (pugi::xml_node rich = C(tx, "rich")) {
       // Text with no properties at all (no a:pPr, a:rPr) is DrawingML's own default in Office
-      // 2007's look: 18-point Arial, not bold (Excel).
+      // 2007's look: 18-point Arial, not bold (Excel's PDFs; PowerPoint's, in Office 2010's look
+      // too).
       pugi::xml_node p = A(rich, "p");
       if ((out.legacy || presentation) && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
-        // PowerPoint, with Office 2010's look too: the chart's text size times 1.1, not bold, in
-        // the chart's font (its PDFs).
-        out.titleSize = presentation ? (spaceSize > 0 ? spaceSize : 10) * 1.1f : 18;
+        out.titleSize = 18;
         out.titleBold = false;
-        if (!presentation) out.titleFont = L"Arial";
+        out.titleFont = L"Arial";
       }
       TextLook(rich, colors, &out.titleSize, &out.titleColor, &out.titleBold);
     } else {
