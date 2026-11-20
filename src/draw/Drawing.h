@@ -54,6 +54,9 @@ class DrawingResources {
     (void)relId;
     return {};
   }
+  // Whether the drawing is in a presentation: PowerPoint draws charts with Excel's engine, but
+  // without the chart area's border when the chart doesn't state one.
+  virtual bool InPresentation() { return false; }
 };
 
 // Where a shape's text goes. The text itself is laid out and drawn by the caller (fwtext); fwdraw
@@ -209,6 +212,7 @@ class PackageResources : public DrawingResources {
   const ColorMap& GetColorMap() override { return colorMap_; }
   std::shared_ptr<const Image> GetImage(std::string_view relId) override;
   pugi::xml_node GetPartXml(std::string_view relId) override;
+  bool InPresentation() override { return part_.starts_with("/ppt/"); }
 
   // The theme for a part: the document's, the workbook's, or a slide's through its layout and
   // master. Null when there is none.
