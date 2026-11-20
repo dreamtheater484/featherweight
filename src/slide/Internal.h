@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "draw/Xml.h"
 #include "pkg/Package.h"
@@ -48,10 +49,10 @@ Hyperlink ReadHyperlink(pugi::xml_node link, const SlideBase& owner, const Prese
 // TextStyles.cpp: a shape's text resolved for the part it is shown on.
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,
                                       const SlideBase& shownOn);
-// A text body with no placeholder chain (table cells): `base` is applied over the default text
-// style, then `extra` (a table style's text properties, a:tcTxStyle), may be null.
+// A text body with no placeholder chain (table cells): the default text style, then the table
+// style's text properties (a:tcTxStyle) in the order given, then the body's own.
 std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_node txBody, const SlideBase& owner,
-                                           const SlideBase& shownOn, pugi::xml_node tcTxStyle);
+                                           const SlideBase& shownOn, const std::vector<pugi::xml_node>& tcTxStyles);
 
 // The master a part's text styles come from.
 const Master* MasterOf(const SlideBase& part);

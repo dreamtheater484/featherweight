@@ -305,6 +305,29 @@ powershell -ExecutionPolicy Bypass -File scripts\make-sheet-files.ps1
 powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Folders tests\office\sheet,tests\office\excel -PrintPdf conditional-formats.xlsx,charts.xlsx
 ```
 
+## Presentations (P1)
+
+P1's public set (`docs/p1-plan.md`, the display criterion: measured like the corpus and reported separately), one deck per feature:
+
+- `presentations/`: decks made by `make_presentations.py` with python-pptx, and the XML PowerPoint writes where python-pptx has no API. All generated, so they can be published; dates and zip timestamps are fixed.
+  - `layouts-placeholders.pptx`: every layout of the default template at 16:9, its placeholders filled (text at two levels, a picture cropped into the picture placeholder, a chart and a table in content placeholders, one content placeholder left empty: its prompt must never show), a placeholder moved and recolored on its slide, and date, footer and slide number placeholders with their fields.
+  - `themes.pptx`: a theme of its own (colors, Georgia and Verdana, a Japanese supplemental font): accent colors with tints, shades and alpha; text in the major and minor fonts; shapes styled through the style matrix (fillRef, effectRef); a slide whose color map is overridden (dark).
+  - `text-autofit.pptx`: shrink on overflow (`normAutofit` with PowerPoint's stored scale), `spAutoFit`, no autofit, wrap off; vertical text (`vert`, `vert270`, `eaVert`), two columns, anchors and insets; character formatting (bold to highlight, underline kinds, strike, super- and subscript, caps, spacing, sizes, gradient, outlined and shadowed text); alignment, line and paragraph spacing; right-to-left Arabic and Japanese; a line break, a tab and a slide number field; WordArt warps.
+  - `bullets.pptx`: the master's nine levels; bullet characters, fonts (Wingdings), colors and sizes; numbering schemes with start values; picture bullets.
+  - `tables.pptx`: built-in table styles (by GUID, as PowerPoint knows them), style options (first and last row and column, bands), merged cells, fills, dashed borders, margins, vertical text, anchors.
+  - `charts.pptx`: twelve kinds (clustered, stacked and 100 % columns, bars, lines with markers, stacked area, pie, exploded pie, doughnut, scatter, bubble, radar), with titles, legends and data labels. The script fixes two python-pptx departures from the schema (negative axis ids, `c:smooth` in radar series).
+  - `pictures.pptx`: PNG, JPEG, GIF and a PNG with alpha; crop, rotation, flips; transparency, grayscale, an outline with a shadow; a picture fill in a shape, a tiled one; an SVG with its PNG fallback (`asvg:svgBlip`); a full-bleed photo with a caption.
+  - `shapes-groups.pptx`: 24 preset shapes with solid, linear, radial and pattern fills; line widths, dashes, arrowheads, a double line, elbow and curved connectors glued to shapes; groups nested, rotated, flipped and scaled (`chExt` twice `ext`); shadows, glow, soft edges, reflection, bevel; a freeform (`custGeom` with lines, a Bézier and an arc) and adjusted shapes.
+  - `backgrounds.pptx`: a master background (gradient) with a master shape, a layout's own color, and on slides: solid, radial gradient, stretched and tiled pictures, a pattern, a theme background style (`bgRef 1003`), and a slide that hides the master's shapes.
+  - `notes.pptx`: speaker notes (short, long, bold and bulleted, none).
+  - `transitions.pptx`: one slide per transition: fade (and through black), push, wipe, split, cover, uncover (`pull`), zoom; dissolve and random bars, PowerPoint 2010's vortex and morph (`mc:AlternateContent` with a fade fallback), which P1 plays as a fade; a duration (`p14:dur`) with an automatic advance.
+  - `animations.pptx`: the entrances P1 plays (appear, fade, fly in, wipe, zoom, float, split), emphasis (grow and shrink, spin), an exit, a motion path; on click, with and after the previous, a first effect that starts by itself; bullets one by one; effects P1 plays as appear (wheel, checkerboard); a trigger (an interactive sequence on a click on a shape); an animated picture, chart and table.
+  - `hyperlinks.pptx`: web and mail links, jumps to slides (with tooltips), show actions (next, previous, first, last, end), a shape and a picture linked to the web, a mouse-over link, home action buttons.
+  - `embedded-fonts.pptx`: FW Pixel, a 5×7 pixel font made by the script (public domain), embedded as Embedded OpenType (`ppt/fonts/font1.fntdata`, uncompressed): a render that falls back to another font is plain to see.
+  - `hidden-slides.pptx`: a portrait deck (7.5 × 10 in) with two hidden slides.
+  - `sections-custom-shows.pptx`: sections (`p14:sectionLst`, one empty) and a custom show, with a button that plays it.
+  - `show.ppsx` and `template.potx`: a slide show and a template (their main part's content type), each with transitions and an animation.
+
 ## Opening budgets
 
 Plan §11 sets the budgets on the typical consumer PC:
@@ -352,6 +375,10 @@ python -m venv .venv
 
 ```bash
 .venv/Scripts/python tests/office/make_test_office.py
+```
+
+```bash
+.venv/Scripts/python -I tests/office/make_presentations.py
 ```
 
 `make_drawing_tests.py` and `layout/`'s own script, `make_layout_docs.py`, need only the

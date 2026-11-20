@@ -436,7 +436,22 @@ Shadow ShadowFor(const OuterShadow& sh, const Rect& bounds) {
   return out;
 }
 
-void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds);
+// Hooks for drawing piece by piece (DrawHooks), and the next text box's index.
+struct Hooked {
+  DrawHooks* hooks = nullptr;
+  size_t* text = nullptr;
+};
+
+void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds, const Hooked& h = {});
+
+// The text boxes in a shape, as TextBoxesAt finds them.
+size_t CountText(const Shape& s) {
+  if (s.hidden) return 0;
+  if (s.kind != Shape::Kind::Group) return s.text ? 1 : 0;
+  size_t n = 0;
+  for (const Shape& c : s.children) n += CountText(c);
+  return n;
+}
 
 void DrawArt(Painter& p, const Art& art, const Rect& box) {
   if (!(art.size.width > 0 && art.size.height > 0)) return;
@@ -460,16 +475,18 @@ void DrawArt(Painter& p, const Art& art, const Rect& box) {
   p.Restore();
 }
 
-void DrawContent(Painter& p, const Shape& s, Size size) {
+// `body`: the shape's own fill, outline and picture; `text`: its text box, through the hooks.
+void DrawContent(Painter& p, const Shape& s, Size size, const Hooked& h, bool body, bool text) {
   const Rect box{0, 0, size.width, size.height};
   switch (s.kind) {
     case Shape::Kind::Group:
-      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds));
+      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds), h);
       return;
     case Shape::Kind::Placeholder:
-      DrawPlaceholder(p, s, box);
+      if (body) DrawPlaceholder(p, s, box);
       return;
     case Shape::Kind::Picture: {
+      if (!body) return;
       Geometry::Outline o = OutlineOf(s, size);
       for (const Geometry::Figure& f : o.figures) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
       p.Save();
@@ -481,31 +498,46 @@ void DrawContent(Painter& p, const Shape& s, Size size) {
       return;
     }
     case Shape::Kind::Shape: {
-      if (s.art) {
+      if (!body) {
+      } else if (s.art) {
         DrawArt(p, *s.art, box);
-        return;
-      }
-      if (s.textPath) {
+      } else if (s.textPath) {
         DrawTextPath(p, s, box);
-        return;
+      } else {
+        Geometry::Outline o = OutlineOf(s, size);
+        for (const Geometry::Figure& f : o.figures) {
+          if (f.fill != Geometry::PathFill::None && !f.path.Empty()) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
+        }
+        StrokeFigures(p, s, o.figures, box);
       }
-      Geometry::Outline o = OutlineOf(s, size);
-      for (const Geometry::Figure& f : o.figures) {
-        if (f.fill != Geometry::PathFill::None && !f.path.Empty()) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
-      }
-      StrokeFigures(p, s, o.figures, box);
+      if (text && h.hooks && s.text) h.hooks->DrawText(p, (*h.text)++);
       return;
     }
   }
 }
 
-void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds) {
+void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds, const Hooked& h) {
   if (s.hidden) return;
-  if (s.shadow.on) p.BeginShadow(ShadowFor(s.shadow, bounds));
+  if (h.hooks && !h.hooks->DrawShape(s.id)) {
+    *h.text += CountText(s);
+    return;
+  }
+  const bool body = !h.hooks || s.kind == Shape::Kind::Group || h.hooks->DrawBody(s.id);
+  const bool shadow = s.shadow.on && body;
+  // A filled shape's shadow is the shape's: its text goes on top, unshadowed. An unfilled shape's
+  // shadow falls from its text, as in PowerPoint.
+  const bool textAfter = shadow && h.hooks && s.text && s.fill.kind != Fill::Kind::None;
+  if (shadow) p.BeginShadow(ShadowFor(s.shadow, bounds));
   else p.Save();
   p.Transform(Place(s, bounds));
-  DrawContent(p, s, {bounds.Width(), bounds.Height()});
+  DrawContent(p, s, {bounds.Width(), bounds.Height()}, h, body, !textAfter);
   p.Restore();
+  if (textAfter) {
+    p.Save();
+    p.Transform(Place(s, bounds));
+    h.hooks->DrawText(p, (*h.text)++);
+    p.Restore();
+  }
 }
 
 void Expand(Rect& r, bool& any, Point q) {
@@ -579,12 +611,29 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   box.content = s.text->content;
   box.properties = s.text->properties;
   box.insets = s.text->insets;
-  const Rect r = OutlineOf(s, {bounds.Width(), bounds.Height()}).textRect;
+  box.shape = s.id;
+  Rect r = OutlineOf(s, {bounds.Width(), bounds.Height()}).textRect;
+  if (s.text->hasTextXfrm) {
+    // SmartArt: the text's own box, from the shape's (both turn about their own centers).
+    const Rect& t = s.text->textXfrm;
+    const float dx = (t.left + t.right - s.bounds.left - s.bounds.right) / 2, dy = (t.top + t.bottom - s.bounds.top - s.bounds.bottom) / 2;
+    const float cx = bounds.Width() / 2 + dx, cy = bounds.Height() / 2 + dy;
+    r = {cx - t.Width() / 2, cy - t.Height() / 2, cx + t.Width() / 2, cy + t.Height() / 2};
+    box.rotation += s.text->textXfrmRotation - s.rotation;
+  }
   box.rect = {r.left + box.insets.left, r.top + box.insets.top, r.right - box.insets.right, r.bottom - box.insets.bottom};
   if (box.rect.right < box.rect.left) box.rect.left = box.rect.right = (box.rect.left + box.rect.right) / 2;
   if (box.rect.bottom < box.rect.top) box.rect.top = box.rect.bottom = (box.rect.top + box.rect.bottom) / 2;
   box.transform = m;
   out.push_back(box);
+}
+
+void PartsAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, std::vector<Drawing::Part>& out) {
+  if (s.hidden) return;
+  const Matrix m = Place(s, bounds) * toDrawing;
+  out.push_back({s.id, {bounds.Width(), bounds.Height()}, m, s.kind == Shape::Kind::Group});
+  if (s.kind == Shape::Kind::Group)
+    for (const Shape& c : s.children) PartsAt(c, ChildToGroup(s, c.bounds), m, out);
 }
 
 }  // namespace
@@ -599,6 +648,14 @@ Rect ChildToGroup(const Shape& g, const Rect& c) {
 }
 
 void DrawShape(Painter& p, const Shape& s) { DrawShapeAt(p, s, s.bounds); }
+
+void DrawShape(Painter& p, const Shape& s, DrawHooks& hooks, size_t& textIndex) {
+  DrawShapeAt(p, s, s.bounds, {&hooks, &textIndex});
+}
+
+void CollectParts(const Shape& s, const Matrix& toDrawing, std::vector<Drawing::Part>& out) {
+  PartsAt(s, s.bounds, toDrawing, out);
+}
 
 Rect PaintedBounds(const Shape& s) {
   Rect r{};

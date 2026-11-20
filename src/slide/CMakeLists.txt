@@ -12,6 +12,7 @@ target_link_libraries(fwslide PUBLIC fwpkg fwcore fwdraw)
 target_compile_options(fwslide PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 if(TARGET fw_tests)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp")
-  target_link_libraries(fw_tests PRIVATE fwslide)
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_eot.cpp")
+  # t2embed makes the Embedded OpenType the decoder is checked against (test only).
+  target_link_libraries(fw_tests PRIVATE fwslide t2embed)
 endif()

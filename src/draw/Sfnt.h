@@ -50,4 +50,21 @@ std::vector<uint8_t> Subset(const Tables& tables, const std::vector<uint16_t>& g
 // whole. Empty when the font lacks one of them.
 std::vector<uint8_t> Whole(const Tables& tables);
 
+// Embedded OpenType (Eot.cpp; W3C submission, 2008), as PowerPoint embeds fonts (.fntdata) and
+// Windows' t2embed writes them: what the header says about the font.
+struct EotInfo {
+  std::wstring family, style, fullName;
+  uint32_t flags = 0;    // TTEMBED_*: 0x1 subset, 0x4 MicroType Express, 0x10000000 XOR
+  uint16_t fsType = 0;   // the font's embedding permissions, as OS/2 fsType
+  bool italic = false;
+  uint32_t weight = 400;
+};
+// The sfnt font inside Embedded OpenType data, with the XOR obfuscation undone and MicroType Express
+// compression expanded. A plain TrueType or OpenType file comes back as it is. Empty when the data
+// is neither or doesn't hold together (it is untrusted: every read is checked, output is capped).
+std::vector<uint8_t> DecodeEot(std::span<const uint8_t> data, EotInfo* info = nullptr);
+// MicroType Express (W3C submission, 2008): its three LZCOMP blocks into a TrueType font, the
+// compact glyph table, loca and cvt rebuilt (hdmx, VDMX and DSIG are left out). Empty on failure.
+std::vector<uint8_t> DecodeMtx(std::span<const uint8_t> data);
+
 }  // namespace draw::sfnt

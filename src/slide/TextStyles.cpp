@@ -383,7 +383,9 @@ namespace detail {
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,
                                       const SlideBase& shownOn) {
   auto out = std::make_unique<TextBody>();
-  pugi::xml_node txBody = P(shape.node, "txBody");
+  // A shape's own text body (a placeholder's textNode is in its merged copy); SmartArt's dsp:txBody
+  // and the like come as a stand-in shape whose textNode is the body itself.
+  pugi::xml_node txBody = shape.drawNode == shape.node ? shape.textNode : P(shape.node, "txBody");
   out->node = txBody;
   out->body = ReadBody(A(shape.textNode, "bodyPr"));
   Ctx c{deck, owner, shownOn, ThemeOf(shownOn), {}};
@@ -413,6 +415,10 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
         case PlaceholderType::Picture:
           style = m->bodyStyle;
           break;
+        case PlaceholderType::None:
+          // Text boxes and shapes start from the default text style alone (PowerPoint 2021,
+          // probed 2026-11-20: otherStyle doesn't reach them).
+          break;
         default:
           style = m->otherStyle;
           break;
@@ -427,14 +433,19 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
     const SlideBase& from = chain[i]->owner ? *chain[i]->owner : owner;
     ApplyListStyle(A(P(chain[i]->node, "txBody"), "lstStyle"), lv, c, from);
   }
-  ApplyFontRef(P(shape.drawNode, "style"), lv, c);
+  pugi::xml_node style;
+  ForEachChild(shape.drawNode, [&](pugi::xml_node n) {
+    if (LocalNameOf(n) == "style") style = n;  // p:style, dsp:style, wps:style
+    return !style;
+  });
+  ApplyFontRef(style, lv, c);
   ApplyListStyle(A(txBody, "lstStyle"), lv, c, owner);
   ReadParagraphs(txBody, lv, c, *out);
   return out;
 }
 
 std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_node txBody, const SlideBase& owner,
-                                           const SlideBase& shownOn, pugi::xml_node tcTxStyle) {
+                                           const SlideBase& shownOn, const std::vector<pugi::xml_node>& tcTxStyles) {
   auto out = std::make_unique<TextBody>();
   out->node = txBody;
   out->body = ReadBody(A(txBody, "bodyPr"));
@@ -443,17 +454,39 @@ std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_n
   c.colors.colorMap = &shownOn.colorMap;
   Levels lv = Defaults(c);
   ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
+  // Table cells take the master's other style, but not its colors: their text is tx1 unless the
+  // table style says otherwise (PowerPoint 2021, probed 2026-11-20).
   if (const Master* m = MasterOf(owner); m && m->kind == PartKind::Master) ApplyListStyle(m->otherStyle, lv, c, *m);
-  if (tcTxStyle) {
+  if (std::optional<draw::Color> tx1 = draw::SchemeColor("tx1", c.colors)) {
+    for (Level& l : lv) {
+      l.run.color = *tx1;
+      l.run.noFill = false;
+      l.run.fill = {};
+    }
+  }
+  for (pugi::xml_node tcTxStyle : tcTxStyles) {
     std::string_view b = tcTxStyle.attribute("b").value(), i = tcTxStyle.attribute("i").value();
     ApplyFontRef(tcTxStyle, lv, c);
+    std::wstring latin, ea, cs;
+    if (pugi::xml_node font = A(tcTxStyle, "font")) {
+      latin = Typeface(A(font, "latin").attribute("typeface").value(), c.theme);
+      ea = Typeface(A(font, "ea").attribute("typeface").value(), c.theme);
+      cs = Typeface(A(font, "cs").attribute("typeface").value(), c.theme);
+    }
     std::optional<draw::Color> color = draw::ReadColor(tcTxStyle, c.colors);
     for (Level& l : lv) {
       if (b == "on") l.run.bold = true;
       if (b == "off") l.run.bold = false;
       if (i == "on") l.run.italic = true;
       if (i == "off") l.run.italic = false;
-      if (color) l.run.color = *color;
+      if (!latin.empty()) l.run.latin = latin;
+      if (!ea.empty()) l.run.eastAsian = ea;
+      if (!cs.empty()) l.run.complexScript = cs;
+      if (color) {
+        l.run.color = *color;
+        l.run.noFill = false;
+        l.run.fill = {};
+      }
     }
   }
   ApplyListStyle(A(txBody, "lstStyle"), lv, c, owner);

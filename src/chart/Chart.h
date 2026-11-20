@@ -96,6 +96,10 @@ struct Chart {
   // chart's text size. Word draws such charts in Office 2010's look.
   bool legacy = false;
   bool workbook = false;  // in a workbook (Read had a DataSource): Excel's denser value axis labels
+  // In a presentation: Excel's denser value axis labels too, and no chart area border unless the
+  // chart states one (PowerPoint's PDFs).
+  bool presentation = false;
+  bool styled = false;  // the chart states c14:style (Office 2010 and later wrote it)
 };
 
 // Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,
