@@ -156,6 +156,16 @@ TEST(Pivot_LayoutMatchesExcelsFresh) {
   CHECK_EQ(CheckBook(*book, *book, false), 0);
 }
 
+// Column fields and no row fields, as Excel lays them out (pivots-colonly.xlsx, excel_pivots.py
+// --colonly): a label column only for a single value, its name there; none for two values or none;
+// with no values, no line of values in the location (fuzz_pivot found the one-value case laid twice).
+TEST(Pivot_ColumnsOnlyMatchExcel) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-colonly.xlsx"));
+  if (!book) return;
+  CHECK(book->FindSheet("ColOne") >= 0 && book->FindSheet("ColNone") >= 0);
+  CHECK_EQ(CheckBook(*book, *book, false), 0);
+}
+
 TEST(Pivot_RefreshMatchesExcelsRefresh) {
   auto stale = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-stale.xlsx"));
   auto refreshed = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-refreshed.xlsx"));
