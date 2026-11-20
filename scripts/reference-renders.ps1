@@ -71,6 +71,10 @@ param(
   # anything is rendered, a blank sheet's standard width must be this; by default the manifest's
   # excel.standardWidth (8.43 for the references made on 16 Nov 2026, the session connected).
   [double]$ExcelStandardWidth = 0,
+  # PowerPoint lays decks out wrong on Remote Desktop or in a disconnected session (P1), so decks are
+  # rendered only from the console session while it's active (qwinsta); otherwise the run stops
+  # before anything starts and says so. -AnySession renders anyway (not for references).
+  [switch]$AnySession,
   # Internal: export one file in this process (the parent runs one child per file).
   [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats,
   [string]$PrintTo, [switch]$Probe
@@ -550,15 +554,42 @@ if ($Child) {
         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($blank)
       }
       "PowerPoint" {
-        # ReadOnly, not untitled, no window
+        $office.DisplayAlerts = 1  # ppAlertsNone: a deck that needs repair fails instead of prompting
+        # ReadOnly, not untitled, no window. A .ppsx opens for editing, not into the show; a .potx as itself.
         $doc = $office.Presentations.Open($Source, -1, 0, 0)
+        # What fwtool compare pairs with the PDF's pages: every slide, hidden ones too, in order.
+        $result.slides = $doc.Slides.Count
+        $result.hidden = @(for ($i = 1; $i -le $doc.Slides.Count; $i++) { if ($doc.Slides.Item($i).SlideShowTransition.Hidden -eq -1) { $i } })
+        $result.slideSize = "{0}x{1}" -f $doc.PageSetup.SlideWidth, $doc.PageSetup.SlideHeight  # points
+        # The fonts the deck asks for, and which of them it embeds (the PDF says what PowerPoint drew with).
+        $result.deckFonts = @(foreach ($font in $doc.Fonts) { if ($font.Embedded -eq -1) { "$($font.Name) (embedded)" } else { $font.Name } })
+        # PowerPoint's PDF leaves hidden slides out, whatever PrintOptions say, and its ExportAsFixedFormat
+        # (which can print them) can't be called from PowerShell (probed 2026-11-20: a type mismatch
+        # whichever way the missing print range is passed). So hidden slides are shown in the copy
+        # PowerPoint has open, which is read-only and closed without saving, and then saved as PDF.
+        foreach ($i in $result.hidden) { $doc.Slides.Item([int]$i).SlideShowTransition.Hidden = 0 }
         $doc.SaveCopyAs($Pdf, 32)  # ppSaveAsPDF
         $doc.Close()
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($doc)
+        $doc = $null
       }
     }
   } catch {
     $result.error = $_.Exception.Message
   } finally {
+    # PowerPoint runs once per user: a deck someone opens while this one runs (a double-click) opens
+    # in this PowerPoint. Then it isn't this script's any more, and is neither quit nor ended.
+    if ($office -and $Child -eq "PowerPoint") {
+      $others = 0
+      try { if ($doc) { $doc.Close() } } catch {}
+      try { $others = [int]$office.Presentations.Count } catch {}
+      if ($others -gt 0) {
+        $result.error = "someone opened a presentation in the PowerPoint this script started; it's left running"
+        $started.Clear()
+        foreach ($o in $doc, $office) { if ($o) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($o) } catch {} } }
+        $doc = $null; $office = $null
+      }
+    }
     if ($office) {
       try { if ($Child -eq "Word") { $office.Quit([ref]0) } else { $office.Quit() } } catch {}
       foreach ($o in $doc, $office) { if ($o) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($o) } }
@@ -660,6 +691,16 @@ if ($ExcelPrinter -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq
     throw "Windows' default printer is '$default', but workbooks are rendered for the reference printer '$ExcelPrinter'. Make that the default again (with 'Let Windows manage my default printer' on, print something on it), or pass -ExcelPrinter."
   }
 }
+# Decks only from the active console session (-AnySession): PowerPoint lays out wrong on Remote
+# Desktop and in a disconnected session.
+if (-not $AnySession -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "PowerPoint" }).Count) {
+  $me = @(qwinsta 2>$null | Where-Object { $_ -match '^>' }) | Select-Object -First 1
+  if (-not $me -or $me -notmatch '^>console\s' -or $me -notmatch '\sActive\s*$') {
+    $where = if ($me) { ($me.TrimStart('>') -replace '\s+', ' ').Trim() } else { "unknown (qwinsta answered nothing)" }
+    Write-Output "Not rendered: decks are rendered only from the active console session, and this one is: $where. Queue the renders and run this again at the console (or pass -AnySession, not for references)."
+    exit 3
+  }
+}
 # Printing while Windows manages the default printer would make Microsoft Print to PDF the default
 # halfway through the run, and every workbook after it would be laid out for that printer.
 if ($PrintPdf.Count -and [int](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').LegacyDefaultPrinterMode -eq 0) {
@@ -703,7 +744,7 @@ function Write-Manifest([bool]$final) {
   $manifest = [ordered]@{
     made = (Get-Date).ToString("yyyy-MM-dd")
     computer = "Office reference PC (decision 19)"
-    export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides"
+    export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint (macros forced off, read-only, from the console session): every slide, hidden ones too (shown in the unsaved copy PowerPoint has open); slides, hidden, slideSize (points) and deckFonts (the fonts the deck names, embedded ones marked) per deck"
   }
   # The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
   $facts = $script:excelFacts
@@ -788,6 +829,12 @@ foreach ($job in $jobs) {
     $entry.app = $r.app
     if ($r.error) { $entry.error = $r.error }
     if ($r.pages) { $entry.pages = $r.pages }
+    if ($kind -eq "PowerPoint" -and $r.slides) {
+      $entry.slides = [int]$r.slides
+      $entry.hidden = @($r.hidden | ForEach-Object { [int]$_ })
+      $entry.slideSize = $r.slideSize
+      $entry.deckFonts = @($r.deckFonts)
+    }
     if ($r.locale -and -not $excelFacts) { $excelFacts = [ordered]@{ locale = $r.locale; printer = $r.printer; standardWidth = $r.standardWidth } }
     if (-not $r.error -and $cellsPath -and (Test-Path $cellsPath)) {
       $entry.cells = $cellsRel
