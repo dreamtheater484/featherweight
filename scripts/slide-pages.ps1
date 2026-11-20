@@ -2,8 +2,9 @@
 .SYNOPSIS
   Slides against PowerPoint's (P1's display criterion, docs\p1-plan.md): for every deck in a
   reference manifest (scripts\reference-renders.ps1) under the given folders, Featherweight draws
-  every slide as the screen does, hidden ones too, at 100 dpi (the app's pagepngs:DIR|100 script op,
-  page-N.png), and fwtool pdf-compare --pngs measures each against the page of PowerPoint's PDF
+  every slide as the screen does, hidden ones too, through p1-render's renderer (by default fwtool
+  slides, which writes the deck as a PDF; -Through app: the app's pagepngs:DIR|100 script op,
+  page-N.png), and fwtool pdf-compare measures each at 100 dpi against the page of PowerPoint's PDF
   (SSIM at 100 dpi, page origins aligned; a slide passes at >= 0.95). The criterion: >= 90 % of the
   slides pass, on the real-world corpus; the public set (tests\office\presentations) is measured the
   same way and reported separately.
@@ -30,7 +31,11 @@ param(
   [int]$TimeoutSeconds = 300,
   [double]$MinSlides = 90,
   # Keep the decks already measured in -Out (their PNGs and comparison); draw only the others.
-  [switch]$Reuse
+  [switch]$Reuse,
+  # How our slides are drawn: "fwtool" (fwtool slides --out DIR deck: p1-render's renderer writes the
+  # deck as a PDF, every slide at its size, which pdf-compare renders at 100 dpi), or "app" (the app's
+  # pagepngs:DIR|100 script op, page-N.png, drawn as the slide view draws them).
+  [ValidateSet("fwtool", "app")][string]$Through = "fwtool"
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -39,7 +44,7 @@ foreach ($v in "Featherweight", "Fwtool", "Out") {
   $p = Get-Variable $v -ValueOnly
   if (-not [IO.Path]::IsPathRooted($p)) { Set-Variable $v (Join-Path $root $p) }
 }
-foreach ($p in $Featherweight, $Fwtool) { if (-not (Test-Path $p)) { throw "$p not found. Build it, or pass its path." } }
+foreach ($p in @($Fwtool) + @(if ($Through -eq "app") { $Featherweight })) { if (-not (Test-Path $p)) { throw "$p not found. Build it, or pass its path." } }
 $Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $refRoot = (Resolve-Path $Reference).Path
 $manifest = Get-Content (Join-Path $refRoot "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -64,7 +69,7 @@ foreach ($e in $entries) {
   $json = Join-Path $decks "$name.compare.json"
   $folder = ($e.source -replace '/[^/]+$', '')
   $row = [ordered]@{ source = $e.source; folder = $folder; slides = [int]$e.pages; ourSlides = 0; passing = 0; inkPassing = 0; hidden = @($e.hidden); ssim = @(); inkSsim = @(); error = $null }
-  $first = Join-Path $pngs "page-1.png"
+  $first = if ($Through -eq "app") { Join-Path $pngs "page-1.png" } else { Join-Path $pngs "slides.pdf" }
   $kept = $Reuse -and (Test-Path $first) -and (Test-Path $json) -and (Get-Item $json).LastWriteTime -ge (Get-Item $first).LastWriteTime
   if (-not $kept) {
     if (Test-Path $pngs) { Remove-Item -Recurse -Force $pngs }
@@ -74,6 +79,25 @@ foreach ($e in $entries) {
       $row.error = "the deck isn't there ($source)"
     } else {
       $log = Join-Path $decks "$name.log"
+      if ($Through -eq "fwtool") {
+        # fwtool slides writes <out>\<deck>.pdf; each deck has a folder of its own, so it's the one PDF there.
+        $p = Start-Process -FilePath $Fwtool -PassThru -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError $log -ArgumentList @(
+          "slides", "--out", "`"$pngs`"", "`"$source`"")
+        $null = $p.Handle
+        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          $row.error = "fwtool slides didn't finish within $TimeoutSeconds s"
+        } else {
+          $pdf = @(Get-ChildItem $pngs -Filter *.pdf -ErrorAction SilentlyContinue) | Select-Object -First 1
+          if (-not $pdf) {
+            $said = @(Get-Content $log, "$log.out" -ErrorAction SilentlyContinue | Where-Object { $_ }) -join "; "
+            $row.error = "no PDF from fwtool slides (exit code $($p.ExitCode))" + $(if ($said) { ": $said" } else { "" })
+          } else {
+            if ($pdf.FullName -ne $first) { Move-Item -Force $pdf.FullName $first }
+            & $Fwtool pdf-compare --json $json --out $diffs $refPdf $first *> $null
+          }
+        }
+      } else {
       $p = Start-Process -FilePath $Featherweight -PassThru -WindowStyle Hidden -RedirectStandardError $log -ArgumentList @(
         "--snapshot", "`"$(Join-Path $decks "$name.png")`"", "--size", "1400x900", "--script", "`"pagepngs:$pngs|100`"", "`"$source`"")
       $null = $p.Handle  # so ExitCode is kept
@@ -85,6 +109,7 @@ foreach ($e in $entries) {
         $row.error = "no slides drawn (exit code $($p.ExitCode))" + $(if ($said) { ": $said" } else { "" })
       } else {
         & $Fwtool pdf-compare --pngs $pngs --json $json --out $diffs $refPdf *> $null
+      }
       }
     }
   }
