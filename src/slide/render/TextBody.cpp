@@ -305,9 +305,12 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     // Vertical placement. Percent line spacing scales each line's height (its fonts' ascent,
     // descent and gap), less the stored autofit's reduction; paragraph spacing in percent is of
     // the first line's largest font.
+    // The bullet (run 0) doesn't count: a bullet at 150 % leaves its line as high (PowerPoint's PDFs).
+    const auto counts = [&](uint32_t run) { return !para.bullet || run != 0; };
     float largest = 0;
     if (!para.lines.empty())
-      for (const text::GlyphPiece& g : para.lines.front().pieces) largest = std::max(largest, g.emSize);
+      for (const text::GlyphPiece& g : para.lines.front().pieces)
+        if (counts(g.run)) largest = std::max(largest, g.emSize);
     if (largest <= 0) largest = para.mark.size;
     auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
     if (!first) y += spacing(pp.spaceBefore);
@@ -317,8 +320,10 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       // (its PDFs: 21.6 pt for Calibri 18, whose own ascent and descent make 21.97), with the
       // baseline at the font's ascent's share of it.
       float size = 0;
-      for (const text::GlyphPiece& g : line.pieces) size = std::max(size, g.emSize);
-      for (const text::InlineObject& o : line.objects) size = std::max(size, o.ascent + o.descent);
+      for (const text::GlyphPiece& g : line.pieces)
+        if (counts(g.run)) size = std::max(size, g.emSize);
+      for (const text::InlineObject& o : line.objects)
+        if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
       if (size <= 0) size = para.mark.size;
       const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
