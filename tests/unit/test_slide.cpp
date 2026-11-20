@@ -641,3 +641,42 @@ TEST(SlideDateFieldsShowToday) {
   CHECK(t->paragraphs[0].runs[1].text.find(L':') != std::wstring::npos);
   CHECK(t->paragraphs[0].runs[2].text == L"kept");
 }
+
+TEST(SlideCorpusDecksResolve) {
+  // The private corpus (plan §10), when FW_CORPUS names it: every deck of FW_CORPUS\pptx opens, and
+  // every slide, notes page and layout resolves; what the reader skipped is printed, per deck.
+  wchar_t root[MAX_PATH];
+  if (!GetEnvironmentVariableW(L"FW_CORPUS", root, MAX_PATH)) return;
+  auto dir = std::filesystem::path(root) / "pptx";
+  if (!std::filesystem::exists(dir)) return;
+  int decks = 0, withProblems = 0;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
+    std::string ext = entry.path().extension().string();
+    for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (ext != ".pptx" && ext != ".ppsx" && ext != ".potx" && ext != ".pptm" && ext != ".potm" && ext != ".ppsm") continue;
+    ++decks;
+    fw::pkg::Status st;
+    auto deck = OpenBytes(FileBytes(entry.path()), &st);
+    if (!deck) {
+      std::printf("  %s: not opened: %s\n", entry.path().filename().string().c_str(), st.message.c_str());
+      CHECK(deck != nullptr);
+      continue;
+    }
+    deck->LoadAll();
+    for (size_t i = 0; i < deck->SlideCount(); ++i) {
+      const Slide* s = deck->GetSlide(i);
+      for (const SlideBase* part : {static_cast<const SlideBase*>(s), static_cast<const SlideBase*>(s->notes)}) {
+        if (!part) continue;
+        for (const DrawItem& item : deck->DrawList(*part)) {
+          if (item.shape->textNode) CHECK(deck->Text(*item.shape, *part) != nullptr);
+          deck->GetTable(*item.shape, *part);
+        }
+      }
+    }
+    deck->EmbeddedFonts();
+    std::vector<std::string> problems = deck->Problems();
+    if (!problems.empty()) ++withProblems;
+    for (const std::string& p : problems) std::printf("  %s: %s\n", entry.path().filename().string().c_str(), p.c_str());
+  }
+  std::printf("  %d corpus decks, %d with something skipped\n", decks, withProblems);
+}
