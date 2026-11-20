@@ -394,3 +394,53 @@ Check next to Excel on copies of your own workbooks.
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`, see `tests\budgets\README.md`): ___ MB, at most 1.35 MB more than S2's 7.91 MB (so ≤ 9.26 MB).
 - [ ] `fuzz_xlsx` (with S3's edits, undo, redo and save) and `fuzz_formula` 60 s each: no findings.
 - [ ] Make a workbook with a table, a chart, a few rules, a list validation, a note, a comment, a link, a name and a protected sheet; save it; open it in Excel: no repair, and everything is there and looks the same.
+
+## More files, pivots and big files (S4)
+
+Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies of ten of the S1 test workbooks), the corpus copies in `D:\Documents\Codex\FeatherweightCorpus\xls` and `\ods` (Excel saved the real-world `.xlsx` corpus as `.xls` and `.ods`), `tests\office\sheet\pivots`, `tests\office\sparklines\sparklines.xlsx`, and the big files from `.venv\Scripts\python tests\office\make_budget_files.py` (`build\budgets`, now with `fifty-mb.xlsx`).
+
+### .xls and .ods
+
+- [ ] Open an `.xls` and an `.ods` from Explorer, by dragging and with Ctrl+O. Each opens in a workbook tab as a copy, with the banner "… is an Excel 97–2003 workbook. Saving makes a new ….xlsx and leaves it as it is." (for `.ods`, "… is an OpenDocument spreadsheet."). Ctrl+S asks where to save the `.xlsx`.
+- [ ] Open a few `.xls` from `tests\fuzz\seeds\xls` next to their `.xlsx` originals in `tests\office\excel`, and a few corpus `.xls` and `.ods` next to Excel: values, number formats, fonts (a font that isn't installed shows in Arial, as in Excel), text with several formats in one cell, fills, borders, merged cells, widths and heights, frozen panes, hidden rows and sheets, conditional formats, pictures, notes and print preview look the same.
+- [ ] Edit an `.xls` and an `.ods` (a value, a formula, a format), save them as `.xlsx`, and open the result in Excel: no repair, and the edits are there. The original `.xls` or `.ods` is unchanged.
+- [ ] An `.ots` (OpenDocument template) opens as a new workbook.
+- [ ] A damaged file (rename a `.txt` to `.ods`) says it "seems to be damaged or isn't an OpenDocument spreadsheet" and nothing else happens.
+- Known: an `.xls`'s chart sheets, macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read.
+
+### Password-protected workbooks
+
+- [ ] Open `tests\fuzz\seeds\xls\text-password-feather1.xls`: the password card says it's protected and asks for the password. A wrong one: "That password isn't right. Try again."; `Feather1` opens it. Save it: the `.xlsx` is encrypted with the same password (Excel asks for it, and opens it without a repair).
+- [ ] Encrypt a copy of one of your own workbooks in Excel (File › Info › Protect Workbook › Encrypt with Password). Featherweight asks for the password, opens it, and after an edit and Ctrl+S Excel still asks for the same password and opens it without a repair.
+
+### New workbooks and templates
+
+- [ ] The + menu and the … menu have **New spreadsheet** (a blank "Book1"); the start screen has Spreadsheet under New.
+- [ ] Save an Excel template (`.xltx`) into `Documents\Custom Office Templates` (or your own templates folder, as Word and Excel have it). **New from template** lists it; picking it opens a new workbook named after it ("Budget1") with its contents and formats; Ctrl+S asks where (as `.xlsx`; `.xlsm` from an `.xltm`). **More templates…** opens that folder.
+
+### PivotTables
+
+- [ ] Open `tests\office\sheet\pivots\pivots-stale.xlsx` in Featherweight and in Excel. The toolbar's **Data** list: **Refresh all PivotTables** (Ctrl+Alt+F5) in Featherweight, Data › Refresh All in Excel: the pivots show the same values. **Refresh PivotTable** (Alt+F5) refreshes the one the cursor is in.
+- [ ] Select a block with a header row, **Data** › **PivotTable…**: the Create PivotTable panel takes the range (or a table), where to put it (New worksheet), and each field as Rows, Columns, Filters, Sum, Count or Average. **Create PivotTable** adds a sheet before the active one with the filters at A1 and the pivot at A3, in Excel's default style; it's one undo step. Saved, Excel opens it without a repair, and Refresh All gives the same values.
+- [ ] Change a value in the pivot's source and refresh: the pivot follows. A pivot with features Featherweight keeps but doesn't refresh (calculated fields, grouping, slicers) says so instead.
+- Known: pivot labels sit about 11 pixels left of Excel's (no room is left for the expand and collapse buttons); custom pivot styles aren't drawn.
+
+### Sparklines
+
+- [ ] Open `tests\office\sparklines\sparklines.xlsx` next to Excel: line, column and win/loss sparklines, markers, high, low, first and last points, negative points, gaps, the axis, custom minimum and maximum, right to left, weights and colors look the same, in the grid and in print preview. Insert rows above them: they move with their cells. (Featherweight shows sparklines; it doesn't create or edit them.)
+
+### Big files and speed (record the numbers)
+
+- [ ] `fifty-mb.xlsx` (384,000 rows, 52 MB): first screen in ___ s (target < 1.5 s), fully loaded in ___ s (target < 5 s), memory ___ MB. Scroll while it loads; when it's loaded, Ctrl+End reaches row 384,000. Edit a cell and save: the window doesn't freeze.
+- [ ] `100mb.csv`: first screen in ___ s (target < 1 s), fully loaded in ___ s. `million-cells.xlsx`: first screen in ___ s (target < 1.5 s).
+- [ ] A workbook with many formulas (`million-cells.xlsx`, or one of yours): editing a value that feeds them recalculates without a noticeable pause; Task Manager shows several cores busy during a full recalculation (Ctrl+Alt+F9), then nothing when idle.
+
+## S4's gate (record the numbers)
+
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 246 `.xlsx`, the `.xls` and the `.ods` copies: ___ failures, ___ new validator errors, ___ Excel repairs (target 0 each); the converted `.xls` and `.ods` saved as `.xlsx` with no edits: ___ validator errors, ___ Excel repairs (target 0 each).
+- [ ] `fwtool compare --cells --folders xls <corpus>\reference` and the same for `ods`: ___ % and ___ % of the cells show Excel's text (target ≥ 99 %).
+- [ ] Printed pages (`scripts\sheet-pages.ps1`): the public set (`-Reference tests\office\reference -Folders excel`) ___ of 239 (target ≥ 90 %); the real-world `.xlsx` (`-Folders xlsx`) ___ % (recorded); the `.xls` and `.ods` copies (`-Folders xls,ods -Originals <the xlsx run's summary.json>`) ___ % and ___ % against their originals' ___ % and ___ % on the same workbooks (target: at least the originals').
+- [ ] PivotTables: every corpus pivot refreshes to Excel's values; the created ones open in Excel without a repair and refresh to the same values.
+- [ ] `fwtool bench --sheet-edits`: full recalculation of 100,000 formulas ___ ms on 1 thread, ___ ms on 4 (speed-up ___×, target ≥ 3×, 0 values differ).
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target < 11 MB, 3.0's budget).
+- [ ] `fuzz_xls`, `fuzz_ods`, the pivot cache, and `fuzz_xlsx` with pivots, 60 s each: no findings.
