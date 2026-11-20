@@ -780,6 +780,20 @@ def broken(simple_docx, simple_xlsx, simple_pptx):
     save(BROKEN, "duplicate-slide-id.pptx", write_zip(edit_part(
         read_entries(simple_pptx), "ppt/presentation.xml",
         lambda b: b.replace(b'<p:sldId id="257"', b'<p:sldId id="256"'))))
+    # PowerPoint 2021 refuses these three (P1, probed 2026-11-20): the same slide listed twice, a
+    # slide without its layout, and a slide list entry that names the slide master.
+    pres = dict(read_entries(simple_pptx))["ppt/presentation.xml"]
+    slide_rids = re.findall(rb'<p:sldId id="\d+" r:id="(rId\d+)"', pres)
+    master_rid = re.search(rb'<p:sldMasterId [^>]*r:id="(rId\d+)"', pres).group(1)
+    save(BROKEN, "slide-listed-twice.pptx", write_zip(edit_part(
+        read_entries(simple_pptx), "ppt/presentation.xml",
+        lambda b: b.replace(b'r:id="' + slide_rids[1] + b'"', b'r:id="' + slide_rids[0] + b'"'))))
+    save(BROKEN, "slide-without-layout.pptx", write_zip(edit_part(
+        read_entries(simple_pptx), "ppt/slides/_rels/slide1.xml.rels",
+        lambda b: re.sub(rb'<Relationship [^>]*relationships/slideLayout"[^>]*/>', b"", b))))
+    save(BROKEN, "slide-list-names-master.pptx", write_zip(edit_part(
+        read_entries(simple_pptx), "ppt/presentation.xml",
+        lambda b: b.replace(b'r:id="' + slide_rids[0] + b'"', b'r:id="' + master_rid + b'"', 1))))
 
 
 def main():
