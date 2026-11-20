@@ -3,6 +3,7 @@
 #include <pugixml.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -248,6 +249,50 @@ class Animator {
   std::vector<TargetKey> moving_;
   int mainNext_ = 0;
   std::vector<int> triggerNext_;
+};
+
+// ---------------------------------------------------------------------------------------------
+// The order of slides
+
+// The order a show plays slides in: hidden slides skipped, the deck's loop, and custom shows (a
+// link's, which comes back to the slide that started it or ends the show there, or the deck's own).
+class SlideOrder {
+ public:
+  static constexpr size_t kEnd = static_cast<size_t>(-1);  // past the last slide: the end of the show
+
+  SlideOrder() = default;
+  // `hidden(i)`: slide i is skipped (asked only when needed: it may load the slide).
+  SlideOrder(size_t count, std::function<bool(size_t)> hidden, bool loop);
+
+  size_t First() const;
+  size_t Next(size_t from) const;  // kEnd past the last (or the first again, looping)
+  size_t Prev(size_t from) const;  // from kEnd: the last; kEnd before the first
+  // A custom show starts: its slides in its order, hidden ones too; after its last slide the show
+  // comes back to `returnTo`, or ends (kEnd), or plays it again (`loop`). False (and nothing
+  // changes) when it has no slides or names one the deck hasn't.
+  bool StartCustom(const std::vector<size_t>& slides, size_t returnTo, bool loop);
+  bool InCustom() const { return inCustom_; }
+  // Moving on from `from` (a click, a key, a link's "next"): the slide to show. Past a custom
+  // show's last slide, the custom show is over.
+  size_t Advance(size_t from);
+  // Going back from `from`: the slide to show. Back before a custom show's first slide (to the
+  // slide that started it), the custom show is over.
+  size_t Back(size_t from);
+  // The show is at `index` now, however it got there: keeps the place in a custom show, or leaves
+  // it on a jump to a slide that isn't in it.
+  void Moved(size_t index);
+
+ private:
+  bool Hidden(size_t i) const { return hidden_ && hidden_(i); }
+
+  size_t count_ = 0;
+  std::function<bool(size_t)> hidden_;
+  bool loop_ = false;
+  bool inCustom_ = false;
+  std::vector<size_t> custom_;
+  size_t pos_ = 0;
+  size_t return_ = kEnd;
+  bool customLoop_ = false;
 };
 
 }  // namespace fw::slide::show

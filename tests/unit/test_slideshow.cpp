@@ -6,6 +6,7 @@
 #include "PkgTestUtil.h"
 #include "TestHarness.h"
 #include "pkg/XmlDom.h"
+#include "slide/Presentation.h"
 #include "slide/show/Timing.h"
 
 using namespace fw::slide::show;
@@ -676,4 +677,145 @@ TEST(SlideShowPowerPointAnimations) {
   a = Animator(&t, BoxOf, nullptr);
   a.FinishAll(0);
   for (const auto& [key, pose] : a.Poses()) CHECK(pose.Identity());
+}
+
+TEST(SlideShowOrder) {
+  // Seven slides; 2 and 5 hidden.
+  auto hidden = [](size_t i) { return i == 2 || i == 5; };
+  const size_t E = SlideOrder::kEnd;
+  SlideOrder o(7, hidden, false);
+  CHECK(o.First() == 0);
+  CHECK(o.Next(1) == 3);
+  CHECK(o.Next(4) == 6);
+  CHECK(o.Next(6) == E);
+  CHECK(o.Prev(3) == 1);
+  CHECK(o.Prev(E) == 6);
+  CHECK(o.Prev(0) == E);
+  SlideOrder none(3, [](size_t) { return true; }, false);
+  CHECK(none.First() == E);
+  SlideOrder loop(7, hidden, true);
+  CHECK(loop.Next(6) == 0);
+
+  // A custom show (1, 4, 2: a hidden slide plays in it) started from slide 3, coming back there.
+  CHECK(!o.StartCustom({1, 9}, 3, false));  // a slide the deck hasn't
+  CHECK(!o.InCustom());
+  CHECK(o.StartCustom({1, 4, 2}, 3, false));
+  CHECK(o.First() == 1);
+  o.Moved(1);
+  size_t s = o.Advance(1);
+  CHECK(s == 4);
+  o.Moved(s);
+  s = o.Advance(4);
+  CHECK(s == 2);
+  o.Moved(s);
+  CHECK(o.Prev(2) == 4);
+  s = o.Advance(2);
+  CHECK(s == 3);
+  o.Moved(s);
+  CHECK(!o.InCustom());
+  CHECK(o.Next(3) == 4);  // on through the deck
+
+  // Started from slide 1, which is in it: back to slide 1, and the deck goes on from there.
+  CHECK(o.StartCustom({1, 4}, 1, false));
+  o.Moved(1);
+  s = o.Advance(1);
+  CHECK(s == 4);
+  o.Moved(s);
+  s = o.Advance(4);
+  CHECK(s == 1);
+  o.Moved(s);
+  CHECK(!o.InCustom());
+  CHECK(o.Next(1) == 3);
+
+  // Not coming back: the end of the show after its last slide.
+  CHECK(o.StartCustom({4, 6}, E, false));
+  o.Moved(4);
+  s = o.Advance(4);
+  CHECK(s == 6);
+  o.Moved(s);
+  CHECK(o.Advance(6) == E);
+  CHECK(!o.InCustom());
+
+  // Back before its first slide: to the slide that started it, and out of it.
+  CHECK(o.StartCustom({4, 6}, 0, false));
+  o.Moved(4);
+  s = o.Back(4);
+  CHECK(s == 0);
+  o.Moved(s);
+  CHECK(!o.InCustom());
+  // With no slide to go back to, back does nothing and it goes on.
+  CHECK(o.StartCustom({4, 6}, E, false));
+  o.Moved(4);
+  CHECK(o.Back(4) == E);
+  CHECK(o.InCustom());
+  // A jump to one of its slides keeps the place; to another slide, leaves it.
+  o.Moved(6);
+  CHECK(o.InCustom());
+  CHECK(o.Prev(6) == 4);
+  o.Moved(0);
+  CHECK(!o.InCustom());
+
+  // The deck's own custom show, looping.
+  SlideOrder own(7, hidden, true);
+  CHECK(own.StartCustom({3, 1}, E, true));
+  CHECK(own.First() == 3);
+  own.Moved(3);
+  s = own.Advance(3);
+  CHECK(s == 1);
+  own.Moved(s);
+  s = own.Advance(1);
+  CHECK(s == 3);
+  own.Moved(s);
+  CHECK(own.InCustom());
+  CHECK(own.Next(3) == 1);
+}
+
+TEST(SlideShowOrderOnDecks) {
+  // p1-corpus's public decks (tests/office/presentations), read by the slide model.
+  auto open = [](const char* name) {
+    auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "presentations" / name;
+    std::ifstream in(path, std::ios::binary);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    fw::pkg::Status st;
+    auto pkg = test::OpenBytes(std::move(bytes), st);
+    return pkg ? fw::slide::Read(std::move(pkg), st) : nullptr;
+  };
+  // The button on slide 1 plays the custom show (slides 1, 4, 6) and comes back.
+  auto deck = open("sections-custom-shows.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const fw::slide::Slide* first = deck->GetSlide(0);
+  const fw::slide::Hyperlink* link = nullptr;
+  for (const fw::slide::Shape& sh : first->shapes)
+    if (sh.click.action == fw::slide::Hyperlink::Action::CustomShow) link = &sh.click;
+  CHECK(link != nullptr);
+  if (!link) return;
+  CHECK(link->returns);
+  const fw::slide::CustomShow* cs = nullptr;
+  for (const fw::slide::CustomShow& c : deck->CustomShows())
+    if (c.id == link->customShow) cs = &c;
+  CHECK(cs != nullptr);
+  if (!cs) return;
+  fw::slide::Presentation* d = deck.get();
+  SlideOrder o(deck->SlideCount(), [d](size_t i) { return d->GetSlide(i)->hidden; }, false);
+  CHECK(o.StartCustom(cs->slides, 0, false));
+  std::vector<size_t> played;
+  for (size_t s = o.First(); played.size() < 10; s = o.Advance(s)) {
+    o.Moved(s);
+    played.push_back(s);
+    if (!o.InCustom()) break;
+  }
+  CHECK((played == std::vector<size_t>{0, 3, 5, 0}));
+
+  // hyperlinks.pptx: the oval's mouse-over link goes to slide 3.
+  deck = open("hyperlinks.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const fw::slide::Shape* oval = nullptr;
+  for (const fw::slide::Shape& sh : deck->GetSlide(0)->shapes)
+    if (sh.id == 10) oval = &sh;
+  CHECK(oval != nullptr);
+  if (!oval) return;
+  CHECK(oval->hover.action == fw::slide::Hyperlink::Action::Slide);
+  CHECK(oval->hover.slide == 2);
 }

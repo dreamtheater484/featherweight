@@ -1088,4 +1088,86 @@ Pose Animator::PoseOf(const TargetKey& key) const {
   return {};
 }
 
+// ---------------------------------------------------------------------------------------------
+// SlideOrder
+
+SlideOrder::SlideOrder(size_t count, std::function<bool(size_t)> hidden, bool loop)
+    : count_(count), hidden_(std::move(hidden)), loop_(loop) {}
+
+size_t SlideOrder::First() const {
+  if (inCustom_) return custom_.front();
+  for (size_t i = 0; i < count_; ++i)
+    if (!Hidden(i)) return i;
+  return kEnd;
+}
+
+size_t SlideOrder::Next(size_t from) const {
+  if (from == kEnd) return kEnd;
+  if (inCustom_) {
+    if (pos_ + 1 < custom_.size()) return custom_[pos_ + 1];
+    return customLoop_ ? custom_.front() : return_;
+  }
+  for (size_t i = from + 1; i < count_; ++i)
+    if (!Hidden(i)) return i;
+  if (loop_)
+    for (size_t i = 0; i <= from && i < count_; ++i)
+      if (!Hidden(i)) return i;
+  return kEnd;
+}
+
+size_t SlideOrder::Prev(size_t from) const {
+  if (inCustom_) {
+    if (from == kEnd) return custom_.back();
+    return pos_ > 0 ? custom_[pos_ - 1] : return_;
+  }
+  size_t i = from == kEnd || from > count_ ? count_ : from;
+  while (i > 0)
+    if (!Hidden(--i)) return i;
+  return kEnd;
+}
+
+bool SlideOrder::StartCustom(const std::vector<size_t>& slides, size_t returnTo, bool loop) {
+  if (slides.empty()) return false;
+  for (size_t i : slides)
+    if (i >= count_) return false;
+  custom_ = slides;
+  inCustom_ = true;
+  pos_ = 0;
+  return_ = returnTo < count_ ? returnTo : kEnd;
+  customLoop_ = loop;
+  return true;
+}
+
+size_t SlideOrder::Advance(size_t from) {
+  size_t next = Next(from);
+  if (inCustom_ && from != kEnd && !customLoop_ && pos_ + 1 >= custom_.size()) inCustom_ = false;
+  return next;
+}
+
+size_t SlideOrder::Back(size_t from) {
+  size_t prev = Prev(from);
+  if (inCustom_ && from != kEnd && pos_ == 0 && prev != kEnd) inCustom_ = false;
+  return prev;
+}
+
+void SlideOrder::Moved(size_t index) {
+  if (!inCustom_) return;
+  if (custom_[pos_] == index) return;
+  if (pos_ + 1 < custom_.size() && custom_[pos_ + 1] == index) {
+    ++pos_;
+    return;
+  }
+  if (customLoop_ && pos_ + 1 == custom_.size() && custom_.front() == index) {
+    pos_ = 0;
+    return;
+  }
+  if (pos_ > 0 && custom_[pos_ - 1] == index) {
+    --pos_;
+    return;
+  }
+  auto it = std::find(custom_.begin(), custom_.end(), index);
+  if (it != custom_.end()) pos_ = static_cast<size_t>(it - custom_.begin());
+  else inCustom_ = false;  // a jump out of it
+}
+
 }  // namespace fw::slide::show
