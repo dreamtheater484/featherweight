@@ -60,6 +60,7 @@ struct Fill {
   Color color;                       // Solid; Pattern: the foreground
   Color background;                  // Pattern
   uint8_t pattern = 0;               // Pattern: index into the presets (PatternBitmap)
+  bool pageAnchored = false;         // Pattern: cells on the page's grid, not from the shape (PowerPoint)
   std::vector<GradientStop> stops;   // Gradient, sorted
   GradientShape shape = GradientShape::Linear;
   float angle = 0;                   // Linear: degrees, clockwise from left-to-right
@@ -175,6 +176,8 @@ std::shared_ptr<const Bitmap> PatternBitmap(uint8_t pattern, Color foreground, C
 Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
 // The width of `text`'s glyphs' advances, as TextOutline lays them out; far cheaper than its outline.
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
+// A run of shaped glyphs' outlines, its origin on the baseline at (0, 0): outlined text.
+Path GlyphRunOutline(const GlyphRun& run);
 
 // ---- Readers (DrawingML.cpp, Vml.cpp) ----
 

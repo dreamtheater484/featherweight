@@ -12,14 +12,14 @@
 #include "draw/Shapes.h"
 
 // fwchart (plan D5): charts shown read-only from the values their part caches (c:chartSpace):
-// column, bar, line, pie and doughnut, area, scatter and radar, with the title, axes, gridlines,
+// column, bar, line, pie and doughnut, area, scatter, bubble and radar, with the title, axes, gridlines,
 // legend and data labels. fwdraw reads a chart through the hook Install() sets, so charts show on screen,
 // printed and in PDF alike. Other types stay placeholders; a chart Word stores with a picture for
 // older versions (mc:AlternateContent) shows that picture. Nothing here writes: the chart part is
 // saved as it was read.
 namespace fw::chart {
 
-enum class Type : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter, Radar };
+enum class Type : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter, Radar, Bubble };
 enum class Grouping : uint8_t { Clustered, Stacked, Percent };
 
 // A fill and an outline from c:spPr: plain colors, or none.
@@ -32,19 +32,23 @@ struct Look {
 struct Series {
   std::wstring name;
   std::vector<std::wstring> categories;  // c:cat's cached text (numbers formatted)
-  std::vector<double> xs;                // scatter: c:xVal (NaN where missing)
+  std::vector<double> xs;                // scatter and bubble: c:xVal (NaN where missing)
   std::vector<double> values;            // c:val or c:yVal (NaN where missing)
+  std::vector<double> sizes;             // bubble: c:bubbleSize (NaN where missing)
   Look look;
   std::vector<std::pair<uint32_t, Look>> points;  // c:dPt: a point's own look
   std::optional<bool> marker;  // line and scatter: c:marker (nullopt: as the group has it)
   std::string symbol;          // c:marker/c:symbol ("circle", "diamond"...; empty: Office's choice)
-  float markerSize = 5;        // c:marker/c:size, points
+  float markerSize = 7;        // c:marker/c:size, points (unstated: Office 2007's 7, PowerPoint's PDFs)
   bool smooth = false;         // line and scatter: c:smooth (Office smooths when it's missing)
   // c:dLbls: values, percentages, category names, series names, legend keys (nullopt: as the
   // group has it), and the text between them.
   std::optional<bool> labels, percent, categoryLabels, seriesNames, keys;
   std::optional<std::wstring> separator;
   std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the group's
+  std::string labelPos;     // c:dLbls/c:dLblPos ("outEnd", "ctr"...); empty: the group's
+  double explosion = 0;     // pie: c:explosion, percent of the radius
+  std::vector<std::pair<uint32_t, double>> explosions;  // c:dPt/c:explosion: a slice's own
 };
 
 struct Group {
@@ -60,6 +64,9 @@ struct Group {
   bool labels = false, percent = false, categoryLabels = false, seriesNames = false, keys = false;
   std::optional<std::wstring> separator;  // nullopt: the user's list separator and a space
   std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the value axis's
+  std::string labelPos;     // c:dLbls/c:dLblPos; empty: the type's default (pie: best fit)
+  double bubbleScale = 100;  // bubble: percent of the default size (the largest a quarter of the plot)
+  bool bubbleWidth = false;  // bubble: c:sizeRepresents w (sizes are diameters, not areas)
   bool secondary = false;  // on the secondary value axis
   std::vector<Series> series;
 };

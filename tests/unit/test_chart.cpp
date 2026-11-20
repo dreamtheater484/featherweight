@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -217,12 +218,46 @@ TEST(Chart_StackedSeriesListedAsTheyStack) {
 }
 
 TEST(Chart_OtherTypesStayPlaceholders) {
-  Parsed bubble(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:bubbleChart>" + Ser(0, "S", {"a"}, {"1"}) +
-                "</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>");
+  Parsed stock(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:stockChart>" + Ser(0, "S", {"a"}, {"1"}) +
+               "</c:stockChart></c:plotArea></c:chart></c:chartSpace>");
   Chart c;
-  CHECK(!Read(bubble.Root(), Colors(), c));
+  CHECK(!Read(stock.Root(), Colors(), c));
   Parsed empty(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea/></c:chart></c:chartSpace>");
   CHECK(!Read(empty.Root(), Colors(), c));
+}
+
+TEST(Chart_BubblesByArea) {
+  // Bubbles at (x, y) sized by area: four times the size, twice as wide; the largest a quarter of
+  // the plot's smaller side across (PowerPoint's PDFs). A series each, so each has its own color.
+  const auto ser = [](int i, const char* x, const char* y, const char* size) {
+    return "<c:ser><c:idx val=\"" + std::to_string(i) + "\"/><c:order val=\"" + std::to_string(i) + "\"/><c:xVal>" +
+           Cache("numLit", {x}) + "</c:xVal><c:yVal>" + Cache("numLit", {y}) + "</c:yVal><c:bubbleSize>" +
+           Cache("numLit", {size}) + "</c:bubbleSize></c:ser>";
+  };
+  Parsed bubble(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:bubbleChart><c:varyColors val=\"0\"/>" +
+                ser(0, "1", "3", "1") + ser(1, "2", "5", "4") +
+                "<c:axId val=\"1\"/><c:axId val=\"2\"/></c:bubbleChart>"
+                "<c:valAx><c:axId val=\"1\"/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/></c:valAx>"
+                "<c:valAx><c:axId val=\"2\"/><c:axPos val=\"l\"/><c:crossAx val=\"1\"/></c:valAx></c:plotArea>"
+                "</c:chart></c:chartSpace>");
+  Chart c;
+  REQUIRE(Read(bubble.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1 && c.groups[0].type == Type::Bubble && c.groups[0].series.size() == 2);
+  const Series& s = c.groups[0].series[1];
+  CHECK(s.xs.size() == 1 && s.xs[0] == 2 && s.values[0] == 5 && s.sizes.size() == 1 && s.sizes[0] == 4);
+  const draw::Art art = Draw(c, {400, 300}, Colors(), L"Calibri");
+  const auto width = [&](const char* accent) {
+    const draw::Color fill = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, fill)) return b.right - b.left;
+    }
+    return 0.0f;
+  };
+  const float narrow = width("accent1"), wide = width("accent2");
+  REQUIRE(narrow > 0);
+  CHECK(std::fabs(wide / narrow - 2) < 0.01f);
+  CHECK(wide > 50 && wide < 75);  // a quarter of a plot a little under 300 points high
 }
 
 TEST(Chart_RadarSpokesAndLines) {
