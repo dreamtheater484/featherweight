@@ -139,7 +139,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.family = r.latin.empty() ? std::wstring(L"Calibri") : r.latin;
     s.eastAsiaFamily = r.eastAsian;
     s.complexFamily = r.complexScript;
-    float size = r.size * fontScale;
+    // PowerPoint rounds a shrunk size to whole points (32 pt at 55 % is drawn at 18).
+    float size = fontScale < 1 ? std::max(1.f, std::round(r.size * fontScale)) : r.size;
     if (r.baseline != 0) {
       s.baselineShift = r.baseline * size;
       size *= 2.f / 3;
@@ -305,13 +306,16 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     if (!first) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
-      const float natural = line.ascent + line.descent + line.lineGap;
+      // PowerPoint's single line is 1.2 times the line's largest font size, whatever the font
+      // (its PDFs: 21.6 pt for Calibri 18, whose own ascent and descent make 21.97), with the
+      // baseline at the font's ascent's share of it.
+      float size = 0;
+      for (const text::GlyphPiece& g : line.pieces) size = std::max(size, g.emSize);
+      for (const text::InlineObject& o : line.objects) size = std::max(size, o.ascent + o.descent);
+      if (size <= 0) size = para.mark.size;
+      const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
-      const float above = natural > 0 ? pitch * (line.ascent + line.lineGap) / natural : 0;
-      if (column + 1 < columns && y + pitch > boxH + 0.01f && y > 0) {
-        ++column;
-        y = 0;
-      }
+      const float above = line.ascent + line.descent > 0 ? pitch * line.ascent / (line.ascent + line.descent) : 0;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
@@ -319,7 +323,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (a == Alignment::Center) shift = (left + right) / 2 - (line.contentLeft + line.contentRight) / 2;
         else if (a == Alignment::End) shift = right - line.contentRight;
       }
-      para.origins.push_back({column * (colW + colGap) + shift, y + above});
+      para.origins.push_back({shift, y + above});
       para.rows.emplace_back(y, y + pitch);
       y += pitch;
       maxBottom = std::max(maxBottom, y);
@@ -329,6 +333,25 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
   }
   // The block's height: down to the last line (the last paragraph's space after doesn't count).
   m.height = maxBottom;
+  // Columns: lines go down a column as far as the box, then on to the next; text too long for
+  // them all is shared out evenly, as PowerPoint does.
+  if (columns > 1 && maxBottom > 0) {
+    const float room = maxBottom > boxH * columns ? maxBottom / columns : boxH;
+    float start = 0, height = 0;
+    for (Impl::Para& p : m.paras)
+      for (size_t i = 0; i < p.rows.size(); ++i) {
+        if (column + 1 < columns && p.rows[i].second - start > room + 0.01f && p.rows[i].first > start) {
+          ++column;
+          start = p.rows[i].first;
+        }
+        p.origins[i].x += column * (colW + colGap);
+        p.origins[i].y -= start;
+        p.rows[i].first -= start;
+        p.rows[i].second -= start;
+        height = std::max(height, p.rows[i].second);
+      }
+    m.height = height;
+  }
 
   // Anchoring, then text coordinates (x along the lines from the text area's top left) to the box's.
   float dy = 0;
