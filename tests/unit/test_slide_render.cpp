@@ -1,8 +1,10 @@
 // Slide rendering (P1, src/slide/render): slides drawn from the presentation model. Placeholders
 // sit where their layout puts them, prompt text isn't drawn, bullets follow the master's styles,
-// the slide show's filter leaves shapes out, and thumbnails render at idle and then stop.
+// the slide show's filter leaves shapes out, thumbnails render at idle and then stop, a big
+// bullet keeps its line's height and outlined text is stroked.
 #include <windows.h>
 
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -20,6 +22,13 @@
 
 using namespace fw::slide;
 using namespace fw::slide::render;
+
+// Stops the test when a condition it needs doesn't hold.
+#define REQUIRE(cond)                                             \
+  do {                                                            \
+    const bool required_ = static_cast<bool>(cond);               \
+    if (!required_) return test::Fail(__FILE__, __LINE__, #cond); \
+  } while (0)
 
 namespace {
 
@@ -169,6 +178,40 @@ TEST(SlideRender_BulletsFollowTheMastersBodyStyle) {
   CHECK(p[1].bounds.left > p[0].bounds.left + 20);
   CHECK(p[1].bounds.top > p[0].bounds.bottom - 1);
   CHECK(p[2].bounds.top > p[1].bounds.bottom - 1);
+}
+
+TEST(SlideRender_BigBulletKeepsTheLineHeight) {
+  // A bullet at 150 % of the text leaves its line as high as the next (PowerPoint's PDFs).
+  auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                          "<a:p><a:pPr><a:buSzPct val=\"150000\"/></a:pPr><a:r><a:t>Big</a:t></a:r></a:p>"
+                                          "<a:p><a:r><a:t>Plain</a:t></a:r></a:p>"),
+                              2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  const float big = p[0].bounds.bottom - p[0].bounds.top, plain = p[1].bounds.bottom - p[1].bounds.top;
+  CHECK(std::fabs(big - plain) < 0.5f);
+}
+
+TEST(SlideRender_OutlinedTextIsStroked) {
+  // A run with no fill and a red a:ln: its glyphs' outlines in red.
+  auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
+                                          "<a:p><a:r><a:rPr sz=\"6000\"><a:ln w=\"38100\"><a:solidFill><a:srgbClr val=\"FF0000\"/>"
+                                          "</a:solidFill></a:ln><a:noFill/></a:rPr><a:t>HHHH</a:t></a:r></a:p>")));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  auto b = Render(*slide, 480, 360);
+  REQUIRE(b != nullptr);
+  int red = 0;
+  for (int y = 0; y < b->Height(); ++y)
+    for (int x = 0; x < b->Width(); ++x) {
+      const uint32_t c = Pixel(*b, x, y);
+      red += (c >> 16) > 200 && ((c >> 8) & 0xFF) < 90 && (c & 0xFF) < 90;
+    }
+  CHECK(red > 40);
 }
 
 TEST(SlideRender_FilterLeavesShapesOut) {
