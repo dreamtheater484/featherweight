@@ -78,15 +78,17 @@ int RunSlides(const Options& options) {
     fw::text::Fonts fonts;
     fw::slide::render::UseDeckFonts(fonts, *deck);
     std::unique_ptr<fw::slide::render::SlideRender> first;
-    double firstMs = 0;
+    double firstMs = 0, preparedMs = 0;
     if (deck->SlideCount() > 0) {
       first = fw::slide::render::SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+      preparedMs = Ms(start);
       // As the slide view shows it: a slide's worth of pixels at 96 dpi.
       const draw::Size size = first->Size();
       fw::slide::render::RenderBitmap(*first, static_cast<int>(size.width * 4 / 3), static_cast<int>(size.height * 4 / 3));
       firstMs = Ms(start);
     }
-    std::printf("  %zu slides; read %.0f ms, first slide shown %.0f ms\n", deck->SlideCount(), read, firstMs);
+    std::printf("  %zu slides; read %.0f ms, first slide prepared %.0f ms, shown %.0f ms\n", deck->SlideCount(), read,
+                preparedMs, firstMs);
     draw::PdfDocument pdf;
     for (size_t i = 0; i < deck->SlideCount(); ++i) {
       std::unique_ptr<fw::slide::render::SlideRender> s =
