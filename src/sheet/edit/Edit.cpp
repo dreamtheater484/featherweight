@@ -5282,6 +5282,24 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   }());
 }
 
+namespace {
+
+// The formulas in a sheet's kept XML (conditional formats, validations, their x14 forms...), as
+// MoveSheetXml visits them.
+std::vector<std::string> SheetXmlFormulas(detail::PartText t, int sheet) {
+  std::vector<std::string> out;
+  refs::Context ctx{refs::Mover(Shift{}), -1, std::string(), {}, {}};
+  ctx.formula = [&](std::string_view text, int, uint32_t, uint32_t) {
+    out.emplace_back(text);
+    return std::string(text);
+  };
+  ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+  refs::MoveSheetXml(t, sheet, ctx);
+  return out;
+}
+
+}  // namespace
+
 Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
                              std::u16string stepName) {
   Guard guard(*this);
@@ -5300,6 +5318,16 @@ Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, c
     std::string oldXml, oldExt;
     xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
     if (oldXml == xml && oldExt == ext) return Result{};
+    // A rule's formula, as a cell's, can't name a sheet the workbook doesn't have: Excel takes no other
+    // workbook in a rule, and the file would name a sheet it hasn't (fuzz_xlsx). Rules it had keep theirs.
+    {
+      detail::PartText now = A::Text(s);
+      xlsx::PutSheetRules(now, validations, xml, ext);
+      const std::vector<std::string> before = SheetXmlFormulas(A::Text(s), sheet);
+      for (const std::string& f : SheetXmlFormulas(now, sheet))
+        if (std::find(before.begin(), before.end(), f) == before.end() && !MissingSheet(book_, f).empty())
+          return Result::Fail(u"The rule's formula names a sheet this workbook doesn't have.");
+    }
     return Run(*this, std::move(stepName), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
@@ -6360,6 +6388,9 @@ Result Editor::SetName(const DefinedName& name) {
     if (!builtin && !ValidName(name.name)) return Result::Fail(u"That isn't a valid name.");
     if (name.sheet >= static_cast<int>(book_.SheetCount())) return NoSheet();
     if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(u"The name needs a reference or a formula.");
+    // As for a cell's formula: Excel would look for a workbook by that name, and a file can't name a
+    // sheet it doesn't have (fuzz_xlsx: Sheet1:Sheet2!A1 without a Sheet1).
+    if (!MissingSheet(book_, name.formula).empty()) return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
     return Run(*this, u"Define Name", [&]() -> Result {
       State& st = *s_;
       st.SaveBook(false, true);

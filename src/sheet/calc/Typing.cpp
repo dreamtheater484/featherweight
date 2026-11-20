@@ -2,6 +2,7 @@
 
 #include "sheet/calc/Typing.h"
 
+#include "pkg/Formula.h"
 #include "sheet/edit/Edit.h"
 
 #include <algorithm>
@@ -775,9 +776,39 @@ std::string SheetsChanged(std::string_view formula, const CompileOptions& at, co
                           int sheet, int to) {
   if (sheet < 0 || static_cast<size_t>(sheet) >= sheets.size() || to == sheet) return std::string(formula);
   SheetList names(sheets);
-  auto f = Compile(formula, at, names);
-  if (!f) return std::string(formula);
   SheetMap map(sheet, to);
+  auto f = Compile(formula, at, names);
+  if (!f) {
+    // One that doesn't compile (a file can hold one): its sheet prefixes change the same way, as
+    // text, so it never names a sheet that's gone (fuzz_xlsx).
+    std::string out;
+    size_t copied = 0;
+    pkg::ForEachSheetToken(formula, [&](const pkg::SheetToken& t) {
+      int s1 = names.FindSheet(t.first), s2 = t.last.empty() ? s1 : names.FindSheet(t.last);
+      if (s1 < 0 || s2 < 0) return;
+      if (s2 < s1) std::swap(s1, s2);
+      int a = s1, b = s2;
+      std::string prefix;
+      if (!map.MapSheets(a, b)) {
+        prefix = "#REF";  // with the "!" after it: #REF!A1, as Print writes it
+      } else if (a == s1 && b == s2) {
+        return;  // as written
+      } else if (a == b) {
+        prefix = pkg::QuoteSheetName(sheets[static_cast<size_t>(a)]);
+      } else {
+        const std::string& x = sheets[static_cast<size_t>(a)];
+        const std::string& y = sheets[static_cast<size_t>(b)];
+        const bool quote = pkg::QuoteSheetName(x) != x || pkg::QuoteSheetName(y) != y;
+        prefix = quote ? pkg::QuoteSheetName(x + ":" + y) : x + ":" + y;
+      }
+      out.append(formula.substr(copied, t.begin - copied));
+      out += prefix;
+      copied = t.end;
+    });
+    if (copied == 0) return std::string(formula);
+    out.append(formula.substr(copied));
+    return out;
+  }
   PrintOptions how;
   how.map = &map;
   return Print(*f, at, names, how);
