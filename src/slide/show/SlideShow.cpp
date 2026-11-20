@@ -180,7 +180,12 @@ class Show final : public anim::FrameSource {
   ComPtr<ID2D1Bitmap1> NewBitmap(UINT w, UINT h);
   bool BeginOffscreen(ID2D1Bitmap1* target, bool clear, D2D1_COLOR_F color = {0, 0, 0, 0});
   void EndOffscreen();
-  M SlideToPixels() const { return M::Scale(scale_, scale_) * M::Translation(ox_, oy_); }
+  // Sends what was drawn off screen to the GPU and waits (up to `maxMs`) until it's done, so the
+  // first frame that shows it doesn't wait for it.
+  void FinishGpu(double maxMs);
+  // Slide points to the pixels of the show's pictures (frames, layers, sprites), whose (0, 0) is the
+  // slide's top left; on screen they sit at (ox_, oy_).
+  M SlideToPixels() const { return M::Scale(scale_, scale_); }
 
   // Scenes.
   std::unique_ptr<Scene> MakeScene(size_t index, bool built, double now);
@@ -218,7 +223,7 @@ class Show final : public anim::FrameSource {
   void ShowCursorNow();
 
   // The bench.
-  void BenchFrame(double start, double cpuMs, bool inTransition);
+  void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
   void WriteBench();
 
   Presentation& deck_;
@@ -227,6 +232,7 @@ class Show final : public anim::FrameSource {
   HWND hwnd_ = nullptr;
   UINT w_ = 1, h_ = 1;
   float scale_ = 1, ox_ = 0, oy_ = 0, slideW_ = 1, slideH_ = 1;  // slide placement, pixels
+  UINT fw_ = 1, fh_ = 1;  // the slide's pictures: the slide's size in pixels
 
   ComPtr<IDXGISwapChain2> swap_;
   HANDLE waitable_ = nullptr;
@@ -243,7 +249,7 @@ class Show final : public anim::FrameSource {
   double transitionStart_ = 0;
   ComPtr<ID2D1Bitmap1> from_;  // what the transition starts from (null: black)
   double visibleAt_ = 0;       // when the slide's transition ended: its advance time counts from here
-  bool wasAnimating_ = false;
+  bool boosted_ = false;  // the thread runs above normal while something moves
 
   int blank_ = 0;  // 1: black, 2: white
   int digits_ = -1;
@@ -254,7 +260,7 @@ class Show final : public anim::FrameSource {
   struct BenchTransition {
     size_t slide;
     TransitionKind kind;
-    int frames = 0, dropped = 0;
+    int frames = 0, dropped = 0, vblankMissed = 0;
     double worstMs = 0;
   };
   bool bench_ = false;
@@ -266,10 +272,22 @@ class Show final : public anim::FrameSource {
   std::vector<double> cpuMs_;
   std::vector<BenchTransition> benchTransitions_;
   int animationFrames_ = 0, animationDropped_ = 0;
-  UINT dxgiStartPresent_ = 0, dxgiStartRefresh_ = 0;
-  bool dxgiStarted_ = false;
-  int dxgiGlitches_ = 0;
-  bool dxgiOk_ = true;
+  double drawMs_ = 0, presentMs_ = 0;  // the last frame's
+  struct SlowFrame {
+    size_t slide;
+    double interval, wait, cpu, draw, present;
+  };
+  std::vector<SlowFrame> slow_;  // late frames in transitions, the first 40
+  double waitMax_ = 0, drawMax_ = 0, presentMax_ = 0;
+  // DXGI's frame statistics, sampled after every present during transitions: refreshes against
+  // presents that reached the screen.
+  DXGI_FRAME_STATISTICS dxgiLast_{};
+  bool dxgiHave_ = false;
+  int dxgiSamples_ = 0, dxgiMissed_ = 0, dxgiFailures_ = 0;
+  // Refreshes with no new frame: each present's vblank interval (on DWM's clock) against the last.
+  UINT64 vblank0_ = 0, vblankPeriod_ = 0;
+  long long lastVblank_ = -1;
+  int vblankMissed_ = 0;
 };
 
 Show* g_show = nullptr;
@@ -315,6 +333,8 @@ bool Show::Create() {
   slideH_ = size.height * scale_;
   ox_ = std::floor((w_ - slideW_) / 2);
   oy_ = std::floor((h_ - slideH_) / 2);
+  fw_ = static_cast<UINT>(std::max(1.f, std::ceil(slideW_)));
+  fh_ = static_cast<UINT>(std::max(1.f, std::ceil(slideH_)));
   bench_ = !opts_.benchReport.empty();
   gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                   DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
@@ -346,7 +366,7 @@ bool Show::EnsureDevice() {
   if (!d3d) return false;
   if (capture_) {
     dc_ = gpu::CreateContext();
-    target_ = NewBitmap();
+    target_ = NewBitmap(w_, h_);
     if (!dc_ || !target_) return false;
     dc_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     generation_ = gpu::Generation();
@@ -364,7 +384,7 @@ bool Show::EnsureDevice() {
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
   desc.SampleDesc.Count = 1;
   desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-  desc.BufferCount = 2;
+  desc.BufferCount = 3;  // one frame queued ahead: a late wake-up of the thread or the compositor costs no refresh
   desc.Scaling = DXGI_SCALING_NONE;
   desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
@@ -373,7 +393,7 @@ bool Show::EnsureDevice() {
   if (FAILED(factory->CreateSwapChainForHwnd(d3d, hwnd_, &desc, nullptr, nullptr, &swap1)) || FAILED(swap1.As(&swap_)))
     return false;
   factory->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-  swap_->SetMaximumFrameLatency(1);
+  swap_->SetMaximumFrameLatency(2);
   waitable_ = swap_->GetFrameLatencyWaitableObject();
   dc_ = gpu::CreateContext();
   ComPtr<IDXGISurface> surface;
@@ -420,7 +440,7 @@ void Show::Invalidate(Scene& s) {
   for (Sprite& sp : s.sprites) sp.bitmap.Reset();
 }
 
-ComPtr<ID2D1Bitmap1> Show::NewBitmap() { return NewBitmap(w_, h_); }
+ComPtr<ID2D1Bitmap1> Show::NewBitmap() { return NewBitmap(fw_, fh_); }
 
 ComPtr<ID2D1Bitmap1> Show::NewBitmap(UINT w, UINT h) {
   ComPtr<ID2D1Bitmap1> b;
@@ -438,6 +458,21 @@ bool Show::BeginOffscreen(ID2D1Bitmap1* target, bool clear, D2D1_COLOR_F color) 
   dc_->SetTransform(M::Identity());
   if (clear) dc_->Clear(color);
   return true;
+}
+
+void Show::FinishGpu(double maxMs) {
+  ID3D11Device* d3d = gpu::D3DDevice();
+  if (!d3d || capture_) return;
+  ComPtr<ID3D11DeviceContext> ctx;
+  d3d->GetImmediateContext(&ctx);
+  D3D11_QUERY_DESC desc{D3D11_QUERY_EVENT, 0};
+  ComPtr<ID3D11Query> done;
+  if (!ctx || FAILED(d3d->CreateQuery(&desc, &done))) return;
+  ctx->End(done.Get());
+  ctx->Flush();
+  const double until = anim::Now() + maxMs;
+  BOOL finished = FALSE;
+  while (ctx->GetData(done.Get(), &finished, sizeof(finished), 0) == S_FALSE && anim::Now() < until) Sleep(1);
 }
 
 void Show::EndOffscreen() {
@@ -537,6 +572,7 @@ std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now) {
   if (built) s->animator.FinishAll(now);
   else s->animator.Start(now, false);
   RenderFrame(*s);
+  FinishGpu(250);
   return s;
 }
 
@@ -631,12 +667,12 @@ void Show::RenderPieces(Scene& s, const std::vector<size_t>& pieces, bool backgr
     // The slide's own area: white under a background that doesn't fill it.
     ComPtr<ID2D1SolidColorBrush> white;
     dc_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &white);
-    if (white) dc_->FillRectangle(D2D1::RectF(ox_, oy_, ox_ + slideW_, oy_ + slideH_), white.Get());
+    if (white) dc_->FillRectangle(D2D1::RectF(0, 0, slideW_, slideH_), white.Get());
   }
   StaticFilter run(s.targets, background);
   auto flush = [&] {
     if (run.Empty()) return;
-    dc_->PushAxisAlignedClip(D2D1::RectF(ox_, oy_, ox_ + slideW_, oy_ + slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
+    dc_->PushAxisAlignedClip(D2D1::RectF(0, 0, slideW_, slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
     renderer_.Draw(dc_.Get(), s.index, toPx, &run);
     dc_->PopAxisAlignedClip();
     run.Reset();
@@ -648,7 +684,7 @@ void Show::RenderPieces(Scene& s, const std::vector<size_t>& pieces, bool backgr
       continue;
     }
     flush();
-    dc_->PushAxisAlignedClip(D2D1::RectF(ox_, oy_, ox_ + slideW_, oy_ + slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
+    dc_->PushAxisAlignedClip(D2D1::RectF(0, 0, slideW_, slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
     DrawSprite(s, p.sprite, PoseOfSprite(s, p.sprite));
     dc_->PopAxisAlignedClip();
   }
@@ -718,35 +754,40 @@ void Show::Draw(double now) {
   if (!EnsureDevice()) return;
   if (cur_ && !cur_->frame && !cur_->layered) RenderFrame(*cur_);
   if (cur_ && cur_->layered && cur_->layers.empty()) EnsureLayers(*cur_);
+  const double t0 = anim::Now();
   dc_->SetTarget(target_.Get());
   dc_->BeginDraw();
   dc_->SetTransform(M::Identity());
   if (blank_) {
     dc_->Clear(blank_ == 2 ? D2D1_COLOR_F{1, 1, 1, 1} : D2D1_COLOR_F{0, 0, 0, 1});
-  } else if (transition_ && cur_) {
-    double dur = std::max(1.0, cur_->transition.durationMs);
-    DrawTransition(std::clamp((now - transitionStart_) / dur, 0.0, 1.0));
   } else if (!cur_ || cur_->index == kEnd) {
     DrawEnd();
-  } else if (cur_->layered) {
-    dc_->Clear({0, 0, 0, 1});
-    for (size_t l = 0; l < cur_->layers.size(); ++l) {
-      if (cur_->layers[l]) dc_->DrawBitmap(cur_->layers[l].Get());
-      if (l < cur_->movers.size()) {
-        dc_->PushAxisAlignedClip(D2D1::RectF(ox_, oy_, ox_ + slideW_, oy_ + slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
-        DrawSprite(*cur_, cur_->movers[l], PoseOfSprite(*cur_, cur_->movers[l]));
-        dc_->PopAxisAlignedClip();
-      }
-    }
-  } else if (cur_->frame) {
-    dc_->DrawBitmap(cur_->frame.Get());
   } else {
+    // The slide's pictures in its place, black around it.
     dc_->Clear({0, 0, 0, 1});
+    dc_->SetTransform(M::Translation(ox_, oy_));
+    dc_->PushAxisAlignedClip(D2D1::RectF(0, 0, slideW_, slideH_), D2D1_ANTIALIAS_MODE_ALIASED);
+    if (transition_) {
+      double dur = std::max(1.0, cur_->transition.durationMs);
+      DrawTransition(std::clamp((now - transitionStart_) / dur, 0.0, 1.0));
+    } else if (cur_->layered) {
+      for (size_t l = 0; l < cur_->layers.size(); ++l) {
+        if (cur_->layers[l]) dc_->DrawBitmap(cur_->layers[l].Get());
+        if (l < cur_->movers.size()) DrawSprite(*cur_, cur_->movers[l], PoseOfSprite(*cur_, cur_->movers[l]));
+      }
+    } else if (cur_->frame) {
+      dc_->DrawBitmap(cur_->frame.Get());
+    }
+    dc_->PopAxisAlignedClip();
+    dc_->SetTransform(M::Identity());
   }
   HRESULT hr = dc_->EndDraw();
   dc_->SetTarget(nullptr);
+  const double t1 = anim::Now();
   if (SUCCEEDED(hr) && swap_) hr = swap_->Present(1, 0);
   if (hr == DXGI_STATUS_OCCLUDED) hr = S_OK;
+  drawMs_ = t1 - t0;
+  presentMs_ = anim::Now() - t1;
   if (gpu::IsDeviceLoss(hr)) {
     gpu::DeviceLost();
     DropDevice();
@@ -768,7 +809,7 @@ void Show::DrawTransition(double p) {
   const Transition& t = cur_->transition;
   ID2D1Bitmap1* b = cur_->frame.Get();
   ID2D1Bitmap1* a = from_.Get();
-  const float W = static_cast<float>(w_), H = static_cast<float>(h_);
+  const float W = static_cast<float>(fw_), H = static_cast<float>(fh_);
   dc_->Clear({0, 0, 0, 1});
   auto put = [&](ID2D1Bitmap1* bmp, float x, float y, float opacity = 1) {
     if (bmp) dc_->DrawBitmap(bmp, D2D1::RectF(x, y, x + W, y + H), opacity, D2D1_INTERPOLATION_MODE_LINEAR);
@@ -868,7 +909,15 @@ void Show::EndTransition(double now) {
 
 void Show::Frame() {
   if (!EnsureDevice()) return;
+  // While something moves, the show's frames come before other programs' work (a build, a sync):
+  // a frame takes well under a millisecond, so this costs them nothing.
+  if (!boosted_ && !capture_) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    boosted_ = true;
+  }
+  const double before = anim::Now();
   if (waitable_) WaitForSingleObjectEx(waitable_, 100, TRUE);
+  const double waited = anim::Now() - before;
   const double start = Now();
   double now = start;
   bool inTransition = transition_;
@@ -879,24 +928,16 @@ void Show::Frame() {
     else if (cur_->layered) Settle(*cur_);
   }
   Draw(now);
-  BenchFrame(start, Now() - start, inTransition);
-  if (inTransition && !transition_ && bench_ && !benchTransitions_.empty()) {
-    // The transition's last frame is drawn: DXGI's count of refreshes against presents.
-    DXGI_FRAME_STATISTICS st{};
-    if (dxgiStarted_ && SUCCEEDED(swap_->GetFrameStatistics(&st))) {
-      int presents = static_cast<int>(st.PresentCount - dxgiStartPresent_);
-      int refreshes = static_cast<int>(st.SyncRefreshCount - dxgiStartRefresh_);
-      if (refreshes > presents) dxgiGlitches_ += refreshes - presents;
-    } else {
-      dxgiOk_ = false;
-    }
-    dxgiStarted_ = false;
-  }
+  BenchFrame(start, Now() - start, inTransition, waited);
   if (!Animating()) AfterSettle(Now());
 }
 
 void Show::AfterSettle(double now) {
   lastFrame_ = -1;
+  if (boosted_) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    boosted_ = false;
+  }
   if (!cur_ || cur_->index == kEnd) {
     if (bench_) SetTimer(hwnd_, kTimerAdvance, static_cast<UINT>(kBenchHoldMs), nullptr);
     return;
@@ -973,11 +1014,12 @@ void Show::GoTo(size_t index, bool transition, bool built) {
   const Transition& t = cur_->transition;
   if (transition && index != kEnd && t.kind != TransitionKind::None && t.durationMs > 0) {
     transition_ = true;
-    transitionStart_ = now;
+    transitionStart_ = Now();
     from_ = from;
     if (bench_) {
       benchTransitions_.push_back({index, t.kind});
       lastFrame_ = -1;
+      lastVblank_ = -1;
     }
   } else {
     visibleAt_ = now;
@@ -1370,6 +1412,7 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     auto open = std::move(self->opts_.openFile);
     size_t last = self->cur_ && self->cur_->index != kEnd ? self->cur_->index : self->lastShown_;
     std::wstring file = std::move(self->fileToOpen_);
+    if (self->boosted_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     self->hwnd_ = nullptr;
     self->DropDevice();
     if (g_show == self) g_show = nullptr;
@@ -1455,10 +1498,13 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
 
 // ---- The bench ------------------------------------------------------------------------------
 
-void Show::BenchFrame(double start, double cpuMs, bool inTransition) {
+void Show::BenchFrame(double start, double cpuMs, bool inTransition, double waitMs) {
   if (!bench_) return;
   cpuMs_.push_back(cpuMs);
+  drawMax_ = std::max(drawMax_, drawMs_);
+  presentMax_ = std::max(presentMax_, presentMs_);
   if (lastFrame_ >= 0) {
+    waitMax_ = std::max(waitMax_, waitMs);
     // Frames start when the display takes one: a gap of two refreshes or more is a dropped frame.
     double interval = start - lastFrame_;
     int missed = interval > 1.5 * periodMs_ ? static_cast<int>(std::lround(interval / periodMs_)) - 1 : 0;
@@ -1467,20 +1513,58 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition) {
       ++t.frames;
       t.dropped += missed;
       t.worstMs = std::max(t.worstMs, interval);
+      if (missed && slow_.size() < 40) slow_.push_back({t.slide, interval, waitMs, cpuMs, drawMs_, presentMs_});
     } else {
       ++animationFrames_;
       animationDropped_ += missed;
     }
   } else if (inTransition && !benchTransitions_.empty()) {
     ++benchTransitions_.back().frames;
-    DXGI_FRAME_STATISTICS st{};
-    if (SUCCEEDED(swap_->GetFrameStatistics(&st))) {
-      dxgiStartPresent_ = st.PresentCount;
-      dxgiStartRefresh_ = st.SyncRefreshCount;
-      dxgiStarted_ = true;
-    }
   }
   lastFrame_ = start;
+  if (inTransition) {
+    LARGE_INTEGER qpc;
+    QueryPerformanceCounter(&qpc);
+    if (lastVblank_ < 0 || !vblankPeriod_) {
+      DWM_TIMING_INFO ti{};
+      ti.cbSize = sizeof(ti);
+      if (SUCCEEDED(DwmGetCompositionTimingInfo(nullptr, &ti)) && ti.qpcRefreshPeriod) {
+        vblank0_ = ti.qpcVBlank;
+        vblankPeriod_ = ti.qpcRefreshPeriod;
+      }
+    }
+    if (vblankPeriod_ && static_cast<UINT64>(qpc.QuadPart) >= vblank0_) {
+      long long index = static_cast<long long>((static_cast<UINT64>(qpc.QuadPart) - vblank0_) / vblankPeriod_);
+      // The display queue: a frame shows at the refresh after its present, and never before the one
+      // after the previous frame's (frames wait their turn). A refresh between two frames shown is
+      // one with no new frame.
+      long long shown = lastVblank_ >= 0 ? std::max(lastVblank_ + 1, index + 1) : index + 1;
+      if (lastVblank_ >= 0 && shown > lastVblank_ + 1) {
+        int missed = static_cast<int>(shown - lastVblank_ - 1);
+        vblankMissed_ += missed;
+        if (!benchTransitions_.empty()) benchTransitions_.back().vblankMissed += missed;
+      }
+      lastVblank_ = shown;
+    }
+  } else {
+    lastVblank_ = -1;
+  }
+  // DXGI: over consecutive samples within a transition, every refresh should have had a new frame.
+  DXGI_FRAME_STATISTICS st{};
+  if (!swap_ || FAILED(swap_->GetFrameStatistics(&st))) {
+    ++dxgiFailures_;
+    dxgiHave_ = false;
+    return;
+  }
+  if (dxgiHave_ && inTransition && st.PresentCount > dxgiLast_.PresentCount &&
+      st.SyncRefreshCount >= dxgiLast_.SyncRefreshCount) {
+    UINT presents = st.PresentCount - dxgiLast_.PresentCount;
+    UINT refreshes = st.SyncRefreshCount - dxgiLast_.SyncRefreshCount;
+    if (refreshes > presents) dxgiMissed_ += static_cast<int>(refreshes - presents);
+    ++dxgiSamples_;
+  }
+  dxgiLast_ = st;
+  dxgiHave_ = inTransition;
 }
 
 void Show::WriteBench() {
@@ -1494,29 +1578,43 @@ void Show::WriteBench() {
   std::vector<double> cpu = cpuMs_;
   std::sort(cpu.begin(), cpu.end());
   auto pct = [&](double q) { return cpu.empty() ? 0.0 : cpu[std::min(cpu.size() - 1, static_cast<size_t>(q * cpu.size()))]; };
-  char buf[512];
+  char buf[1024];
   std::string json = "{\n";
   snprintf(buf, sizeof(buf),
            "  \"refreshHz\": %.2f,\n  \"width\": %u,\n  \"height\": %u,\n  \"slides\": %zu,\n  \"transitions\": %zu,\n"
-           "  \"transitionFrames\": %d,\n  \"droppedFrames\": %d,\n  \"dxgiMissedRefreshes\": %s,\n"
+           "  \"transitionFrames\": %d,\n  \"missedRefreshes\": %d,\n  \"lateFrameStarts\": %d,\n"
+           "  \"dxgiMissedRefreshes\": %d,\n"
+           "  \"dxgiSamples\": %d,\n  \"dxgiFailures\": %d,\n  \"waitMsMax\": %.2f,\n  \"drawMsMax\": %.2f,\n"
+           "  \"presentMsMax\": %.2f,\n"
            "  \"worstIntervalMs\": %.2f,\n  \"animationFrames\": %d,\n  \"animationDropped\": %d,\n"
            "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n",
-           refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, dropped,
-           dxgiOk_ ? std::to_string(dxgiGlitches_).c_str() : "null", worst, animationFrames_, animationDropped_, pct(0.5),
+           refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, vblankMissed_, dropped,
+           dxgiMissed_, dxgiSamples_, dxgiFailures_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
            pct(0.99), cpu.empty() ? 0.0 : cpu.back(), gpu::IsWarp() ? "true" : "false",
-           dropped == 0 && frames > 0 ? "true" : "false");
+           vblankMissed_ == 0 && frames > 0 ? "true" : "false");
   json += buf;
+  json += "  \"lateFrames\": [\n";
+  for (size_t i = 0; i < slow_.size(); ++i) {
+    const SlowFrame& f = slow_[i];
+    snprintf(buf, sizeof(buf),
+             "    {\"slide\": %zu, \"intervalMs\": %.2f, \"waitMs\": %.2f, \"cpuMs\": %.2f, \"drawMs\": %.2f, "
+             "\"presentMs\": %.2f}%s\n",
+             f.slide + 1, f.interval, f.wait, f.cpu, f.draw, f.present, i + 1 < slow_.size() ? "," : "");
+    json += buf;
+  }
+  json += "  ],\n";
   json += "  \"perTransition\": [\n";
   for (size_t i = 0; i < benchTransitions_.size(); ++i) {
     const BenchTransition& t = benchTransitions_[i];
-    snprintf(buf, sizeof(buf), "    {\"slide\": %zu, \"kind\": %d, \"frames\": %d, \"dropped\": %d, \"worstMs\": %.2f}%s\n",
-             t.slide + 1, static_cast<int>(t.kind), t.frames, t.dropped, t.worstMs,
+    snprintf(buf, sizeof(buf),
+             "    {\"slide\": %zu, \"kind\": %d, \"frames\": %d, \"missed\": %d, \"lateStarts\": %d, \"worstMs\": %.2f}%s\n",
+             t.slide + 1, static_cast<int>(t.kind), t.frames, t.vblankMissed, t.dropped, t.worstMs,
              i + 1 < benchTransitions_.size() ? "," : "");
     json += buf;
   }
   json += "  ]\n}\n";
   util::WriteFileAtomic(opts_.benchReport, json);
-  g_benchPassed = dropped == 0 && frames > 0;
+  g_benchPassed = vblankMissed_ == 0 && frames > 0;
 }
 
 }  // namespace
