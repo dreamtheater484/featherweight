@@ -466,3 +466,71 @@ TEST(SlideTableSpansAndOwnProperties) {
   CHECK(t->Cell(1, 1) && !t->Cell(1, 1)->node);   // a missing cell is an empty one
   CHECK(wide->text && wide->text->paragraphs[0].runs[0].text == L"wide");
 }
+
+namespace {
+
+std::string PartText(const char* deck, const char* part) {
+  fw::pkg::Status st;
+  auto pk = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(FileBytes(Generated() / deck)), fw::pkg::Limits::Default(), st);
+  std::vector<uint8_t> b;
+  if (pk) pk->ReadPart(part, b);
+  return test::Text(b);
+}
+
+void ReplaceBetween(std::string& s, const std::string& open, const std::string& close, const std::string& with) {
+  size_t a = s.find(open), b = s.find(close, a);
+  if (a != std::string::npos && b != std::string::npos) s.replace(a, b + close.size() - a, with);
+}
+
+}  // namespace
+
+TEST(SlideBaseStylesAsPowerPointUsesThem) {
+  // What PowerPoint 2021 showed for this deck (2026-11-20): text boxes and shapes start from the
+  // default text style (22 pt green), never the master's other style (40 pt red); table cells take
+  // the other style's size but tx1, or their table style's color.
+  std::string master = PartText("simple.pptx", "/ppt/slideMasters/slideMaster1.xml");
+  ReplaceBetween(master, "<p:otherStyle>", "</p:otherStyle>",
+                 "<p:otherStyle><a:lvl1pPr marL=\"0\"><a:defRPr sz=\"4000\"><a:solidFill><a:srgbClr val=\"FF0000\"/>"
+                 "</a:solidFill></a:defRPr></a:lvl1pPr></p:otherStyle>");
+  std::string pres = PartText("simple.pptx", "/ppt/presentation.xml");
+  ReplaceBetween(pres, "<a:lvl1pPr marL=\"0\"", "</a:lvl1pPr>",
+                 "<a:lvl1pPr marL=\"0\"><a:defRPr sz=\"2200\"><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill>"
+                 "</a:defRPr></a:lvl1pPr>");
+  std::string styles = std::string("<a:tblStyleLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+                                   "def=\"{11111111-0000-0000-0000-000000000001}\"><a:tblStyle "
+                                   "styleId=\"{11111111-0000-0000-0000-000000000001}\" styleName=\"Blue\"><a:wholeTbl>"
+                                   "<a:tcTxStyle><a:srgbClr val=\"0000FF\"/></a:tcTxStyle><a:tcStyle><a:tcBdr/></a:tcStyle>"
+                                   "</a:wholeTbl></a:tblStyle></a:tblStyleLst>");
+  auto table = [](int id, const char* styleId) {
+    std::string pr = styleId ? std::string("<a:tblPr><a:tableStyleId>") + styleId + "</a:tableStyleId></a:tblPr>" : "<a:tblPr/>";
+    return "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"" + std::to_string(id) +
+           "\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext "
+           "cx=\"100\" cy=\"100\"/></p:xfrm><a:graphic><a:graphicData "
+           "uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl>" + pr +
+           "<a:tblGrid><a:gridCol w=\"100\"/></a:tblGrid><a:tr h=\"100\"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r>"
+           "<a:t>Cell</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+  };
+  std::string box =
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Box\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>"
+      "<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Box</a:t></a:r></a:p></p:txBody></p:sp>";
+  auto deck = Modified({{"ppt/slideMasters/slideMaster1.xml", master},
+                        {"ppt/presentation.xml", pres},
+                        {"ppt/tableStyles.xml", styles},
+                        {"ppt/slides/slide1.xml", SlideXml(box + table(3, nullptr) + table(4, "{11111111-0000-0000-0000-000000000001}"))},
+                        {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const TextBody* b = TextOf(*deck, *s, 2);
+  CHECK(b && std::fabs(b->paragraphs[0].runs[0].props.size - 22.f) < 0.01f);
+  CHECK(b && Near(b->paragraphs[0].runs[0].props.color, 0, 1, 0));
+  const Table* plain = deck->GetTable(*s->FindShape(3), *s);
+  CHECK(plain && plain->Cell(0, 0)->text);
+  if (plain && plain->Cell(0, 0)->text) {
+    const RunProps& r = plain->Cell(0, 0)->text->paragraphs[0].runs[0].props;
+    CHECK_NEAR(r.size, 40.f, 0.01f);
+    CHECK(Near(r.color, 0, 0, 0));
+  }
+  const Table* blue = deck->GetTable(*s->FindShape(4), *s);
+  CHECK(blue && blue->Cell(0, 0)->text && Near(blue->Cell(0, 0)->text->paragraphs[0].runs[0].props.color, 0, 0, 1));
+}

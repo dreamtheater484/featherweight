@@ -413,6 +413,10 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
         case PlaceholderType::Picture:
           style = m->bodyStyle;
           break;
+        case PlaceholderType::None:
+          // Text boxes and shapes start from the default text style alone (PowerPoint 2021,
+          // probed 2026-11-20: otherStyle doesn't reach them).
+          break;
         default:
           style = m->otherStyle;
           break;
@@ -443,7 +447,16 @@ std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_n
   c.colors.colorMap = &shownOn.colorMap;
   Levels lv = Defaults(c);
   ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
+  // Table cells take the master's other style, but not its colors: their text is tx1 unless the
+  // table style says otherwise (PowerPoint 2021, probed 2026-11-20).
   if (const Master* m = MasterOf(owner); m && m->kind == PartKind::Master) ApplyListStyle(m->otherStyle, lv, c, *m);
+  if (std::optional<draw::Color> tx1 = draw::SchemeColor("tx1", c.colors)) {
+    for (Level& l : lv) {
+      l.run.color = *tx1;
+      l.run.noFill = false;
+      l.run.fill = {};
+    }
+  }
   for (pugi::xml_node tcTxStyle : tcTxStyles) {
     std::string_view b = tcTxStyle.attribute("b").value(), i = tcTxStyle.attribute("i").value();
     ApplyFontRef(tcTxStyle, lv, c);
