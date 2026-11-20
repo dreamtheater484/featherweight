@@ -114,6 +114,9 @@ param(
   [string]$Hosts,
   # Only the manifest's files of these formats (docx, xlsx, csv, pptx), for example -Rescreen -Formats pptx.
   [string[]]$Formats,
+  # Check Defender on these folders and the files in them (status, the EICAR proof in each, every
+  # file scanned on its own, then each folder); nothing is downloaded, screened or deleted.
+  [string[]]$DefenderCheck,
   # Screen these local files and print the results; nothing is downloaded, moved or deleted.
   [string[]]$Screen
 )
@@ -122,6 +125,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 # powershell -File passes "a,b" as one string.
 $Screen = @($Screen | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$DefenderCheck = @($DefenderCheck | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Out -and $Screen) { $Out = [IO.Path]::GetTempPath() }
 if (-not $Out) { throw "Give the corpus folder with -Out, or set FW_CORPUS." }
@@ -1438,6 +1442,36 @@ if ($Screen) {
     if ($reasons.Count) { "REJECTED {0}: {1}" -f $p, ($reasons -join "; ") }
     else { "passed   {0}: {1}" -f $p, (ConvertTo-PrettyJson $t.facts).Replace("`n", " ") }
   }
+  return
+}
+
+# -DefenderCheck: Defender's status, the EICAR proof in each folder (an exclusion could cover any of
+# them), every file in them scanned on its own, then each folder as a whole. Nothing is deleted but
+# the EICAR file (and a folder this made for the proof). Exit 1 if anything isn't clean.
+if ($DefenderCheck) {
+  $status = Assert-DefenderReady
+  "Defender: service, antivirus and real-time protection on; signatures {0} from {1}; engine {2}" -f $status.signatures, $status.signaturesUpdated, $status.engine
+  $bad = 0
+  foreach ($dir in $DefenderCheck) {
+    $full = [IO.Path]::GetFullPath($dir)
+    $made = -not (Test-Path -LiteralPath $full)
+    if ($made) { New-Item -ItemType Directory -Force $full | Out-Null }
+    try { "EICAR in ${full}: caught, " + (Assert-EicarCaught $full) + " (deleted)" }
+    finally { if ($made) { Remove-Item -Recurse -Force -LiteralPath $full -ErrorAction SilentlyContinue } }
+    if ($made) { continue }
+    $n = 0; $here = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath $full -File -Recurse | Sort-Object FullName)) {
+      $n++
+      $one = Test-Defender $f.FullName
+      if (-not $one.clean -or -not (Test-Path -LiteralPath $f.FullName)) { $here++; Write-Host "NOT CLEAN $($f.FullName): exit $($one.code), $($one.output)" -ForegroundColor Red }
+    }
+    $all = Test-Defender $full
+    if (-not $all.clean) { $here++ }
+    $bad += $here
+    "{0}: {1} files scanned one by one, {2} not clean; the folder as a whole: exit {3}, {4}" -f $full, $n, $here, $all.code, $all.output
+  }
+  if ($bad) { exit 1 }
+  "Defender check: all clean."
   return
 }
 
