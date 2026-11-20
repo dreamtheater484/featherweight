@@ -407,7 +407,7 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 - [ ] An `.ots` (OpenDocument template) opens as a new workbook.
 - [ ] A damaged file (rename a `.txt` to `.ods`) says it "seems to be damaged or isn't an OpenDocument spreadsheet" and nothing else happens.
 - [ ] An `.xls` with pictures, text boxes and shapes shows them where Excel does; one with a chart sheet keeps the sheet in its place, with an empty chart where Excel draws its chart, and prints a page for it.
-- Known: an `.xls`'s charts aren't read (a chart sheet keeps an empty chart), its macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read. Printed, the `.xls` copies pass about as many pages as their `.xlsx` originals (19.15 % against 18.68 %, one workbook Excel prints differently left out), but by workbook they're behind on average (17.15 % against 19.42 %): a follow-up.
+- Known: an `.xls`'s charts aren't read (a chart sheet keeps an empty chart), its macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read. Printed, the `.xls` copies pass about as many pages as their `.xlsx` originals (21.99 % against 21.51 % on 198 workbooks, one workbook Excel prints differently left out), but by workbook they're behind on average (27.70 % against 29.56 %): a follow-up.
 
 ### Password-protected workbooks
 
