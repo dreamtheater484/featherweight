@@ -220,6 +220,8 @@ constexpr float kLabelMiddle = 0.36f;  // the same for data labels
 constexpr float kTitleGap = 8.2f;    // points: the title's (or a legend's) line to the room below
 constexpr float kAxisTitle = 6.1f, kAxisTitleGap = 5.07f;  // points: an axis title from the room's edge; to its labels
 constexpr float kKey = 0.549f;       // a legend key's square
+constexpr float kAcross = 4.0f;      // a value axis across the bottom: a label every so many text sizes at most
+constexpr double kBubble = 0.25;     // the largest bubble across, of the plot's smaller side
 constexpr size_t kOutlinedLabels = 64;  // a category axis whose labels are all outlined at once (more: when drawn)
 
 struct Label {
@@ -353,10 +355,11 @@ Color SeriesColor(size_t i, const draw::ColorContext& colors) {
   return c;
 }
 
-// A pie's or doughnut's slice: Office shades the accent (76 %, Excel's PDFs).
-Color SliceColor(size_t i, const draw::ColorContext& colors) {
+// A pie's or doughnut's slice: Excel and Word shade the accent (76 %, their PDFs); PowerPoint
+// doesn't (`plain`).
+Color SliceColor(size_t i, const draw::ColorContext& colors, bool plain) {
   Color c = SeriesColor(i, colors);
-  draw::ApplyColorTransform(c, "shade", 76000);
+  if (!plain) draw::ApplyColorTransform(c, "shade", 76000);
   return c;
 }
 
@@ -487,6 +490,7 @@ struct Entry {
   std::string symbol = "none";  // its markers'
   float markerSize = 5;
   Color markerFill;
+  bool circle = false;  // a bubble's key: a circle
 };
 
 std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
@@ -498,7 +502,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
     const size_t n = std::max(s.categories.size(), s.values.size());
     for (size_t i = 0; i < n && i < 64; ++i) {
       const Look* look = PointLook(s, i);
-      Color c = look && look->fill ? *look->fill : pie ? SliceColor(i, colors) : SeriesColor(i, colors);
+      Color c = look && look->fill ? *look->fill : pie ? SliceColor(i, colors, ch.presentation) : SeriesColor(i, colors);
       Entry e;
       e.name = i < s.categories.size() ? s.categories[i] : std::to_wstring(i + 1);
       e.color = c;
@@ -518,8 +522,9 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       if (line && s.look.line) e.color = *s.look.line;
       else if (!line && s.look.fill) e.color = *s.look.fill;
       e.line = line;
+      e.circle = g.type == Type::Bubble;
       if (line) {
-        e.width = s.look.lineWidth >= 0 ? s.look.lineWidth : scatter ? 1.5f : 2.25f;
+        e.width = s.look.lineWidth >= 0 ? s.look.lineWidth : scatter && !ch.presentation ? 1.5f : 2.25f;
         e.symbol = MarkerSymbol(s, scatter || g.marker, k);
         e.markerSize = s.markerSize;
       }
@@ -588,12 +593,16 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     widest = std::max(widest, labels.back().width);
     lines |= e.line;
   }
-  // With a line among them, every key is a line's length.
-  const float box = kKey * ts, keyW = lines ? 1.92f * ts : box, lead = keyW + (lines ? 0.212f : 0.245f) * ts;
+  // With a line among them, every key is a line's length: 1.92 text sizes, at most 20 points, and
+  // the gap after it at most 2.9 (Excel's PDFs at 10 points, PowerPoint's at 18).
+  const float box = kKey * ts, keyW = lines ? std::min(1.92f * ts, 20.0f) : box,
+              lead = keyW + (lines ? std::min(0.212f * ts, 2.9f) : 0.245f * ts);
   const auto key = [&](const Entry& e, float x, float cy) {
     if (e.line) {
       b.Line({x, cy}, {x + keyW, cy}, e.color, e.width);
       DrawMarker(b, e.symbol, {x + keyW / 2, cy}, e.markerSize, e.markerFill, e.color);
+    } else if (e.circle) {
+      b.Add(Path::Ellipse({x, cy - box / 2, x + keyW, cy + box / 2}), e.color, std::nullopt, 0);
     } else {
       b.Add(Path::FromRect({x, cy - box / 2, x + keyW, cy + box / 2}), e.color, std::nullopt, 0);
     }
@@ -677,8 +686,11 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     baseline += pitch + extra[k];
   }
   if (!overlay) {
-    if (pos == LegendPos::Bottom) r.bottom = first - kAscent * ts - kTitleGap;
-    else r.top = baseline - pitch + kDescent * ts + kTitleGap;
+    // The gap to the plot's room grows with the text past 12 points (PowerPoint's PDFs: 12.6
+    // points with 18-point text).
+    const float room = std::max(kTitleGap, 0.7f * ts);
+    if (pos == LegendPos::Bottom) r.bottom = first - kAscent * ts - room;
+    else r.top = baseline - pitch + kDescent * ts + room;
   }
   return r;
 }
@@ -790,8 +802,10 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
   return out + line;
 }
 
-// A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`.
-void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H) {
+// A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`;
+// `plain`: slices in the accents themselves (SliceColor).
+void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H,
+             bool plain) {
   const float m = kMargin * ts;
   r = {r.left + m, r.top + m, r.right - m, r.bottom - m};
   const bool doughnut = g.type == Type::Doughnut;
@@ -799,10 +813,17 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
   bool labelled = g.labels || g.percent || g.categoryLabels || g.seriesNames;
   for (const Series& s : g.series)
     labelled |= s.labels.value_or(false) || s.percent.value_or(false) || s.categoryLabels.value_or(false) || s.seriesNames.value_or(false);
-  // Labels round a pie take some of its room.
-  const float R = std::min(r.right - r.left, r.bottom - r.top) / 2 - (labelled && !doughnut ? 1.32f * ts : 0);
+  // Labels round a pie take some of its room; so do slices pulled out of it (c:explosion, a part
+  // of the radius), the pie shrunk to keep the farthest inside.
+  double pulled = 0;
+  if (!doughnut && !g.series.empty()) {
+    pulled = g.series.front().explosion;
+    for (const auto& [i, e] : g.series.front().explosions) pulled = std::max(pulled, e);
+  }
+  const float R = static_cast<float>((std::min(r.right - r.left, r.bottom - r.top) / 2 - (labelled && !doughnut ? 1.32f * ts : 0)) /
+                                     (1 + pulled / 100));
   if (R < 2) return;
-  const Point c{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+  const Point center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
   const float hole = doughnut ? static_cast<float>(R * g.hole / 100) : 0, ring = (R - hole) / rings;
   std::vector<Pending> labels;
   for (size_t j = 0; j < rings; ++j) {
@@ -813,18 +834,26 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
     if (!(total > 0) || !std::isfinite(total)) continue;
     const float inner = doughnut ? hole + j * ring : 0, outer = doughnut ? inner + ring : R;
     const bool key = ShowsKey(g, s);
+    const std::string format = !s.labelFormat.empty() ? s.labelFormat : !g.labelFormat.empty() ? g.labelFormat : "General";
+    const std::string& pos = !s.labelPos.empty() ? s.labelPos : g.labelPos;
     double a = g.firstAngle - 90;
     for (size_t i = 0; i < s.values.size() && labels.size() < 4096; ++i) {
       const double v = s.values[i];
       if (!(v > 0) || !std::isfinite(v)) continue;
       const double sweep = v / total * 360;
       const Look* look = PointLook(s, i);
-      const Color fill = g.varyColors ? SliceColor(i, colors) : s.look.fill.value_or(SliceColor(j, colors));
+      const Color fill = g.varyColors ? SliceColor(i, colors, plain) : s.look.fill.value_or(SliceColor(j, colors, plain));
+      const double mid = (a + sweep / 2) * kPi / 180;
+      const Point dir{static_cast<float>(std::cos(mid)), static_cast<float>(std::sin(mid))};
+      double out = doughnut ? 0 : s.explosion;
+      if (!doughnut)
+        for (const auto& [k, e] : s.explosions)
+          if (k == i) out = e;
+      const float shift = static_cast<float>(R * out / 100);
+      const Point c{center.x + shift * dir.x, center.y + shift * dir.y};
       b.Mark(Slice(c, outer, inner, a, a + sweep), look ? *look : s.look, fill, std::nullopt, 0.75f);
-      std::vector<std::wstring> parts = LabelParts(g, s, i, FormatNumber(v, "General"), FormatNumber(v / total, "0%"));
+      std::vector<std::wstring> parts = LabelParts(g, s, i, FormatNumber(v, format), FormatNumber(v / total, "0%"));
       if (!parts.empty()) {
-        const double mid = (a + sweep / 2) * kPi / 180;
-        const Point dir{static_cast<float>(std::cos(mid)), static_cast<float>(std::sin(mid))};
         const std::optional<Color> k = key ? std::optional<Color>((look && look->fill) ? *look->fill : fill) : std::nullopt;
         if (doughnut) {
           const float rad = (inner + outer) / 2;
@@ -851,7 +880,11 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
           measure(t, w, h);
           const float fits = static_cast<float>(2 * 0.65 * R * std::sin(std::min(sweep, 180.0) / 2 * kPi / 180));
           Point at;
-          if (w <= fits) {
+          if (pos == "ctr" || pos == "inEnd") {
+            // In the middle of the slice, or inside its edge (Office's).
+            const float rad = pos == "ctr" ? 0.5f * R : R - 0.2f * ts - std::max(std::fabs(dir.x) * w, std::fabs(dir.y) * h) / 2;
+            at = {c.x + rad * dir.x, c.y + rad * dir.y};
+          } else if (pos != "outEnd" && w <= fits) {
             at = {c.x + 0.62f * R * dir.x, c.y + 0.62f * R * dir.y};
           } else {
             if (wrap) t = Wrapped(b, parts, 0.8f * R, ts), measure(t, w, h);
@@ -1035,8 +1068,10 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
   }
 }
 
+// `width`: a line's unless the series says (Excel's 1.5 points, PowerPoint's 2.25).
 void DrawScatter(Builder& b, const Group& g, size_t first, const Rect& r, const Scale& xs, const Scale& ys,
-                 const draw::ColorContext& colors, std::vector<Pending>& labels, const std::string& format, float ts) {
+                 const draw::ColorContext& colors, std::vector<Pending>& labels, const std::string& format, float ts,
+                 float width) {
   const double w = r.right - r.left, h = r.bottom - r.top;
   for (size_t j = 0; j < g.series.size(); ++j) {
     const Series& s = g.series[j];
@@ -1057,15 +1092,43 @@ void DrawScatter(Builder& b, const Group& g, size_t first, const Rect& r, const 
                           {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, std::nullopt});
     }
     const Color line = s.look.line.value_or(color);
-    if (g.lines && !s.look.noLine) b.Add(Polyline(runs, s.smooth), std::nullopt, line, s.look.lineWidth >= 0 ? s.look.lineWidth : 1.5f);
+    if (g.lines && !s.look.noLine) b.Add(Polyline(runs, s.smooth), std::nullopt, line, s.look.lineWidth >= 0 ? s.look.lineWidth : width);
     const std::string symbol = MarkerSymbol(s, true, first + j);
     for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), line);
   }
 }
 
+// Bubbles: each point a circle at (x, y), the largest a quarter of the plot's smaller side across
+// at a bubble scale of 100 %, the others in proportion by area (or by width); sizes not above zero
+// aren't shown.
+void DrawBubbles(Builder& b, const Group& g, size_t first, const Rect& r, const Scale& xs, const Scale& ys,
+                 const draw::ColorContext& colors, std::vector<Pending>& labels, const std::string& format) {
+  double largest = 0;
+  for (const Series& s : g.series)
+    for (double z : s.sizes)
+      if (std::isfinite(z)) largest = std::max(largest, z);
+  if (!(largest > 0)) return;
+  const double w = r.right - r.left, h = r.bottom - r.top, full = std::min(w, h) * kBubble * g.bubbleScale / 100;
+  for (size_t j = 0; j < g.series.size(); ++j) {
+    const Series& s = g.series[j];
+    const Color color = SeriesColor(first + j, colors);
+    for (size_t i = 0; i < s.values.size() && i < s.sizes.size(); ++i) {
+      const double x = s.xs.size() == s.values.size() ? s.xs[i] : double(i + 1), y = s.values[i], z = s.sizes[i];
+      if (!std::isfinite(x) || !std::isfinite(y) || !(z > 0)) continue;
+      const float d = static_cast<float>(full * (g.bubbleWidth ? z / largest : std::sqrt(z / largest)));
+      const Point c{static_cast<float>(r.left + Near01(xs.At(x)) * w), static_cast<float>(r.bottom - Near01(ys.At(y)) * h)};
+      const Look* look = PointLook(s, i);
+      b.Mark(Path::Ellipse({c.x - d / 2, c.y - d / 2, c.x + d / 2, c.y + d / 2}), look ? *look : s.look, color, std::nullopt, 0.75f);
+      if (ShowsLabels(g, s))
+        labels.push_back({Joined(LabelParts(g, s, i, FormatNumber(y, !s.labelFormat.empty() ? s.labelFormat : !g.labelFormat.empty() ? g.labelFormat : format), {})),
+                          c, 1, std::nullopt});
+    }
+  }
+}
+
 void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H) {
   const Group& g0 = ch.groups.front();
-  const bool scatter = g0.type == Type::Scatter, bar = g0.type == Type::Bar;
+  const bool scatter = g0.type == Type::Scatter || g0.type == Type::Bubble, bar = g0.type == Type::Bar;
   // The categories, and the values each value axis shows.
   Cats cats;
   cats.between = ch.value.between;
@@ -1083,7 +1146,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
       n = std::max(n, s.values.size());
       if (names.empty()) names = s.categories;
       for (size_t i = 0; i < s.values.size(); ++i) {
-        if (g.type == Type::Scatter) {
+        if (g.type == Type::Scatter || g.type == Type::Bubble) {
           const double x = s.xs.size() == s.values.size() ? s.xs[i] : double(i + 1);
           if (std::isfinite(x)) xlo = std::min(xlo, x), xhi = std::max(xhi, x);
         }
@@ -1104,11 +1167,17 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   }
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
   // A value axis up the side has room for a label every 1.6 lines or so in Word, 1.2 in Excel
-  // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels).
-  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
+  // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels); one across the bottom for
+  // a label every kAcross text sizes of the room the labels up the side leave (PowerPoint's PDFs:
+  // 0 to 10 by 5 on a 280-point plot of 18-point labels, 0 to 5 by 1 on 396 points; Excel's agree).
+  const auto acrossMost = [&](float side) { return static_cast<int>((r.right - r.left - side) / (kAcross * ts)); };
+  float catW = 0;  // bars: the widest category name up the side
+  if (bar)
+    for (size_t i = 0; i < std::min<size_t>(names.size(), 64); ++i) catW = std::max(catW, b.Measure(names[i], ts).width);
+  const int most = bar ? acrossMost(std::min(catW, (r.right - r.left) * 0.4f) + kValueGap * ts)
+                       : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
-  const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
   const std::string vformat = ch.value.format.empty() && percent ? "0%" : ch.value.format;
 
   // The labels round the plot.
@@ -1123,6 +1192,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     for (double v : vticks) vlabels.push_back(b.Fit(FormatNumber(v, vformat), ts, bar ? W : sideRoom)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
     for (double v : sticks) slabels.push_back(b.Fit(FormatNumber(v, ch.secondary.format), ts, sideRoom)), sw = std::max(sw, slabels.back().width);
+  const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true, acrossMost(std::min(vw, sideRoom) + kValueGap * ts));
   const std::vector<double> xticks = scatter ? Ticks(xscale) : std::vector<double>();
   if (ch.category.shown) {
     if (scatter)
@@ -1164,11 +1234,13 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   Plot p;
   p.bar = bar;
   p.reversed = ch.category.reversed;
-  const float margin = kMargin * ts, maxSide = (r.right - r.left) * 0.4f;
+  // The margin at the sides stops growing with the text past 10 points (PowerPoint's PDFs: 4.6
+  // points with 18-point text).
+  const float margin = kMargin * ts, side = std::min(margin, kMargin * 10), maxSide = (r.right - r.left) * 0.4f;
   const float sideW = bar ? cw : vw;  // labels up the left side
   const bool across = bar ? !vlabels.empty() : !clabels.empty();  // labels across the bottom
-  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : margin);
-  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : margin);
+  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : side);
+  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : side);
   p.r.top = r.top + margin;
   p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts : margin);
   // Labels centred on the plot's left and right edges (values across the bottom, categories on the
@@ -1176,7 +1248,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const std::vector<Label>& bottom = bar ? vlabels : clabels;
   if (!bottom.empty() && (bar || scatter || !cats.between)) {
     p.r.left = std::max(p.r.left, r.left + std::min(bottom.front().width / 2, maxSide));
-    if (sw <= 0) p.r.right = std::min(p.r.right, r.right - margin - std::min(bottom.back().width / 2, maxSide));
+    if (sw <= 0) p.r.right = std::min(p.r.right, r.right - side - std::min(bottom.back().width / 2, maxSide));
   }
   if (p.r.right - p.r.left < 8 || p.r.bottom - p.r.top < 8) return;
   const Rect& P = p.r;
@@ -1237,7 +1309,8 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   std::vector<Pending> labels;
   size_t first = 0;
   for (const Group& g : ch.groups) {
-    if (g.type == Type::Scatter) DrawScatter(b, g, first, P, xscale, vs, colors, labels, ch.value.format, ts);
+    if (g.type == Type::Scatter) DrawScatter(b, g, first, P, xscale, vs, colors, labels, ch.value.format, ts, ch.presentation ? 2.25f : 1.5f);
+    else if (g.type == Type::Bubble) DrawBubbles(b, g, first, P, xscale, vs, colors, labels, ch.value.format);
     else if (g.type != Type::Pie && g.type != Type::Doughnut) DrawGroup(b, g, first, p, cats, g.secondary ? ss : vs, g.secondary ? ch.secondary.format : vformat, colors, labels, ts);
     first += g.series.size();
   }
@@ -1293,7 +1366,6 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
   }
   n = std::min<size_t>(std::max(n, names.size()), 360);
   if (n == 0) return;
-  const Scale sc = MakeScale(lo, hi, ch.value, true, false);
   std::vector<Label> cats;
   float widest = 0;
   if (ch.category.shown)
@@ -1302,6 +1374,9 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
   const float gapV = cats.empty() ? 0.0f : 4.7f, gapH = cats.empty() ? 0.0f : 3.0f, lineH = cats.empty() ? 0.0f : ts;
   const float R = std::min(r.bottom - r.top - 2 * (lineH + gapV), r.right - r.left - 2 * (widest + gapH)) / 2;
   if (!(R >= 4)) return;
+  // A label up the first spoke every 1.2 lines (Excel's PDFs: 0 to 25 by 5 on an 85-point radius
+  // of 10-point labels; PowerPoint's: 0 to 20 by 5 on 143 points of 18-point ones).
+  const Scale sc = MakeScale(lo, hi, ch.value, true, false, static_cast<int>(R / (1.2f * ts)));
   const Point c{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
   const auto at = [&](size_t i, double u) {
     const double t = (-90 + 360.0 * i / n) * kPi / 180;
@@ -1386,7 +1461,9 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Rect inner = r;
   // A title or legend over the plot is drawn after it, on top.
   const auto title = [&] {
-    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's first line (Excel's PDFs)
+    // The top of the title's first line (Excel's PDFs; PowerPoint's put it higher: its baseline 0.9
+    // title sizes below the padding).
+    const float top = ch.presentation ? kPad + 0.15f * tts : kPad + 1 + 0.206f * tts;
     // Excel wraps a title wider than about 80 % of the chart, and keeps it to about half its
     // height; each line after the first takes a line's room from the plot.
     const float pitch = kLine * tts;
@@ -1401,7 +1478,7 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   if (!entries.empty() && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
   if (r.right - r.left >= 10 && r.bottom - r.top >= 10) {
     const Group& g0 = ch.groups.front();
-    if (g0.type == Type::Pie || g0.type == Type::Doughnut) DrawPie(b, g0, r, ts, text, colors, W, H);
+    if (g0.type == Type::Pie || g0.type == Type::Doughnut) DrawPie(b, g0, r, ts, text, colors, W, H, ch.presentation);
     else if (g0.type == Type::Radar) DrawRadar(b, ch, r, ts, text, colors);
     else DrawAxes(b, ch, r, ts, text, colors, W, H);
   }

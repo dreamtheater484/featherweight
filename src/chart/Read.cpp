@@ -179,11 +179,15 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   ForEachChild(ser, [&](pugi::xml_node dPt) {
     if (LocalNameOf(dPt) == "dPt" && NamespaceOf(dPt) == kChart && s.points.size() < kMaxPoints) {
       const double idx = Number(C(dPt, "idx"), "val", -1);
-      if (idx >= 0 && idx < double(kMaxPoints)) s.points.push_back({static_cast<uint32_t>(idx), LookOf(C(dPt, "spPr"), colors)});
+      if (idx >= 0 && idx < double(kMaxPoints)) {
+        s.points.push_back({static_cast<uint32_t>(idx), LookOf(C(dPt, "spPr"), colors)});
+        if (pugi::xml_node e = C(dPt, "explosion"))
+          s.explosions.push_back({static_cast<uint32_t>(idx), std::clamp(Number(e, "val", 0), 0.0, 400.0)});
+      }
     }
     return true;
   });
-  const bool scatter = type == Type::Scatter;
+  const bool scatter = type == Type::Scatter || type == Type::Bubble;
   pugi::xml_node cat = C(ser, scatter ? "xVal" : "cat");
   pugi::xml_node catRef = C(cat, "strRef");
   if (!catRef) catRef = C(cat, "numRef");
@@ -215,18 +219,21 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   const size_t n = std::min(s.values.size(), budget);
   s.values.resize(n);
   if (s.xs.size() > n) s.xs.resize(n);
+  if (type == Type::Bubble) s.sizes = Numbers(C(ser, "bubbleSize"), source), s.sizes.resize(n, kNaN);
   budget -= n;
   if (pugi::xml_node m = C(ser, "marker")) {
     s.symbol = Val(C(m, "symbol"));
     if (s.symbol.size() > 16) s.symbol.clear();
     if (pugi::xml_node c = C(m, "symbol")) s.marker = s.symbol != "none";
-    s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 5), 2.0, 72.0));
+    s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 7), 2.0, 72.0));
   }
   s.smooth = (type == Type::Line || scatter) && On(ser, "smooth", true);
   const LabelParts l = LabelsOf(C(ser, "dLbls"));
   s.labels = l.val, s.percent = l.pct, s.categoryLabels = l.cat, s.seriesNames = l.ser, s.keys = l.key;
   s.separator = l.separator;
   s.labelFormat = LabelFormat(C(ser, "dLbls"));
+  s.labelPos = Val(C(C(ser, "dLbls"), "dLblPos"));
+  if (pugi::xml_node e = C(ser, "explosion")) s.explosion = std::clamp(Number(e, "val", 0), 0.0, 400.0);
   return s;
 }
 
@@ -322,8 +329,9 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     else if (k == "areaChart" || k == "area3DChart") g.type = Type::Area;
     else if (k == "scatterChart") g.type = Type::Scatter;
     else if (k == "radarChart" && out.groups.empty()) g.type = Type::Radar;
+    else if (k == "bubbleChart" && out.groups.empty()) g.type = Type::Bubble;
     else {
-      unknown = true;  // stock, bubble, surface…
+      unknown = true;  // stock, surface…
       return false;
     }
     if (out.groups.size() >= 16) return true;
@@ -335,6 +343,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     g.hole = std::clamp(Number(C(c, "holeSize"), "val", 50), 1.0, 90.0);
     g.firstAngle = std::clamp(Number(C(c, "firstSliceAng"), "val", 0), 0.0, 360.0);
     g.marker = On(c, "marker", false);
+    g.bubbleScale = std::clamp(Number(C(c, "bubbleScale"), "val", 100), 0.0, 300.0);
+    g.bubbleWidth = Val(C(c, "sizeRepresents")) == "w";
     if (g.type == Type::Radar) {
       const std::string_view radar = Val(C(c, "radarStyle"));
       g.marker = radar == "marker";
@@ -344,6 +354,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     g.lines = style != "marker" && style != "none";
     const LabelParts l = LabelsOf(C(c, "dLbls"));
     g.labelFormat = LabelFormat(C(c, "dLbls"));
+    g.labelPos = Val(C(C(c, "dLbls"), "dLblPos"));
     g.labels = l.val.value_or(false);
     g.percent = l.pct.value_or(false);
     g.categoryLabels = l.cat.value_or(false);
@@ -374,7 +385,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   if (first.size() >= 2) {
     pugi::xml_node a = axis(first[0]), b = axis(first[1]);
     // Scatter has two value axes: x is the one across the bottom (or top).
-    const bool scatter = out.groups.front().type == Type::Scatter;
+    const bool scatter = out.groups.front().type == Type::Scatter || out.groups.front().type == Type::Bubble;
     if (scatter) {
       const std::string_view pos = Val(C(a, "axPos"));
       if (pos == "l" || pos == "r") std::swap(a, b);
@@ -426,8 +437,9 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       // Text with no properties at all (no a:pPr, a:rPr) is DrawingML's own default in Office
       // 2007's look: 18-point Arial, not bold (Excel).
       pugi::xml_node p = A(rich, "p");
-      if (out.legacy && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
-        // PowerPoint: the chart's text size times 1.1, not bold, in the chart's font (its PDFs).
+      if ((out.legacy || presentation) && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
+        // PowerPoint, with Office 2010's look too: the chart's text size times 1.1, not bold, in
+        // the chart's font (its PDFs).
         out.titleSize = presentation ? (spaceSize > 0 ? spaceSize : 10) * 1.1f : 18;
         out.titleBold = false;
         if (!presentation) out.titleFont = L"Arial";
