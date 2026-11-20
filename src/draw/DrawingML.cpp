@@ -372,6 +372,7 @@ class Reader {
 
   void ReadNames(pugi::xml_node nv, Shape& s) {
     pugi::xml_node c = Part(nv, "cNvPr");
+    s.id = static_cast<uint32_t>(std::clamp(Number(c, "id", 0), 0.0, 4294967295.0));
     s.name = c.attribute("name").value();
     s.description = c.attribute("descr").value();
     s.hidden = Bool(c, "hidden", false);
@@ -415,6 +416,18 @@ class Reader {
     b.upright = Bool(props, "upright", false);
     b.columns = std::clamp(static_cast<int>(Number(props, "numCol", 1)), 1, 16);
     b.columnSpacing = Emu(props, "spcCol");
+    if (pugi::xml_node x = Child(el, kDsp, "txXfrm")) {
+      Shape tx;
+      ReadXfrm(x, tx);
+      t->hasTextXfrm = tx.bounds.Width() > 0 && tx.bounds.Height() > 0;
+      t->textXfrm = tx.bounds;
+      t->textXfrmRotation = tx.rotation;
+    }
+    if (pugi::xml_node font = A(Part(el, "style"), "fontRef")) {
+      b.fontColor = ReadColor(font, ctx_.colors);
+      std::string_view idx = font.attribute("idx").value();
+      b.fontFace = idx == "major" ? "+mj-lt" : idx == "minor" ? "+mn-lt" : "";
+    }
     if (pugi::xml_node fit = A(props, "normAutofit")) {
       b.autofit = TextBox::Autofit::ShrinkText;
       b.fontScale = std::clamp(Percent(fit, "fontScale", 100000), 0.01f, 1.f);
