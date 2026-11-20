@@ -337,7 +337,9 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     if (out.groups.size() >= 16) return true;
     const std::string_view grouping = Val(C(c, "grouping"));
     g.grouping = grouping == "stacked" ? Grouping::Stacked : grouping == "percentStacked" ? Grouping::Percent : Grouping::Clustered;
-    g.varyColors = On(c, "varyColors", g.type == Type::Pie || g.type == Type::Doughnut);
+    // Unstated, Office varies a lone series' bars and slices (PowerPoint's PDFs).
+    g.varyColors = On(c, "varyColors", g.type == Type::Column || g.type == Type::Bar || g.type == Type::Pie ||
+                                           g.type == Type::Doughnut);
     g.gap = std::clamp(Number(C(c, "gapWidth"), "val", 150), 0.0, 500.0);
     g.overlap = std::clamp(Number(C(c, "overlap"), "val", g.grouping == Grouping::Clustered ? 0 : 100), -100.0, 100.0);
     g.hole = std::clamp(Number(C(c, "holeSize"), "val", 50), 1.0, 90.0);
@@ -447,6 +449,13 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     } else {
       TextLook(C(t, "txPr"), colors, &out.titleSize, &out.titleColor, &out.titleBold);
     }
+  } else if (C(chart, "autoTitleDeleted") && !On(chart, "autoTitleDeleted", true) && out.groups.size() == 1 &&
+             out.groups.front().series.size() == 1) {
+    // No title, but the automatic one not deleted: a single series' name, bold, at the size of a
+    // title without text (PowerPoint's PDFs).
+    out.title = out.groups.front().series.front().name;
+    out.titleSize = out.legacy ? (spaceSize > 0 ? spaceSize * 1.2f : 10) : size > 0 ? size * 14 / 9 : 18;
+    out.titleColor = spaceColor;
   }
   if (pugi::xml_node legend = C(chart, "legend")) {
     const std::string_view pos = Val(C(legend, "legendPos"));
