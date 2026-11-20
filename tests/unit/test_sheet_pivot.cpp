@@ -140,6 +140,9 @@ int CheckBook(Workbook& book, const Workbook& expected, bool refresh) {
         CHECK_EQ(e.firstHeaderRow, t.firstHeaderRow);
         CHECK_EQ(e.firstDataRow, t.firstDataRow);
         CHECK_EQ(e.firstDataCol, t.firstDataCol);
+        CHECK_EQ(e.rowItems.size(), t.rowItems.size());
+        CHECK_EQ(e.colItems.size(), t.colItems.size());
+        CHECK_EQ(e.rowPageCount, t.rowPageCount);
         area = Union(area, e.location);
       }
     }
@@ -164,6 +167,30 @@ TEST(Pivot_ColumnsOnlyMatchExcel) {
   if (!book) return;
   CHECK(book->FindSheet("ColOne") >= 0 && book->FindSheet("ColNone") >= 0);
   CHECK_EQ(CheckBook(*book, *book, false), 0);
+}
+
+// Page fields over a one-column table: their values lie right of it, in the area (fuzz_pivot's
+// cell outside the area). With no fields, nothing to show: a one-cell location under page fields,
+// Excel's placeholder box without; row fields and no values leave the column of values out.
+TEST(Pivot_PagesAndNothingMatchExcel) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-pageonly.xlsx"));
+  if (!book) return;
+  CHECK(book->FindSheet("PageOnly") >= 0 && book->FindSheet("Empty") >= 0);
+  CHECK_EQ(CheckBook(*book, *book, false), 0);
+  Pivots p;
+  CHECK(ReadAll(*book, p));
+  for (auto& [sheet, t] : p.tables) {
+    if (t.name != "PageValue" && t.name != "PageOnly") continue;
+    pivot::Layout lay;
+    std::u16string why;
+    CHECK(pivot::Lay(p.caches[t.cachePart], t, lay, why));
+    CHECK(lay.area == (Range{2, 0, t.name == "PageOnly" ? 4u : 5u, 1}));
+    for (const pivot::OutCell& c : lay.cells) CHECK(lay.area.Contains(c.at.row, c.at.col));
+    // Written without the empty lists, read again with the same location.
+    pivot::Table back;
+    CHECK(pivot::ReadTable(pivot::WriteTable(PartText(*book, t.part), t), back));
+    CHECK(back.location == t.location && back.rowItems.size() == t.rowItems.size());
+  }
 }
 
 TEST(Pivot_RefreshMatchesExcelsRefresh) {

@@ -159,9 +159,12 @@ struct OutCell {
 };
 struct Layout {
   Range location;   // the table without its page fields
-  Range area;       // with them
+  Range area;       // with them (AreaOf)
   std::vector<OutCell> cells;
 };
+// A table's cells with its `pages` page fields: their lines above `location` with a blank line
+// between, and their values' column, right of a one-column table too.
+Range AreaOf(const Range& location, uint32_t pages);
 // Lays `table` out from its cache: its location (the top-left cell stays), rowItems and colItems,
 // the page fields above it, and every cell. False with `why` when it can't.
 bool Lay(const Cache& cache, Table& table, Layout& out, std::u16string& why);

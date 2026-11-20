@@ -70,9 +70,7 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
     l.table.part = p.table;
     l.table.cachePart = p.cache;
     if (p.cache.empty() || !pivot::ReadTable(Bytes(ed, p.table), l.table)) continue;
-    l.before = l.table.location;
-    if (l.table.rowPageCount && l.before.firstRow > l.table.rowPageCount)
-      l.before.firstRow -= l.table.rowPageCount + 1;
+    l.before = pivot::AreaOf(l.table.location, l.table.rowPageCount);
     tables.push_back(std::move(l));
   }
   // The caches to refresh.

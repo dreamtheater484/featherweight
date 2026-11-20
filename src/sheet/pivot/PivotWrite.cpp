@@ -315,8 +315,11 @@ std::string WriteTable(std::string_view oldXml, const Table& t) {
       }
     }
   }
-  Lines(Fresh(root, "rowItems", {"location", "pivotFields", "rowFields"}), t.rowItems);
-  Lines(Fresh(root, "colItems", {"location", "pivotFields", "rowFields", "rowItems", "colFields"}), t.colItems);
+  // No lines (a pivot with nothing to show): no list, as Excel writes it (a list has one <i> at least).
+  if (t.rowItems.empty()) root.remove_child(Child(root, "rowItems"));
+  else Lines(Fresh(root, "rowItems", {"location", "pivotFields", "rowFields"}), t.rowItems);
+  if (t.colItems.empty()) root.remove_child(Child(root, "colItems"));
+  else Lines(Fresh(root, "colItems", {"location", "pivotFields", "rowFields", "rowItems", "colFields"}), t.colItems);
   return dom.Serialize();
 }
 

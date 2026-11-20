@@ -522,6 +522,14 @@ std::string ItemText(const Item& v) {
 
 }  // namespace
 
+Range AreaOf(const Range& location, uint32_t pages) {
+  Range a = location;
+  if (!pages) return a;
+  if (a.firstRow > pages) a.firstRow -= pages + 1;
+  if (a.lastCol == a.firstCol && a.firstCol + 1 < kMaxCols) ++a.lastCol;
+  return a;
+}
+
 bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   why = u"This PivotTable uses features Featherweight keeps but doesn't refresh.";
   if (!t.why.empty() || !cache.why.empty() || t.fields.size() != cache.fields.size()) return false;
@@ -585,16 +593,22 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   // labels the line of values), and with no values there is no line of values at all.
   const bool colField = std::any_of(t.colFields.begin(), t.colFields.end(), [](int32_t f) { return f != kData; });
   const bool valueLabel = t.rowFields.empty() && colField && t.dataFields.size() == 1;
+  // With no values, the location leaves out the line of values (column fields) or the column of
+  // them (row fields). With no fields at all it shows nothing: one cell under page fields, else
+  // Excel's placeholder box of 3 columns and 18 lines.
   const bool noValueLine = t.rowFields.empty() && colField && t.dataFields.empty();
+  const bool noValueCol = !t.rowFields.empty() && !colField && t.dataFields.empty();
+  const bool nothing = t.rowFields.empty() && t.colFields.empty() && t.dataFields.empty();
+  const uint32_t pages = static_cast<uint32_t>(t.pageFields.size());
   const uint32_t fdc = t.rowFields.empty() ? (valueLabel ? 1 : 0) : colOfLevel.back() + 1;
   const bool valuesOnly = t.colFields.size() == 1 && t.colFields[0] == kData && t.hideValuesRow;
-  const uint32_t fhr = t.colFields.empty() ? 1 : (valuesOnly ? 0 : 1);
-  const uint32_t fdr = t.colFields.empty() ? 1 : fhr + static_cast<uint32_t>(t.colFields.size());
+  const uint32_t fhr = nothing && pages ? 0 : t.colFields.empty() ? 1 : (valuesOnly ? 0 : 1);
+  const uint32_t fdr = nothing && pages ? 0 : t.colFields.empty() ? 1 : fhr + static_cast<uint32_t>(t.colFields.size());
   const uint32_t top = t.location.firstRow, left = t.location.firstCol;
-  const uint64_t lastRow = uint64_t{top} + fdr + rows.size() - 1 - (noValueLine ? 1 : 0);
-  const uint64_t lastCol = uint64_t{left} + fdc + cols.size() - 1;
-  const uint32_t pages = static_cast<uint32_t>(t.pageFields.size());
-  if (lastRow >= kMaxRows || lastCol >= kMaxCols || (pages && top < pages + 1)) {
+  uint64_t lastRow = uint64_t{top} + fdr + rows.size() - 1 - (noValueLine ? 1 : 0);
+  uint64_t lastCol = uint64_t{left} + fdc + cols.size() - 1 - (noValueCol ? 1 : 0);
+  if (nothing) lastRow = top + (pages ? 0 : 17), lastCol = left + (pages ? 0 : 2);
+  if (lastRow >= kMaxRows || lastCol >= kMaxCols || (pages && (top < pages + 1 || left + 1 >= kMaxCols))) {
     why = u"The PivotTable doesn't fit on the sheet.";
     return false;
   }
@@ -606,13 +620,14 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   t.location = {top, left, static_cast<uint32_t>(lastRow), static_cast<uint32_t>(lastCol)};
   t.rowItems.clear();
   t.colItems.clear();
-  for (const AxisLine& l : rows) t.rowItems.push_back(l.line);
-  for (const AxisLine& l : cols) t.colItems.push_back(l.line);
+  if (!nothing) {
+    for (const AxisLine& l : rows) t.rowItems.push_back(l.line);
+    for (const AxisLine& l : cols) t.colItems.push_back(l.line);
+  }
 
   out = Layout{};
   out.location = t.location;
-  out.area = t.location;
-  if (pages) out.area.firstRow = top - pages - 1;
+  out.area = AreaOf(t.location, pages);
   auto put = [&](uint32_t row, uint32_t col, Item v, uint32_t fmt = kNone, uint8_t indent = 0) {
     OutCell c;
     c.at = {row, col};
@@ -674,6 +689,7 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
       put(row, left + 1, TextItem(hidden ? "(Multiple Items)" : "(All)"));
     }
   }
+  if (nothing) return true;
   // Captions.
   const std::string rowCaption = t.rowHeaderCaption.empty() ? "Row Labels" : t.rowHeaderCaption;
   const std::string colCaption = t.colHeaderCaption.empty() ? "Column Labels" : t.colHeaderCaption;
