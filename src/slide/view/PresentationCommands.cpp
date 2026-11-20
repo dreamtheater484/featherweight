@@ -573,8 +573,8 @@ void PresentationView::StartShow(bool fromCurrent) {
   if (!Ready() || SlideCount() == 0 || fw::slide::show::Running()) return;
   Presentation* model = deck_->Model();
   if (!model) return;
-  // p1-show's renderer for the show (the plain one until p1-render's adapter is in).
-  if (!showRenderer_) showRenderer_ = fw::slide::show::MakePlainRenderer(*model);
+  // p1-show's renderer for the show: slides drawn by p1-render's SlideRender.
+  if (!showRenderer_) showRenderer_ = fw::slide::show::MakeRenderer(*model);
   fw::slide::show::ShowOptions o;
   o.first = fromCurrent ? current_ : 0;
   o.owner = host_.ViewHwnd();
