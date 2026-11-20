@@ -137,8 +137,8 @@ while ((Get-Date) -lt $deadline) {
     if ($now -ne $lastWhy) { Write-Status "waiting: $now (CPU $([math]::Round($sample.Cpu)) %, idle $([math]::Round($idle)) s)"; $lastWhy = $now }
     continue
   }
-  $lock = Enter-Lock
-  if (-not $lock) {
+  $held = Enter-Lock  # not $lock: PowerShell names ignore case, and $Lock is the path
+  if (-not $held) {
     if ($lastWhy -ne 'lock') { Write-Status "waiting: the quiet-PC lock is held"; $lastWhy = 'lock' }
     continue
   }
@@ -163,7 +163,7 @@ while ((Get-Date) -lt $deadline) {
     if (-not $p.WaitForExit(15 * 60 * 1000)) { $p.Kill(); $p.WaitForExit(); Write-Status 'the bench ran 15 minutes: killed'; exit 1 }
     $code = $p.ExitCode
   } finally {
-    $lock.Dispose()
+    $held.Dispose()
   }
   if ($code -eq 3) {
     Write-Status "try $try stopped on input; waiting for the next quiet spell"
