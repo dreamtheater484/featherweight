@@ -185,12 +185,21 @@ bool TileBrush(Painter& p, const PictureFill& pic, const Rect& box, Brush& out) 
   return true;
 }
 
-Brush PatternBrush(const Fill& f, Geometry::PathFill mode) {
+// `ctm`: the painter's current transform, for a page-anchored pattern.
+Brush PatternBrush(const Fill& f, Geometry::PathFill mode, const Matrix& ctm) {
   if (!f.patternBitmap) f.patternBitmap = PatternBitmap(f.pattern, f.color, f.background);
   std::shared_ptr<const Bitmap> bmp = f.patternBitmap;
   if (mode != Geometry::PathFill::Normal) bmp = PatternBitmap(f.pattern, Shade(f.color, mode), Shade(f.background, mode));
-  // 8 x 8 cells of 0.75 pt: one pixel each at 96 dpi and 100 %.
-  Brush b = Brush::FromBitmap(bmp, Matrix::Scale(0.75f, 0.75f), Brush::Extend::Repeat);
+  // 8 x 8 cells of 0.75 pt: one pixel each at 96 dpi and 100 %. PowerPoint starts them on the
+  // page's grid of cells (its PDFs: at multiples of 6 points), wherever the shape is; unturned
+  // shapes do here too.
+  Matrix m = Matrix::Scale(0.75f, 0.75f);
+  if (f.pageAnchored && ctm.m12 == 0 && ctm.m21 == 0 && ctm.m11 > 0 && ctm.m22 > 0) {
+    const float cx = 6 * ctm.m11, cy = 6 * ctm.m22;  // a cell on the page
+    const float dx = std::floor(ctm.dx / cx) * cx - ctm.dx, dy = std::floor(ctm.dy / cy) * cy - ctm.dy;
+    m = m * Matrix::Translate(dx / ctm.m11, dy / ctm.m22);
+  }
+  Brush b = Brush::FromBitmap(bmp, m, Brush::Extend::Repeat);
   b.smooth = false;
   return b;
 }
@@ -203,7 +212,7 @@ void FillArea(Painter& p, const Path& path, const Fill& f, const Rect& box, floa
       p.FillPath(path, Brush::Solid(Shade(f.color, mode)));
       return;
     case Fill::Kind::Pattern:
-      p.FillPath(path, PatternBrush(f, mode));
+      p.FillPath(path, PatternBrush(f, mode, p.CurrentTransform()));
       return;
     case Fill::Kind::Gradient: {
       if (f.stops.empty()) return;
@@ -254,7 +263,7 @@ Brush LineBrush(Painter& p, const Line& line, const Rect& box, float rotation) {
       }
       break;
     case Fill::Kind::Pattern:
-      return PatternBrush(f, Geometry::PathFill::Normal);
+      return PatternBrush(f, Geometry::PathFill::Normal, p.CurrentTransform());
     case Fill::Kind::Picture: {
       Brush b;
       if (f.picture && TileBrush(p, *f.picture, box, b)) return b;

@@ -60,6 +60,7 @@ struct Fill {
   Color color;                       // Solid; Pattern: the foreground
   Color background;                  // Pattern
   uint8_t pattern = 0;               // Pattern: index into the presets (PatternBitmap)
+  bool pageAnchored = false;         // Pattern: cells on the page's grid, not from the shape (PowerPoint)
   std::vector<GradientStop> stops;   // Gradient, sorted
   GradientShape shape = GradientShape::Linear;
   float angle = 0;                   // Linear: degrees, clockwise from left-to-right

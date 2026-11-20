@@ -120,6 +120,7 @@ class Reader {
       out.pattern = PatternIndex(n.attribute("prst").value());
       out.color = ReadColor(A(n, "fgClr"), colors).value_or(Color{0, 0, 0, 1});
       out.background = ReadColor(A(n, "bgClr"), colors).value_or(Color{1, 1, 1, 1});
+      out.pageAnchored = ctx_.resources.InPresentation();
     } else if (kind == "grpFill") {
       out = groupFill ? *groupFill : Fill{};
     } else {
