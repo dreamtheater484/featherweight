@@ -7,9 +7,13 @@ big for the repository:
                        dates and codes with leading zeros, some fields quoted
   fifty-mb.xlsx        S4's very large workbook (docs/s4-plan.md, "Scale"): the million-cell
                        workbook's rows, 384,000 of them (7.68 million cells), about 50 MB
+  deck-50.pptx         P1's opening budget (docs/p1-plan.md): 50 slides as a lecture has them,
+                       titles and bullets, 20 photos, 5 charts, 5 tables, groups and shapes, notes
+  deck-typical.pptx    P1's memory budget: a typical 20-slide deck (8 photos, 2 charts, a table)
 
 Output goes to the folder given (default: build/budgets, which git ignores):
   .venv\\Scripts\\python tests/office/make_budget_files.py [folder]
+  .venv\\Scripts\\python tests/office/make_budget_files.py --decks [folder]   (only the two decks)
 
 The output is deterministic (fixed seed, fixed dates), so timings compare across runs.
 """
@@ -75,9 +79,75 @@ def big_csv(path, target=100 * 1024 * 1024):
     return n
 
 
+def deck(path, slides, photos, charts, tables):
+    """A deck as consumers receive them: python-pptx's default theme at 16:9, photos as 1600 x 900
+    JPEGs, charts with their workbooks, notes on every slide."""
+    import io
+    import pptx
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Emu, Inches
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from make_presentations import jpeg
+    from make_test_office import normalize, set_core, to_bytes
+    prs = pptx.Presentation()
+    set_core(prs.core_properties, f"{slides}-slide deck")
+    prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)
+    rnd = random.Random(slides)
+    pics = [jpeg(1600, 900, seed=i) for i in range(photos)]
+    kinds = ["photo"] * photos + ["chart"] * charts + ["table"] * tables
+    kinds += ["bullets"] * (slides - 1 - len(kinds))
+    rnd.shuffle(kinds)
+    title = prs.slides.add_slide(prs.slide_layouts[0])
+    title.shapes.title.text = f"A {slides}-slide deck"
+    title.placeholders[1].text = "Featherweight's opening budget"
+    for i, kind in enumerate(kinds):
+        s = prs.slides.add_slide(prs.slide_layouts[5 if kind != "bullets" else 1])
+        s.shapes.title.text = f"{i + 2}. " + " ".join(rnd.choice(WORDS) for _ in range(4)).capitalize()
+        if kind == "bullets":
+            tf = s.placeholders[1].text_frame
+            tf.text = " ".join(rnd.choice(WORDS) for _ in range(9))
+            for lvl in (0, 1, 1, 0, 1):
+                para = tf.add_paragraph()
+                para.text = " ".join(rnd.choice(WORDS) for _ in range(rnd.randint(4, 12)))
+                para.level = lvl
+            grp = s.shapes.add_group_shape()
+            for k in range(3):
+                grp.shapes.add_shape(MSO_SHAPE.CHEVRON, Inches(9 + k * 1.1), Inches(6.2), Inches(1), Inches(0.6))
+        elif kind == "photo":
+            s.shapes.add_picture(io.BytesIO(pics.pop()), Inches(1.2), Inches(1.6), Inches(9.5))
+        elif kind == "chart":
+            data = CategoryChartData()
+            data.categories = ["2021", "2022", "2023", "2024", "2025"]
+            for name in ("North", "South", "West"):
+                data.add_series(name, [round(rnd.uniform(5, 50), 1) for _ in range(5)])
+            s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1.6), Inches(11), Inches(5.4), data)
+        else:
+            t = s.shapes.add_table(8, 5, Inches(1), Inches(1.6), Inches(11), Inches(5)).table
+            for r in range(8):
+                for c in range(5):
+                    t.cell(r, c).text = rnd.choice(WORDS) if c == 0 or r == 0 else f"{rnd.uniform(0, 1000):.1f}"
+        s.notes_slide.notes_text_frame.text = " ".join(rnd.choice(WORDS) for _ in range(30))
+    with open(path, "wb") as f:
+        f.write(normalize(to_bytes(prs)))
+
+
+def decks(out):
+    for name, slides, photos, charts, tables in (("deck-50.pptx", 50, 20, 5, 5), ("deck-typical.pptx", 20, 8, 2, 1)):
+        d = os.path.join(out, name)
+        deck(d, slides, photos, charts, tables)
+        print(f"  {d}  ({os.path.getsize(d):,} bytes, {slides} slides)")
+
+
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "budgets")
+    args = [a for a in sys.argv[1:] if a != "--decks"]
+    out = args[0] if args else os.path.join(ROOT, "build", "budgets")
     os.makedirs(out, exist_ok=True)
+    if "--decks" in sys.argv:  # only the decks (scripts/budgets.ps1 makes them for its timings)
+        decks(out)
+        return
     x = os.path.join(out, "million-cells.xlsx")
     million_cells(x)
     print(f"  {x}  ({os.path.getsize(x):,} bytes, 1,000,000 cells)")
@@ -87,6 +157,7 @@ def main():
     f = os.path.join(out, "fifty-mb.xlsx")
     million_cells(f, rows=384_000, title="About 50 MB")
     print(f"  {f}  ({os.path.getsize(f):,} bytes, 7,680,000 cells)")
+    decks(out)
 
 
 if __name__ == "__main__":

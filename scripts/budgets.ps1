@@ -63,6 +63,10 @@ $fixedFiles = @("tests\pdfs\text.pdf", "tests\pdfs\big-600-pages.pdf", "tests\pd
 # includes paginating it all in the background, which has a budget of its own.
 $longDocBudget = 3000      # ms, launch to a 300-page document fully paginated
 $longDoc = "long-300.docx"
+# Decks (P1), made by tests\office\make_budget_files.py --decks with the venv's Python (python-pptx):
+# a 50-slide deck to its first slide, and memory with a typical 20-slide deck open.
+$deckBudget = 500          # ms, launch to the first slide of deck-50.pptx
+$deckMemoryBudget = 150    # MB, the private working set with deck-typical.pptx open
 # Typing in it (fwtool bench --typing): keystroke to the page painted again, the median of letters
 # and Backspaces, and the worst of every key, Enter included.
 $typingBudget = 16; $typingWorstBudget = 50  # ms
@@ -208,6 +212,12 @@ if (($Timings -or $TrackTimings) -and $exe) {
     & python tests\office\make_long_docs.py $longDir 300 | Out-Null
     if (Test-Path (Join-Path $longDir $longDoc)) { $files += (Join-Path $longDir $longDoc) }
   }
+  $venvPython = Join-Path $root ".venv\Scripts\python.exe"
+  if (Test-Path $venvPython) {
+    New-Item -ItemType Directory -Force $longDir | Out-Null
+    & $venvPython -I tests\office\make_budget_files.py --decks $longDir | Out-Null
+    foreach ($d in "deck-50.pptx", "deck-typical.pptx") { if (Test-Path (Join-Path $longDir $d)) { $files += (Join-Path $longDir $d) } }
+  }
   ""
   & $Fwtool bench-app --runs $Runs --json $benchJson $exe @files | Out-Host
   $benchFailed = $LASTEXITCODE -ne 0
@@ -263,6 +273,12 @@ if (($Timings -or $TrackTimings) -and $exe) {
     if ($s.name -eq "launch") {
       if ([double]$s.memoryMB -ge $launchMemoryBudget) { $timingFailures.Add("Memory after launch is $($s.memoryMB) MB, over its budget of $launchMemoryBudget MB.") }
       if ([double]$s.readyMs -ge $launchBudget) { $timingFailures.Add("Launch took $($s.readyMs) ms, over its budget of $launchBudget ms.") }
+    }
+    if ($s.name -eq "deck-50.pptx" -and [double]$s.readyMs -ge $deckBudget) {
+      $timingFailures.Add("A 50-slide deck took $($s.readyMs) ms to its first slide, over its budget of $deckBudget ms.")
+    }
+    if ($s.name -eq "deck-typical.pptx" -and [double]$s.memoryMB -ge $deckMemoryBudget) {
+      $timingFailures.Add("A typical deck uses $($s.memoryMB) MB, over its budget of $deckMemoryBudget MB.")
     }
     if ($s.name -eq $longDoc -and [double]$s.readyMs -ge $longDocBudget) {
       $timingFailures.Add("Paginating a 300-page document took $($s.readyMs) ms, over its budget of $longDocBudget ms.")
