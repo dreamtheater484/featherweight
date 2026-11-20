@@ -8,8 +8,14 @@
 #   pivots-stale.xlsx      the source data changed afterwards (values, new and gone items, a table
 #                          grown by rows), the pivots not refreshed
 #   pivots-refreshed.xlsx  the same after Excel's own Refresh All: what refreshing the stale file must give
+#
+#   python tests/sheet/excel_pivots.py --colonly <out folder>
+#
+# Writes pivots-colonly.xlsx from the folder's pivots-fresh.xlsx (which it leaves as it is): five more
+# pivots, on sheets of their own, with column fields and no row fields (one value, two, none; two
+# column fields) and two values alone: where Excel keeps a label column and where it doesn't.
 # Excel runs in a new instance of its own (DispatchEx), alerts, events and macros off, and only that
-# instance is ended.
+# instance is ended; one Office automation at a time (the mutex of scripts\reference-renders.ps1).
 import json, os, re, sys, zipfile
 import pythoncom, win32api, win32con, win32event, win32process
 import win32com.client
@@ -198,9 +204,34 @@ def scrub_pivot_user(path):
     os.replace(tmp, path)
 
 
-def main(out):
+def make_colonly(xl, path_fresh, path_out):
+    wb = xl.Workbooks.Open(os.path.abspath(path_fresh), 0, True)
+    src = "Data!R1C1:R%dC%d" % (len(ROWS) + 1, len(HEAD))
+    cases = [("ColOne", ["Region"], [("Sales", xlSum)]),
+             ("ColTwo", ["Region"], [("Sales", xlSum), ("Units", xlCount)]),
+             ("ColNone", ["Region"], []),
+             ("ColDeep", ["Region", "Quarter"], [("Sales", xlSum)]),
+             ("ValuesTwo", [], [("Sales", xlSum), ("Units", xlCount)])]
+    for name, cols, values in cases:
+        ws = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
+        ws.Name = name
+        pt = wb.PivotCaches().Create(xlDatabase, src, 6).CreatePivotTable(ws.Range("A3"), name, True, 6)
+        for i, f in enumerate(cols):
+            pt.PivotFields(f).Orientation = xlColumnField
+            pt.PivotFields(f).Position = i + 1
+        for f, func in values:
+            pt.AddDataField(pt.PivotFields(f), "%s of %s" % ({xlSum: "Sum", xlCount: "Count"}[func], f), func)
+        pt.RefreshTable()
+    wb.SaveAs(os.path.abspath(path_out), 51)
+    wb.Close(False)
+
+
+def main(out, colonly=False):
     os.makedirs(out, exist_ok=True)
     paths = [os.path.join(out, n) for n in ("pivots-fresh.xlsx", "pivots-stale.xlsx", "pivots-refreshed.xlsx")]
+    written = [os.path.join(out, "pivots-colonly.xlsx")] if colonly else paths
+    mutex = win32event.CreateMutex(None, False, "Global\\FeatherweightOfficeAutomation")
+    win32event.WaitForSingleObject(mutex, win32event.INFINITE)
     pythoncom.CoInitialize()
     xl = win32com.client.DispatchEx("Excel.Application")
     pid = None
@@ -214,7 +245,10 @@ def main(out):
         xl.EnableEvents = False
         xl.AutomationSecurity = 3
         xl.AskToUpdateLinks = False
-        make(xl, *paths)
+        if colonly:
+            make_colonly(xl, paths[0], written[0])
+        else:
+            make(xl, *paths)
     finally:
         xl.Quit()
         del xl
@@ -227,11 +261,15 @@ def main(out):
                 win32api.CloseHandle(h)
             except Exception:
                 pass
-    for p in paths:
+        win32event.ReleaseMutex(mutex)
+    for p in written:
         scrub_author(p)
         scrub_pivot_user(p)
         print("written", p)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    if sys.argv[1] == "--colonly":
+        main(sys.argv[2], colonly=True)
+    else:
+        main(sys.argv[1])

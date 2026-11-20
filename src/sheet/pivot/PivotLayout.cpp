@@ -581,12 +581,18 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   std::vector<uint32_t> colOfLevel(t.rowFields.size(), 0);
   for (size_t k = 1; k < t.rowFields.size(); ++k)
     colOfLevel[k] = colOfLevel[k - 1] + (b.CompactCol(t.rowFields[k - 1]) ? 0 : 1);
-  const uint32_t fdc = t.rowFields.empty() ? 0 : colOfLevel.back() + 1;
+  // No row fields but a column field: Excel keeps a label column only for a single value (its name
+  // labels the line of values), and with no values there is no line of values at all.
+  const bool colField = std::any_of(t.colFields.begin(), t.colFields.end(), [](int32_t f) { return f != kData; });
+  const bool valueLabel = t.rowFields.empty() && colField && t.dataFields.size() == 1;
+  const bool noValueLine = t.rowFields.empty() && colField && t.dataFields.empty();
+  const uint32_t fdc = t.rowFields.empty() ? (valueLabel ? 1 : 0) : colOfLevel.back() + 1;
   const bool valuesOnly = t.colFields.size() == 1 && t.colFields[0] == kData && t.hideValuesRow;
   const uint32_t fhr = t.colFields.empty() ? 1 : (valuesOnly ? 0 : 1);
   const uint32_t fdr = t.colFields.empty() ? 1 : fhr + static_cast<uint32_t>(t.colFields.size());
   const uint32_t top = t.location.firstRow, left = t.location.firstCol;
-  const uint64_t lastRow = uint64_t{top} + fdr + rows.size() - 1, lastCol = uint64_t{left} + fdc + cols.size() - 1;
+  const uint64_t lastRow = uint64_t{top} + fdr + rows.size() - 1 - (noValueLine ? 1 : 0);
+  const uint64_t lastCol = uint64_t{left} + fdc + cols.size() - 1;
   const uint32_t pages = static_cast<uint32_t>(t.pageFields.size());
   if (lastRow >= kMaxRows || lastCol >= kMaxCols || (pages && top < pages + 1)) {
     why = u"The PivotTable doesn't fit on the sheet.";
@@ -672,7 +678,7 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   const std::string rowCaption = t.rowHeaderCaption.empty() ? "Row Labels" : t.rowHeaderCaption;
   const std::string colCaption = t.colHeaderCaption.empty() ? "Column Labels" : t.colHeaderCaption;
   if (!t.colFields.empty() && fhr == 1) {
-    if (t.dataFields.size() == 1) put(top, left, TextItem(t.dataFields[0].name));
+    if (t.dataFields.size() == 1 && !t.rowFields.empty()) put(top, left, TextItem(t.dataFields[0].name));
     if (t.compact) {
       put(top, left + fdc, TextItem(t.colFields.size() == 1 && t.colFields[0] == kData ? t.dataCaption : colCaption));
     } else {
@@ -681,6 +687,7 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
     }
   }
   if (t.colFields.empty() && t.dataFields.size() == 1 && !dataOnRows) put(top, left + fdc, TextItem(t.dataFields[0].name));
+  if (valueLabel) put(top + fdr, left, TextItem(t.dataFields[0].name));
   if (t.colFields.empty() && dataOnRows && t.gridDropZones) put(top, left + fdc, TextItem("Total"));  // the classic layout
   for (size_t k = 0; k < t.rowFields.size(); ++k)
     if (k == 0 || colOfLevel[k] != colOfLevel[k - 1]) {
