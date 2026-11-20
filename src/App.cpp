@@ -26,6 +26,7 @@
 #include "ui/Theme.h"
 #include "pkg/Backups.h"
 #include "sheet/view/WorkbookView.h"
+#include "slide/view/PresentationView.h"
 #include "word/DocView.h"
 
 #pragma comment(lib, "imm32.lib")
@@ -1454,6 +1455,7 @@ void App::Execute(int cmd) {
       break;
     case CmdPresentation:
       if (ready && v->Paged()) SetPresentation(!presentation_);
+      else if (ready) v->Execute(cmd);  // a presentation's slide show (P1)
       break;
     case CmdThemeSystem: SetTheme(ThemeSetting::System); break;
     case CmdThemeLight: SetTheme(ThemeSetting::Light); break;
@@ -1671,6 +1673,8 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
+  if (fw::KindOfPath(path) == fw::FileKind::Presentation)
+    return std::make_unique<fw::slide::view::PresentationView>(*this, path);  // P1: read-only
   if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
     auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
     if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
@@ -1733,13 +1737,14 @@ void App::OpenDialog(bool templates) {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
   // Everything the viewers open first, then each kind on its own.
-  std::wstring all, docs, books;
+  std::wstring all, docs, books, decks;
   for (const fw::FileKindInfo& k : fw::FileKinds()) {
     if (!k.viewer) continue;
     for (const wchar_t* ext : k.extensions) {
       all += (all.empty() ? L"*" : L";*") + std::wstring(ext);
       if (k.kind == fw::FileKind::Document) docs += (docs.empty() ? L"*" : L";*") + std::wstring(ext);
       if (k.kind == fw::FileKind::Workbook) books += (books.empty() ? L"*" : L";*") + std::wstring(ext);
+      if (k.kind == fw::FileKind::Presentation) decks += (decks.empty() ? L"*" : L";*") + std::wstring(ext);
     }
   }
   // Templates (S4): those a shipped editor opens, as a new document or workbook.
@@ -1752,8 +1757,9 @@ void App::OpenDialog(bool templates) {
                                  {L"PDF documents", L"*.pdf"},
                                  {L"Word documents", docs.c_str()},
                                  {L"Excel workbooks", books.c_str()},
+                                 {L"PowerPoint presentations", decks.c_str()},
                                  {L"All files", L"*.*"}};
-  dlg->SetFileTypes(templates ? 6 : 5, templates ? filters : filters + 1);
+  dlg->SetFileTypes(templates ? 7 : 6, templates ? filters : filters + 1);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -2666,6 +2672,8 @@ void App::RunScript(const std::wstring& script) {
       if (v && v->Ready() && v->Kind() == TabKind::Document) written = static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi);
       if (v && v->Ready() && v->Kind() == TabKind::Workbook)
         written = static_cast<fw::sheet::view::WorkbookView*>(v)->RenderPagesForTesting(dir, dpi);
+      if (v && v->Ready() && v->Kind() == TabKind::Presentation)
+        written = static_cast<fw::slide::view::PresentationView*>(v)->RenderPagesForTesting(dir, dpi);
       if (written == 0) fwprintf(stderr, L"pagepngs failed\n");
     } else if (op == L"workbookpdf") {
       // workbookpdf:out.pdf exports every sheet of a workbook, as Excel's reference PDFs have them.

@@ -445,4 +445,24 @@ enum Cmd : int {
 
   // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
   CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
+
+  // Presentations (P1, p1-view): 3240-3299. F5 is CmdPresentation; the slides use CmdNextPage,
+  // CmdPrevPage, CmdFirstPage, CmdLastPage and the zoom commands.
+  CmdPresentFromCurrent = 3240,  // Shift+F5
+  CmdNotesPane,                  // the speaker notes below the slide, shown or hidden
+  CmdCopySlideText,
+  CmdCopySlidePicture,
+  CmdCopyNotes,
+  CmdOpenSlideLink,              // the link under the right-click
+  CmdPrintLayoutMenu,            // the toolbar's Print layout ▾
+  CmdPrintSlides,                // what Print and Export PDF lay out: slides,
+  CmdPrintHandouts1,             // handouts with 1, 2, 3, 4, 6 or 9 slides a page (in that order),
+  CmdPrintHandouts2,
+  CmdPrintHandouts3,
+  CmdPrintHandouts4,
+  CmdPrintHandouts6,
+  CmdPrintHandouts9,
+  CmdPrintNotes,                 // or notes pages
+  CmdPrintHidden,                // hidden slides print too
+  CmdPrintFrame,                 // a frame around the slides on handouts and notes pages
 };
