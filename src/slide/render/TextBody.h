@@ -56,9 +56,4 @@ class TextBlock {
   std::unique_ptr<Impl> impl_;
 };
 
-// A text body no model shape owns (SmartArt's stored drawing): its own paragraph and run
-// properties over the defaults, and the shape style's font reference.
-std::unique_ptr<fw::slide::TextBody> PlainTextBody(pugi::xml_node txBody, const draw::TextBox& box,
-                                                   const draw::ColorContext& colors);
-
 }  // namespace fw::slide::render

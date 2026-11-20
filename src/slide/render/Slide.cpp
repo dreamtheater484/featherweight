@@ -3,6 +3,7 @@
 
 #include "draw/Xml.h"
 #include "slide/render/SlideRender.h"
+#include "slide/render/Table.h"
 #include "slide/render/TextBody.h"
 #include "text/Fonts.h"
 
@@ -34,7 +35,8 @@ struct SlideRender::Impl {
     std::unique_ptr<draw::DrawingResources> resources;
     std::unique_ptr<draw::Drawing> drawing;
     std::vector<TextBlock> texts;  // one per drawing text box
-    std::vector<std::unique_ptr<fw::slide::TextBody>> ownText;  // text no model shape owns
+    std::unique_ptr<TableRender> table;
+    draw::Rect frame;  // a table's graphic frame, slide points
   };
   std::vector<Item> items;
 };
@@ -100,8 +102,18 @@ struct Builder {
     const fw::slide::Shape& s = *di.shape;
     using K = fw::slide::Shape::Kind;
     if (s.hidden || s.kind == K::ContentPart || s.placeholder.type == fw::slide::PlaceholderType::SlideImage) return;
-    if (s.kind == K::Table) return;  // tables: with the model's resolved tables (next step)
     SlideRender::Impl::Item item;
+    if (s.kind == K::Table) {
+      const fw::slide::Table* t = deck.GetTable(s, slide);
+      if (!t) return;
+      item.inherited = di.owner != &slide;
+      item.id = s.id;
+      item.shape = &s;
+      item.table = std::make_unique<TableRender>(*t, fonts, extras);
+      item.frame = s.bounds;
+      impl.items.push_back(std::move(item));
+      return;
+    }
     item.inherited = di.owner != &slide;
     item.id = s.id;
     item.shape = &s;
@@ -109,12 +121,8 @@ struct Builder {
     item.drawing = draw::Drawing::FromShapeTree(s.drawNode, *item.resources);
     if (!item.drawing || item.drawing->IsHidden()) return;
     for (const draw::TextBox& box : item.drawing->TextBoxes()) {
-      const fw::slide::TextBody* body = nullptr;
-      if (const fw::slide::Shape* owner = di.owner->ShapeOfText(box.content)) body = deck.Text(*owner, slide);
-      if (!body && box.content) {
-        item.ownText.push_back(PlainTextBody(box.content, box, extras.colors));
-        body = item.ownText.back().get();
-      }
+      // The model's shapes' text, and SmartArt's (a text box's, with its style's font reference).
+      const fw::slide::TextBody* body = box.content ? deck.TextOf(box.content, *di.owner, slide) : nullptr;
       TextBlock& block = item.texts.emplace_back();
       if (body && !body->Empty()) block.Build(fonts, box, *body, extras);
     }
@@ -124,6 +132,21 @@ struct Builder {
   void Finish() {
     for (const SlideRender::Impl::Item& item : impl.items) {
       if (item.background) continue;
+      if (item.table) {
+        ShapeInfo info;
+        info.id = item.inherited ? 0 : item.id;
+        info.shape = item.shape;
+        info.size = item.table->Extent();
+        info.transform = draw::Matrix::Translate(item.frame.left, item.frame.top);
+        info.bounds = Bounds(info.transform, info.size);
+        info.fromMaster = item.inherited;
+        out.shapes_.push_back(info);
+        int i = 0;
+        for (const draw::Rect& r : item.table->ParagraphBounds()) out.paragraphs_.push_back({info.id, i++, Transformed(info.transform, r)});
+        for (const TextBlock::Link& l : item.table->Links()) out.links_.push_back({info.id, Transformed(info.transform, l.bounds), l.link});
+        if (!item.inherited) Append(item.table->PlainText());
+        continue;
+      }
       const draw::Rect b = item.drawing->Bounds();
       const draw::Matrix place = draw::Matrix::Translate(b.left, b.top);
       for (const draw::Drawing::Part& p : item.drawing->Parts()) {
@@ -180,6 +203,15 @@ void SlideRender::Draw(draw::Painter& p, const draw::Rect& frame, DrawFilter* fi
   for (const Impl::Item& item : impl_->items) {
     if (item.background) {
       if (!filter || filter->Background()) item.drawing->Draw(p, item.drawing->Bounds());
+      continue;
+    }
+    if (item.table) {
+      const uint32_t id = item.inherited ? 0 : item.id;
+      if (filter && !filter->Shape(id)) continue;
+      p.Save();
+      p.Transform(draw::Matrix::Translate(item.frame.left, item.frame.top));
+      item.table->Draw(p, filter, id);
+      p.Restore();
       continue;
     }
     Hooks hooks(item, filter);

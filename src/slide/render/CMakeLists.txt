@@ -3,6 +3,7 @@
 # and charts through fwdraw and fwchart, text through fwtext. Headless: no UI and no window.
 add_library(fwslide_render STATIC
   Slide.cpp
+  Table.cpp
   TextBody.cpp
   Thumbnails.cpp
 )
