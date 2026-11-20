@@ -249,6 +249,26 @@ bool TranslateFormula(std::string_view f, std::string& out, int rows, int cols, 
     if (ns == "msoxl") {
       if (!f.empty() && f[0] == '=') f.remove_prefix(1);
       if (rows || cols) return false;  // not written repeated
+      // Excel's syntax as it is, but not naming a sheet (Name! or 'Name'!) the workbook doesn't have
+      // under that name.
+      for (size_t i = 0; names && i < f.size(); ++i) {
+        if (f[i] == '"') {
+          i = f.find('"', i + 1);
+          if (i == std::string_view::npos) return false;
+        } else if (f[i] == '!' && i > 0) {
+          size_t b = i;
+          if (f[i - 1] == '\'') {
+            b = i >= 2 ? f.rfind('\'', i - 2) : std::string_view::npos;
+            if (b == std::string_view::npos) return false;
+          } else {
+            while (b > 0 && (Alpha(f[b - 1]) || Digit(f[b - 1]) || f[b - 1] == '_' || f[b - 1] == '.')) --b;
+            if (b > 0 && (f[b - 1] == '#' || f[b - 1] == '/')) continue;  // an error: #REF!, #DIV/0!
+          }
+          std::string sheet(f.substr(b, i - b));
+          if (sheet.size() >= 2 && sheet.front() == '\'') sheet = sheet.substr(1, sheet.size() - 2);
+          if (!sheet.empty() && (*names)(sheet) != sheet) return false;  // missing, or renamed for Excel
+        }
+      }
       out = std::string(f);
       return !out.empty();
     }
@@ -276,6 +296,12 @@ bool TranslateFormula(std::string_view f, std::string& out, int rows, int cols, 
       out.append(f.substr(i, j + 1 - i));
       i = j + 1;
     } else if (c == '[') {
+      // A reference right after an operand ("LN[Hidden.B2]", "2[.A1]") isn't OpenFormula: written
+      // as they are, the two would read as one (a sheet "LNHidden"). Refused: the cell keeps its value.
+      if (!out.empty()) {
+        const char p = out.back();
+        if (Alpha(p) || Digit(p) || std::string_view("_.\\\")}!?").find(p) != std::string_view::npos) return false;
+      }
       size_t j = i + 1;
       bool quoted = false;
       while (j < f.size() && (quoted || f[j] != ']')) {

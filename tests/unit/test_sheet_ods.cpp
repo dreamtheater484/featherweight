@@ -47,6 +47,15 @@ TEST(sheet_ods_formulas) {
   ods::SheetNames names = [](std::string_view n) { return n == "Long" ? std::string("Short") : std::string(); };
   std::string out;
   CHECK(ods::TranslateFormula("of:=[Long.A1]+[Gone.A1]", out, 0, 0, &names) && out == "Short!A1+#REF!");
+  // A reference glued to an operand (a fuzz finding: LN[Hidden.B2] read as a sheet LNHidden).
+  CHECK_EQ(Tr("of:=ISBLANK(LN[Hidden.B2])"), std::string("(refused)"));
+  CHECK_EQ(Tr("of:=2[.A1]"), std::string("(refused)"));
+  // Excel's own syntax keeps its sheets, but not one the workbook doesn't have under that name.
+  ods::SheetNames same = [](std::string_view n) { return n == "Data" ? std::string(n) : std::string(); };
+  CHECK(ods::TranslateFormula("msoxl:=Data!A1+#REF!+1/0", out, 0, 0, &same) && out == "Data!A1+#REF!+1/0");
+  CHECK(!ods::TranslateFormula("msoxl:=Long!A1", out, 0, 0, &names));  // renamed Short
+  CHECK(!ods::TranslateFormula("msoxl:=Gone!A1", out, 0, 0, &same));
+  CHECK(!ods::TranslateFormula("msoxl:='Gone too'!A1", out, 0, 0, &same));
   CHECK(ods::TranslateAddress("$Sheet1.$A$1:.$B$3", out) && out == "Sheet1!$A$1:$B$3");
   CHECK(!ods::TranslateAddress("not an address", out));
 }
