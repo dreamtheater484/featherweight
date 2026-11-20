@@ -60,6 +60,8 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" "
       "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" "
       "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" "
+      "xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" "
+      "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
       "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><office:automatic-styles>"
       "<style:style style:name=\"cf1\" style:family=\"table-cell\"><style:text-properties fo:color=\"#FF0000\"/></style:style>"
       "<style:style style:name=\"ce1\" style:family=\"table-cell\"><style:map style:condition=\"of:cell-content()&gt;2\" "
@@ -90,7 +92,8 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "<table:table-cell office:value-type=\"string\"><text:p><text:ruby><text:ruby-base>Tokyo</text:ruby-base>"
       "<text:ruby-text>kana</text:ruby-text></text:ruby><text:tab/>x</text:p></table:table-cell>"
       "<table:table-cell office:value-type=\"string\"><text:p>a<text:span text:style-name=\"T1\">b</text:span></text:p>"
-      "</table:table-cell></table:table-row>"
+      "</table:table-cell><table:table-cell><draw:frame svg:x=\"1pt\" svg:y=\"2pt\" svg:width=\"30pt\" svg:height=\"20pt\">"
+      "<draw:image xlink:href=\"Pictures/p.png\"/></draw:frame></table:table-cell></table:table-row>"
       "<table:table-row table:number-rows-repeated=\"1048572\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
       "</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>";
   fw::pkg::MemorySink sink;
@@ -99,6 +102,8 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   zip.Add("mimetype", std::span(reinterpret_cast<const uint8_t*>(mime.data()), mime.size()), nullptr,
           fw::pkg::ZipWriter::Compression::Store);
   zip.Add("content.xml", std::span(reinterpret_cast<const uint8_t*>(content.data()), content.size()));
+  const std::string png("\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\1\0\0\0\1\x08\x06\0\0\0", 29);  // a picture's header
+  zip.Add("Pictures/p.png", std::span(reinterpret_cast<const uint8_t*>(png.data()), png.size()));
   zip.Finish();
 
   std::vector<uint8_t> xlsx;
@@ -144,6 +149,11 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   const std::string comments = part("/xl/comments1.xml");
   CHECK(comments.find("ref=\"A4\"") != std::string::npos && comments.find("Check") != std::string::npos &&
         comments.find("this") != std::string::npos);
-  CHECK(sheet.find("<legacyDrawing r:id=\"rIdVml\"/>") != std::string::npos);
+  CHECK(sheet.find("<drawing r:id=\"rIdDrawing\"/><legacyDrawing r:id=\"rIdVml\"/>") != std::string::npos);
+  // The picture in D4: from that cell, 1 pt and 2 pt in, 30 by 20 pt.
+  const std::string drawing = part("/xl/drawings/drawing1.xml");
+  CHECK(drawing.find("<xdr:oneCellAnchor") != std::string::npos && drawing.find("<xdr:col>3</xdr:col>") != std::string::npos &&
+        drawing.find("<xdr:colOff>12700</xdr:colOff>") != std::string::npos && drawing.find("cx=\"381000\"") != std::string::npos);
+  CHECK(part("/xl/media/image1.png").size() == png.size());
   CHECK(!part("/xl/drawings/vmlDrawing1.vml").empty());
 }
