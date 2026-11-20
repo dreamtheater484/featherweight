@@ -8,7 +8,7 @@
     "grades": "workbooks: grade lists, grade books and marking sheets",
     "calculators": "workbooks: calculators and forms with formulas (loans, savings, tax, benefits, applications)",
     "business": "workbooks: small-business templates (inventory, sales logs)",
-    "statistics": "workbooks and CSV files: statistics tables from statistics offices and ministries",
+    "statistics": "workbooks, CSV files and decks: statistics tables and briefings from statistics offices and ministries",
     "opendata": "CSV files from open-data portals",
     "letters": "letters and letter templates",
     "forms": "form templates, with content controls or legacy form fields",
@@ -19,7 +19,15 @@
     "manuals": "manuals, guides, brochures and newsletters with pictures and text boxes",
     "legal": "contracts, policies, procurement documents and legislation with multi-level numbering",
     "review": "documents with comments or tracked changes",
-    "features": "small test files from LibreOffice's and Apache POI's test suites: charts, equations, right-to-left and East Asian text; for workbooks, number formats, conditional formats, charts and other features"
+    "lectures": "decks: university lectures and seminars, many slides of text, formulas, diagrams and charts",
+    "school": "decks: school lessons and teacher training",
+    "briefings": "decks: government and international briefings and presentations",
+    "training": "decks: training and workshop decks with screenshots, callouts and tables",
+    "templates": "decks: presentation templates (.potx and .pptx) with masters, layouts and themes",
+    "shows": "decks: slide shows (.ppsx) with transitions and animations",
+    "photos": "decks: photo-heavy decks",
+    "charts": "decks: chart-heavy decks",
+    "features": "small test files from LibreOffice's and Apache POI's test suites: charts, equations, right-to-left and East Asian text; for workbooks, number formats, conditional formats, charts and other features; for decks, one feature each"
   },
   "sources": [
     { "domain": "gov", "tag": "usgov", "kind": "government", "name": "US government (.gov)" },
@@ -261,7 +269,94 @@
       "kind": "test-suite",
       "name": "LibreOffice's test files (Mozilla Public License 2.0)",
       "paths": ["/LibreOffice/core/"]
-    }
+    },
+    {
+      "domain": "paho.org",
+      "tag": "paho",
+      "kind": "international",
+      "name": "Pan American Health Organization (PAHO/WHO)"
+    },
+    {
+      "domain": "ilo.org",
+      "tag": "ilo",
+      "kind": "international",
+      "name": "International Labour Organization"
+    },
+    { "domain": "tum.de", "tag": "tum", "kind": "university", "name": "Technical University of Munich" },
+    {
+      "domain": "federalreserveeducation.org",
+      "tag": "fededucation",
+      "kind": "public-body",
+      "name": "Federal Reserve Education (Federal Reserve System)"
+    },
+    {
+      "domain": "dallasfed.org",
+      "tag": "dallasfed",
+      "kind": "public-body",
+      "name": "Federal Reserve Bank of Dallas"
+    },
+    {
+      "domain": "lehrerfortbildung-bw.de",
+      "tag": "zslbw",
+      "kind": "school",
+      "name": "ZSL Baden-Wuerttemberg teacher training"
+    },
+    {
+      "domain": "uantwerpen.be",
+      "tag": "uantwerpen",
+      "kind": "university",
+      "name": "University of Antwerp"
+    },
+    {
+      "domain": "uni-potsdam.de",
+      "tag": "unipotsdam",
+      "kind": "university",
+      "name": "University of Potsdam"
+    },
+    { "domain": "era-online.org", "tag": "era", "kind": "publisher", "name": "European Renal Association" },
+    {
+      "domain": "escmid.org",
+      "tag": "escmid",
+      "kind": "publisher",
+      "name": "European Society of Clinical Microbiology and Infectious Diseases"
+    },
+    {
+      "domain": "smartdublin.ie",
+      "tag": "smartdublin",
+      "kind": "government",
+      "name": "Dublin City Council (Smart Dublin open data)"
+    },
+    {
+      "domain": "commonwealthfund.org",
+      "tag": "commonwealthfund",
+      "kind": "publisher",
+      "name": "The Commonwealth Fund (non-commercial use)"
+    },
+    {
+      "domain": "cpb.nl",
+      "tag": "cpb",
+      "kind": "government",
+      "name": "CPB Netherlands Bureau for Economic Policy Analysis"
+    },
+    {
+      "domain": "datamillnorth.org",
+      "tag": "datamillnorth",
+      "kind": "government",
+      "name": "Data Mill North (Leeds City Council)"
+    },
+    {
+      "domain": "uni-saarland.de",
+      "tag": "unisaarland",
+      "kind": "university",
+      "name": "Saarland University"
+    },
+    {
+      "domain": "uni-goettingen.de",
+      "tag": "unigoettingen",
+      "kind": "university",
+      "name": "University of Goettingen"
+    },
+    { "domain": "scot.nhs.uk", "tag": "nhsscot", "kind": "public-body", "name": "NHS Scotland" }
   ],
   "files": [
     {

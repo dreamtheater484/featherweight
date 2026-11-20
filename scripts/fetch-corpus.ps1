@@ -90,6 +90,9 @@ param(
   [switch]$Rescreen,
   [switch]$Retry,
   [string[]]$Only,
+  # A JSON list of host names: every download hop (redirects too) must be one of them, on top of
+  # the sources list, so a download stays on the hosts a request named.
+  [string]$Hosts,
   # Screen these local files and print the results; nothing is downloaded, moved or deleted.
   [string[]]$Screen
 )
@@ -158,6 +161,12 @@ function Read-Json([string]$path) {
 $manifestData = if (Test-Path $Manifest) { Read-Json $Manifest } else { $null }
 if (-not $manifestData -or -not $manifestData.sources) { throw "$Manifest has no sources list." }
 $sources = @($manifestData.sources)
+$allowedHosts = $null
+if ($Hosts) {
+  $allowedHosts = @{}
+  foreach ($h in @((Read-Json $Hosts) | ForEach-Object { $_ })) { $allowedHosts[([string]$h).ToLowerInvariant().TrimEnd('.')] = $true }
+  if (-not $allowedHosts.Count) { throw "$Hosts lists no hosts." }
+}
 
 # The source whose domain the URL's host is, or ends with ("gov" allows every *.gov host). A
 # source with "paths" matches only URLs whose path starts with one of them (case-sensitive).
@@ -184,6 +193,7 @@ function Get-Download([string]$url, [string]$dest, [string]$format = "docx") {
       $u = [Uri]$url
       if ($u.Scheme -ne "https") { throw "not HTTPS: $url" }
       if (-not (Find-Source $u)) { throw "not on the sources list: $($u.Host)" }
+      if ($allowedHosts -and -not $allowedHosts.ContainsKey($u.Host.ToLowerInvariant().TrimEnd('.'))) { throw "not one of the request's hosts: $($u.Host)" }
       $w = & $curl -sS --proto =https --max-redirs 0 --max-filesize $MaxBytes --connect-timeout 30 --max-time 300 `
         --stderr $errors -D $headers -o $dest -w "%{http_code} %{redirect_url}" $u.AbsoluteUri
       if ($LASTEXITCODE -eq 63) { throw "larger than 20 MB" }
@@ -1223,7 +1233,8 @@ function Get-Extension($e, [string]$format) {
   if ($e.file) { return [IO.Path]::GetExtension($e.file).ToLowerInvariant() }
   $ext = [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath).ToLowerInvariant()
   switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } }
-    "pptx" { if (@(".ppsx", ".potx") -contains $ext) { $ext } else { ".pptx" } } default { ".docx" } }
+    "pptx" { if ($e.format -and -not $ext) { $ext = ".$($e.format)".ToLowerInvariant() }  # a template served from a URL without an extension
+      if (@(".ppsx", ".potx") -contains $ext) { $ext } else { ".pptx" } } default { ".docx" } }
 }
 
 # fwtool check refuses malformed packages and zip bombs, and checks every reference.
