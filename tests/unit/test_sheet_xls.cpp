@@ -144,3 +144,69 @@ TEST(xls_decompile) {
   CHECK_EQ(Decompile({0x00}), std::string("<failed>"));
   CHECK_EQ(Decompile({0x24, 0}), std::string("<failed>"));
 }
+
+namespace {
+
+// A BIFF8 record: type, size, data.
+void Rec(std::vector<uint8_t>& out, uint16_t type, std::initializer_list<uint32_t> fields, std::initializer_list<int> sizes) {
+  std::vector<uint8_t> data;
+  auto size = sizes.begin();
+  for (uint32_t v : fields) {
+    for (int i = 0; i < *size; ++i) data.push_back(static_cast<uint8_t>(v >> (8 * i)));
+    ++size;
+  }
+  for (uint16_t v : {type, static_cast<uint16_t>(data.size())}) {
+    out.push_back(static_cast<uint8_t>(v));
+    out.push_back(static_cast<uint8_t>(v >> 8));
+  }
+  out.insert(out.end(), data.begin(), data.end());
+}
+
+}  // namespace
+
+TEST(xls_row_formats_print) {
+  // Excel's .xls writer keeps a row's format on its ROW record, and Excel prints the .xls down to the
+  // last such row within DIMENSIONS: the used range reaches it (a blank cell in the row's format).
+  std::vector<uint8_t> globals, sheet;
+  Rec(globals, 0x0809, {0x0600, 0x0005, 0, 0, 0, 0}, {2, 2, 2, 2, 4, 4});  // BOF: globals
+  Rec(globals, 0x0031, {220, 0, 0x7FFF, 400, 0, 0, 0, 0, 0, 5, 0, 'A', 'r', 'i', 'a', 'l'},
+      {2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1});  // FONT Arial 11
+  for (int i = 0; i < 15; ++i) Rec(globals, 0x00E0, {0, 0, 0xFFF5, 0x20, 0, 0, 0, 0x20C0}, {2, 2, 2, 2, 4, 2, 4, 2});  // style XFs
+  Rec(globals, 0x00E0, {0, 0, 0x0001, 0x20, 0, 0, 0, 0x20C0}, {2, 2, 2, 2, 4, 2, 4, 2});                // XF 15
+  Rec(globals, 0x00E0, {0, 0, 0x0001, 0x20, 0x4000, 0, 0x04000000, 0x208D}, {2, 2, 2, 2, 4, 2, 4, 2});  // XF 16: a fill
+  const size_t boundSheet = globals.size();
+  Rec(globals, 0x0085, {0, 0, 0, 1, 0, 'S'}, {4, 1, 1, 1, 1, 1});  // BOUNDSHEET "S"; its offset below
+  Rec(globals, 0x000A, {}, {});
+  const uint32_t at = static_cast<uint32_t>(globals.size());
+  for (int i = 0; i < 4; ++i) globals[boundSheet + 4 + i] = static_cast<uint8_t>(at >> (8 * i));
+  Rec(sheet, 0x0809, {0x0600, 0x0010, 0, 0, 0, 0}, {2, 2, 2, 2, 4, 4});  // BOF: a worksheet
+  Rec(sheet, 0x0200, {0, 9, 0, 2, 0}, {4, 4, 2, 2, 2});                  // DIMENSIONS: rows 1-9
+  for (uint32_t row : {4u, 5u, 6u, 7u, 8u, 11u})                         // ROW: rows 5-9 and 12 formatted
+    Rec(sheet, 0x0208, {row, 0, 0, 300, 0, 0, 0x0180, 16}, {2, 2, 2, 2, 2, 2, 2, 2});
+  Rec(sheet, 0x0203, {0, 0, 15, 0, 0x3FF00000}, {2, 2, 2, 4, 4});  // NUMBER: A1 = 1
+  Rec(sheet, 0x000A, {}, {});
+  std::vector<uint8_t> stream = globals;
+  stream.insert(stream.end(), sheet.begin(), sheet.end());
+
+  const xls::StreamFn streams = [&](std::string_view n) -> std::optional<std::vector<uint8_t>> {
+    if (n == "Workbook") return stream;
+    return std::nullopt;
+  };
+  pkg::Status st;
+  std::vector<uint8_t> xlsx = xls::ToXlsx(streams, st);
+  CHECK(st.Ok() && !xlsx.empty());
+  if (xlsx.empty()) return;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(xlsx)), pkg::Limits::Default(), st);
+  CHECK(package != nullptr);
+  if (!package) return;
+  auto book = xlsx::Read(std::move(package), st, {.loadAll = true});
+  CHECK(book != nullptr);
+  if (!book) return;
+  const Sheet& s = book->GetSheet(0);
+  CHECK_EQ(s.GetValue(0, 0).number, 1.0);
+  const std::optional<Range> used = s.UsedRange();
+  CHECK(used && used->lastRow == 8 && used->lastCol == 0);  // row 9; not row 12, past DIMENSIONS
+  CellInfo cell;
+  CHECK(s.GetCell(8, 0, cell) && cell.style != 0 && cell.style == s.Row(8).style);
+  CHECK(s.Row(11).customFormat && !s.GetCell(11, 0, cell));
+}

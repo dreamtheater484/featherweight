@@ -1244,6 +1244,7 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   double defaultHeight = 12.75;
   uint16_t defaultHeightFlags = 0;
   uint16_t defColWidth = 8;
+  uint32_t dimRows = 0;  // DIMENSIONS: one past the last row Excel counts as used
   uint16_t window2 = 0x06B6, topRow = 0, leftCol = 0, gridColor = 64, scaleSlv = 0, scaleNormal = 0;
   bool window2Seen = false;
   uint16_t zoomNum = 0, zoomDen = 0;
@@ -1555,6 +1556,7 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         break;
       }
       case 0x0055: defColWidth = b.U16(); break;
+      case 0x0200: b.Skip(4); dimRows = b.Ok() ? b.U32() : 0; break;  // DIMENSIONS
       case 0x0225: {  // DEFAULTROWHEIGHT
         defaultHeightFlags = b.U16();
         const uint16_t h = b.U16();
@@ -1968,6 +1970,21 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
     if (c.form == Cell::SharedChild && !liveSi.count(c.si)) c.form = Cell::None;
 
   auto xfOf = [&](uint32_t xf) { return xf < cellXf_.size() ? cellXf_[xf] : 0u; };
+
+  // Excel prints an .xls down to its last formatted row within DIMENSIONS (its writer keeps a row's
+  // format on the row, not in blank cells), while the used range counts cells: a blank cell in the
+  // row's format, at the first column in use, keeps those rows printing.
+  if (!unique.empty()) {
+    for (auto it = rows.rbegin(); it != rows.rend() && it->first > unique.back().row; ++it) {
+      if (it->first >= dimRows || !it->second.format || !xfOf(it->second.xf)) continue;
+      Cell c;
+      c.row = it->first;
+      c.col = std::min_element(unique.begin(), unique.end(), [](const Cell& a, const Cell& b) { return a.col < b.col; })->col;
+      c.xf = it->second.xf;
+      unique.push_back(c);
+      break;
+    }
+  }
 
   std::string o = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
                   "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
