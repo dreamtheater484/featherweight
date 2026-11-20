@@ -147,6 +147,12 @@ struct LabelParts {
   std::optional<std::wstring> separator;
 };
 
+// A data label's own number format (c:numFmt with sourceLinked off); empty when it follows the data.
+std::string LabelFormat(pugi::xml_node dLbls) {
+  pugi::xml_node f = C(dLbls, "numFmt");
+  return f && !Bool(f, "sourceLinked", false) ? f.attribute("formatCode").value() : "";
+}
+
 LabelParts LabelsOf(pugi::xml_node dLbls) {
   LabelParts l;
   if (!dLbls) return l;
@@ -220,6 +226,7 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   const LabelParts l = LabelsOf(C(ser, "dLbls"));
   s.labels = l.val, s.percent = l.pct, s.categoryLabels = l.cat, s.seriesNames = l.ser, s.keys = l.key;
   s.separator = l.separator;
+  s.labelFormat = LabelFormat(C(ser, "dLbls"));
   return s;
 }
 
@@ -274,7 +281,7 @@ bool HasC14Style(pugi::xml_node chartSpace) {
 
 }  // namespace
 
-bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data) {
+bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data, bool presentation) {
   out = Chart{};
   if (!chartSpace || LocalNameOf(chartSpace) != "chartSpace" || NamespaceOf(chartSpace) != kChart) return false;
   pugi::xml_node chart = C(chartSpace, "chart");
@@ -285,7 +292,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
   out.roundedCorners = On(chartSpace, "roundedCorners", data != nullptr);
   out.styled = HasC14Style(chartSpace);
-  out.legacy = data && !out.styled;
+  out.presentation = presentation;
+  out.legacy = (data || presentation) && !out.styled;
   out.workbook = data != nullptr;
   out.plot = LookOf(C(plot, "spPr"), colors);
   float size = -1;  // stated by the chart, or else (below) by its axes or legend
@@ -335,6 +343,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const std::string_view style = Val(C(c, "scatterStyle"));
     g.lines = style != "marker" && style != "none";
     const LabelParts l = LabelsOf(C(c, "dLbls"));
+    g.labelFormat = LabelFormat(C(c, "dLbls"));
     g.labels = l.val.value_or(false);
     g.percent = l.pct.value_or(false);
     g.categoryLabels = l.cat.value_or(false);
@@ -418,9 +427,10 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       // 2007's look: 18-point Arial, not bold (Excel).
       pugi::xml_node p = A(rich, "p");
       if (out.legacy && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
-        out.titleSize = 18;
+        // PowerPoint: the chart's text size times 1.2, not bold, in the chart's font (its PDFs).
+        out.titleSize = presentation ? (spaceSize > 0 ? spaceSize : 10) * 1.2f : 18;
         out.titleBold = false;
-        out.titleFont = L"Arial";
+        if (!presentation) out.titleFont = L"Arial";
       }
       TextLook(rich, colors, &out.titleSize, &out.titleColor, &out.titleBold);
     } else {
