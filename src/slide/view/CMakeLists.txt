@@ -19,4 +19,8 @@ set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PROPE
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_view.cpp")
   target_link_libraries(fw_tests PRIVATE fwslideviewcore)
+  # The tab off-screen: find, the notes, handouts and notes pages, Export PDF, a .ppsx.
+  add_test(NAME presentation_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DDECKS=${PROJECT_SOURCE_DIR}/tests/office/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/presentation"
+           -P "${PROJECT_SOURCE_DIR}/tests/screens/presentation.cmake")
 endif()
