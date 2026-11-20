@@ -596,3 +596,24 @@ TEST(SlidePublicDecksResolve) {
   }
   CHECK(decks >= 18);
 }
+
+TEST(SlideDateFieldsShowToday) {
+  // PowerPoint updates date fields when it shows a slide; the stored text is from the last save.
+  std::string shape =
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"D\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>"
+      "<a:bodyPr/><a:lstStyle/><a:p><a:fld id=\"{1}\" type=\"datetime1\"><a:rPr lang=\"en-US\"/><a:t>1/27/13</a:t></a:fld>"
+      "<a:fld id=\"{2}\" type=\"datetime10\"><a:rPr lang=\"nl-NL\"/><a:t>9:15</a:t></a:fld>"
+      "<a:fld id=\"{3}\" type=\"datetimeFigureOut\"><a:t>kept</a:t></a:fld></a:p></p:txBody></p:sp>";
+  auto deck = Modified({{"ppt/slides/slide1.xml", SlideXml(shape)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const TextBody* t = TextOf(*deck, *deck->GetSlide(0), 5);
+  CHECK(t && t->paragraphs[0].runs.size() == 3);
+  if (!t || t->paragraphs[0].runs.size() != 3) return;
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+  std::wstring today = std::to_wstring(now.wMonth) + L"/" + std::to_wstring(now.wDay) + L"/" + std::to_wstring(now.wYear);
+  CHECK(t->paragraphs[0].runs[0].text == today);
+  CHECK(t->paragraphs[0].runs[1].text.find(L':') != std::wstring::npos);
+  CHECK(t->paragraphs[0].runs[2].text == L"kept");
+}
