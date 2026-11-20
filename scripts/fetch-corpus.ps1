@@ -1043,7 +1043,9 @@ function Test-Pptx([string]$path) {
   $part = $null
   try {
     $zip = [IO.Compression.ZipFile]::OpenRead($path)
-    $entries = @($zip.Entries)
+    # A zip whose central directory isn't where its end record says reads as one empty entry here.
+    $entries = @($zip.Entries | Where-Object { $_ -and $_.FullName })
+    if (-not $entries.Count) { throw "a damaged zip (no part can be read: its central directory isn't where its end record says)" }
     if ($entries.Count -gt 5000) { throw "more than 5000 parts" }
     $names = @{}
     foreach ($e in $entries) {
