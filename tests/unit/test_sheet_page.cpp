@@ -264,6 +264,48 @@ TEST(sheet_page_scaled_rows_as_excel) {
   if (layout.PageCount() == 3) CHECK(layout.Page(0).body.lastRow == 49 && layout.Page(1).body.lastRow == 99);
 }
 
+// Without a print area Excel prints its used range and leaves out the pages at the end with nothing
+// on them; merged cells count, empty as they are (s4-ods's pages check: poi-57893's 50,000 merges
+// print 1,064 pages). Excel 2021's counts (scratchpad excel_used.py): A1 "x" and, at row 200, an
+// empty cell with a number format 1 page; A200:B200 merged 5; a space 5; AD200:AE200 merged 20.
+TEST(sheet_page_used_range_merges_as_excel) {
+  const std::string a1 = "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>";
+  auto book = OpenZip(test::MakeZip(WorkbookParts(
+      {"<sheetData>" + a1 + "<row r=\"200\"><c r=\"A200\" s=\"1\"/></row></sheetData>",
+       "<sheetData>" + a1 + "</sheetData><mergeCells count=\"1\"><mergeCell ref=\"A200:B200\"/></mergeCells>",
+       "<sheetData>" + a1 + "<row r=\"200\"><c r=\"A200\" t=\"inlineStr\"><is><t xml:space=\"preserve\"> </t></is></c></row></sheetData>",
+       "<sheetData>" + a1 + "<row r=\"200\"><c r=\"AD200\" s=\"1\"/><c r=\"AE200\" s=\"1\"/></row></sheetData>"
+       "<mergeCells count=\"1\"><mergeCell ref=\"AD200:AE200\"/></mergeCells>"})));
+  if (!book) return;
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const size_t excel[] = {1, 5, 5, 20};
+  for (size_t i = 0; i < std::size(excel); ++i) {
+    const Sheet& s = book->GetSheet(i);
+    view::Grid grid;
+    grid.Build(s, book->GetStyles(), measure);
+    view::PrintLayout layout(*book, s, i, grid, text, view::PrintInfo{});
+    CHECK(layout.PageCount() == excel[i]);
+    if (layout.PageCount() != excel[i]) std::printf("    sheet %zu: %zu pages, Excel %zu\n", i + 1, layout.PageCount(), excel[i]);
+  }
+  // FW_PRINT_KINDS=excel_used.py's kinds.xlsx: each sheet's pages, to set beside Excel's.
+  wchar_t path[MAX_PATH];
+  if (DWORD n = GetEnvironmentVariableW(L"FW_PRINT_KINDS", path, MAX_PATH); n && n < MAX_PATH) {
+    std::ifstream in(path, std::ios::binary);
+    auto kinds = OpenZip(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+    if (!kinds) return;
+    view::CellText kindText(*kinds, fonts, measure, locale);
+    for (size_t i = 0; i < kinds->SheetCount(); ++i) {
+      view::Grid grid;
+      grid.Build(kinds->GetSheet(i), kinds->GetStyles(), measure);
+      view::PrintLayout layout(*kinds, kinds->GetSheet(i), i, grid, kindText, view::PrintInfo{});
+      std::printf("    %-13s pages %3zu\n", kinds->GetSheet(i).Name().c_str(), layout.PageCount());
+    }
+  }
+}
+
 // s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again
 // (the undo takes its text back to before its first save); margins the edit didn't change keep
 // their value (Excel's 17 digits).
