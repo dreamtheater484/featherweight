@@ -271,3 +271,154 @@ TEST(sheet_edit_lost_reference_on_a_deleted_sheet) {
   CHECK(ed.Undo(2));
   CHECK_EQ(FormulaText(book->GetSheet(1), 0, 0), std::string("MH!#REF!"));
 }
+
+// A 3-D range (Sheet1:Sheet3!A1) as Excel changes it (checked in Excel 2026-11-20), in a cell, a name,
+// a conditional format and a validation alike (Excel refuses 3-D ranges in the last two, but a
+// file can have them):
+// - deleting an end sheet moves that end to the next sheet inward; one sheet left, it's a plain
+//   reference; every sheet deleted, #REF!;
+// - renaming an end renames it;
+// - moving a sheet changes what the range spans; an end moved past the other end gives way to the
+//   next sheet inward.
+TEST(sheet_edit_3d_ranges_follow_their_sheets) {
+  struct Step {
+    char op;  // 'd' delete, 'r' rename, 'm' move
+    const char* sheet;
+    const char* name = "";
+    int to = 0;
+  };
+  auto run = [](const char* range, std::vector<Step> steps, const std::string& want) {
+    const std::string sum = std::string("SUM(") + range + "!A1)";
+    const std::string five = "<sheetData><row r=\"1\"><c r=\"C1\"><f>" + sum + "</f><v>0</v></c></row></sheetData>"
+                             "<conditionalFormatting sqref=\"E1\"><cfRule type=\"expression\" priority=\"1\"><formula>" + sum +
+                             "&gt;0</formula></cfRule></conditionalFormatting><dataValidations count=\"1\">"
+                             "<dataValidation type=\"custom\" sqref=\"F1\"><formula1>" + sum + "&gt;0</formula1></dataValidation></dataValidations>";
+    const std::string data = "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>";
+    auto book = OpenParts({data, data, data, data, five});
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(ed.SetName(DefinedName{"N", -1, std::string(range) + "!$A$1", false}));
+    auto index = [&](const char* name) {
+      for (size_t i = 0; i < book->SheetCount(); ++i)
+        if (book->GetSheet(i).Name() == name) return static_cast<int>(i);
+      return -1;
+    };
+    for (const Step& s : steps) {
+      const int i = index(s.sheet);
+      CHECK(i >= 0);
+      if (s.op == 'd') CHECK(ed.DeleteSheet(i));
+      else if (s.op == 'r') CHECK(ed.RenameSheet(i, s.name));
+      else CHECK(ed.MoveSheet(i, s.to));
+    }
+    const Sheet& five2 = book->GetSheet(static_cast<size_t>(index("Sheet5")));
+    const std::string ref = want == "#REF!" ? want : want + "!A1", abs = want == "#REF!" ? want : want + "!$A$1";
+    const std::string cell = FormulaText(five2, 0, 2), name = book->FindName("N") ? book->FindName("N")->formula : "-";
+    const std::string& rules = five2.Text().afterData;
+    const bool cf = rules.find("<formula>SUM(" + ref + ")&gt;0</formula>") != std::string::npos;
+    const bool dv = rules.find("<formula1>SUM(" + ref + ")&gt;0</formula1>") != std::string::npos;
+    if (cell != "SUM(" + ref + ")" || name != abs || !cf || !dv)
+      std::printf("    %s, %zu steps: %s | %s | %s\n", range, steps.size(), cell.c_str(), name.c_str(), rules.c_str());
+    CHECK_EQ(cell, "SUM(" + ref + ")");
+    CHECK_EQ(name, abs);
+    CHECK(cf && dv);
+    // Undone, as it was.
+    CHECK(ed.Undo(static_cast<int>(steps.size())));
+    CHECK_EQ(FormulaText(book->GetSheet(4), 0, 2), sum);
+    CHECK(book->FindName("N") && book->FindName("N")->formula == std::string(range) + "!$A$1");
+  };
+  const char* r = "Sheet1:Sheet3";
+  // Deleting.
+  run(r, {{'d', "Sheet1"}}, "Sheet2:Sheet3");
+  run(r, {{'d', "Sheet3"}}, "Sheet1:Sheet2");
+  run(r, {{'d', "Sheet2"}}, "Sheet1:Sheet3");
+  run(r, {{'d', "Sheet1"}, {'d', "Sheet2"}}, "Sheet3");
+  run(r, {{'d', "Sheet3"}, {'d', "Sheet2"}}, "Sheet1");
+  run(r, {{'d', "Sheet1"}, {'d', "Sheet3"}}, "Sheet2");
+  run(r, {{'d', "Sheet1"}, {'d', "Sheet2"}, {'d', "Sheet3"}}, "#REF!");
+  // Renaming.
+  run(r, {{'r', "Sheet1", "Jan"}}, "Jan:Sheet3");
+  run(r, {{'r', "Sheet3", "Mar 2"}}, "'Sheet1:Mar 2'");
+  run(r, {{'r', "Sheet1", "Jan"}, {'r', "Sheet3", "Mar"}}, "Jan:Mar");
+  // Moving: what the range spans changes, its text only when an end passes the other.
+  run(r, {{'m', "Sheet4", "", 1}}, "Sheet1:Sheet3");  // into it
+  run(r, {{'m', "Sheet2", "", 4}}, "Sheet1:Sheet3");  // out of it
+  run(r, {{'m', "Sheet1", "", 1}}, "Sheet1:Sheet3");  // an end inward
+  run(r, {{'m', "Sheet3", "", 3}}, "Sheet1:Sheet3");  // an end outward
+  run(r, {{'m', "Sheet4", "", 0}}, "Sheet1:Sheet3");  // before the first
+  run(r, {{'m', "Sheet1", "", 2}}, "Sheet2:Sheet3");  // the first past the last
+  run(r, {{'m', "Sheet1", "", 4}}, "Sheet2:Sheet3");
+  run(r, {{'m', "Sheet3", "", 0}}, "Sheet1:Sheet2");  // the last before the first
+  run(r, {{'m', "Sheet1", "", 2}, {'d', "Sheet2"}}, "Sheet3");
+  run("Sheet1:Sheet2", {{'m', "Sheet1", "", 1}}, "Sheet2");
+  run("Sheet1:Sheet2", {{'m', "Sheet2", "", 0}}, "Sheet1");
+}
+
+// A name, as a cell's formula, can't name a sheet the workbook doesn't have: Excel would look for a
+// workbook by that name, and the file would name a sheet it hasn't (fuzz_xlsx, CI 44693360543:
+// Sheet1:Sheet2!A1 with no Sheet1).
+TEST(sheet_edit_names_name_sheets_the_workbook_has) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.RenameSheet(0, "Sheet 1"));
+  for (const char* f : {"Sheet1:Sheet2!A1", "Sheet2:Sheet1!A1", "Sheet9!A1*2", "SUM(Sheet2!A1,Sheet1!B2)"}) {
+    CHECK(!ed.SetName(DefinedName{"N", -1, f, false}));
+    CHECK(!ed.SetName(DefinedName{"_xlnm.Print_Area", 1, f, false}));
+  }
+  CHECK(!book->FindName("N") && !book->FindName("_xlnm.Print_Area", 1));
+  for (const char* f : {"'Sheet 1:Sheet2'!A1", "sheet2!A1*2", "5", "\"Sheet1!A1\"", "[1]Sheet1!A1", "#REF!"}) {
+    CHECK(ed.SetName(DefinedName{"N", -1, f, false}));
+    CHECK(book->FindName("N") && book->FindName("N")->formula == f);
+  }
+}
+
+// So can't a conditional format's or a validation's formula (Excel takes no other workbook in a
+// rule); a rule the file had that names one doesn't stop the sheet's other rules from changing.
+TEST(sheet_edit_rules_name_sheets_the_workbook_has) {
+  const std::string stale = "<conditionalFormatting sqref=\"C1\"><cfRule type=\"expression\" priority=\"1\">"
+                            "<formula>Gone!A1&gt;0</formula></cfRule></conditionalFormatting>";
+  auto book = OpenParts({"<sheetData/>" + stale, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.RenameSheet(0, "Sheet 1"));
+  using RK = Editor::RuleKind;
+  auto cf = [](const char* f, int priority) {
+    return "<conditionalFormatting sqref=\"A1\"><cfRule type=\"expression\" priority=\"" + std::to_string(priority) +
+           "\"><formula>" + std::string(f) + "</formula></cfRule></conditionalFormatting>";
+  };
+  auto dv = [](const char* f) {
+    return "<dataValidations count=\"1\"><dataValidation type=\"list\" sqref=\"B1\"><formula1>" + std::string(f) +
+           "</formula1></dataValidation></dataValidations>";
+  };
+  for (const char* f : {"Sheet1:Sheet2!A1&gt;0", "Sheet9!A1&gt;0"})
+    CHECK(!ed.SetSheetRules(0, RK::ConditionalFormats, stale + cf(f, 2), "", u"New Rule"));
+  CHECK(!ed.SetSheetRules(0, RK::Validations, dv("Sheet1!$A$1:$A$3"), "", u"Data Validation"));
+  CHECK(!ed.SetSheetRules(1, RK::Validations, dv("Sheet1:Sheet2!$A$1"), "", u"Data Validation"));
+  CHECK(book->GetSheet(0).Text().afterData == stale);
+  CHECK(ed.SetSheetRules(0, RK::ConditionalFormats, stale + cf("'Sheet 1:Sheet2'!A1&gt;0", 2), "", u"New Rule"));
+  CHECK(ed.SetSheetRules(0, RK::Validations, dv("Sheet2!$A$1:$A$3"), "", u"Data Validation"));
+  CHECK(book->GetSheet(0).Text().afterData.find("<formula1>Sheet2!$A$1:$A$3</formula1>") != std::string::npos);
+}
+
+// A formula that doesn't compile (a file can hold one) keeps its text, but its sheet prefixes
+// follow its sheets as a compiled one's do: it never names a sheet that's gone (fuzz_xlsx).
+TEST(sheet_edit_sheet_prefixes_of_formulas_that_dont_compile) {
+  const std::string data = "<sheetData/>";
+  auto book = OpenParts({data, data, data, data});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetName(DefinedName{"Span", -1, "Sheet1:Sheet3!A1+", false}));
+  CHECK(ed.SetName(DefinedName{"One", -1, "Sheet1!A1+Sheet4!A1+", false}));
+  CHECK(ed.SetName(DefinedName{"Moved", -1, "SUM('Sheet2:Sheet4'!A1", false}));
+  auto name = [&](const char* n) { return book->FindName(n) ? book->FindName(n)->formula : std::string("-"); };
+  CHECK(ed.DeleteSheet(0));  // Sheet1
+  CHECK_EQ(name("Span"), std::string("Sheet2:Sheet3!A1+"));
+  CHECK_EQ(name("One"), std::string("#REF!+Sheet4!A1+"));
+  CHECK_EQ(name("Moved"), std::string("SUM('Sheet2:Sheet4'!A1"));
+  CHECK(ed.MoveSheet(0, 2));  // Sheet2, a first end, past both last ends: each gives way to Sheet3
+  CHECK_EQ(name("Span"), std::string("Sheet3!A1+"));
+  CHECK_EQ(name("Moved"), std::string("SUM(Sheet3:Sheet4!A1"));
+  CHECK(ed.Undo(2));
+  CHECK_EQ(name("Span"), std::string("Sheet1:Sheet3!A1+"));
+  CHECK_EQ(name("One"), std::string("Sheet1!A1+Sheet4!A1+"));
+}
