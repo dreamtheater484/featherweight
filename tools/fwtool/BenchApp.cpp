@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <thread>
@@ -143,6 +144,126 @@ std::map<ULONG_PTR, ULONG> ContextSwitches(DWORD pid) {
     }
     if (!p->NextEntryOffset) return switches;
     offset += p->NextEntryOffset;
+  }
+}
+
+// --idle-threads: what woke while idle, thread by thread: where the thread started (a module and
+// an offset into it), whether it's the UI thread, its CPU time, and when it woke (ms into the idle
+// window). Looked at every 5 ms, which itself wakes nothing in the app.
+bool g_idleThreads = false;
+double g_settleMs = 0;  // diagnosis: settle at least this long (FW_BENCH_SETTLE_MS)
+
+struct ThreadLook {
+  ULONG switches = 0;
+  int64_t cpu = 0;  // 100 ns
+};
+
+std::map<ULONG_PTR, ThreadLook> ThreadsOf(DWORD pid) {
+  using Query = NTSTATUS(NTAPI*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+  static auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
+  std::map<ULONG_PTR, ThreadLook> looks;
+  if (!query) return looks;
+  static std::vector<uint8_t> buf(1 << 20);
+  ULONG needed = 0;
+  while (query(SystemProcessInformation, buf.data(), static_cast<ULONG>(buf.size()), &needed) < 0) {
+    if (buf.size() > (64u << 20)) return looks;
+    buf.resize(std::max<size_t>(buf.size() * 2, needed + 65536));
+  }
+  for (size_t offset = 0;;) {
+    auto* p = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(buf.data() + offset);
+    if (static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(p->UniqueProcessId)) == pid) {
+      auto* threads = reinterpret_cast<SystemThread*>(p + 1);
+      for (ULONG t = 0; t < p->NumberOfThreads; ++t)
+        looks[reinterpret_cast<ULONG_PTR>(threads[t].clientThread)] = {
+            threads[t].contextSwitches, threads[t].kernelTime.QuadPart + threads[t].userTime.QuadPart};
+      return looks;
+    }
+    if (!p->NextEntryOffset) return looks;
+    offset += p->NextEntryOffset;
+  }
+}
+
+std::string StartOf(HANDLE process, DWORD tid) {
+  using QueryThread = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  static auto query =
+      reinterpret_cast<QueryThread>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+  ULONG_PTR start = 0;
+  if (HANDLE t = OpenThread(THREAD_QUERY_INFORMATION, FALSE, tid)) {
+    if (query) query(t, 9 /* ThreadQuerySetWin32StartAddress */, &start, sizeof start, nullptr);
+    CloseHandle(t);
+  }
+  HMODULE modules[1024];
+  DWORD bytes = 0;
+  char text[MAX_PATH + 32];
+  if (start && EnumProcessModulesEx(process, modules, sizeof modules, &bytes, LIST_MODULES_ALL))
+    for (DWORD i = 0; i < bytes / sizeof(HMODULE); ++i) {
+      MODULEINFO mi{};
+      if (!GetModuleInformation(process, modules[i], &mi, sizeof mi)) continue;
+      const auto base = reinterpret_cast<ULONG_PTR>(mi.lpBaseOfDll);
+      if (start < base || start >= base + mi.SizeOfImage) continue;
+      char name[MAX_PATH] = "";
+      GetModuleBaseNameA(process, modules[i], name, MAX_PATH);
+      std::snprintf(text, sizeof text, "%s+0x%llx", name, static_cast<unsigned long long>(start - base));
+      return text;
+    }
+  std::snprintf(text, sizeof text, "0x%llx", static_cast<unsigned long long>(start));
+  return text;
+}
+
+// Every thread of the app: where it started and when (ms after the process), its CPU time.
+void ListThreads(HANDLE process, DWORD pid) {
+  using Query = NTSTATUS(NTAPI*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+  static auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
+  FILETIME created, exited, kernel, user;
+  if (!query || !GetProcessTimes(process, &created, &exited, &kernel, &user)) return;
+  const int64_t born = (static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  std::vector<uint8_t> buf(4 << 20);
+  ULONG needed = 0;
+  if (query(SystemProcessInformation, buf.data(), static_cast<ULONG>(buf.size()), &needed) < 0) return;
+  for (size_t offset = 0;;) {
+    auto* p = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(buf.data() + offset);
+    if (static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(p->UniqueProcessId)) == pid) {
+      auto* threads = reinterpret_cast<SystemThread*>(p + 1);
+      for (ULONG t = 0; t < p->NumberOfThreads; ++t) {
+        const auto tid = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(threads[t].clientThread));
+        std::printf("    thread %5lu made at %7.0f ms  %-40s %7.1f ms CPU, %lu switches, wait reason %lu\n", tid,
+                    (threads[t].createTime.QuadPart - born) / 10000.0, StartOf(process, tid).c_str(),
+                    (threads[t].kernelTime.QuadPart + threads[t].userTime.QuadPart) / 10000.0, threads[t].contextSwitches,
+                    threads[t].waitReason);
+      }
+      return;
+    }
+    if (!p->NextEntryOffset) return;
+    offset += p->NextEntryOffset;
+  }
+}
+
+// Watches the app for `ms` and prints each thread that woke.
+void WatchIdle(HANDLE process, DWORD pid, DWORD uiThread, double ms) {
+  ListThreads(process, pid);
+  const auto t0 = Clock::now();
+  auto first = ThreadsOf(pid), last = first;
+  std::map<ULONG_PTR, std::vector<double>> woke;
+  while (MsSince(t0) < ms) {
+    Sleep(5);
+    auto now = ThreadsOf(pid);
+    const double at = MsSince(t0);
+    for (const auto& [tid, look] : now) {
+      auto it = last.find(tid);
+      const ULONG before = it == last.end() ? 0 : it->second.switches;
+      for (ULONG k = before; k < look.switches; ++k) woke[tid].push_back(at);
+    }
+    last = std::move(now);
+  }
+  for (const auto& [tid, times] : woke) {
+    auto a = first.find(tid);
+    auto b = last.find(tid);
+    const double cpu = b == last.end() ? 0 : (b->second.cpu - (a == first.end() ? 0 : a->second.cpu)) / 10000.0;
+    std::string when;
+    for (double t : times) when += (when.empty() ? "" : " ") + std::to_string(static_cast<int>(t));
+    std::printf("    thread %5llu%s %-40s %3zu wakeups, %5.1f ms CPU%s: %s\n", static_cast<unsigned long long>(tid),
+                tid == uiThread ? " (UI)" : "     ", StartOf(process, static_cast<DWORD>(tid)).c_str(), times.size(), cpu,
+                b == last.end() ? " (ended)" : "", when.c_str());
   }
 }
 
@@ -349,11 +470,27 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
     std::vector<std::pair<double, Screen::Frame>> frames;
     Screen::Frame frame;
     double stableSince = MsSince(t0);
+    // And until no thread of the app has woken for a second (S4). What isn't the app's own work
+    // then settles first: a worker the PC starved below "busy" (a 50 MB workbook read while other
+    // programs build), and what Windows and the graphics driver do in the app on their own clock
+    // (AMD's driver starts a thread about 5 s after the device is made, which wakes thread-pool
+    // threads half a second later: inside the idle window of a file that took 4 s to open). A
+    // timer still shows: one firing every second keeps the app from settling (20 s) or wakes it 3
+    // times in the idle window, and one firing more often never lets it settle.
+    auto switches = ContextSwitches(pi.dwProcessId);
+    double quietSince = MsSince(t0), switchesLooked = quietSince;
     while (MsSince(t0) < 20000 && (MsSince(t0) - stableSince < 1000 || MsSince(t0) - busyUntil < 500 ||
-                                   MsSince(t0) - loadedUntil < 500)) {
+                                   MsSince(t0) - loadedUntil < 500 || MsSince(t0) - quietSince < 1000 ||
+                                   MsSince(t0) < g_settleMs)) {
       Pump();
       watchCpu();
       double at = MsSince(t0);
+      if (at - switchesLooked >= 50) {
+        auto now = ContextSwitches(pi.dwProcessId);
+        if (Wakeups(switches, now)) quietSince = at;
+        switches = std::move(now);
+        switchesLooked = at;
+      }
       if (screen.Capture(hwnd, frame) && (frames.empty() || Screen::Difference(frames.back().second, frame) > 0)) {
         if (frames.empty() || Screen::Difference(frames.back().second, frame) > 0.002) stableSince = at;
         frames.emplace_back(at, frame);
@@ -376,7 +513,8 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
       GetLastInputInfo(&before);
       double cpu = CpuMs(pi.hProcess);
       auto switches = ContextSwitches(pi.dwProcessId);
-      Sleep(static_cast<DWORD>(kIdleSeconds * 1000));
+      if (g_idleThreads) WatchIdle(pi.hProcess, pi.dwProcessId, pi.dwThreadId, kIdleSeconds * 1000);
+      else Sleep(static_cast<DWORD>(kIdleSeconds * 1000));
       GetLastInputInfo(&after);
       if (after.dwTime != before.dwTime) continue;
       run.idleCpuMs = CpuMs(pi.hProcess) - cpu;
@@ -448,6 +586,8 @@ int RunBenchApp(const Options& options) {
   std::vector<std::filesystem::path> files{std::filesystem::path()};
   for (size_t i = 1; i < options.inputs.size(); ++i) files.push_back(std::filesystem::absolute(options.inputs[i]));
   const int runs = std::max(1, options.runs);
+  g_idleThreads = options.idleThreads;
+  if (const char* v = std::getenv("FW_BENCH_SETTLE_MS")) g_settleMs = std::atof(v);
   std::printf("%s %s: the median of %d runs after a warm-up, each a fresh start, in ms from the launch.\n",
               Display(source).c_str(), fw::WideToUtf8(version).c_str(), runs);
   std::printf("\"ready\" is the app's last work before it goes quiet (its UI thread); \"loaded\" the last burst of work\n"

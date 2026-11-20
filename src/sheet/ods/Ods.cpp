@@ -34,6 +34,7 @@ constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDoc
 constexpr std::string_view kRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 constexpr int kMaxRow = 1048576, kMaxCol = 16384;
 constexpr int kMaxDepth = 32;               // nested spans in a cell, nested row groups
+constexpr int64_t kMaxEmptyRows = 50000;    // rows written without cells, a file (WriteRow)
 
 std::string_view Attr(xml_node n, const char* name) { return n.attribute(name).value(); }
 
@@ -412,6 +413,7 @@ class Converter {
   int headerRowFirst_ = -1, headerRowLast_ = -1;
   int minRow_ = kMaxRow, maxRow_ = -1, minCol_ = kMaxCol, maxCol_ = -1;
   int hiddenFrom_ = -1;  // rows from here to the end are hidden (zeroHeight)
+  int64_t emptyRows_ = 0;  // rows written without cells, in the whole file (kMaxEmptyRows)
 };
 
 int Converter::Shared(const std::string& s) {
@@ -599,13 +601,20 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     formatted |= it.formatted;
   }
   if (!content && !special && !formatted) return;
+  // Rows written without cells (hidden, a height, a level, a format) cost as much to read as rows
+  // with cells: a file gets kMaxEmptyRows of them, the rest come out as other rows (a fuzz timeout:
+  // 524,284 hidden rows mid-sheet).
+  const bool empty = !content && !formatted && rowFormat < 0;
   if (!content && repeat > 1000) {
-    // A hidden block to (nearly) the end: zeroHeight. Other big empty blocks are left as they are.
-    if (hidden && index + repeat >= kMaxRow - 1024 && repeat > 10000) hiddenFrom_ = index;
+    // A hidden block to (nearly) the end: zeroHeight, every row above it written, shown. Other big
+    // empty blocks are left as they are; a hidden one elsewhere is written row by row.
+    if (hidden && index + repeat >= kMaxRow - 1024 && repeat > 10000 && emptyRows_ + index <= kMaxEmptyRows)
+      hiddenFrom_ = index, emptyRows_ += index;
     if (!hidden || hiddenFrom_ == index) return;
   }
   for (int k = 0; k < repeat && cells_ < maxCells_ && work_ < maxWork_; ++k) {
     ++work_;
+    if (empty && emptyRows_ >= kMaxEmptyRows) break;
     const int r = index + k;
     std::string xml = "<row r=\"" + std::to_string(r + 1) + "\"";
     if (rowFormat >= 0) xml += " s=\"" + std::to_string(rowFormat) + "\" customFormat=\"1\"";
@@ -724,6 +733,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
         merges_.push_back({r, it.col, r + sr - 1, it.col + sc - 1});
     }
     if (cellsXml.empty() && !special) continue;
+    if (cellsXml.empty() && ++emptyRows_ > kMaxEmptyRows) continue;
     rows.push_back({r, cellsXml.empty() ? xml + "/>" : xml + ">" + cellsXml + "</row>"});
   }
 }
