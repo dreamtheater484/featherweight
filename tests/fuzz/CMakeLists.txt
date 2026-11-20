@@ -83,7 +83,8 @@ add_test(NAME fuzz_numfmt_replay COMMAND fuzz_numfmt ${_fw_runs} "${_fw_seeds}/n
 add_test(NAME fuzz_csv_replay COMMAND fuzz_csv ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/office/csv" "${_fw_regressions}/csv")
 add_test(NAME fuzz_ods_replay COMMAND fuzz_ods ${_fw_runs} "${_fw_seeds}/ods" "${_fw_regressions}/ods")
 add_test(NAME fuzz_condfmt_replay COMMAND fuzz_condfmt ${_fw_runs} "${_fw_seeds}/condfmt" "${_fw_regressions}/condfmt")
-add_test(NAME fuzz_pptx_replay COMMAND fuzz_pptx ${_fw_runs} "${_fw_seeds}/pptx" "${_fw_seeds}/package" "${_fw_regressions}/pptx")
+add_test(NAME fuzz_pptx_replay COMMAND fuzz_pptx ${_fw_runs} "${_fw_seeds}/pptx" "${_fw_seeds}/package"
+  "${CMAKE_SOURCE_DIR}/tests/office/presentations" "${_fw_regressions}/pptx")
 add_test(NAME fuzz_pivot_replay COMMAND fuzz_pivot ${_fw_runs} "${_fw_seeds}/pivot" "${_fw_regressions}/pivot")
 add_test(NAME fuzz_timing_replay COMMAND fuzz_timing ${_fw_runs} "${_fw_seeds}/timing" "${_fw_regressions}/timing")
 

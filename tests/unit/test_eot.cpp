@@ -6,7 +6,11 @@
 #include <t2embapi.h>
 #include <wrl/client.h>
 
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -260,4 +264,24 @@ TEST(EotDamagedDataGivesNothing) {
   // A plain font comes back as it is.
   std::vector<uint8_t> ttf = {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   CHECK(draw::sfnt::DecodeEot(ttf) == ttf);
+}
+
+TEST(EotCommittedPixelFont) {
+  // FW Pixel (public domain, tests/office/make_presentations.py) as the public deck embeds it, and
+  // as t2embed compresses it (tests/fuzz/seeds/font): the same glyphs, without t2embed at test time.
+  auto dir = std::filesystem::path(__FILE__).parent_path().parent_path() / "fuzz" / "seeds" / "font";
+  auto read = [](const std::filesystem::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+  };
+  std::vector<uint8_t> plain = draw::sfnt::DecodeEot(read(dir / "fw-pixel.fntdata"));
+  draw::sfnt::EotInfo info;
+  std::vector<uint8_t> packed = draw::sfnt::DecodeEot(read(dir / "fw-pixel-mtx.fntdata"), &info);
+  std::vector<uint8_t> subset = draw::sfnt::DecodeEot(read(dir / "fw-pixel-subset-mtx.fntdata"));
+  CHECK(!plain.empty() && !packed.empty() && !subset.empty());
+  CHECK(info.family == L"FW Pixel" && (info.flags & 0x4));
+  std::vector<GlyphData> a = Glyphs(plain), b = Glyphs(packed);
+  CHECK(!a.empty() && a == b);
+  CHECK_EQ(DirectWriteGlyphCount(packed), static_cast<uint32_t>(b.size()));
+  CHECK_EQ(DirectWriteGlyphCount(subset), static_cast<uint32_t>(Glyphs(subset).size()));
 }
