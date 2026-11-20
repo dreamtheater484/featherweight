@@ -406,7 +406,8 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 - [ ] Edit an `.xls` and an `.ods` (a value, a formula, a format), save them as `.xlsx`, and open the result in Excel: no repair, and the edits are there. The original `.xls` or `.ods` is unchanged.
 - [ ] An `.ots` (OpenDocument template) opens as a new workbook.
 - [ ] A damaged file (rename a `.txt` to `.ods`) says it "seems to be damaged or isn't an OpenDocument spreadsheet" and nothing else happens.
-- Known: an `.xls`'s chart sheets, macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read.
+- [ ] An `.xls` with pictures, text boxes and shapes shows them where Excel does; one with a chart sheet keeps the sheet in its place, with an empty chart where Excel draws its chart, and prints a page for it.
+- Known: an `.xls`'s charts aren't read (a chart sheet keeps an empty chart), its macro sheets and macros are dropped (references to them become `#REF!`), and formulas that refer to other workbooks keep their values; an `.ods`'s sheet protection comes across without its password, and its data validations aren't read. Printed, the `.xls` copies pass about as many pages as their `.xlsx` originals (19.15 % against 18.68 %, one workbook Excel prints differently left out), but by workbook they're behind on average (17.15 % against 19.42 %): a follow-up.
 
 ### Password-protected workbooks
 
@@ -437,10 +438,11 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 
 ## S4's gate (record the numbers)
 
-- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 246 `.xlsx`, the `.xls` and the `.ods` copies: ___ failures, ___ new validator errors, ___ Excel repairs (target 0 each); the converted `.xls` and `.ods` saved as `.xlsx` with no edits: ___ validator errors, ___ Excel repairs (target 0 each).
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 249 `.xlsx` (44 public, 205 real-world), the 204 `.xls` and the 171 `.ods` copies: ___ failures, ___ new validator errors, ___ Excel repairs (target 0 each); the converted `.xls` and `.ods` saved as `.xlsx` with no edits: ___ validator errors, ___ Excel repairs (target 0 each).
 - [ ] `fwtool compare --cells --folders xls <corpus>\reference` and the same for `ods`: ___ % and ___ % of the cells show Excel's text (target ≥ 99 %).
-- [ ] Printed pages (`scripts\sheet-pages.ps1`): the public set (`-Reference tests\office\reference -Folders excel`) ___ of 239 (target ≥ 90 %); the real-world `.xlsx` (`-Folders xlsx`) ___ % (recorded); the `.xls` and `.ods` copies (`-Folders xls,ods -Originals <the xlsx run's summary.json>`) ___ % and ___ % against their originals' ___ % and ___ % on the same workbooks (target: at least the originals').
+- [ ] Printed pages (`scripts\sheet-pages.ps1`): the public set (`-Reference tests\office\reference -Folders excel`) ___ of 239 (target ≥ 90 %); the real-world `.xlsx` (`-Folders xlsx`) ___ % (recorded); the `.xls` and `.ods` copies (`-Folders xls,ods -Originals <the xlsx run's summary.json>`) ___ % and ___ % against their originals' ___ % and ___ % on the same workbooks (target: at least the originals'; `govuk-english-indices-of-deprivation-2019-file-8` is left out of the `.xls` comparison, as the plan says, because Excel prints its own `.xls` differently from its `.xlsx`).
 - [ ] PivotTables: every corpus pivot refreshes to Excel's values; the created ones open in Excel without a repair and refresh to the same values.
 - [ ] `fwtool bench --sheet-edits`: full recalculation of 100,000 formulas ___ ms on 1 thread, ___ ms on 4 (speed-up ___×, target ≥ 3×, 0 values differ).
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target < 11 MB, 3.0's budget).
+- [ ] On a quiet PC with no Featherweight open (the script won't start its copies beside one): `scripts\budgets.ps1 -Build build-release -Timings` (launch, ready, memory, idle) and `fwtool bench-app build-release\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv build\budgets\fifty-mb.xlsx`: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000), fifty-mb on screen in ___ ms (< 1,500) and loaded in ___ ms (< 5,000); then record them (`-Timings -Record "…"`) before release 3.0.
 - [ ] `fuzz_xls`, `fuzz_ods`, the pivot cache, and `fuzz_xlsx` with pivots, 60 s each: no findings.
