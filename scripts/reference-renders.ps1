@@ -672,9 +672,18 @@ if ($Corpus) {
   }
   $screened = $corpusNames | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
   if (-not $screened) { throw "$corpusRoot has no $($corpusNames -join ', ') folder (see scripts\fetch-corpus.ps1)." }
+  # Decks (P1): only the files the screen passed, by their hash in tests\office\real-world.json, so a
+  # deck that got into pptx\ some other way never reaches PowerPoint.
+  $screenedHashes = @{}
+  $realWorld = Join-Path $root "tests\office\real-world.json"
+  if (Test-Path $realWorld) { foreach ($m in @((Get-Content $realWorld -Raw -Encoding UTF8 | ConvertFrom-Json).files)) { if ($m.sha256) { $screenedHashes[[string]$m.sha256] = $true } } }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
     $rel = $f.FullName.Substring($corpusRoot.Length + 1) -replace '\\', '/'
+    if ($rel -like "pptx/*" -and -not $screenedHashes[(Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()]) {
+      Write-Output "Not rendered: $rel isn't a deck the screen passed (its hash isn't in tests\office\real-world.json)."
+      continue
+    }
     $jobs += @{ File = $f; Source = $rel; Pdf = "$rel.pdf" }
   }
 } else {
