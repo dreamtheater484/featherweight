@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "slide/view/ModelDeck.h"
@@ -66,8 +67,9 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     return OpenResult::Failed;
   }
   thumbCache_.assign(deck_->SlideCount(), {});
-  // A slide show file starts in the show; Esc comes back here (plan §8.1).
-  showPending_ = deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx");
+  // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
+  // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
+  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
   LayoutParts();
   return OpenResult::Ok;
 }

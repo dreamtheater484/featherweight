@@ -36,11 +36,12 @@ endfunction()
 snapshot(tab "slide:2;cmd:find;type:point;wait:300" "${DECKS}/simple.pptx")
 
 # Pages: 11 slides as handouts of 6 (2 pages) and of 9 (2), notes pages (11), and the slides as a PDF.
-snapshot(pages "printlayout:handouts6;pagepngs:${OUT}/h6|48;printlayout:handouts9;pagepngs:${OUT}/h9|48;printlayout:notes;pagepngs:${OUT}/notes|48;printlayout:slides;exportpdf:${OUT}/slides.pdf;printlayout:handouts3;exportpdf:${OUT}/handouts3.pdf"
+snapshot(pages "printlayout:handouts6;pagepngs:${OUT}/h6|48;printlayout:handouts9;pagepngs:${OUT}/h9|48;printlayout:notes;pagepngs:${OUT}/notes|48;printlayout:slides;pagepngs:${OUT}/slides|24;exportpdf:${OUT}/slides.pdf;printlayout:handouts3;exportpdf:${OUT}/handouts3.pdf"
          "${DECKS}/layouts.pptx")
 expect_pages("${OUT}/h6" 2)
 expect_pages("${OUT}/h9" 2)
 expect_pages("${OUT}/notes" 11)
+expect_pages("${OUT}/slides" 11)  # pagepngs: every slide, hidden ones too (the pixel compare)
 foreach(pdf slides handouts3)
   if(NOT EXISTS "${OUT}/${pdf}.pdf")
     message(FATAL_ERROR "${pdf}.pdf wasn't exported")

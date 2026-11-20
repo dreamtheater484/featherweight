@@ -251,7 +251,14 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
 int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
   if (!Ready()) return 0;
   CreateDirectoryW(dir.c_str(), nullptr);
-  const std::vector<PrintPage> pages = Pages(deck_->SlideSize(), deck_->NotesSize());
+  // Full page slides (the default): every slide, hidden ones too, in order, at the slide's size, for
+  // the pixel compare (p1-corpus's slide-pages.ps1). Handouts and notes pages as they export.
+  std::vector<size_t> slides = PrintedSlides();
+  if (print_.what == PrintWhat::Slides) {
+    slides.resize(SlideCount());
+    for (size_t i = 0; i < slides.size(); ++i) slides[i] = i;
+  }
+  const std::vector<PrintPage> pages = LayoutPages(slides, deck_->SlideSize(), deck_->SlideSize(), deck_->NotesSize(), print_);
   const float scale = dpi / 72;
   int written = 0;
   for (const PrintPage& page : pages) {
