@@ -495,6 +495,7 @@ struct Context {
   bool played = true;
   double repeat = 1;
   bool autoReverse = false;
+  double accel = 0, decel = 0;  // the effect's own (motion paths' smooth start and end)
 };
 
 class Compiler {
@@ -575,8 +576,11 @@ class Compiler {
     b.repeat = rc.empty() || rc == "indefinite" ? 1 : std::clamp(Number(rc, 1000) / 1000, 0.0, 1000.0);
     b.repeat *= ctx.repeat;
     b.autoReverse = Truthy(Attr(cTn, "autoRev")) || ctx.autoReverse;
-    b.accel = std::clamp(Number(Attr(cTn, "accel"), 0) / 100000, 0.0, 1.0);
-    b.decel = std::clamp(Number(Attr(cTn, "decel"), 0) / 100000, 0.0, 1.0);
+    // A behavior without its own easing takes its effect's: the behaviors of one effect run
+    // together, so easing each is easing the effect.
+    std::string_view accel = Attr(cTn, "accel"), decel = Attr(cTn, "decel");
+    b.accel = std::clamp((accel.empty() ? ctx.accel : Number(accel, 0)) / 100000, 0.0, 1.0);
+    b.decel = std::clamp((decel.empty() ? ctx.decel : Number(decel, 0)) / 100000, 0.0, 1.0);
     if (b.accel + b.decel > 1) {
       double s = b.accel + b.decel;
       b.accel /= s;
@@ -692,6 +696,8 @@ class Compiler {
     std::string_view rc = Attr(cTn, "repeatCount");
     if (!rc.empty() && rc != "indefinite") ctx.repeat = std::clamp(Number(rc, 1000) / 1000, 0.0, 1000.0);
     ctx.autoReverse = Truthy(Attr(cTn, "autoRev"));
+    ctx.accel = Number(Attr(cTn, "accel"), 0);
+    ctx.decel = Number(Attr(cTn, "decel"), 0);
   }
 
   Timing& t_;

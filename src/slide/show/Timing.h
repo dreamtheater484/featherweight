@@ -75,7 +75,9 @@ struct TargetBox {
 struct Reveal {
   enum Kind : uint8_t { None, Wipe, Split };
   Kind kind = None;
-  Side side = Side::Down;  // Wipe: the direction the edge moves ("down": revealed from the top)
+  // Wipe: the edge the shown part starts at. PowerPoint's "Wipe From Bottom" is filter="wipe(down)":
+  // Down, shown from the bottom edge up.
+  Side side = Side::Down;
   bool vertical = false;   // Split: the split line is vertical (barn ...Vertical)
   bool outward = true;     // Split: from the middle out (barn out...)
   float shown = 1;         // 0: nothing, 1: all

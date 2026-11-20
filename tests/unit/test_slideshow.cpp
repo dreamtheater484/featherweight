@@ -1,6 +1,9 @@
 // The slide show's transitions, timing tree and animation interpreter (src/slide/show/Timing.h).
+#include <filesystem>
+#include <fstream>
 #include <string>
 
+#include "PkgTestUtil.h"
 #include "TestHarness.h"
 #include "pkg/XmlDom.h"
 #include "slide/show/Timing.h"
@@ -316,10 +319,10 @@ TEST(SlideShowClickDuringStep) {
 }
 
 TEST(SlideShowByParagraphWipe) {
-  // Wipe from the bottom (filter wipe(up)), by paragraph: one click per paragraph.
+  // Wipe from the bottom (PowerPoint writes filter="wipe(down)"), by paragraph: one click per paragraph.
   auto wipe = [](int para) {
     return Group(Sub(0, Effect("entr", 22, "clickEffect", 0,
-                               Set(3, "visible", 0, para) + Filter(3, "in", "wipe(up)", 500, para))));
+                               Set(3, "visible", 0, para) + Filter(3, "in", "wipe(down)", 500, para))));
   };
   Timing t = ParseXml(TimingXml(wipe(0) + wipe(1), "", "<p:bldP spid=\"3\" grpId=\"0\" build=\"p\"/>"));
   CHECK_EQ(t.main.steps.size(), 2u);
@@ -337,7 +340,7 @@ TEST(SlideShowByParagraphWipe) {
   Pose p = a.PoseOf(Para(3, 0));
   CHECK(p.visible);
   CHECK(p.reveal.kind == Reveal::Wipe);
-  CHECK(p.reveal.side == Side::Up);
+  CHECK(p.reveal.side == Side::Down);
   CHECK_NEAR(p.reveal.shown, 0.5, 1e-6);
   a.Update(500);
   CHECK(a.PoseOf(Para(3, 0)).Identity());
@@ -536,4 +539,141 @@ TEST(SlideShowTimingRobust) {
   none.Start(0);
   CHECK(!none.Click(0));
   CHECK(none.PoseOf(Shape(4)).Identity());
+}
+
+// ---- The decks PowerPoint made (tests/office/show/make_show_decks.ps1) ----
+
+namespace {
+
+struct Deck {
+  std::unique_ptr<fw::pkg::Package> pkg;
+  explicit Deck(const char* name) {
+    auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "show" / name;
+    std::ifstream in(path, std::ios::binary);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    fw::pkg::Status st;
+    pkg = test::OpenBytes(std::move(bytes), st);
+    CHECK(pkg != nullptr);
+  }
+  // Slide n's DOM (1-based).
+  bool Slide(int n, fw::pkg::XmlDom& dom) const {
+    std::vector<uint8_t> data;
+    if (!pkg || !pkg->ReadPart("/ppt/slides/slide" + std::to_string(n) + ".xml", data).Ok()) return false;
+    return dom.Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size())).Ok();
+  }
+};
+
+pugi::xml_node Child(pugi::xml_node root, const char* local) {
+  for (pugi::xml_node c = root.first_child(); c; c = c.next_sibling())
+    if (fw::pkg::LocalNameOf(c) == local) return c;
+  return {};
+}
+
+Timing DeckTiming(const Deck& d, int n) {
+  fw::pkg::XmlDom dom;
+  CHECK(d.Slide(n, dom));
+  return ParseTiming(Child(dom.Root(), "timing"));
+}
+
+Transition DeckTransition(const Deck& d, int n) {
+  fw::pkg::XmlDom dom;
+  CHECK(d.Slide(n, dom));
+  pugi::xml_node t = Child(dom.Root(), "transition");
+  return ParseTransition(t ? t : Child(dom.Root(), "AlternateContent"));
+}
+
+}  // namespace
+
+TEST(SlideShowPowerPointTransitions) {
+  Deck d("transitions.pptx");
+  Transition t = DeckTransition(d, 1);
+  CHECK(t.kind == TransitionKind::Fade && !t.throughBlack);
+  CHECK_NEAR(t.durationMs, 1000, 0.01);
+  CHECK(DeckTransition(d, 2).throughBlack);
+  t = DeckTransition(d, 4);
+  CHECK(t.kind == TransitionKind::Push && t.side == Side::Down);
+  CHECK(DeckTransition(d, 5).side == Side::Left);
+  t = DeckTransition(d, 11);
+  CHECK(t.kind == TransitionKind::Wipe && t.side == Side::Down);
+  t = DeckTransition(d, 15);
+  CHECK(t.kind == TransitionKind::Split && t.vertical && t.in);
+  t = DeckTransition(d, 20);
+  CHECK(t.kind == TransitionKind::Cover && t.side == Side::RightDown);
+  t = DeckTransition(d, 25);
+  CHECK(t.kind == TransitionKind::Uncover && t.side == Side::LeftUp);
+  t = DeckTransition(d, 26);
+  CHECK(t.kind == TransitionKind::Zoom && t.in);
+  t = DeckTransition(d, 28);  // vortex
+  CHECK(t.kind == TransitionKind::Fade && !t.played);
+  t = DeckTransition(d, 32);  // cut
+  CHECK(t.kind == TransitionKind::None);
+  t = DeckTransition(d, 33);
+  CHECK(t.kind == TransitionKind::Push && t.side == Side::Up);
+  CHECK_NEAR(t.durationMs, 2000, 0.01);
+  CHECK(!t.advanceOnClick);
+  CHECK_NEAR(t.advanceAfterMs, 3000, 0.01);
+}
+
+TEST(SlideShowPowerPointAnimations) {
+  Deck d("animations.pptx");
+  Timing t = DeckTiming(d, 1);  // appear, fade, fly in from the bottom
+  CHECK_EQ(t.main.steps.size(), 3u);
+  CHECK_EQ(t.initiallyHidden.size(), 3u);
+  CHECK_EQ(t.unsupportedEffects, 0);
+  t = DeckTiming(d, 2);  // four flies on one click
+  CHECK_EQ(t.main.steps.size(), 1u);
+  CHECK_NEAR(t.main.steps[0].length, 750, 0.01);
+  t = DeckTiming(d, 3);  // wipe from bottom, wipe from left, split vertical out, zoom
+  CHECK_EQ(t.main.steps.size(), 4u);
+  CHECK_EQ(t.unsupportedEffects, 0);
+  bool wipe = false, split = false;
+  for (const Behavior& b : t.main.steps[0].behaviors) wipe |= b.reveal == Reveal::Wipe && b.side == Side::Down;
+  for (const Behavior& b : t.main.steps[2].behaviors) split |= b.reveal == Reveal::Split && b.vertical && b.outward;
+  CHECK(wipe);
+  CHECK(split);
+  t = DeckTiming(d, 4);  // float in, faded zoom, grow and turn (appear), float out
+  CHECK_EQ(t.unsupportedEffects, 1);
+  CHECK_EQ(t.main.steps.size(), 4u);
+  t = DeckTiming(d, 5);  // grow, spin, teeter (nothing)
+  CHECK_EQ(t.unsupportedEffects, 1);
+  CHECK(t.initiallyHidden.empty());
+  CHECK(t.main.steps[2].behaviors.empty());
+  t = DeckTiming(d, 7);  // by paragraph
+  CHECK_EQ(t.main.steps.size(), 4u);
+  CHECK_EQ(t.byParagraph.size(), 1u);
+  CHECK_EQ(t.initiallyHidden.size(), 4u);
+  t = DeckTiming(d, 8);  // A on click; B with it after 0.5 s; C after B; D after C after 1 s
+  CHECK_EQ(t.main.steps.size(), 1u);
+  CHECK_NEAR(t.main.steps[0].length, 3500, 0.01);
+  t = DeckTiming(d, 9);  // starts by itself after 1 s, then a click
+  CHECK_EQ(t.main.steps.size(), 2u);
+  CHECK(t.main.steps[0].start != StepStart::Click);
+  CHECK(t.main.steps[1].start == StepStart::Click);
+  t = DeckTiming(d, 10);  // the trigger
+  CHECK(t.main.steps.empty());
+  CHECK_EQ(t.triggers.size(), 1u);
+  CHECK_EQ(t.triggers[0].triggerSpid, 3u);
+  CHECK_EQ(t.initiallyHidden.size(), 1u);
+  t = DeckTiming(d, 11);  // motion paths, with the effect's smooth start and end
+  CHECK_EQ(t.main.steps.size(), 3u);
+  for (const Step& s : t.main.steps) {
+    CHECK_EQ(s.behaviors.size(), 1u);
+    CHECK(s.behaviors[0].kind == Behavior::Motion && s.behaviors[0].path.size() >= 2);
+    CHECK_NEAR(s.behaviors[0].accel, 0.5, 1e-9);
+  }
+  t = DeckTiming(d, 12);  // repeat twice, auto-reverse
+  CHECK_NEAR(t.main.steps[0].length, 4000, 0.01);
+  t = DeckTiming(d, 13);  // wheel, blinds, checkerboard: appear
+  CHECK_EQ(t.unsupportedEffects, 3);
+
+  // Played through, every slide ends where PowerPoint ends: entrances shown, exits hidden.
+  Animator a;
+  t = DeckTiming(d, 6);
+  a = Animator(&t, BoxOf, nullptr);
+  a.FinishAll(0);
+  for (const auto& [key, pose] : a.Poses()) CHECK(!pose.visible);
+  t = DeckTiming(d, 3);
+  a = Animator(&t, BoxOf, nullptr);
+  a.FinishAll(0);
+  for (const auto& [key, pose] : a.Poses()) CHECK(pose.Identity());
 }
