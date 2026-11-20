@@ -1,11 +1,11 @@
 # The presentation tab (P1, p1-view; plan §5.4, §8). Two libraries:
 #  - fwslideviewcore: headless (no window): the tab's geometry, the printed and exported pages
-#    (slides, handouts, notes pages) drawn through draw::Painter, and the placeholder deck used
-#    until p1-model's reader and p1-render's renderer are in. Tools and tests use it.
+#    (slides, handouts, notes pages) drawn through draw::Painter, and the tab's Deck over p1-model's
+#    presentation (fwslide). Tools and tests use it.
 #  - fwslideview: the tab (a TabContent) on the app's shell; linked into the exe only.
-add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp PlaceholderDeck.cpp)
+add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp)
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwslideviewcore PUBLIC fwpkg fwdraw fwtext fwcore)
+target_link_libraries(fwslideviewcore PUBLIC fwslide fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp)

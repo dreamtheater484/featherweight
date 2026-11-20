@@ -10,7 +10,7 @@
 #include "Commands.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
-#include "slide/view/PlaceholderDeck.h"
+#include "slide/view/ModelDeck.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -60,7 +60,7 @@ PresentationView::~PresentationView() = default;
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = OpenPlaceholderDeck(path_, why);
+  deck_ = OpenDeck(path_, why);
   if (!deck_) {
     error = FileNameOf(path_) + L": " + why;
     return OpenResult::Failed;

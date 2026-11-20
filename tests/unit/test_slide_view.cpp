@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "TestHarness.h"
-#include "slide/view/PlaceholderDeck.h"
+#include "slide/view/ModelDeck.h"
 #include "slide/view/SlideLayout.h"
 #include "slide/view/SlidePages.h"
 #include "text/Fonts.h"
@@ -216,9 +216,9 @@ TEST(SlideView_FindAll) {
   CHECK((FindAll(L"ÉCOLE école", L"école", false, false) == std::vector<size_t>{0, 6}));
 }
 
-TEST(SlideView_PlaceholderDeckReadsTheGeneratedDecks) {
+TEST(SlideView_ModelDeckReadsTheGeneratedDecks) {
   std::wstring error;
-  std::unique_ptr<fw::slide::view::Deck> deck = OpenPlaceholderDeck(DeckPath("simple.pptx"), error);
+  std::unique_ptr<fw::slide::view::Deck> deck = OpenDeck(DeckPath("simple.pptx"), error);
   CHECK(deck != nullptr);
   if (!deck) return;
   CHECK_EQ(deck->SlideCount(), size_t{2});
@@ -237,9 +237,9 @@ TEST(SlideView_PlaceholderDeckReadsTheGeneratedDecks) {
   deck->Paint(0, p);
   CHECK(p.fills >= 1 && p.glyphs > 10);
 
-  std::unique_ptr<fw::slide::view::Deck> wide = OpenPlaceholderDeck(DeckPath("layouts.pptx"), error);
+  std::unique_ptr<fw::slide::view::Deck> wide = OpenDeck(DeckPath("layouts.pptx"), error);
   CHECK(wide && wide->SlideCount() == 11);
   if (wide) CHECK_NEAR(wide->SlideSize().width, 960.0f, 0.01f);  // 16:9
-  CHECK(OpenPlaceholderDeck(DeckPath("shapes-table-chart.pptx"), error) != nullptr);
-  CHECK(OpenPlaceholderDeck(DeckPath("no-such-deck.pptx"), error) == nullptr && !error.empty());
+  CHECK(OpenDeck(DeckPath("shapes-table-chart.pptx"), error) != nullptr);
+  CHECK(OpenDeck(DeckPath("no-such-deck.pptx"), error) == nullptr && !error.empty());
 }
