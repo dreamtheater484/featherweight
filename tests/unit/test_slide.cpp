@@ -561,3 +561,38 @@ TEST(SlideTextOfFreeBodies) {
   CHECK(deck->TextOf(s->shapes[0].textNode, *s, *s) == deck->Text(s->shapes[0], *s));
   CHECK(deck->TextOf(pugi::xml_node(), *s, *s) == nullptr);
 }
+
+TEST(SlidePublicDecksResolve) {
+  // Every deck of the public set (tests/office/presentations) opens, and every slide, notes page,
+  // layout and master resolves (texts, tables, fonts) without the reader skipping anything.
+  auto dir = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "presentations";
+  int decks = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    std::string ext = entry.path().extension().string();
+    if (ext != ".pptx" && ext != ".ppsx" && ext != ".potx" && ext != ".pptm" && ext != ".potm") continue;
+    ++decks;
+    auto deck = OpenBytes(FileBytes(entry.path()));
+    CHECK(deck != nullptr);
+    if (!deck) continue;
+    deck->LoadAll();
+    auto resolve = [&](const SlideBase& part) {
+      for (const DrawItem& item : deck->DrawList(part)) {
+        if (item.shape->textNode) CHECK(deck->Text(*item.shape, part) != nullptr);
+        if (item.shape->kind == Shape::Kind::Table) CHECK(deck->GetTable(*item.shape, part) != nullptr);
+      }
+    };
+    for (size_t i = 0; i < deck->SlideCount(); ++i) {
+      const Slide* s = deck->GetSlide(i);
+      resolve(*s);
+      if (s->notes) resolve(*s->notes);
+    }
+    for (const auto& l : deck->Layouts()) resolve(*l);
+    deck->EmbeddedFonts();
+    for (const std::string& p : deck->Problems()) std::printf("  %s: %s\n", entry.path().filename().string().c_str(), p.c_str());
+    CHECK(deck->Problems().empty());
+    if (entry.path().filename() == "show.ppsx") CHECK(deck->StartsInShow());
+    if (entry.path().filename() == "template.potx") CHECK(deck->IsTemplate());
+    if (entry.path().filename() == "embedded-fonts.pptx") CHECK(!deck->EmbeddedFonts().empty());
+  }
+  CHECK(decks >= 18);
+}
