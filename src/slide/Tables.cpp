@@ -71,7 +71,6 @@ struct BuiltIn {
 constexpr BuiltIn kBuiltIns[] = {
     {"{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}", kMedium2, "dk1"},
     {"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}", kMedium2, "accent1"},
-    {"{21E4AEA4-8DFA-4A89-87EB-49C32662AFE8}", kMedium2, "accent2"},
     {"{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}", kMedium2, "accent3"},
     {"{00A15C55-8517-42AA-B614-E9B94910E393}", kMedium2, "accent4"},
     {"{7DF18680-E054-41AD-8BC1-D1AEF772440D}", kMedium2, "accent5"},
@@ -208,19 +207,22 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
           return !style;
         });
       }
-      if (!style) {
-        for (const BuiltIn& b : kBuiltIns) {
-          if (!SameId(b.id, id)) continue;
-          if (!builtInStyles_) builtInStyles_ = std::make_unique<pugi::xml_document>();
-          std::string body = b.body;
-          for (size_t at = body.find('@'); at != std::string::npos; at = body.find('@', at)) body.replace(at, 1, b.color);
-          std::string xml = std::string("<a:tblStyle xmlns:a=\"") + std::string(kA) + "\" styleId=\"" + b.id + "\">" + body +
-                            "</a:tblStyle>";
-          pugi::xml_document doc;
-          if (doc.load_buffer(xml.data(), xml.size())) style = builtInStyles_->append_copy(doc.document_element());
-          break;
-        }
+    }
+    if (!style) {
+      // A built-in style the deck names without defining it. PowerPoint 2021 (probed 2026-11-20)
+      // draws a table without a style, or with an id it doesn't know, as a black 1 pt grid with no
+      // fills: Table Grid's look.
+      const BuiltIn* b = &kBuiltIns[std::size(kBuiltIns) - 2];
+      for (const BuiltIn& candidate : kBuiltIns) {
+        if (!id.empty() && SameId(candidate.id, id)) b = &candidate;
       }
+      if (!builtInStyles_) builtInStyles_ = std::make_unique<pugi::xml_document>();
+      std::string body = b->body;
+      for (size_t at = body.find('@'); at != std::string::npos; at = body.find('@', at)) body.replace(at, 1, b->color);
+      std::string xml =
+          std::string("<a:tblStyle xmlns:a=\"") + std::string(kA) + "\" styleId=\"" + b->id + "\">" + body + "</a:tblStyle>";
+      pugi::xml_document doc;
+      if (doc.load_buffer(xml.data(), xml.size())) style = builtInStyles_->append_copy(doc.document_element());
     }
   }
   t->background = ReadCellFill(FillChild(A(style, "tblBg")), t->colors, theme);
