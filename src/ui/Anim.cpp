@@ -7,7 +7,11 @@
 namespace anim {
 namespace {
 double g_until = 0;
+FrameSource* g_source = nullptr;
 }
+
+void SetFrameSource(FrameSource* source) { g_source = source; }
+FrameSource* ActiveFrameSource() { return g_source; }
 
 double Now() {
   static LARGE_INTEGER freq = [] {

@@ -75,6 +75,10 @@ enum Cmd : int {
   // s4-ods (3020-3039): the user's own templates (UserTemplates.h).
   CmdUserTemplate = 3020,         // + index (up to kUserTemplateCount): a new document or workbook from one
   CmdUserTemplatesFolder = 3036,  // "More templates...": the Open dialog in the personal templates folder
+  // p1-show (3300-3349): the slide show (src/slide/show/SlideShow.h).
+  CmdSlideShowFromStart = 3300,    // F5
+  CmdSlideShowFromCurrent = 3301,  // Shift+F5
+  CmdSlideShowMonitor = 3310,      // + index into fw::slide::show::Monitors(): where the show goes
 
   // Documents: formatting (D2). The toolbar's boxes have ids too.
   CmdBold = 1000,
