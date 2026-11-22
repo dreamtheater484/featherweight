@@ -620,17 +620,12 @@ pugi::xml_node Editor::Impl::Unwrap(pugi::xml_node shape) {
     if (LocalNameOf(p) == "spTree") break;
   }
   if (!ac) return shape;
-  if (Is(branch, pkg::mce::kNamespace, "Choice")) {
-    // The Choice stays (what it holds, math or a newer shape, needs its wrapper to stay valid); the
-    // stale Fallback and other Choices go.
-    for (pugi::xml_node b = ac.first_child(); b;) {
-      pugi::xml_node next = b.next_sibling();
-      if (b != branch && b.type() == pugi::node_element) ac.remove_child(b);
-      b = next;
-    }
-    return shape;
-  }
-  // A Fallback's content is plain markup: it replaces the block.
+  // A Choice's shape is edited where it is: the block keeps its wrapper (math or a newer shape needs it
+  // to stay valid), its other Choices and its Fallback (what other apps show, never dropped). The
+  // operations that apply to the Fallback's shape too keep it in step (ShapeOps.cpp, SyncTwins).
+  if (Is(branch, pkg::mce::kNamespace, "Choice")) return shape;
+  // The Fallback was chosen (no Choice is understood): its content is plain markup and replaces the
+  // block, so what was edited is what every app shows.
   // The path from the branch's child down to the shape, to find its copy.
   std::vector<int> path;
   pugi::xml_node top = shape;
