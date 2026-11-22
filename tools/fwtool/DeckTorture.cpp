@@ -28,6 +28,14 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
+// p2-model's edit API and writer (P2); without them every edit is refused.
+#if __has_include("slide/edit/Edit.h") && __has_include("slide/edit/Save.h")
+#include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
+#define FW_SLIDE_EDIT 1
+#else
+#define FW_SLIDE_EDIT 0
+#endif
 
 namespace fwtool {
 namespace decktorture {
@@ -278,6 +286,139 @@ class ReadOnlyTarget : public DeckTarget {
  private:
   std::unique_ptr<sl::Presentation> deck_;
 };
+
+#if FW_SLIDE_EDIT
+namespace ed = fw::slide::edit;
+
+std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
+
+// Through p2-model's edit API (slide/edit/Edit.h) and its writer (Save.h), as the tab's commands do.
+class EditTarget : public DeckTarget {
+ public:
+  explicit EditTarget(std::unique_ptr<sl::Presentation> deck) : deck_(std::move(deck)), editor_(*deck_) {}
+  const char* Name() const override { return "the edit API (slide/edit/Edit.h)"; }
+  sl::Presentation& Deck() override { return *deck_; }
+
+  Applied Apply(const Edit& e, std::string& why) override {
+    ed::Result r = Run(e, why);
+    if (!why.empty()) return Applied::Refused;  // refused here, before the editor was asked
+    if (!r) {
+      why = Utf8(r.message);
+      return Applied::Refused;
+    }
+    return Applied::Done;
+  }
+
+  fw::pkg::Status Save(std::vector<uint8_t>& out) override {
+    written.clear();
+    return ed::SaveToBytes(editor_, out, &written);
+  }
+  int UndoAll() override {
+    const size_t steps = editor_.UndoNames().size();
+    if (steps && !editor_.Undo(steps)) return -1;
+    return static_cast<int>(steps);
+  }
+  bool RedoSteps(int steps) override { return steps <= 0 || static_cast<bool>(editor_.Redo(static_cast<size_t>(steps))); }
+  bool CanUndo() const override { return editor_.CanUndo(); }
+
+ private:
+  ed::Result Run(const Edit& e, std::string& why) {
+    const size_t slide = static_cast<size_t>(std::max(e.slide, 0));
+    const std::wstring text = fw::Utf8ToWide(e.text);
+    switch (e.op) {
+      case Op::NewSlide: return editor_.NewSlide(static_cast<size_t>(e.slide + 1), e.count);
+      case Op::Duplicate: return editor_.DuplicateSlides({slide});
+      case Op::DeleteSlide: return editor_.DeleteSlides({slide});
+      case Op::MoveSlide: return editor_.MoveSlides({slide}, static_cast<size_t>(e.to));
+      case Op::Hide: return editor_.HideSlides({slide}, e.arg == "on");
+      case Op::Layout: return editor_.SetLayout({slide}, e.count);
+      case Op::Notes: return editor_.SetNotesText(slide, text);
+      case Op::Undo:
+      case Op::Redo: {
+        const size_t have = e.op == Op::Undo ? editor_.UndoNames().size() : editor_.RedoNames().size();
+        if (!have) {
+          why = std::string("nothing to ") + OpName(e.op);
+          return {};
+        }
+        const size_t steps = std::min<size_t>(e.count, have);
+        return e.op == Op::Undo ? editor_.Undo(steps) : editor_.Redo(steps);
+      }
+      case Op::Type: {
+        const ed::TextTarget t{slide, e.shape};
+        const size_t n = editor_.ParagraphCount(t);
+        if (n == 0) return editor_.SetText(t, text);  // a shape without text yet: typing gives it some
+        const ed::TextPos end{n - 1, editor_.ParagraphText(t, n - 1).size()};
+        if (e.arg == "start") return editor_.InsertText(t, {0, 0}, text);
+        if (e.arg == "replace") return editor_.ReplaceText(t, {{0, 0}, end}, text);
+        if (e.arg == "para") return editor_.InsertText(t, end, L"\n" + text);
+        return editor_.InsertText(t, end, text);
+      }
+      case Op::Move:
+      case Op::Resize:
+      case Op::Rotate: {
+        const sl::Shape* s = slide < deck_->SlideCount() ? deck_->GetSlide(slide)->FindShape(e.shape) : nullptr;
+        if (!s) {
+          why = "no shape " + std::to_string(e.shape) + " on slide " + std::to_string(slide);
+          return {};
+        }
+        ed::Transform t{s->bounds, s->rotation, s->flipH, s->flipV};
+        if (e.op == Op::Move) {
+          t.bounds.left += static_cast<float>(e.dx), t.bounds.right += static_cast<float>(e.dx);
+          t.bounds.top += static_cast<float>(e.dy), t.bounds.bottom += static_cast<float>(e.dy);
+        } else if (e.op == Op::Resize) {
+          t.bounds.right = t.bounds.left + s->bounds.Width() * static_cast<float>(e.dx);
+          t.bounds.bottom = t.bounds.top + s->bounds.Height() * static_cast<float>(e.dy);
+        } else {
+          t.rotation = static_cast<float>(e.dx);
+        }
+        return editor_.SetTransform(slide, e.shape, t);
+      }
+      case Op::DeleteShape: return editor_.DeleteShapes(slide, {e.shape});
+      case Op::Group: return editor_.Group(slide, e.shapes);
+      case Op::Ungroup: return editor_.Ungroup(slide, e.shape);
+      case Op::Order: {
+        const ed::ZOrder z = e.arg == "front" ? ed::ZOrder::BringToFront : e.arg == "back" ? ed::ZOrder::SendToBack
+                             : e.arg == "forward" ? ed::ZOrder::BringForward : ed::ZOrder::SendBackward;
+        return editor_.Arrange(slide, {e.shape}, z);
+      }
+      case Op::Format: {
+        constexpr const char* kA = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        auto value = [&](size_t prefix) { return e.arg.substr(prefix); };
+        if (e.arg.starts_with("fill=") || e.arg.starts_with("line=")) {
+          const std::string fill = "<a:solidFill xmlns:a=\"" + std::string(kA) + "\"><a:srgbClr val=\"" + value(5) + "\"/></a:solidFill>";
+          ed::ShapePatch p;
+          if (e.arg.starts_with("fill=")) p.fill = fill;
+          else p.line = "<a:ln xmlns:a=\"" + std::string(kA) + "\" w=\"25400\"><a:solidFill><a:srgbClr val=\"" + value(5) +
+                        "\"/></a:solidFill></a:ln>";
+          return editor_.SetShapeProps(slide, {e.shape}, p);
+        }
+        // The text ones over all the shape's text.
+        const ed::TextTarget t{slide, e.shape};
+        const size_t n = editor_.ParagraphCount(t);
+        if (n == 0) {
+          why = "the shape has no text to format";
+          return {};
+        }
+        ed::RunPatch p;
+        if (e.arg == "bold") p.bold = true;
+        else if (e.arg == "italic") p.italic = true;
+        else if (e.arg.starts_with("size=")) p.size = static_cast<float>(std::atof(value(5).c_str()));
+        else if (e.arg.starts_with("color=")) p.color = ed::ColorSpec::Rgb(static_cast<uint32_t>(std::strtoul(value(6).c_str(), nullptr, 16)));
+        else {
+          why = "unknown format " + e.arg;
+          return {};
+        }
+        return editor_.SetRunProps(t, {{0, 0}, {n - 1, editor_.ParagraphText(t, n - 1).size()}}, p);
+      }
+      case Op::Save: return {};
+    }
+    return {};
+  }
+
+  std::unique_ptr<sl::Presentation> deck_;
+  ed::Editor editor_;  // after deck_: it goes first
+};
+#endif
 
 // ---- Random edits
 
@@ -916,7 +1057,11 @@ std::unique_ptr<DeckTarget> OpenDeckTarget(std::unique_ptr<sl::Presentation> dec
     status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "no presentation");
     return nullptr;
   }
+#if FW_SLIDE_EDIT
+  return std::make_unique<EditTarget>(std::move(deck));
+#else
   return std::make_unique<ReadOnlyTarget>(std::move(deck));
+#endif
 }
 
 }  // namespace decktorture
