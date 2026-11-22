@@ -13,9 +13,9 @@ set_source_files_properties(SlideOrder.cpp SlideDesign.cpp SlideHeaderFooter.cpp
 # clipboard, find, spelling, links).
 target_sources(fwslideviewcore PRIVATE TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp)
 target_link_libraries(fwslideviewcore PUBLIC fwdoc fwproof)
-# Formatting, the clipboard, find and spelling run once per command: compiled for size (typing's
-# path, TextDoc and TextSession, stays compiled for speed).
-set_source_files_properties(TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp PROPERTIES
+# Text editing is compiled for size: a keystroke is a few hundred microseconds of it either way
+# (fwtool bench --slide-text), well inside the 16 ms budget.
+set_source_files_properties(TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
@@ -30,7 +30,7 @@ target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CM
 target_link_libraries(fwslideview PUBLIC fwslideviewcore fwslideobjects)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 # Commands, menus and printing run once per click: compiled for size.
-set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp NotesEdit.cpp
+set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp NotesEdit.cpp PresentationFile.cpp PresentationSave.cpp
   PresentationText.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
@@ -47,3 +47,5 @@ if(TARGET fw_tests)
            "-DDECKS=${PROJECT_SOURCE_DIR}/tests/office/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/presentation"
            -P "${PROJECT_SOURCE_DIR}/tests/screens/presentation.cmake")
 endif()
+# p2-objects: the objects' UI runs once per click or edit (a drag frame only draws two bitmaps): for size.
+set_source_files_properties(ObjectTool.cpp PresentationObjects.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")

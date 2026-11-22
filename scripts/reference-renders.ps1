@@ -74,9 +74,9 @@ param(
   # anything is rendered, a blank sheet's standard width must be this; by default the manifest's
   # excel.standardWidth (8.43 for the references made on 16 Nov 2026, the session connected).
   [double]$ExcelStandardWidth = 0,
-  # PowerPoint lays decks out wrong on Remote Desktop or in a disconnected session (P1), so decks are
-  # rendered only from the console session while it's active (qwinsta); otherwise the run stops
-  # before anything starts and says so. -AnySession renders anyway (not for references).
+  # Decks are rendered only from an active session (qwinsta): the console or Remote Desktop, which
+  # render the same (probed 2026-11-22), never a disconnected one; otherwise the run stops before
+  # anything starts, or before the next deck, and says so. -AnySession renders anyway (not for references).
   [switch]$AnySession,
   # Internal: export one file in this process (the parent runs one child per file).
   [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats,
@@ -106,6 +106,9 @@ function Get-TestPassword([string]$path) {
   "featherweight"
 }
 
+# UTF-8 without a BOM, so every read of these files says -Encoding UTF8: Windows PowerShell reads a
+# file without a BOM as ANSI, and each read and rewrite turned the manifest's € into â‚¬ (a deck run
+# rewrites the manifest after every deck, so it grew to 1.4 GB).
 function Write-Json($value, [string]$path) {
   [IO.File]::WriteAllText($path, ($value | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 }
@@ -639,7 +642,7 @@ function Get-CopyOf([string]$source, [string]$sourceRoot) {
 
 $refManifest = Join-Path $root "tests\office\reference\manifest.json"
 if (-not $ExcelPrinter -and (Test-Path $refManifest)) {
-  $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer
+  $ExcelPrinter = [string](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.printer
 }
 
 # Each job: the source file, its name in the manifest, and its PDF relative to the output folder.
@@ -656,7 +659,7 @@ if ($Corpus) {
   }
   New-Item -ItemType Directory -Force $outRoot | Out-Null
   $manifestPath = Join-Path $outRoot "manifest.json"
-  if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
+  if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files) }
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
   # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
   # scripts\make-sheet-copies.ps1).
@@ -666,7 +669,7 @@ if ($Corpus) {
     foreach ($c in $CorpusFolders) { if ($corpusNames -notcontains $c) { throw "-CorpusFolders: $c isn't one of $($corpusNames -join ', ')." } }
     $corpusNames = $CorpusFolders
     # The other folders' entries stay as they are.
-    $prior = if (Test-Path $manifestPath) { @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) } else { @() }
+    $prior = if (Test-Path $manifestPath) { @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files) } else { @() }
     $kept = @($prior | Where-Object { $CorpusFolders -notcontains ($_.source -split '/')[0] })
     $old = @($old | Where-Object { $CorpusFolders -contains ($_.source -split '/')[0] })
   }
@@ -693,7 +696,7 @@ if ($Corpus) {
   $names = @($Folders | ForEach-Object { Split-Path -Leaf $_ })
   if (Test-Path $manifestPath) {
     # Entries of folders that aren't rendered this time stay as they are.
-    $previousFiles = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files)
+    $previousFiles = @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files)
     $kept = @($previousFiles | Where-Object { $names -notcontains ($_.source -split '/')[0] })
   }
   foreach ($folder in $Folders) {
@@ -713,13 +716,21 @@ if ($ExcelPrinter -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq
     throw "Windows' default printer is '$default', but workbooks are rendered for the reference printer '$ExcelPrinter'. Make that the default again (with 'Let Windows manage my default printer' on, print something on it), or pass -ExcelPrinter."
   }
 }
-# Decks only from the active console session (-AnySession): PowerPoint lays out wrong on Remote
-# Desktop and in a disconnected session.
-if (-not $AnySession -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "PowerPoint" }).Count) {
+# Decks only from an active session, at the console or over Remote Desktop, never a disconnected one
+# (-AnySession: any). Probed 2026-11-22: the 18 public decks rendered on Remote Desktop (rdp-tcp,
+# active) match the console references (97 slides, SSIM >= 0.99992, the only difference a date field;
+# the same fonts drawn), so PowerPoint doesn't lay slides out by the session's display or printer.
+# Returns why this session isn't one to render in, or nothing.
+function Get-SessionProblem {
   $me = @(qwinsta 2>$null | Where-Object { $_ -match '^>' }) | Select-Object -First 1
-  if (-not $me -or $me -notmatch '^>console\s' -or $me -notmatch '\sActive\s*$') {
-    $where = if ($me) { ($me.TrimStart('>') -replace '\s+', ' ').Trim() } else { "unknown (qwinsta answered nothing)" }
-    Write-Output "Not rendered: decks are rendered only from the active console session, and this one is: $where. Queue the renders and run this again at the console (or pass -AnySession, not for references)."
+  if ($me -and $me -match '^>(console|rdp-tcp#\d+)\s' -and $me -match '\sActive\s*$') { return $null }
+  $where = if ($me) { ($me.TrimStart('>') -replace '\s+', ' ').Trim() } else { "unknown (qwinsta answered nothing)" }
+  "decks are rendered only from an active session (the console or Remote Desktop), and this one is: $where"
+}
+if (-not $AnySession -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "PowerPoint" }).Count) {
+  $why = Get-SessionProblem
+  if ($why) {
+    Write-Output "Not rendered: $why. Queue the renders and run this again from an active session (or pass -AnySession, not for references)."
     exit 3
   }
 }
@@ -736,7 +747,7 @@ try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
 
 # Excel must lay out as it did for the references (-ExcelStandardWidth): one Excel, a blank sheet.
 if (-not $ExcelStandardWidth -and (Test-Path $refManifest)) {
-  $ExcelStandardWidth = [double](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.standardWidth
+  $ExcelStandardWidth = [double](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.standardWidth
 }
 if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) {
   $probeFile = Join-Path $tmp "probe.json"
@@ -747,7 +758,7 @@ if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) 
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $probeArgs
   $done = $p.WaitForExit(120000)
   if (-not $done) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  $probed = if (Test-Path $probeFile) { Get-Content $probeFile -Raw | ConvertFrom-Json } else { $null }
+  $probed = if (Test-Path $probeFile) { Get-Content $probeFile -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
   if ($probed) { Stop-Started @($probed.pid) $apps["Excel"].Exe $(if ($done) { 15000 } else { 0 }) }
   if (-not $probed -or $probed.error) {
     $mutex.ReleaseMutex()
@@ -766,11 +777,11 @@ function Write-Manifest([bool]$final) {
   $manifest = [ordered]@{
     made = (Get-Date).ToString("yyyy-MM-dd")
     computer = "Office reference PC (decision 19)"
-    export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint (macros forced off, read-only, from the console session): every slide, hidden ones too (shown in the unsaved copy PowerPoint has open); slides, hidden, slideSize (points) and deckFonts (the fonts the deck names, embedded ones marked) per deck"
+    export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint (macros forced off, read-only, from an active session: the console or Remote Desktop): every slide, hidden ones too (shown in the unsaved copy PowerPoint has open); slides, hidden, slideSize (points) and deckFonts (the fonts the deck names, embedded ones marked) per deck"
   }
   # The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
   $facts = $script:excelFacts
-  if (-not $facts -and (Test-Path $manifestPath)) { $facts = (Get-Content $manifestPath -Raw | ConvertFrom-Json).excel }
+  if (-not $facts -and (Test-Path $manifestPath)) { $facts = (Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).excel }
   if ($facts) { $manifest.excel = $facts }
   if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the documents here
   $done = @{}
@@ -832,13 +843,25 @@ foreach ($job in $jobs) {
     $childArgs += @("-PrintTo", "`"$printPath`"")
   }
   $limit = if ($kind -eq "Excel") { $ExcelTimeoutSeconds } else { $TimeoutSeconds }
+  if ($kind -eq "PowerPoint") {
+    # Before every deck: no PowerPoint this script didn't start (each child's ends before the next
+    # deck, so one running now is someone else's, never to be automated), and the session still
+    # active. Otherwise the run stops; the decks done so far are kept.
+    $stop = if (@(Get-Process POWERPNT -ErrorAction SilentlyContinue).Count) { "a PowerPoint this script didn't start is running" }
+            elseif (-not $AnySession) { Get-SessionProblem }
+    if ($stop) {
+      Write-Manifest $false
+      Write-Output "Stopped before $($job.Source): $stop. The decks rendered so far are kept; run this again later."
+      exit $(if ($stop -like "decks are rendered only*") { 3 } else { 4 })
+    }
+  }
   try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
   try {
     $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
     $finished = $p.WaitForExit($limit * 1000)
     # Office is stuck, usually on a prompt: end the child.
     if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
+    $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     # The child ends the Office it started; if it hung or died, that's done here, so no hidden Office
     # is left to block the next file.
     if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }

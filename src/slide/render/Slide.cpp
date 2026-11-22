@@ -35,6 +35,7 @@ struct SlideRender::Impl {
     std::unique_ptr<draw::DrawingResources> resources;
     std::unique_ptr<draw::Drawing> drawing;
     std::vector<TextBlock> texts;  // one per drawing text box
+    std::vector<const fw::slide::TextBody*> bodies;  // what each was laid out from (null: none)
     std::unique_ptr<TableRender> table;
     bool backgroundFill = false;  // p:sp useBgFill
     draw::Rect frame;  // a table's graphic frame, slide points
@@ -160,6 +161,7 @@ struct Builder {
       // The model's shapes' text, and SmartArt's (a text box's, with its style's font reference).
       const fw::slide::TextBody* body = box.content ? deck.TextOf(box.content, *di.owner, slide) : nullptr;
       TextBlock& block = item.texts.emplace_back();
+      item.bodies.push_back(body);
       if (body && !body->Empty()) block.Build(fonts, box, *body, extras);
       else if (body && !item.inherited && s.placeholder && box.content == s.textNode) Prompt(s, *body, item.texts.size() - 1);
     }
@@ -324,6 +326,25 @@ bool SlideRender::FindText(uint32_t shape, int row, int column, TextFrame& out) 
     }
   }
   return false;
+}
+
+std::vector<SlideRender::TextOnSlide> SlideRender::Texts() const {
+  std::vector<TextOnSlide> out;
+  for (const Impl::Item& item : impl_->items) {
+    if (item.inherited || item.background || item.table || !item.drawing) continue;
+    const std::vector<draw::TextBox>& boxes = item.drawing->TextBoxes();
+    const draw::Rect b = item.drawing->Bounds();
+    for (size_t t = 0; t < boxes.size() && t < item.texts.size() && t < item.bodies.size(); ++t) {
+      if (!item.bodies[t] || item.bodies[t]->Empty()) continue;
+      TextOnSlide x;
+      x.shape = boxes[t].shape ? boxes[t].shape : item.id;
+      x.block = &item.texts[t];
+      x.body = item.bodies[t];
+      x.toSlide = item.texts[t].ToSlide(boxes[t].transform * draw::Matrix::Translate(b.left, b.top));
+      out.push_back(x);
+    }
+  }
+  return out;
 }
 
 bool SlideRender::CellAt(uint32_t shape, draw::Point at, int& row, int& column) const {

@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "draw/Xml.h"
+#include "slide/edit/TableGrid.h"
 
 namespace fw::slide::objects {
 
@@ -302,95 +303,7 @@ void ReplaceFill(pugi::xml_node parent, const Paint& p, std::initializer_list<st
   InsertFragment(parent, PaintXml(p), before);
 }
 
-// Cells of a table as a grid: tcs[row][column] (null where a row is short).
-std::vector<std::vector<pugi::xml_node>> Grid(pugi::xml_node tbl) {
-  std::vector<std::vector<pugi::xml_node>> out;
-  for (pugi::xml_node tr : Kids(tbl, kA, "tr")) out.push_back(Kids(tr, kA, "tc"));
-  return out;
-}
-
 bool Flag(pugi::xml_node n, const char* attr) { return Bool(n, attr, false); }
-int Span(pugi::xml_node tc, const char* attr) { return static_cast<int>(std::max<int64_t>(1, Int(tc, attr, 1))); }
-
-void SetSpan(pugi::xml_node tc, const char* attr, int v) {
-  if (v <= 1) tc.remove_attribute(attr);
-  else SetInt(tc, attr, v);
-}
-
-// A cell like `like` but empty: its cell properties, the first paragraph's properties, and the
-// look of its first run (else its end-of-paragraph properties) for the text typed next.
-void ClearCell(pugi::xml_node tc) {
-  pugi::xml_node body = Kid(tc, kA, "txBody");
-  if (!body) return;
-  pugi::xml_node first = Kid(body, kA, "p");
-  pugi::xml_node pPr = first ? Kid(first, kA, "pPr") : pugi::xml_node();
-  pugi::xml_node endPr = first ? Kid(first, kA, "endParaRPr") : pugi::xml_node();
-  pugi::xml_node runPr;  // the text's own look wins over the empty paragraph end's
-  if (first)
-    for (pugi::xml_node r = first.first_child(); r && !runPr; r = r.next_sibling())
-      if (LocalNameOf(r) == "r") runPr = Kid(r, kA, "rPr");
-  pugi::xml_document keep;
-  pugi::xml_node kp = keep.append_child("keep");
-  pugi::xml_node pPrCopy = pPr ? kp.append_copy(pPr) : pugi::xml_node();
-  pugi::xml_node endCopy = runPr ? kp.append_copy(runPr) : endPr ? kp.append_copy(endPr) : pugi::xml_node();
-  for (pugi::xml_node p : Kids(body, kA, "p")) body.remove_child(p);
-  const std::string pName = NameIn(body, kA, "p");
-  pugi::xml_node np = body.append_child(pName.c_str());
-  if (pPrCopy) np.append_copy(pPrCopy);
-  if (endCopy) {
-    pugi::xml_node e = np.append_copy(endCopy);
-    e.set_name(NameIn(body, kA, "endParaRPr").c_str());
-    e.remove_attribute("dirty");
-    e.remove_attribute("err");
-  }
-  // An a:extLst after the paragraphs stays after them.
-  if (pugi::xml_node ext = Kid(body, kA, "extLst")) body.insert_move_after(ext, np);
-}
-
-// Office's row and column ids (a16:rowId, a16:colId in an a:extLst): a copy gets a new one.
-void RenumberIds(pugi::xml_node copy, std::set<uint32_t>& used) {
-  std::vector<pugi::xml_node> stack{copy};
-  while (!stack.empty()) {
-    pugi::xml_node n = stack.back();
-    stack.pop_back();
-    for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
-      if (c.type() == pugi::node_element) stack.push_back(c);
-    const std::string_view local = LocalNameOf(n);
-    if ((local == "rowId" || local == "colId") && n.attribute("val")) {
-      uint32_t v = static_cast<uint32_t>(Int(n, "val", 0)) + 1;
-      while (used.count(v) || v == 0) ++v;
-      used.insert(v);
-      SetInt(n, "val", v);
-    }
-  }
-}
-
-std::set<uint32_t> UsedIds(pugi::xml_node tbl) {
-  std::set<uint32_t> out;
-  std::vector<pugi::xml_node> stack{tbl};
-  while (!stack.empty()) {
-    pugi::xml_node n = stack.back();
-    stack.pop_back();
-    for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
-      if (c.type() == pugi::node_element) stack.push_back(c);
-    const std::string_view local = LocalNameOf(n);
-    if (local == "rowId" || local == "colId") out.insert(static_cast<uint32_t>(Int(n, "val", 0)));
-  }
-  return out;
-}
-
-// The frame's size from the grid: the columns' widths and the rows' heights.
-void FitFrame(pugi::xml_node frame, pugi::xml_node tbl) {
-  int64_t cx = 0, cy = 0;
-  for (pugi::xml_node c : Kids(Kid(tbl, kA, "tblGrid"), kA, "gridCol")) cx += Int(c, "w");
-  for (pugi::xml_node r : Kids(tbl, kA, "tr")) cy += Int(r, "h");
-  Xfrm x;
-  if (ReadXfrm(frame, x)) {
-    x.cx = cx;
-    x.cy = cy;
-    WriteXfrm(frame, x);
-  }
-}
 
 }  // namespace
 
@@ -405,65 +318,6 @@ ObjectKind KindOf(pugi::xml_node object) {
          : n == "graphicFrame" ? ObjectKind::GraphicFrame
          : n == "grpSp"        ? ObjectKind::Group
                                : ObjectKind::Other;
-}
-
-pugi::xml_node XfrmNode(pugi::xml_node object) {
-  if (KindOf(object) == ObjectKind::GraphicFrame) return Kid(object, kP, "xfrm");
-  return Kid(PropertiesOf(object, false), kA, "xfrm");
-}
-
-bool ReadXfrm(pugi::xml_node object, Xfrm& out) {
-  pugi::xml_node x = XfrmNode(object);
-  if (!x) return false;
-  out = Xfrm();
-  pugi::xml_node off = Kid(x, kA, "off"), ext = Kid(x, kA, "ext");
-  out.x = Int(off, "x");
-  out.y = Int(off, "y");
-  out.cx = std::max<int64_t>(0, Int(ext, "cx"));
-  out.cy = std::max<int64_t>(0, Int(ext, "cy"));
-  out.rot = static_cast<int32_t>(Int(x, "rot") % 21600000);
-  out.flipH = Flag(x, "flipH");
-  out.flipV = Flag(x, "flipV");
-  pugi::xml_node chOff = Kid(x, kA, "chOff"), chExt = Kid(x, kA, "chExt");
-  if (chOff && chExt) {
-    out.child = true;
-    out.chX = Int(chOff, "x");
-    out.chY = Int(chOff, "y");
-    out.chCx = Int(chExt, "cx");
-    out.chCy = Int(chExt, "cy");
-  }
-  return true;
-}
-
-void WriteXfrm(pugi::xml_node object, const Xfrm& v) {
-  pugi::xml_node x = XfrmNode(object);
-  if (!x) {
-    if (KindOf(object) == ObjectKind::GraphicFrame) {
-      pugi::xml_node after = Kid(object, kP, "nvGraphicFramePr");
-      const std::string name = NameIn(object, kP, "xfrm");
-      x = after ? object.insert_child_after(name.c_str(), after) : object.prepend_child(name.c_str());
-    } else {
-      pugi::xml_node pr = PropertiesOf(object, true);
-      if (!pr) return;
-      x = InsertOrdered(pr, kA, "xfrm", kSpPrOrder);
-    }
-  }
-  if (v.rot) SetInt(x, "rot", v.rot); else x.remove_attribute("rot");
-  if (v.flipH) SetAttr(x, "flipH", "1"); else x.remove_attribute("flipH");
-  if (v.flipV) SetAttr(x, "flipV", "1"); else x.remove_attribute("flipV");
-  constexpr std::initializer_list<std::string_view> order = {"off", "ext", "chOff", "chExt"};
-  pugi::xml_node off = Ensure(x, kA, "off", order), ext = Ensure(x, kA, "ext", order);
-  SetInt(off, "x", v.x);
-  SetInt(off, "y", v.y);
-  SetInt(ext, "cx", v.cx);
-  SetInt(ext, "cy", v.cy);
-  if (v.child) {
-    pugi::xml_node chOff = Ensure(x, kA, "chOff", order), chExt = Ensure(x, kA, "chExt", order);
-    SetInt(chOff, "x", v.chX);
-    SetInt(chOff, "y", v.chY);
-    SetInt(chExt, "cx", v.chCx);
-    SetInt(chExt, "cy", v.chCy);
-  }
 }
 
 Frame ToFrame(const Xfrm& x) {
@@ -710,57 +564,6 @@ draw::Rect PlacePicture(draw::Size natural, draw::Size slide) {
   return {(slide.width - w) / 2, (slide.height - h) / 2, (slide.width + w) / 2, (slide.height + h) / 2};
 }
 
-// ---- Grouping
-
-Xfrm GroupBox(const std::vector<Xfrm>& children) {
-  Xfrm g;
-  if (children.empty()) return g;
-  double l = 1e300, t = 1e300, r = -1e300, b = -1e300;
-  for (const Xfrm& c : children) {
-    if (c.rot == 0) {
-      l = std::min(l, double(c.x)), t = std::min(t, double(c.y));
-      r = std::max(r, double(c.x + c.cx)), b = std::max(b, double(c.y + c.cy));
-      continue;
-    }
-    const draw::Rect box = ToFrame(c).Bounds();
-    l = std::min(l, double(box.left) * kEmuPerPoint), t = std::min(t, double(box.top) * kEmuPerPoint);
-    r = std::max(r, double(box.right) * kEmuPerPoint), b = std::max(b, double(box.bottom) * kEmuPerPoint);
-  }
-  g.x = std::llround(l), g.y = std::llround(t);
-  g.cx = std::llround(r) - g.x, g.cy = std::llround(b) - g.y;
-  g.child = true;
-  g.chX = g.x, g.chY = g.y, g.chCx = g.cx, g.chCy = g.cy;
-  return g;
-}
-
-Xfrm Ungrouped(const Xfrm& g, const Xfrm& c) {
-  const double sx = g.child && g.chCx > 0 ? double(g.cx) / g.chCx : 1;
-  const double sy = g.child && g.chCy > 0 ? double(g.cy) / g.chCy : 1;
-  const double ox = static_cast<double>(g.child ? g.chX : g.x), oy = static_cast<double>(g.child ? g.chY : g.y);
-  // The child's centre in the group's box, from the box's centre.
-  double px = (c.x + c.cx / 2.0 - ox) * sx - g.cx / 2.0;
-  double py = (c.y + c.cy / 2.0 - oy) * sy - g.cy / 2.0;
-  if (g.flipH) px = -px;
-  if (g.flipV) py = -py;
-  const double a = g.rot / 60000.0 * 3.14159265358979323846 / 180.0;
-  const double rx = px * std::cos(a) - py * std::sin(a), ry = px * std::sin(a) + py * std::cos(a);
-  const double cx = g.x + g.cx / 2.0 + rx, cy = g.y + g.cy / 2.0 + ry;
-  Xfrm out = c;
-  out.cx = std::llround(c.cx * sx);
-  out.cy = std::llround(c.cy * sy);
-  out.x = std::llround(cx - out.cx / 2.0);
-  out.y = std::llround(cy - out.cy / 2.0);
-  int64_t rot = c.rot;
-  if (g.flipH != g.flipV) rot = -rot;
-  rot += g.rot;
-  rot %= 21600000;
-  if (rot < 0) rot += 21600000;
-  out.rot = static_cast<int32_t>(rot);
-  out.flipH = c.flipH != g.flipH;
-  out.flipV = c.flipV != g.flipV;
-  return out;
-}
-
 // ---- Format
 
 Format ReadFormat(pugi::xml_node object) {
@@ -913,148 +716,19 @@ int TableColumns(pugi::xml_node frame) {
 }
 
 bool InsertTableRow(pugi::xml_node frame, int at) {
-  pugi::xml_node tbl = TableOf(frame);
-  std::vector<pugi::xml_node> rows = Kids(tbl, kA, "tr");
-  if (!tbl || rows.empty() || at < 0 || at > static_cast<int>(rows.size()) || rows.size() >= 1000) return false;
-  const auto grid = Grid(tbl);
-  const int n = static_cast<int>(rows.size());
-  pugi::xml_node like = rows[at > 0 ? at - 1 : 0];
-  pugi::xml_node row = at < n ? tbl.insert_copy_before(like, rows[at]) : tbl.insert_copy_after(like, rows[n - 1]);
-  std::set<uint32_t> used = UsedIds(tbl);
-  RenumberIds(row, used);
-  std::vector<pugi::xml_node> cells = Kids(row, kA, "tc");
-  std::set<pugi::xml_node_struct*> grown;
-  for (size_t c = 0; c < cells.size(); ++c) {
-    pugi::xml_node tc = cells[c];
-    ClearCell(tc);
-    for (const char* a : {"gridSpan", "rowSpan", "hMerge", "vMerge"}) tc.remove_attribute(a);
-    // A vertical merge over the place: the row below is covered by one above.
-    if (at <= 0 || at >= n || c >= grid[at].size() || !Flag(grid[at][c], "vMerge")) continue;
-    for (const char* a : {"gridSpan", "hMerge", "vMerge"})
-      if (pugi::xml_attribute v = grid[at][c].attribute(a)) SetAttr(tc, a, v.value());
-    int r = at - 1;
-    while (r > 0 && c < grid[r].size() && Flag(grid[r][c], "vMerge")) --r;
-    size_t oc = c;
-    while (oc > 0 && oc < grid[r].size() && Flag(grid[r][oc], "hMerge")) --oc;
-    if (oc < grid[r].size()) {
-      pugi::xml_node origin = grid[r][oc];
-      if (grown.insert(origin.internal_object()).second && Span(origin, "rowSpan") > 1)
-        SetSpan(origin, "rowSpan", Span(origin, "rowSpan") + 1);
-    }
-  }
-  FitFrame(frame, tbl);
-  return true;
+  return KindOf(frame) == ObjectKind::GraphicFrame && fw::slide::edit::table::InsertRow(frame, at);
 }
 
 bool InsertTableColumn(pugi::xml_node frame, int at) {
-  pugi::xml_node tbl = TableOf(frame);
-  pugi::xml_node tblGrid = Kid(tbl, kA, "tblGrid");
-  std::vector<pugi::xml_node> cols = Kids(tblGrid, kA, "gridCol");
-  const int n = static_cast<int>(cols.size());
-  if (!tbl || n == 0 || at < 0 || at > n || n >= 1000) return false;
-  const auto grid = Grid(tbl);
-  std::set<uint32_t> used = UsedIds(tbl);
-  const int likeCol = at > 0 ? at - 1 : 0;
-  pugi::xml_node col = at < n ? tblGrid.insert_copy_before(cols[likeCol], cols[at]) : tblGrid.insert_copy_after(cols[likeCol], cols[n - 1]);
-  RenumberIds(col, used);
-  std::vector<pugi::xml_node> rows = Kids(tbl, kA, "tr");
-  for (size_t r = 0; r < rows.size(); ++r) {
-    const auto& cells = grid[r];
-    if (cells.empty()) continue;
-    const size_t likeIdx = std::min<size_t>(likeCol, cells.size() - 1);
-    pugi::xml_node tc = at < static_cast<int>(cells.size()) ? rows[r].insert_copy_before(cells[likeIdx], cells[at])
-                                                           : rows[r].insert_copy_after(cells[likeIdx], cells.back());
-    ClearCell(tc);
-    for (const char* a : {"gridSpan", "rowSpan", "hMerge", "vMerge"}) tc.remove_attribute(a);
-    if (at <= 0 || at >= static_cast<int>(cells.size()) || !Flag(cells[at], "hMerge")) continue;
-    for (const char* a : {"rowSpan", "hMerge", "vMerge"})
-      if (pugi::xml_attribute v = cells[at].attribute(a)) SetAttr(tc, a, v.value());
-    int c = at - 1;
-    while (c > 0 && Flag(cells[c], "hMerge")) --c;
-    if (Span(cells[c], "gridSpan") > 1) SetSpan(cells[c], "gridSpan", Span(cells[c], "gridSpan") + 1);
-  }
-  FitFrame(frame, tbl);
-  return true;
+  return KindOf(frame) == ObjectKind::GraphicFrame && fw::slide::edit::table::InsertColumn(frame, at);
 }
 
 bool DeleteTableRow(pugi::xml_node frame, int row) {
-  pugi::xml_node tbl = TableOf(frame);
-  std::vector<pugi::xml_node> rows = Kids(tbl, kA, "tr");
-  const int n = static_cast<int>(rows.size());
-  if (!tbl || n <= 1 || row < 0 || row >= n) return false;
-  const auto grid = Grid(tbl);
-  std::set<pugi::xml_node_struct*> shrunk;
-  for (size_t c = 0; c < grid[row].size(); ++c) {
-    pugi::xml_node tc = grid[row][c];
-    if (Flag(tc, "vMerge")) {  // covered from above: the merge shrinks
-      int r = row - 1;
-      while (r > 0 && c < grid[r].size() && Flag(grid[r][c], "vMerge")) --r;
-      if (r >= 0 && c < grid[r].size()) {
-        pugi::xml_node origin = grid[r][c];
-        if (Span(origin, "rowSpan") > 1 && shrunk.insert(origin.internal_object()).second)
-          SetSpan(origin, "rowSpan", Span(origin, "rowSpan") - 1);
-      }
-      continue;
-    }
-    // The top of a merge: the cell below takes over.
-    if (row + 1 < n && c < grid[row + 1].size() && Flag(grid[row + 1][c], "vMerge")) {
-      pugi::xml_node below = grid[row + 1][c];
-      below.remove_attribute("vMerge");
-      SetSpan(below, "rowSpan", Span(tc, "rowSpan") - 1);
-      if (!Flag(tc, "hMerge")) {
-        if (pugi::xml_attribute g = tc.attribute("gridSpan")) SetAttr(below, "gridSpan", g.value());
-        pugi::xml_node body = Kid(tc, kA, "txBody"), old = Kid(below, kA, "txBody");
-        if (body) {
-          pugi::xml_node moved = old ? below.insert_copy_before(body, old) : below.prepend_copy(body);
-          (void)moved;
-          if (old) below.remove_child(old);
-        }
-      }
-    }
-  }
-  tbl.remove_child(rows[row]);
-  FitFrame(frame, tbl);
-  return true;
+  return KindOf(frame) == ObjectKind::GraphicFrame && fw::slide::edit::table::DeleteRow(frame, row);
 }
 
 bool DeleteTableColumn(pugi::xml_node frame, int column) {
-  pugi::xml_node tbl = TableOf(frame);
-  pugi::xml_node tblGrid = Kid(tbl, kA, "tblGrid");
-  std::vector<pugi::xml_node> cols = Kids(tblGrid, kA, "gridCol");
-  const int n = static_cast<int>(cols.size());
-  if (!tbl || n <= 1 || column < 0 || column >= n) return false;
-  const auto grid = Grid(tbl);
-  std::vector<pugi::xml_node> rows = Kids(tbl, kA, "tr");
-  for (size_t r = 0; r < rows.size(); ++r) {
-    const auto& cells = grid[r];
-    if (column >= static_cast<int>(cells.size())) continue;
-    pugi::xml_node tc = cells[column];
-    if (Flag(tc, "hMerge")) {
-      int c = column - 1;
-      while (c > 0 && Flag(cells[c], "hMerge")) --c;
-      if (c >= 0 && Span(cells[c], "gridSpan") > 1) SetSpan(cells[c], "gridSpan", Span(cells[c], "gridSpan") - 1);
-    } else if (column + 1 < static_cast<int>(cells.size()) && Flag(cells[column + 1], "hMerge")) {
-      pugi::xml_node next = cells[column + 1];
-      next.remove_attribute("hMerge");
-      SetSpan(next, "gridSpan", Span(tc, "gridSpan") - 1);
-      if (!Flag(tc, "vMerge")) {
-        if (pugi::xml_attribute rs = tc.attribute("rowSpan")) SetAttr(next, "rowSpan", rs.value());
-        pugi::xml_node body = Kid(tc, kA, "txBody"), old = Kid(next, kA, "txBody");
-        if (body) {
-          if (old) {
-            next.insert_copy_before(body, old);
-            next.remove_child(old);
-          } else {
-            next.prepend_copy(body);
-          }
-        }
-      }
-    }
-    rows[r].remove_child(tc);
-  }
-  tblGrid.remove_child(cols[column]);
-  FitFrame(frame, tbl);
-  return true;
+  return KindOf(frame) == ObjectKind::GraphicFrame && fw::slide::edit::table::DeleteColumn(frame, column);
 }
 
 void SetTableStyle(pugi::xml_node frame, std::string_view styleId) {

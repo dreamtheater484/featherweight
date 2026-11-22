@@ -13,6 +13,7 @@
 #include "draw/D2DPainter.h"
 #include "slide/view/Deck.h"
 #include "slide/view/TextClip.h"
+#include "slide/view/TextFind.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModelEdit.h"
@@ -139,10 +140,14 @@ bool TextEditing::StartAt(size_t slide, const TextTarget& t) {
   render::SlideRender::TextFrame frame;
   if (!r || !r->FindText(t.shape, t.row, t.column, frame)) return false;
   auto s = std::make_unique<TextSession>(*model_, t, *deck_->LayoutFonts());
+  // The text's colors resolve against the slide's theme and color map, kept here: each edit replaces
+  // the slide's model object (its pointers die), and the text is laid out again after each key.
   render::TextExtras extras;
   if (const SlideBase* part = model_->Part(t)) {
-    extras.colors.theme = part->theme ? part->theme.get() : nullptr;
-    extras.colors.colorMap = &part->colorMap;
+    theme_ = part->theme ? part->theme : draw::Theme::Default();
+    colorMap_ = part->colorMap;
+    extras.colors.theme = theme_.get();
+    extras.colors.colorMap = &colorMap_;
   }
   if (!s->Start(frame, extras)) return false;
   session_ = std::move(s);
@@ -214,6 +219,58 @@ bool TextEditing::NextCell(bool back) {
   session_->SelectAll();
   Changed();
   return true;
+}
+
+bool TextEditing::NextMisspelling(size_t slide, const std::function<void(size_t)>& goTo) {
+  if (!model_ || !deck_) return false;
+  if (!checker_) {
+    checker_ = std::make_unique<fw::text::SpellChecker>();
+    spelling_ = std::make_unique<SlideSpelling>(*checker_);
+  }
+  if (!checker_->Available()) {
+    host_.ViewMessage(BannerKind::Info, L"Spelling can't be checked on this PC.");
+    return false;
+  }
+  // The texts in order, and where to start: the caret's text, else the current slide's first.
+  std::vector<TextTarget> texts;
+  ForEachText(*model_, false, [&](const TextTarget& t, const TextBody&) {
+    texts.push_back(t);
+    return true;
+  });
+  if (texts.empty()) return false;
+  size_t start = 0;
+  TextPos after{};
+  const bool inText = session_ && !session_->Target().notes;
+  if (inText) {
+    after = session_->SelTo();
+    start = static_cast<size_t>(std::find(texts.begin(), texts.end(), session_->Target()) - texts.begin());
+    if (start == texts.size()) start = 0;
+  } else {
+    while (start < texts.size() && texts[start].slide < slide) ++start;
+    if (start == texts.size()) start = 0;
+  }
+  // Round the deck once; the caret's own text twice (after the caret, then before it).
+  for (size_t k = 0; k <= texts.size(); ++k) {
+    const TextTarget t = texts[(start + k) % texts.size()];
+    const std::unique_ptr<TextDoc> doc = OpenText(*model_, t);
+    if (!doc) continue;
+    for (const SpellError& e : spelling_->Check(doc->Resolved())) {
+      const TextPos from{e.para, e.from};
+      if (inText && k == 0 && from < after) continue;
+      if (inText && k == texts.size() && !(from < after)) continue;
+      if (session_ && session_->Target() == t) {
+        session_->Select(from, {e.para, e.to});
+      } else {
+        if (goTo && t.slide != slide) goTo(t.slide);
+        if (!Begin(t)) continue;
+        session_->Select(from, {e.para, e.to});
+      }
+      Changed();
+      return true;
+    }
+  }
+  host_.ViewMessage(BannerKind::Info, L"No spelling errors were found.");
+  return false;
 }
 
 bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size_t slide) {
@@ -441,14 +498,14 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
   const draw::Matrix toScreen = draw::Matrix::Scale(k, k) * draw::Matrix::Translate(rc.left, rc.top);
   const Palette& pal = theme::P();
   c.PushClip(rc);
-  D2D1_MATRIX_3X2_F old;
-  dc->GetTransform(&old);
-  auto set = [&](const draw::Matrix& m) { dc->SetTransform(D2D1::Matrix3x2F(m.m11, m.m12, m.m21, m.m22, m.dx, m.dy) * old); };
   {
+    // Transforms go through the painter (it keeps its own, from the device's when it's made): the
+    // text block adds its own to the painter's.
     draw::D2DPainter painter(dc);
     // The text box's outline, dashed, as PowerPoint marks the text being edited.
     const render::SlideRender::TextFrame& f = session_->Frame();
-    set(f.toSlide * toScreen);
+    painter.Save();
+    painter.Transform(f.toSlide * toScreen);
     const draw::Rect& r = f.box.rect;
     draw::Path box;
     box.MoveTo({r.left - f.box.insets.left, r.top - f.box.insets.top});
@@ -463,8 +520,10 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
     painter.StrokePath(box, pen);
     // The text itself, laid out after the last keystroke.
     session_->Block().Draw(painter, nullptr, session_->Target().shape);
+    painter.Restore();
     // The selection over it.
-    set(toScreen);
+    painter.Save();
+    painter.Transform(toScreen);
     const D2D1_COLOR_F sel = pal.selection;
     for (const auto& q : session_->SelectionQuads()) {
       draw::Path p;
@@ -475,8 +534,8 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
       p.Close();
       painter.FillPath(p, draw::Brush::Solid({sel.r, sel.g, sel.b, 0.4f}));
     }
+    painter.Restore();
   }
-  dc->SetTransform(old);
   // The caret: a thin line, in screen pixels.
   if (!session_->HasSelection()) {
     const TextSession::CaretLine line = session_->CaretGeometry();
@@ -487,32 +546,44 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
 }
 
 void TextEditing::DrawSpelling(gfx::Canvas& c, size_t slide, const D2D1_RECT_F& rc, bool on) {
-  // Squiggles under the text being edited (other shapes' text is checked as it's edited).
-  if (!on || !session_ || !deck_ || session_->Target().slide != slide || session_->Target().notes) return;
+  // Squiggles under misspelled words in the slide's texts, as the editor shows them (a deck that
+  // can't be edited shows none): the one being edited as typed, the others as drawn.
+  if (!on || !deck_ || !model_) return;
+  render::SlideRender* render = deck_->Rendered(slide);
+  if (!render) return;
   if (!checker_) {
     checker_ = std::make_unique<fw::text::SpellChecker>();
     spelling_ = std::make_unique<SlideSpelling>(*checker_);
   }
   if (!checker_->Available()) return;
   const draw::Size size = deck_->SlideSize();
+  if (size.width <= 0) return;
   const float k = (rc.right - rc.left) / size.width;
-  const draw::Matrix m = session_->TextToSlide() * draw::Matrix::Scale(k, k) * draw::Matrix::Translate(rc.left, rc.top);
-  c.PushClip(rc);
-  for (const SpellError& e : spelling_->Check(session_->Doc().Resolved())) {
-    for (const draw::Rect& r : session_->Block().SelectionRects(e.para, e.from, e.para, e.to)) {
-      // A wavy red line along the rectangle's bottom.
-      const draw::Point a = m.Apply({r.left, r.bottom}), b = m.Apply({r.right, r.bottom});
-      const float len = std::hypot(b.x - a.x, b.y - a.y);
-      if (len < 1) continue;
-      const float step = 2.0f;
-      const int n = static_cast<int>(len / step);
-      for (int i = 0; i < n; ++i) {
-        const float t0 = i * step / len, t1 = (i + 1) * step / len;
-        const float y0 = (i % 2) ? -1.f : 1.f, y1 = -y0;
-        c.Line(a.x + (b.x - a.x) * t0, a.y - 1 + y0, a.x + (b.x - a.x) * t1, a.y - 1 + y1, D2D1::ColorF(0.85f, 0.1f, 0.1f, 1), 1);
+  const draw::Matrix toScreen = draw::Matrix::Scale(k, k) * draw::Matrix::Translate(rc.left, rc.top);
+  auto underline = [&](const render::TextBlock& block, const TextBody& body, const draw::Matrix& toSlide) {
+    const draw::Matrix m = toSlide * toScreen;
+    for (const SpellError& e : spelling_->Check(body)) {
+      for (const draw::Rect& r : block.SelectionRects(e.para, e.from, e.para, e.to)) {
+        // A wavy red line along the rectangle's bottom.
+        const draw::Point a = m.Apply({r.left, r.bottom}), b = m.Apply({r.right, r.bottom});
+        const float len = std::hypot(b.x - a.x, b.y - a.y);
+        if (len < 1) continue;
+        const float step = 2.0f;
+        const int n = static_cast<int>(len / step);
+        for (int i = 0; i < n; ++i) {
+          const float t0 = i * step / len, t1 = (i + 1) * step / len;
+          const float y0 = (i % 2) ? -1.f : 1.f, y1 = -y0;
+          c.Line(a.x + (b.x - a.x) * t0, a.y - 1 + y0, a.x + (b.x - a.x) * t1, a.y - 1 + y1, D2D1::ColorF(0.85f, 0.1f, 0.1f, 1), 1);
+        }
       }
     }
-  }
+  };
+  const uint32_t editing = EditingShape(slide);
+  c.PushClip(rc);
+  for (const render::SlideRender::TextOnSlide& t : render->Texts())
+    if (t.shape != editing) underline(*t.block, *t.body, t.toSlide);
+  if (session_ && session_->Target().slide == slide && !session_->Target().notes)
+    underline(session_->Block(), session_->Doc().Resolved(), session_->TextToSlide());
   c.PopClip();
 }
 
@@ -532,6 +603,7 @@ std::optional<RECT> TextEditing::CaretRect(const D2D1_RECT_F& rc) const {
 // Commands
 
 int TextEditing::Shortcut(UINT vk, UINT mods) const {
+  if (vk == VK_F7 && !(mods & (kModCtrl | kModShift | kModAlt)) && model_) return CmdSpelling;
   if (!session_) return 0;
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (ctrl && !alt && !shift && vk == 'K') return CmdInsertLink;
@@ -541,6 +613,7 @@ int TextEditing::Shortcut(UINT vk, UINT mods) const {
 }
 
 bool TextEditing::Owns(int cmd) const {
+  if (cmd == CmdSpelling) return model_ != nullptr;
   if (!session_) return false;
   if (cmd == CmdInsertLink) return true;
   if (cmd >= CmdSpellSuggest && cmd < CmdSpellSuggest + 20) return true;
@@ -549,6 +622,12 @@ bool TextEditing::Owns(int cmd) const {
 
 CommandState TextEditing::Query(int cmd) {
   CommandState s;
+  if (cmd == CmdSpelling) {
+    s.enabled = model_ != nullptr;
+    s.label = L"Spelling: next error";
+    s.shortcut = L"F7";
+    return s;
+  }
   if (!session_) return s;
   const TextLook look = LookOf(*session_);
   s.enabled = true;

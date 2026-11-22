@@ -66,6 +66,11 @@ class TextEditing {
   // placeholder of `slide`), fontsize:<points> and fontcolor:<RRGGBB> (the selection, or the word at
   // the caret). False for ops that aren't text's; one that can't do its job says why on stderr.
   bool ScriptOp(const std::wstring& op, const std::wstring& arg, size_t slide);
+  // F7: the next misspelled word after the caret (from the start of `slide` when no text is being
+  // edited), through the slides' texts in find's order and round again, selected in its text;
+  // `goTo` shows another slide first. False when spelling can't be checked or nothing is misspelled
+  // (the tab is told why).
+  bool NextMisspelling(size_t slide, const std::function<void(size_t)>& goTo);
 
   // ---- Input (slide points) ----
   // A click on the slide: true when it went into text (the tab then drags with MouseMove).
@@ -117,6 +122,9 @@ class TextEditing {
   std::unique_ptr<Hide> hide_;
   bool slideChanged_ = false;
   uint32_t left_ = 0;  // TakeLeft's
+  // The edited text's colors: the slide's theme and color map when editing began (StartAt).
+  std::shared_ptr<const draw::Theme> theme_;
+  draw::ColorMap colorMap_;
   wchar_t highSurrogate_ = 0;
   double lastDoubleClick_ = -1e9;
   draw::Point lastDoubleAt_;

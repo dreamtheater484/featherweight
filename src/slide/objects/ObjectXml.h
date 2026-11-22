@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "draw/Painter.h"
+#include "slide/edit/Transform.h"
 #include "slide/objects/Frame.h"
 
 // Objects as PresentationML writes them (P2, p2-objects; plan §8.2 "Objects"): the transform of a
@@ -28,26 +29,20 @@ inline int64_t ToEmu(float points) { return static_cast<int64_t>(points * static
 inline float ToPoints(int64_t emu) { return static_cast<float>(static_cast<double>(emu) / kEmuPerPoint); }
 
 // a:xfrm (p:xfrm on a graphic frame) as written: EMUs, rotation in 60000ths of a degree. A group
-// also has its children's space (chOff, chExt).
-struct Xfrm {
-  int64_t x = 0, y = 0, cx = 0, cy = 0;
-  int32_t rot = 0;
-  bool flipH = false, flipV = false;
-  int64_t chX = 0, chY = 0, chCx = 0, chCy = 0;
-  bool child = false;  // chOff/chExt present
-};
+// also has its children's space (chOff, chExt). The one copy is the edit layer's (slide/edit/Transform.h).
+using Xfrm = fw::slide::edit::xfrm::Box;
 
 // What kind of object an element is.
 enum class ObjectKind : uint8_t { Shape, Picture, Connector, GraphicFrame, Group, Other };
 ObjectKind KindOf(pugi::xml_node object);
 
-// The transform element: spPr/a:xfrm, p:xfrm, grpSpPr/a:xfrm (or a:xfrm inside them). Null when
-// the object has none (a placeholder taking its layout's place).
-pugi::xml_node XfrmNode(pugi::xml_node object);
-bool ReadXfrm(pugi::xml_node object, Xfrm& out);
+// The transform element: spPr/a:xfrm, p:xfrm, grpSpPr/a:xfrm. Null when the object has none (a
+// placeholder taking its layout's place).
+inline pugi::xml_node XfrmNode(pugi::xml_node object) { return edit::xfrm::XfrmOf(object, false); }
+inline bool ReadXfrm(pugi::xml_node object, Xfrm& out) { return edit::xfrm::Read(object, out); }
 // Writes the transform, making the element when there's none. Attributes at their defaults
 // (rot 0, no flips) are removed, as PowerPoint writes them.
-void WriteXfrm(pugi::xml_node object, const Xfrm& x);
+inline void WriteXfrm(pugi::xml_node object, const Xfrm& x) { edit::xfrm::Write(object, x); }
 
 // Points and degrees <-> EMUs and 60000ths, in the object's parent's coordinates.
 Frame ToFrame(const Xfrm& x);
@@ -104,10 +99,10 @@ draw::Rect PlacePicture(draw::Size natural, draw::Size slide);
 
 // ---- Grouping. A group's box is the box around its children (turned ones' bounds); the children
 // keep their coordinates, which are the group's children's space at first.
-Xfrm GroupBox(const std::vector<Xfrm>& children);
+using edit::xfrm::GroupBox;  // the edit layer's own (a forward of the same name would be ambiguous by ADL)
 // A child of `group` taken out of it: its transform in the group's parent's coordinates (moved,
 // scaled and turned as the group shows it). A child group's own children's space stays.
-Xfrm Ungrouped(const Xfrm& group, const Xfrm& child);
+using edit::xfrm::Ungrouped;
 
 // ---- Format
 struct Paint {
