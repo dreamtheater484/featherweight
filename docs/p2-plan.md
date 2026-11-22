@@ -120,6 +120,7 @@ As P1 and S2 (`docs/p1-plan.md` and `docs/s2-plan.md`, "Rules"), plus:
 - Table rows and columns added copy their neighbour's cell properties and first run's look, clear the text, and grow merges they land in; a16 row and column ids get new values.
 - The clipboard has a private format (the objects' XML and the parts their relationships name, charts with their workbook); pasting outside Featherweight's objects takes pictures (files, PNG, bitmaps) and text (a new text box).
 - Without a cell chosen (text editing tells it), table row and column commands work at the table's end.
+- Presses between objects and text editing: a shape whose text body has no characters (an inserted shape, say) is the objects': it moves when dragged, and a double-click or typing puts text in it. Placeholders and text boxes take the caret even when empty, as in PowerPoint. Test runs (`--snapshot`) cut, copy and paste objects on the run's own clipboard (`util::UsePrivateClipboard`), never the user's.
 
 **p2-slides (2026-11-22):**
 - A built-in theme is applied by changing the master's theme part in place: its name, the color scheme (a:clrScheme), the heading and body Latin typefaces, the master's p:clrMap (light or dark) and the master's background; layouts and the masters' shapes, effects, East Asian and script fonts stay. Seven themes and twelve color sets are compact data in `SlideDesign.cpp`. Theme colors alone change only a:clrScheme. A theme or colors go to the masters of the slides chosen (all masters from the Design panel).
