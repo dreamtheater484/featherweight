@@ -150,7 +150,7 @@ constexpr const char* kUsage =
     "  fwtool spelling <file or folder>...\n"
     "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
     "      as the app does in idle time, and times both (plan §6.2, §11).\n"
-    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--workbooks] [--out DIR] [--json FILE] <file or folder>...\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--workbooks | --decks] [--out DIR] [--json FILE] <file or folder>...\n"
     "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
     "      document through the editor (typing, deletes and replacements across fields, bookmarks,\n"
     "      comments, content controls, tables and tracked changes, splits, joins, run, paragraph and\n"
@@ -171,6 +171,12 @@ constexpr const char* kUsage =
     "      the workbooks among the inputs (scripts/sheet-torture.ps1). --ops value,formula,...:\n"
     "      only those edits (names as reproducers write them). After the edits, undoing them all\n"
     "      must give the workbook as opened and redoing them the workbook as edited.\n"
+    "      Decks (P2): each deck saved with no edits first (the save writes no part; the copy, in\n"
+    "      DIR/unchanged, for PowerPoint and the PDF comparison), then seeded edits through the edit API\n"
+    "      (new, duplicated, deleted, moved and hidden slides, layouts, typing, notes, shapes moved,\n"
+    "      resized, rotated, deleted, grouped, ungrouped, reordered and formatted, undo, redo), then\n"
+    "      save: the same checks as workbooks (scripts/deck-torture.ps1). --decks: only the decks.\n"
+    "      Without the edit API in the build, every edit is refused.\n"
     "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
     "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
@@ -312,6 +318,7 @@ int wmain(int argc, wchar_t** argv) {
     if (arg == L"--reserialize-all") options.reserializeAll = true;
     else if (arg == L"--model") options.model = true;
     else if (arg == L"--workbooks") options.workbooks = true;
+    else if (arg == L"--decks") options.decks = true;
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];

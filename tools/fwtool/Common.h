@@ -13,6 +13,7 @@ struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
   bool model = false;           // roundtrip: read Word documents and workbooks into their models and write their parts
   bool workbooks = false;       // roundtrip, check, dump: workbooks only
+  bool decks = false;           // torture: decks only (P2); bench: the deck editing budgets
   bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)

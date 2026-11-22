@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "Common.h"
+#include "DeckTorture.h"
 #include "DrawingPlaces.h"
 #include "SheetTorture.h"
 #include "Torture.h"
@@ -3016,23 +3017,30 @@ int RunTorture(const Options& options) {
   set.seed = options.seed ? options.seed : 1;
   set.edits = static_cast<uint32_t>(options.edits);
   set.rounds = options.rounds;
-  if (options.replay)
+  if (options.replay) {
+    if (IsDeckReproducer(options.inputs.front())) return ReplayDeck(options.inputs.front(), options.outDir);
     return IsSheetReproducer(options.inputs.front()) ? ReplaySheet(options.inputs.front(), options.outDir)
                                                      : Replay(options.inputs.front(), options.outDir);
+  }
   set.out = options.outDir.empty() ? fs::path("build") / "torture" : options.outDir;
 
-  std::vector<fs::path> files, workbooks;  // workbooks: SheetTorture.cpp (S2)
+  // workbooks: SheetTorture.cpp (S2); decks: DeckTorture.cpp (P2).
+  std::vector<fs::path> files, workbooks, decks;
   for (const auto& f : CollectFiles(options.inputs)) {
     if (IsWordFile(f)) {
-      if (!options.workbooks) files.push_back(f);  // --workbooks: workbooks only
+      if (!options.workbooks && !options.decks) files.push_back(f);  // --workbooks, --decks: only those
     } else if (IsWorkbookFile(f)) {
-      workbooks.push_back(f);
+      if (!options.decks) workbooks.push_back(f);
+    } else if (IsDeckFile(f)) {
+      if (!options.workbooks) decks.push_back(f);
     }
   }
+  // Decks alone (--decks, or no documents and workbooks among the inputs).
+  if (files.empty() && workbooks.empty() && !decks.empty()) return RunDeckTorture(options, decks, false);
   // OpenDocument text (D5), which fwtool's other commands don't take.
   for (const auto& in : options.inputs) {
     std::error_code walk;
-    if (options.workbooks || !fs::is_directory(in, walk)) continue;
+    if (options.workbooks || options.decks || !fs::is_directory(in, walk)) continue;
     std::vector<fs::path> odf;
     for (auto it = fs::recursive_directory_iterator(in, walk); !walk && it != fs::end(it); it.increment(walk)) {
       const std::wstring ext = fw::ToLower(it->path().extension().wstring());
@@ -3042,8 +3050,12 @@ int RunTorture(const Options& options) {
     files.insert(files.end(), odf.begin(), odf.end());
   }
   if (files.empty()) {
-    if (!workbooks.empty()) return RunSheetTorture(options, workbooks, false);
-    std::fprintf(stderr, "No Word documents or workbooks found.\n");
+    if (!workbooks.empty()) {
+      int code = RunSheetTorture(options, workbooks, false);
+      if (!decks.empty() && RunDeckTorture(options, decks, true) != 0) code = 1;
+      return code;
+    }
+    std::fprintf(stderr, "No Word documents, workbooks or decks found.\n");
     return 1;
   }
   std::error_code ec;
@@ -3134,6 +3146,11 @@ int RunTorture(const Options& options) {
     std::printf("\n");
     pairs.close();
     if (RunSheetTorture(options, workbooks, true) != 0) code = 1;
+  }
+  if (!decks.empty()) {
+    std::printf("\n");
+    pairs.close();
+    if (RunDeckTorture(options, decks, true) != 0) code = 1;
   }
   return code;
 }
