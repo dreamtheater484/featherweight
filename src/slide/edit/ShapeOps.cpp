@@ -437,10 +437,15 @@ bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, cons
 // ---- Editor: shapes
 
 // Puts a parsed shape on a slide: ids renewed against the slide's, at z position `z`.
-Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, int z, uint32_t* id) {
+Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, int z, uint32_t* id, uint32_t parentGroup) {
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node tree = P(P(root, "cSld"), "spTree");
   if (!tree) return Result::Fail(u"The slide can't be read.");
+  if (parentGroup) {
+    tree = Editor::Impl::FindShape(root, parentGroup);
+    if (!tree || LocalNameOf(tree) != "grpSp") return Result::Fail(u"That group isn't on the slide.");
+    tree = Editor::Impl::Unwrap(tree);
+  }
   // Ids the shape defines that the slide uses: new ones above the slide's highest.
   std::set<uint32_t> own;
   IdsIn(shape, own);
@@ -461,7 +466,32 @@ Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, in
   return {};
 }
 
-Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int z) {
+Result Editor::MoveShape(size_t slide, uint32_t id, uint32_t parentGroup, int index) {
+  Call call(*this, u"Arrange");
+  Impl& m = *impl_;
+  std::string part = m.SlidePart(slide);
+  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  pugi::xml_node root = m.Edit(part);
+  pugi::xml_node shape = Impl::FindShape(root, id);
+  if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  pugi::xml_node parent = P(P(root, "cSld"), "spTree");
+  if (parentGroup) {
+    parent = Impl::FindShape(root, parentGroup);
+    if (!parent || LocalNameOf(parent) != "grpSp") return call.End(Result::Fail(u"That group isn't on the slide."));
+    parent = Impl::Unwrap(parent);
+    shape = Impl::FindShape(root, id);
+  }
+  pugi::xml_node unit = UnitOf(shape);
+  for (pugi::xml_node a = parent; a; a = a.parent()) {
+    if (a == unit) return call.End(Result::Fail(u"A group can't go into itself."));
+  }
+  pugi::xml_node before = InsertPoint(parent, index);
+  if (before != unit) before ? parent.insert_move_before(unit, before) : parent.append_move(unit);
+  m.Touched(part, id);
+  return call.End({});
+}
+
+Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int z, uint32_t parentGroup) {
   Call call(*this, u"Insert Shape");
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
@@ -477,7 +507,7 @@ Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int
   for (const std::string& r : rels) {
     if (!r.empty() && (!have || !have->Find(r))) return call.End(Result::Fail(u"The shape names a part the slide doesn't have."));
   }
-  return call.End(PutShape(m, part, doc.document_element(), z, id));
+  return call.End(PutShape(m, part, doc.document_element(), z, id, parentGroup));
 }
 
 Result Editor::InsertTextBox(size_t slide, const draw::Rect& r, std::wstring_view text, uint32_t* id) {

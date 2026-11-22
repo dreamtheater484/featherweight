@@ -258,6 +258,11 @@ TEST(SlideEditShapes) {
   s = deck->GetSlide(0);
   CHECK(s->FindShape(group) && s->FindShape(group)->kind == Shape::Kind::Group);
   CHECK_EQ(s->FindShape(group)->children.size(), size_t{2});
+  // Into and out of the group as it is.
+  CHECK(ed.MoveShape(0, table, group, -1));
+  CHECK_EQ(deck->GetSlide(0)->FindShape(group)->children.size(), size_t{3});
+  CHECK(ed.MoveShape(0, table, 0, -1));
+  CHECK_EQ(deck->GetSlide(0)->FindShape(group)->children.size(), size_t{2});
   std::vector<uint32_t> back;
   CHECK(ed.Ungroup(0, group, &back));
   CHECK_EQ(back.size(), size_t{2});

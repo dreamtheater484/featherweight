@@ -311,7 +311,11 @@ class Editor {
   // A shape element (p:sp, p:pic, p:cxnSp, p:graphicFrame, p:grpSp) as XML declaring the prefixes
   // it uses, put at z position `z` (0 the bottom; -1 on top). Its ids are renewed; the relationships
   // it names must exist (AddPart, AddRelationship in the same group).
-  Result InsertShape(size_t slide, std::string_view xml, uint32_t* id = nullptr, int z = -1);
+  // `parentGroup`: into that group (its child space), 0 the slide.
+  Result InsertShape(size_t slide, std::string_view xml, uint32_t* id = nullptr, int z = -1, uint32_t parentGroup = 0);
+  // A shape moved to z position `index` (-1: on top) of group `parentGroup` (0: the slide), into or
+  // out of groups as it is (its xfrm unchanged: the caller rewrites it with SetShapeXml/SetTransform).
+  Result MoveShape(size_t slide, uint32_t id, uint32_t parentGroup, int index);
   // A text box (Insert > Text Box) and a preset shape with the theme's style ("rect", "ellipse",
   // "rightArrow"...), as PowerPoint inserts them.
   Result InsertTextBox(size_t slide, const draw::Rect& r, std::wstring_view text, uint32_t* id = nullptr);
