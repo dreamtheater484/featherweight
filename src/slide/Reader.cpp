@@ -6,6 +6,8 @@
 #include "core/Strings.h"
 #include "draw/Sfnt.h"
 #include "slide/Internal.h"
+#include "slide/edit/Edit.h"
+#include "slide/edit/Parts.h"
 
 namespace fw::slide {
 
@@ -42,6 +44,16 @@ std::unique_ptr<pkg::XmlDom> ParsePart(const pkg::Package& package, std::string_
   }
   if (problem) *problem = std::string(part) + ": " + st.message;
   return nullptr;
+}
+
+std::shared_ptr<const pkg::XmlDom> DomOf(const Presentation& deck, std::string_view part, std::string* problem) {
+  if (part.empty()) return nullptr;
+  if (const edit::PartStore* store = deck.Edits(); store && store->Find(part)) {
+    edit::DomPtr dom = store->Dom(part);
+    if (!dom && problem) *problem = std::string(part) + ": missing";
+    return dom;
+  }
+  return std::shared_ptr<const pkg::XmlDom>(ParsePart(deck.GetPackage(), part, problem));
 }
 
 const Master* MasterOf(const SlideBase& part) {
@@ -128,7 +140,15 @@ class Loader {
   static void Finish(Presentation& deck, SlideBase& part, pugi::xml_node spTree, draw::Size size);
   static void Index(SlideBase& part, Shape& s);
   static void ReadPresentation(Presentation& deck, pugi::xml_node root);
+  static void ReadSlideList(Presentation& deck, pugi::xml_node root);
   static void ReadPresProps(Presentation& deck, const std::string& part);
+
+ public:
+  static void Refresh(Presentation& deck, const std::set<std::string>& parts, bool full, edit::Changes& out);
+
+ private:
+  static void Retire(Presentation& deck, std::unique_ptr<Slide> slide);
+  static bool ShowsNumber(const Slide& slide);
 };
 
 namespace {
@@ -168,11 +188,12 @@ uint32_t U32(pugi::xml_node n, const char* attr, uint32_t def = 0) {
 bool Loader::InitPart(Presentation& deck, SlideBase& part, PartKind kind, const std::string& name) {
   part.kind = kind;
   part.part = name;
-  part.relationships = deck.package_->RelationshipsOf(name);
+  part.rels_ = deck.store_ ? deck.store_->RelationshipsPtr(name) : nullptr;
+  part.relationships = part.rels_ ? part.rels_.get() : deck.RelationshipsOf(name);
   static const pkg::RelationshipSet kNone;
   if (!part.relationships) part.relationships = &kNone;
   std::string problem;
-  part.dom_ = ParsePart(*deck.package_, name, &problem);
+  part.dom_ = DomOf(deck, name, &problem);
   if (!part.dom_) {
     deck.problems_.push_back(problem.empty() ? name + ": missing" : problem);
     return false;
@@ -210,7 +231,7 @@ Master* Loader::LoadMaster(Presentation& deck, const std::string& name, PartKind
     if (it == deck.themes_.end()) {
       std::vector<uint8_t> bytes;
       std::shared_ptr<const draw::Theme> theme;
-      if (deck.package_->ReadPart(themePart, bytes).Ok()) {
+      if (deck.ReadPart(themePart, bytes)) {
         theme = draw::Theme::Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
       }
       if (!theme) deck.problems_.push_back(themePart + ": not a theme Featherweight can read");
@@ -334,7 +355,7 @@ void Loader::LoadSlide(Presentation& deck, size_t index) {
 }
 
 void Loader::ReadPresProps(Presentation& deck, const std::string& part) {
-  std::unique_ptr<pkg::XmlDom> dom = ParsePart(*deck.package_, part, nullptr);
+  std::shared_ptr<const pkg::XmlDom> dom = DomOf(deck, part, nullptr);
   if (!dom) return;
   pugi::xml_node show = P(dom->Root(), "showPr");
   if (!show) return;
@@ -357,7 +378,23 @@ void Loader::ReadPresProps(Presentation& deck, const std::string& part) {
 }
 
 void Loader::ReadPresentation(Presentation& deck, pugi::xml_node root) {
-  const pkg::RelationshipSet* rels = deck.package_->RelationshipsOf(deck.presentationPart_);
+  ReadSlideList(deck, root);
+  const pkg::RelationshipSet* rels = deck.RelationshipsOf(deck.presentationPart_);
+  ForEachChild(P(root, "sldMasterIdLst"), [&](pugi::xml_node id) {
+    std::string part = TargetOf(rels, RelId(id, "id"));
+    if (!part.empty() && deck.masters_.size() < 100) LoadMaster(deck, part, PartKind::Master);
+    return true;
+  });
+  if (deck.masters_.empty()) {
+    std::string part = TargetOfType(rels, "slideMaster");
+    if (!part.empty()) LoadMaster(deck, part, PartKind::Master);
+  }
+}
+
+// The presentation part's own content: sizes, the slide list, custom shows, sections, embedded
+// fonts and the show settings (not the masters).
+void Loader::ReadSlideList(Presentation& deck, pugi::xml_node root) {
+  const pkg::RelationshipSet* rels = deck.RelationshipsOf(deck.presentationPart_);
   if (pugi::xml_node sz = P(root, "sldSz")) {
     float w = Emu(sz, "cx", 9144000), h = Emu(sz, "cy", 6858000);
     // ST_SlideSizeCoordinate: 914400 to 51206400 EMU.
@@ -385,15 +422,6 @@ void Loader::ReadPresentation(Presentation& deck, pugi::xml_node root) {
     deck.slideRefs_.push_back(std::move(ref));
     return deck.slideRefs_.size() < 100000;
   });
-  ForEachChild(P(root, "sldMasterIdLst"), [&](pugi::xml_node id) {
-    std::string part = TargetOf(rels, RelId(id, "id"));
-    if (!part.empty() && deck.masters_.size() < 100) LoadMaster(deck, part, PartKind::Master);
-    return true;
-  });
-  if (deck.masters_.empty()) {
-    std::string part = TargetOfType(rels, "slideMaster");
-    if (!part.empty()) LoadMaster(deck, part, PartKind::Master);
-  }
 
   // Custom shows and sections, as slide indexes.
   ForEachChild(P(root, "custShowLst"), [&](pugi::xml_node show) {
@@ -473,6 +501,225 @@ std::unique_ptr<Presentation> Read(std::unique_ptr<pkg::Package> package, pkg::S
   return Loader::Read(std::move(package), status);
 }
 
+// ---- After an edit (src/slide/edit)
+
+bool Loader::ShowsNumber(const Slide& slide) {
+  // A slide number field in the slide's own text (placeholders inherit none of their text).
+  bool found = false;
+  std::vector<pugi::xml_node> stack{slide.root};
+  while (!stack.empty() && !found) {
+    pugi::xml_node n = stack.back();
+    stack.pop_back();
+    for (pugi::xml_node c = n.first_child(); c && !found; c = c.next_sibling()) {
+      if (c.type() != pugi::node_element) continue;
+      if (LocalNameOf(c) == "fld" && std::string_view(c.attribute("type").value()) == "slidenum") found = true;
+      stack.push_back(c);
+    }
+  }
+  return found;
+}
+
+void Loader::Retire(Presentation& deck, std::unique_ptr<Slide> slide) {
+  if (!slide) return;
+  edit::PartStore::Retired& grave = deck.store_->Graveyard();
+  std::vector<const void*> shown{slide.get()};
+  if (slide->notes) {
+    shown.push_back(slide->notes);
+    for (auto it = deck.notes_.begin(); it != deck.notes_.end(); ++it) {
+      if (it->get() == slide->notes) {
+        grave.parts.push_back(std::move(*it));
+        deck.notes_.erase(it);
+        break;
+      }
+    }
+  }
+  auto gone = [&](const std::pair<const void*, const void*>& key) {
+    return std::find(shown.begin(), shown.end(), key.second) != shown.end();
+  };
+  for (auto it = deck.texts_.begin(); it != deck.texts_.end();) {
+    if (gone(it->first)) {
+      grave.texts.push_back(std::move(it->second));
+      it = deck.texts_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = deck.tables_.begin(); it != deck.tables_.end();) {
+    if (gone(it->first)) {
+      grave.tables.push_back(std::move(it->second));
+      it = deck.tables_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  grave.parts.push_back(std::move(slide));
+}
+
+void Loader::Refresh(Presentation& deck, const std::set<std::string>& parts, bool full, edit::Changes& out) {
+  std::lock_guard lock(deck.mutex_);
+  edit::PartStore::Retired& grave = deck.store_->Graveyard();
+  auto changed = [&](std::string_view part) { return !part.empty() && parts.count(pkg::PartKey(part)) > 0; };
+
+  // A master, layout, notes master or theme changed: everything is read again.
+  if (!full) {
+    for (const auto& m : deck.masters_) full = full || changed(m->part);
+    for (const auto& l : deck.layouts_) full = full || changed(l->part);
+    if (deck.notesMaster_) full = full || changed(deck.notesMaster_->part);
+    for (const auto& [key, theme] : deck.themes_) full = full || parts.count(key) > 0;
+    std::string styles = TargetOfType(deck.RelationshipsOf(deck.presentationPart_), "tableStyles");
+    full = full || changed(styles);
+  }
+  bool presentation = full || changed(deck.presentationPart_);
+  if (!presentation && !std::any_of(parts.begin(), parts.end(), [&](const std::string& k) {
+        for (const auto& r : deck.slideRefs_) {
+          if (pkg::PartKey(r.part) == k || (r.slide && r.slide->notes && pkg::PartKey(r.slide->notes->part) == k)) return true;
+        }
+        return false;
+      })) {
+    return;  // nothing the model holds (a picture or chart part on its own: its slide is reported by the edit)
+  }
+
+  // The slide list before, to report what came, went and moved.
+  struct Old {
+    uint32_t id;
+    std::string key;
+  };
+  std::vector<Old> before;
+  before.reserve(deck.slideRefs_.size());
+  for (const auto& r : deck.slideRefs_) before.push_back({r.id, pkg::PartKey(r.part)});
+  std::vector<std::pair<uint32_t, uint32_t>> flags;  // slide id, ChangeFlag bits
+
+  if (presentation) {
+    grave.doms.push_back(deck.presentationDom_);
+    std::string problem;
+    std::shared_ptr<const pkg::XmlDom> dom = DomOf(deck, deck.presentationPart_, &problem);
+    if (dom && Is(dom->Root(), kP, "presentation")) deck.presentationDom_ = dom;  // else the last good one stays
+    pugi::xml_node root = deck.presentationDom_->Root();
+    deck.defaultTextStyle_ = P(root, "defaultTextStyle");
+    std::map<std::string, std::unique_ptr<Slide>> kept;
+    for (auto& r : deck.slideRefs_) {
+      if (r.slide) kept[pkg::PartKey(r.part)] = std::move(r.slide);
+    }
+    std::vector<Section> oldSections = std::move(deck.sections_);
+    std::vector<CustomShow> oldShows = std::move(deck.customShows_);
+    deck.slideRefs_.clear();
+    deck.sections_.clear();
+    deck.customShows_.clear();
+    deck.fontParts_.clear();
+    deck.show_ = {};
+    if (full) {
+      for (auto& [key, s] : kept) Retire(deck, std::move(s));
+      kept.clear();
+      for (auto& m : deck.masters_) grave.parts.push_back(std::move(m));
+      for (auto& l : deck.layouts_) grave.parts.push_back(std::move(l));
+      for (auto& n : deck.notes_) grave.parts.push_back(std::move(n));
+      if (deck.notesMaster_) grave.parts.push_back(std::move(deck.notesMaster_));
+      deck.masters_.clear();
+      deck.layouts_.clear();
+      deck.notes_.clear();
+      for (auto& [key, t] : deck.texts_) grave.texts.push_back(std::move(t));
+      for (auto& [key, t] : deck.tables_) grave.tables.push_back(std::move(t));
+      deck.texts_.clear();
+      deck.tables_.clear();
+      for (auto& [key, t] : deck.themes_) grave.themes.push_back(t);
+      deck.themes_.clear();
+      grave.doms.push_back(deck.tableStyles_);
+      deck.tableStyles_.reset();
+      deck.tableStylesRead_ = false;
+      ReadPresentation(deck, root);
+      out.allSlides = true;
+    } else {
+      ReadSlideList(deck, root);
+    }
+    for (size_t i = 0; i < deck.slideRefs_.size(); ++i) {
+      Presentation::SlideRef& r = deck.slideRefs_[i];
+      auto it = kept.find(pkg::PartKey(r.part));
+      if (it == kept.end() || !it->second) continue;
+      std::unique_ptr<Slide> s = std::move(it->second);
+      int number = deck.firstSlideNumber_ + static_cast<int>(i);
+      if (s->number != number && ShowsNumber(*s)) {
+        flags.emplace_back(r.id, edit::kNumber);
+        Retire(deck, std::move(s));
+        continue;
+      }
+      s->index = i;
+      s->number = number;
+      s->id = r.id;
+      r.slide = std::move(s);
+    }
+    for (auto& [key, s] : kept) Retire(deck, std::move(s));
+    auto sameSections = [&] {
+      if (oldSections.size() != deck.sections_.size() || oldShows.size() != deck.customShows_.size()) return false;
+      for (size_t i = 0; i < oldSections.size(); ++i) {
+        if (oldSections[i].name != deck.sections_[i].name || oldSections[i].slides != deck.sections_[i].slides) return false;
+      }
+      for (size_t i = 0; i < oldShows.size(); ++i) {
+        if (oldShows[i].name != deck.customShows_[i].name || oldShows[i].slides != deck.customShows_[i].slides) return false;
+      }
+      return true;
+    };
+    out.sections = out.sections || !sameSections();
+    std::string props = TargetOfType(deck.RelationshipsOf(deck.presentationPart_), "presProps");
+    if (!props.empty()) ReadPresProps(deck, props);
+  } else {
+    std::string props = TargetOfType(deck.RelationshipsOf(deck.presentationPart_), "presProps");
+    if (changed(props)) {
+      deck.show_ = {};
+      ReadPresProps(deck, props);
+    }
+  }
+
+  // Slides whose own part, relationships or notes changed are read again on first use.
+  for (Presentation::SlideRef& r : deck.slideRefs_) {
+    bool self = changed(r.part);
+    bool notes = r.slide && r.slide->notes && changed(r.slide->notes->part);
+    if (!self && !notes) continue;
+    flags.emplace_back(r.id, (self ? edit::kContent | edit::kProps : 0u) | (notes ? edit::kNotes : 0u));
+    Retire(deck, std::move(r.slide));
+  }
+
+  // What the view needs to know.
+  std::map<uint32_t, uint32_t> what;
+  for (auto [id, f] : flags) what[id] |= f;
+  bool sameList = before.size() == deck.slideRefs_.size();
+  for (size_t i = 0; sameList && i < before.size(); ++i) {
+    sameList = before[i].id == deck.slideRefs_[i].id && before[i].key == pkg::PartKey(deck.slideRefs_[i].part);
+  }
+  if (!sameList) {
+    out.slideList = true;
+    std::set<uint32_t> now;
+    for (const auto& r : deck.slideRefs_) now.insert(r.id);
+    std::set<uint32_t> was;
+    for (const Old& o : before) {
+      was.insert(o.id);
+      if (!now.count(o.id)) what[o.id] |= edit::kRemoved;
+    }
+    for (const auto& r : deck.slideRefs_) {
+      if (!was.count(r.id)) what[r.id] |= edit::kAdded;
+    }
+    // The same id on another part (an undone delete and a new slide): new to the view.
+    for (const Old& o : before) {
+      int i = deck.SlideIndexOfId(o.id);
+      if (i >= 0 && pkg::PartKey(deck.slideRefs_[static_cast<size_t>(i)].part) != o.key) what[o.id] |= edit::kAdded | edit::kContent;
+    }
+  }
+  for (auto [id, f] : what) {
+    auto it = std::find_if(out.slides.begin(), out.slides.end(), [&](const edit::SlideChange& c) { return c.id == id; });
+    if (it == out.slides.end()) {
+      out.slides.push_back({id, -1, 0, {}});
+      it = out.slides.end() - 1;
+    }
+    it->what |= f;
+  }
+  for (edit::SlideChange& c : out.slides) c.index = deck.SlideIndexOfId(c.id);
+}
+
+namespace detail {
+void RefreshModel(Presentation& deck, const std::set<std::string>& parts, bool full, edit::Changes& out) {
+  Loader::Refresh(deck, parts, full, out);
+}
+}  // namespace detail
+
 // ---- Presentation
 
 Presentation::Presentation() = default;
@@ -524,7 +771,19 @@ std::vector<DrawItem> Presentation::DrawList(const SlideBase& slide) const {
 }
 
 std::unique_ptr<draw::DrawingResources> Presentation::Resources(const SlideBase& owner, const SlideBase& shownOn) const {
+  if (store_ && !store_->Empty()) {
+    return std::make_unique<edit::EditedResources>(*store_, owner.part, shownOn.theme, shownOn.colorMap, images_);
+  }
   return std::make_unique<draw::PackageResources>(*package_, owner.part, shownOn.theme, shownOn.colorMap, images_);
+}
+
+const pkg::RelationshipSet* Presentation::RelationshipsOf(std::string_view part) const {
+  return store_ ? store_->Relationships(part) : package_->RelationshipsOf(part);
+}
+
+bool Presentation::ReadPart(std::string_view part, std::vector<uint8_t>& out) const {
+  if (store_) return store_->ReadPart(part, out);
+  return package_->ReadPart(part, out).Ok();
 }
 
 const TextBody* Presentation::Text(const Shape& shape, const SlideBase& shownOn) {
@@ -561,7 +820,7 @@ const std::vector<EmbeddedFont>& Presentation::EmbeddedFonts() {
     for (int i = 0; i < 4; ++i) {
       if (parts[i].empty()) continue;
       std::vector<uint8_t> bytes;
-      if (!package_->ReadPart(parts[i], bytes).Ok()) continue;
+      if (!ReadPart(parts[i], bytes)) continue;
       EmbeddedFont f;
       f.typeface = typeface;
       f.bold = i == 1 || i == 3;
