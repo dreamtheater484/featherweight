@@ -134,13 +134,17 @@ class Reader {
     auto pic = std::make_shared<PictureFill>();
     pugi::xml_node blip = A(n, "blip");
     std::shared_ptr<const Image> raster;
-    if (std::string_view id = RelId(blip, "embed"); !id.empty()) raster = ctx_.resources.GetImage(id);
+    // A themed fill's pictures are the theme part's relationships.
+    const auto image = [&](std::string_view id) {
+      return themed_ ? ctx_.resources.GetThemeImage(id) : ctx_.resources.GetImage(id);
+    };
+    if (std::string_view id = RelId(blip, "embed"); !id.empty()) raster = image(id);
     pic->image = raster;
     // Office stores SVG pictures in an extension, with a PNG copy as the blip itself.
     ForEachChild(A(blip, "extLst"), [&](pugi::xml_node ext) {
       if (pugi::xml_node svg = Child(ext, kAsvg, "svgBlip")) {
         std::string_view id = RelId(svg, "embed");
-        std::shared_ptr<const Image> vector = id.empty() ? nullptr : ctx_.resources.GetImage(id);
+        std::shared_ptr<const Image> vector = id.empty() ? nullptr : image(id);
         if (vector && (vector->Faithful() || !raster)) pic->image = vector;
         return false;
       }
@@ -352,7 +356,9 @@ class Reader {
     if (pugi::xml_node fill = A(style, "fillRef")) {
       ColorContext c = refColor(fill);
       pugi::xml_node themed = ctx_.theme->Fill(static_cast<int>(Number(fill, "idx", 0)));
+      themed_ = true;
       if (!themed || !ReadFill(themed, c, nullptr, s.fill)) s.fill = Fill{};
+      themed_ = false;
     }
     if (pugi::xml_node eff = A(style, "effectRef")) {
       ColorContext c = refColor(eff);
@@ -583,6 +589,7 @@ class Reader {
 
  private:
   ReadContext& ctx_;
+  bool themed_ = false;  // reading a fill from the theme's format scheme (its pictures are the theme's)
 };
 
 }  // namespace
