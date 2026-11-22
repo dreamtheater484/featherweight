@@ -78,3 +78,13 @@ As P1 and S2 (`docs/p1-plan.md` and `docs/s2-plan.md`, "Rules"), plus:
 - **Questions:** Roy asked not to be asked unless it's unavoidable. Decide within this plan and record the decision below; ask the coordinator, not Roy.
 
 ## Decisions during P2
+
+**p2-objects (2026-11-22):**
+- Objects' headless code is its own library, `fwslideobjects` (`src/slide/objects`: frames and handles, smart guides, align/distribute/order, selection over a slide's object tree, the PresentationML of objects, chart parts with their embedded workbook), shared by the tab, fwtool and the torture script. The tab's part is `ObjectTool` (`src/slide/view/ObjectTool.*`), hooked into PresentationView with one-line calls.
+- Every object edit goes through the deck's editor: `Deck::Editor()` (ModelDeck makes it on first use and owns it). Format changes (fill, outline, weight, dash, shadow) read the shape with `ShapeXml`, change only that part with `fwslideobjects`, and write it back with `SetShapeXml`, one step for the selection; moves, resizes and turns are one `SetTransforms` step.
+- Dragging draws two bitmaps made at the drag's start (the slide without the dragged objects, and them alone) and moves, scales or turns the second each frame; the edit is made on release. Larger than 4096 px (zoomed far in): outlines only.
+- Snapping: smart guides first (slide edges and centre, other objects' edges and centres at the same level, equal spacing), else a 6-point grid; Alt turns both off. Arrow keys nudge 6 points, Ctrl+arrow 1 point.
+- Inserted objects follow PowerPoint 2021: shapes with the theme's style, lines as connectors, pictures at their size (scaled to fit, centred), tables 640 points wide with 29.2-point rows in Medium Style 2 - Accent 1, charts 640 x 360 with PowerPoint's starting data and a minimal embedded workbook (Sheet1). Editing chart data replaces the embedded workbook with a minimal one (its Excel formatting isn't kept).
+- Table rows and columns added copy their neighbour's cell properties and first run's look, clear the text, and grow merges they land in; a16 row and column ids get new values.
+- The clipboard has a private format (the objects' XML and the parts their relationships name, charts with their workbook); pasting outside Featherweight's objects takes pictures (files, PNG, bitmaps) and text (a new text box).
+- Without a cell chosen (text editing tells it), table row and column commands work at the table's end.
