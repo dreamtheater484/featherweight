@@ -197,6 +197,9 @@ void ApplyPPr(pugi::xml_node pPr, ParagraphProps& p, RunProps* run, const Ctx& c
     } else if (k == "buNone") {
       b.kind = Bullet::Kind::None;
     } else if (k == "buAutoNum") {
+      // Numbers replacing a character bullet don't take that bullet's font (cbs deck: a master's
+      // Arial for "●" isn't the numbers' font; PowerPoint draws them in the text's).
+      if (b.kind == Bullet::Kind::Char && !A(pPr, "buFont") && !A(pPr, "buFontTx")) b.font.clear();
       b.kind = Bullet::Kind::AutoNumber;
       b.scheme = n.attribute("type").value();
       b.startAt = std::clamp(static_cast<int>(Number(n, "startAt", 1)), 1, 32767);

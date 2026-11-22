@@ -1050,6 +1050,45 @@ TEST(DrawingML_ChartIsPlaceholder) {
   CHECK(d && d->Extent().width == 100);
 }
 
+TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {
+  // PowerPoint keeps the data model's extension list as dgm:extLst: its dsp:dataModelExt names the
+  // drawing Office saved, which is drawn.
+  struct Parts : TestResources {
+    fw::pkg::XmlDom data, drawing;
+    pugi::xml_node GetPartXml(std::string_view relId) override {
+      return relId == "rIdDm" ? data.Root() : relId == "rIdDrawing" ? drawing.Root() : pugi::xml_node();
+    }
+  } res;
+  res.data = ParseXml(R"(<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" )"
+                      R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:extLst>)"
+                      R"(<a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt )"
+                      R"(xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rIdDrawing"/></a:ext>)"
+                      R"(</dgm:extLst></dgm:dataModel>)");
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>)" +
+                         Xfrm(0, 0, 100, 50) +
+                         R"(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>)"
+                         R"(</dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>)");
+  fw::pkg::XmlDom dom = ParseXml(
+      "<p:graphicFrame" + kNs + R"(><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 3"/><p:cNvGraphicFramePr/><p:nvPr/>)"
+      R"(</p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></p:xfrm><a:graphic>)"
+      R"(<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds )"
+      R"(xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>)"
+      R"(</a:graphicData></a:graphic></p:graphicFrame>)");
+  auto d = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(100, 50);
+  {
+    D2DPainter p(s.dc.Get());
+    d->Draw(p, d->Bounds());
+  }
+  CHECK(s.End());
+  CHECK(Near(s.At(50, 25), 0xFF0000));
+}
+
 TEST(DrawingML_ShapeTree) {
   // A slide shape: its bounds come from its xfrm, in the slide's coordinates.
   TestResources res;

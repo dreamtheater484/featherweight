@@ -248,6 +248,25 @@ TEST(Chart_UnstatedChartAreaFillByProgram) {
   CHECK(filledArea(stated, true));
 }
 
+TEST(Chart_SlideTitleIsTheTextSizeTimesOnePointTwo) {
+  // A styled chart (c14:style) on a slide with c:txPr at 18 pt and an automatic title: 21.6 pt
+  // (poi line chart in PowerPoint's PDF); in a workbook Excel's 14/9 ratio stays.
+  std::string xml = ColumnChart();
+  const std::string title = "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title>";
+  xml.replace(xml.find(title), title.size(), "<c:title><c:overlay val=\"0\"/></c:title>");
+  xml.insert(xml.find("<c:chart>"), "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+                                    "<mc:Choice Requires=\"c14\" xmlns:c14=\"http://schemas.microsoft.com/office/drawing/2007/8/2/chart\">"
+                                    "<c14:style val=\"102\"/></mc:Choice><mc:Fallback><c:style val=\"2\"/></mc:Fallback></mc:AlternateContent>");
+  xml.insert(xml.rfind("</c:chartSpace>"), "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr>"
+                                           "<a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>");
+  Parsed doc(xml);
+  Chart slide, book;
+  CHECK(Read(doc.Root(), Colors(), slide, nullptr, true));
+  CHECK_NEAR(slide.titleSize, 21.6f, 0.01f);
+  CHECK(Read(doc.Root(), Colors(), book, nullptr, false));
+  CHECK_NEAR(book.titleSize, 28.f, 0.01f);
+}
+
 TEST(Chart_BubblesByArea) {
   // Bubbles at (x, y) sized by area: four times the size, twice as wide; the largest a quarter of
   // the plot's smaller side across (PowerPoint's PDFs). A series each, so each has its own color.

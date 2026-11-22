@@ -134,6 +134,21 @@ Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family, DWRITE_FONT_WEIGHT
   }
 }
 
+IDWriteFontFace* Face::Plain() const {
+  if (face_->GetSimulations() == DWRITE_FONT_SIMULATIONS_NONE) return face_.Get();
+  if (!plain_) {
+    ComPtr<IDWriteFontFace3> face3;
+    ComPtr<IDWriteFontFaceReference> ref;
+    ComPtr<IDWriteFontFace3> plain;
+    if (SUCCEEDED(face_.As(&face3)) && SUCCEEDED(face3->GetFontFaceReference(&ref)) &&
+        SUCCEEDED(ref->CreateFontFaceWithSimulations(DWRITE_FONT_SIMULATIONS_NONE, &plain)))
+      plain_ = plain;
+    else
+      plain_ = face_;
+  }
+  return plain_.Get();
+}
+
 FontMetrics Face::Metrics(float size) const {
   float k = size / upem_;
   FontMetrics m;
