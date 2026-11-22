@@ -21,6 +21,8 @@
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
+#include "ui/PanelButton.h"
+#include "ui/SidePanel.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
 #include "word/DocFormat.h"
@@ -31,6 +33,34 @@ struct TextEditing::Hide : render::DrawFilter {
   uint32_t shape = 0;
   int first = 0, count = 0;
   bool Paragraph(uint32_t id, int index) override { return !(id == shape && index >= first && index < first + count); }
+};
+
+// Ctrl+K: a link over the selection (or the link at the caret) to a web or e-mail address, a file,
+// or a slide of this deck, with the text it shows and its ScreenTip, as PowerPoint's dialog has them.
+class TextEditing::LinkPanel : public PanelContent {
+ public:
+  explicit LinkPanel(TextEditing& t);
+  std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
+  void Draw(gfx::Canvas& c) override;
+  void Open();
+
+ private:
+  class Box : public ComboBox {
+   public:
+    using ComboBox::TakeFocus;
+  };
+  void Apply();
+  void Remove();
+  void Close();
+  TextEditing& t_;
+  Box text_, address_, tip_;
+  PanelButton apply_, remove_;
+  bool editing_ = false, focusWanted_ = false;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
+  std::wstring note_;
+  D2D1_RECT_F noteRc_{};
+  float ui_ = 1;
 };
 
 namespace {
@@ -135,6 +165,7 @@ bool TextEditing::Begin(const TextTarget& t, std::optional<draw::Point> at) {
 void TextEditing::End() {
   if (!session_) return;
   session_.reset();
+  if (linkPanel_ && host_.ViewShownPanel() == linkPanel_.get()) host_.ViewShowPanel(nullptr);
   if (editor_) editor_->EndTyping();  // typing here again later is a new step
   slideChanged_ = true;
   host_.ViewInvalidate();
@@ -492,22 +523,7 @@ bool TextEditing::Execute(int cmd) {
     case CmdOutdent: format::Level(s, false); break;
     case CmdChangeCase: format::ChangeCase(s); break;
     case CmdRemoveLink: format::SetLink(s, {}, false, {}); break;
-    case CmdInsertLink: {
-      // Until the link panel: the selection's text as a web address, when it is one.
-      const std::wstring text = s.HasSelection() ? Trim(s.Doc().Text(s.SelFrom(), s.SelTo())) : std::wstring();
-      const bool web = text.starts_with(L"http://") || text.starts_with(L"https://") || text.starts_with(L"www.");
-      const bool mail = text.find(L'@') != std::wstring::npos && text.find(L' ') == std::wstring::npos;
-      if (model_ && (web || mail)) {
-        const std::wstring url = text.starts_with(L"www.") ? L"https://" + text : mail && !text.starts_with(L"mailto:") ? L"mailto:" + text : text;
-        model_->BeginGroup(u"Hyperlink");
-        const std::string rel = model_->AddLink(s.Target(), url, -1);
-        if (!rel.empty()) format::SetLink(s, rel, false, {});
-        model_->EndGroup();
-      } else {
-        host_.ViewMessage(BannerKind::Info, L"Select a web or email address to make it a link.");
-      }
-      break;
-    }
+    case CmdInsertLink: OpenLinkPanel(); break;
     case CmdCut: Copy(true); break;
     case CmdCopy: Copy(false); break;
     case CmdPaste: Paste(false); break;
@@ -661,6 +677,202 @@ void TextEditing::FillContextMenu(HMENU m, size_t slide, draw::Point at) {
   menu::AppendSeparator(m);
   menu::AppendItem(m, CmdInsertLink, Query(CmdInsertLink).label);
   if (Query(CmdRemoveLink).enabled) menu::AppendItem(m, CmdRemoveLink, L"Remove link");
+}
+
+// ---------------------------------------------------------------------------
+// The link panel (Ctrl+K)
+
+namespace {
+
+// What's typed as PowerPoint takes it: an e-mail address gets mailto:, a drive path file:///, and
+// anything else without a scheme https://.
+std::wstring LinkAddress(std::wstring a) {
+  if (a.empty() || a.find(L"://") != std::wstring::npos || a.rfind(L"mailto:", 0) == 0) return a;
+  if (a.size() > 2 && a[1] == L':' && (a[2] == L'\\' || a[2] == L'/')) {
+    std::replace(a.begin(), a.end(), L'\\', L'/');
+    return L"file:///" + a;
+  }
+  if (a.find(L'@') != std::wstring::npos && a.find(L'/') == std::wstring::npos) return L"mailto:" + a;
+  return L"https://" + a;
+}
+
+// "Slide 3: Its title", as the address list shows the deck's slides.
+std::wstring SlideItem(Deck& deck, size_t i) {
+  std::wstring title;
+  Presentation* p = deck.Model();
+  const Slide* s = p && i < p->SlideCount() ? p->GetSlide(i) : nullptr;
+  for (const Shape& sh : s ? s->shapes : std::vector<Shape>{}) {
+    if (!sh.placeholder || (sh.placeholder.type != PlaceholderType::Title && sh.placeholder.type != PlaceholderType::CenteredTitle))
+      continue;
+    if (const TextBody* t = p->Text(sh, *s)) {
+      for (const Paragraph& para : t->paragraphs) {
+        for (const TextRun& r : para.runs)
+          if (r.kind == TextRun::Kind::Text) title += r.text;
+        if (!title.empty()) break;
+      }
+    }
+    break;
+  }
+  return L"Slide " + std::to_wstring(i + 1) + (title.empty() ? L"" : L": " + title);
+}
+
+}  // namespace
+
+void TextEditing::OpenLinkPanel() {
+  if (!session_ || !model_) return;
+  if (!linkPanel_) linkPanel_ = std::make_unique<LinkPanel>(*this);
+  linkPanel_->Open();
+  host_.ViewShowPanel(linkPanel_.get());
+  host_.ViewInvalidate();
+}
+
+TextEditing::LinkPanel::LinkPanel(TextEditing& t) : t_(t) {
+  text_.autoComplete = false;
+  tip_.autoComplete = false;
+  address_.tooltip = L"A web or e-mail address, a file, or a slide of this presentation";
+  for (Box* b : {&text_, &address_, &tip_}) b->onEnter = [this] { Apply(); };
+  address_.onCommit = [this](const std::wstring& item, int index) {
+    // Picking a slide shows its title when there's no text yet.
+    if (index >= 0 && text_.Text().empty() && !editing_) {
+      const size_t colon = item.find(L": ");
+      if (colon != std::wstring::npos) text_.SetText(item.substr(colon + 2));
+    }
+  };
+  apply_.onInvoke = [this] { Apply(); };
+  remove_.text = L"Remove link";
+  remove_.onInvoke = [this] { Remove(); };
+}
+
+void TextEditing::LinkPanel::Open() {
+  note_.clear();
+  focusWanted_ = true;
+  TextSession& s = *t_.session_;
+  std::vector<std::wstring> items;
+  for (size_t i = 0; t_.deck_ && i < t_.deck_->SlideCount(); ++i) items.push_back(SlideItem(*t_.deck_, i));
+  address_.items = std::move(items);
+  TextPos from, to;
+  pugi::xml_node h;
+  editing_ = format::LinkAt(s, from, to, h);
+  std::wstring address, tip;
+  if (editing_) {
+    // What the link does, from the text as resolved: an address or a slide.
+    const std::vector<Paragraph>& paras = s.Doc().Resolved().paragraphs;
+    if (from.para < paras.size()) {
+      uint32_t at = 0;
+      for (const TextRun& r : paras[from.para].runs) {
+        const uint32_t len = r.kind == TextRun::Kind::Break ? 1 : static_cast<uint32_t>(r.text.size());
+        if (from.offset < at + len || (len == 0 && from.offset == at)) {
+          const Hyperlink& l = r.props.click;
+          if (l.action == Hyperlink::Action::Slide && l.slide >= 0 && t_.deck_) address = SlideItem(*t_.deck_, static_cast<size_t>(l.slide));
+          else address = Utf8ToWide(l.url);
+          tip = Utf8ToWide(l.tooltip);
+          break;
+        }
+        at += len;
+      }
+    }
+    text_.SetText(s.Doc().Text(from, to));
+  } else {
+    text_.SetText(s.HasSelection() && s.SelFrom().para == s.SelTo().para ? s.Doc().Text(s.SelFrom(), s.SelTo()) : L"");
+  }
+  address_.SetText(address);
+  tip_.SetText(tip);
+  apply_.text = editing_ ? L"Update link" : L"Insert link";
+  remove_.visible = editing_;
+}
+
+std::vector<Control*> TextEditing::LinkPanel::Layout(const D2D1_RECT_F& body, float ui) {
+  ui_ = ui;
+  const float left = body.left + 16 * ui, right = body.right - 16 * ui;
+  float y = body.top + 12 * ui;
+  labels_.clear();
+  const std::pair<const wchar_t*, Box*> rows[] = {{L"Text to display", &text_},
+                                                  {L"Address, or a slide in this presentation", &address_},
+                                                  {L"ScreenTip", &tip_}};
+  for (const auto& [label, box] : rows) {
+    labels_.push_back({label, D2D1::RectF(left, y, right, y + 16 * ui)});
+    box->rc = D2D1::RectF(left, y + 18 * ui, right, y + 48 * ui);
+    y += 56 * ui;
+  }
+  apply_.rc = D2D1::RectF(left, y, left + 110 * ui, y + 32 * ui);
+  remove_.rc = D2D1::RectF(apply_.rc.right + 8 * ui, y, apply_.rc.right + 8 * ui + 120 * ui, y + 32 * ui);
+  noteRc_ = D2D1::RectF(left, y + 44 * ui, right, y + 124 * ui);
+  std::vector<Control*> out = {&text_, &address_, &tip_, &apply_};
+  if (editing_) out.push_back(&remove_);
+  return out;
+}
+
+void TextEditing::LinkPanel::Draw(gfx::Canvas& c) {
+  const Palette& p = theme::P();
+  for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
+  c.TextWrapped(note_.empty() ? L"In the slide show a click on the text follows the link." : note_, noteRc_,
+                note_.empty() ? p.textSecondary : p.text, 12 * ui_, 4);
+  if (focusWanted_) {
+    address_.TakeFocus();
+    focusWanted_ = false;
+  }
+}
+
+void TextEditing::LinkPanel::Close() {
+  t_.host_.ViewShowPanel(nullptr);
+  t_.host_.ViewFocusPage();
+  t_.host_.ViewInvalidate();
+}
+
+void TextEditing::LinkPanel::Apply() {
+  TextSession* s = t_.session_.get();
+  TextModel* model = t_.model_;
+  if (!s || !model) {
+    note_ = L"Click into the text to link first.";
+    t_.host_.ViewInvalidate();
+    return;
+  }
+  const std::wstring typed = Trim(address_.Text());
+  if (typed.empty()) {
+    note_ = L"Type an address, or pick a slide.";
+    t_.host_.ViewInvalidate();
+    return;
+  }
+  int slide = -1;
+  const auto item = std::find(address_.items.begin(), address_.items.end(), typed);
+  if (item != address_.items.end()) slide = static_cast<int>(item - address_.items.begin());
+  const std::wstring url = slide >= 0 ? std::wstring() : LinkAddress(typed);
+  std::wstring shown = text_.Text();
+  if (shown.empty()) shown = typed;
+  // The text the link goes over: the link's, the selection, or what's typed as text to display.
+  TextPos from = s->SelFrom(), to = s->SelTo();
+  pugi::xml_node h;
+  if (editing_) format::LinkAt(*s, from, to, h);
+  model->BeginGroup(u"Hyperlink");
+  bool ok = true;
+  if ((from == to || s->Doc().Text(from, to) != shown) && from.para == to.para) {
+    s->Select(from, to);
+    ok = s->ReplaceSelection(shown, u"Hyperlink");
+    to = {from.para, from.offset + static_cast<uint32_t>(shown.size())};
+  }
+  std::string rel;
+  if (ok) rel = model->AddLink(s->Target(), url, slide);
+  if (ok && !rel.empty()) {
+    s->Select(from, to);
+    ok = format::SetLink(*s, rel, slide >= 0, Trim(tip_.Text()));
+    s->Select(to, to);
+  }
+  model->EndGroup();
+  t_.Changed();
+  if (!ok || rel.empty()) {
+    note_ = L"That link can't be made here.";
+    t_.host_.ViewInvalidate();
+    return;
+  }
+  Close();
+}
+
+void TextEditing::LinkPanel::Remove() {
+  if (TextSession* s = t_.session_.get()) {
+    format::SetLink(*s, {}, false, {});
+    t_.Changed();
+  }
+  Close();
 }
 
 }  // namespace fw::slide::view

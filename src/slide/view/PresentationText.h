@@ -89,6 +89,7 @@ class TextEditing {
   void Edited(const edit::Changes& c);  // the editor's notification
   bool StartAt(size_t slide, const TextTarget& t);
   void Copy(bool cut);
+  void OpenLinkPanel();  // Ctrl+K
   void Paste(bool textOnly);
 
   ViewHost& host_;
@@ -109,6 +110,8 @@ class TextEditing {
   std::wstring lastColorHex_ = L"C00000";
   std::vector<std::wstring> suggestions_;  // the context menu's
   std::optional<std::pair<TextPos, TextPos>> menuWord_;
+  class LinkPanel;
+  std::unique_ptr<LinkPanel> linkPanel_;
 };
 
 }  // namespace fw::slide::view
