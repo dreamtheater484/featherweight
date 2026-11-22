@@ -1,5 +1,8 @@
+#include <windows.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
 #include "draw/Xml.h"
 #include "slide/render/SlideRender.h"
@@ -18,6 +21,29 @@ draw::Rect Bounds(const draw::Matrix& m, draw::Size size) {
   for (const draw::Point& q : pts)
     r = {std::min(r.left, q.x), std::min(r.top, q.y), std::max(r.right, q.x), std::max(r.bottom, q.y)};
   return r;
+}
+
+// A family the PC doesn't have, as PowerPoint replaces it: fwtext's table (Aptos, Helvetica...),
+// Windows' FontSubstitutes, a typewriter or code face in Courier New, everything else in Calibri
+// (p1-render's corpus survey: Whitney, Circular Std, Futura PT, Source Sans Pro, Monaco,
+// Liberation Serif, Open Sans SemiBold all drawn in Calibri, whatever the theme's fonts).
+std::wstring PresentationSubstitute(std::wstring_view family) {
+  if (family.empty() || family.size() > 64) return {};
+  if (std::wstring_view known = text::Fonts::BuiltInSubstitute(family); !known.empty()) return std::wstring(known);
+  const std::wstring name(family);
+  wchar_t value[128] = {};
+  DWORD bytes = sizeof value;
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes", name.c_str(),
+                   RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS && value[0]) {
+    std::wstring s = value;
+    if (size_t comma = s.find(L','); comma != std::wstring::npos) s.resize(comma);  // "Arial,0": a charset
+    return s;
+  }
+  std::wstring lower = name;
+  for (wchar_t& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+  for (std::wstring_view word : {L"mono", L"courier", L"consol", L"typewriter", L"code"})
+    if (lower.find(word) != std::wstring::npos) return L"Courier New";
+  return L"Calibri";
 }
 
 draw::Rect Transformed(const draw::Matrix& m, const draw::Rect& r) {
@@ -406,6 +432,7 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck) {
     names.push_back(f.typeface);
   }
   if (!files.empty()) fonts.UseDocumentFonts(files, names);
+  fonts.SetSubstitute(PresentationSubstitute);
 }
 
 }  // namespace fw::slide::render

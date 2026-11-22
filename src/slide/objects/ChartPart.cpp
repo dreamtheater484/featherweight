@@ -237,8 +237,12 @@ std::string ChartXml(ChartType type, const ChartData& d, const std::string& work
          "val=\"nextTo\"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val=\"500000001\"/><c:crosses "
          "val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>";
   }
-  x += "</c:plotArea><c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend><c:plotVisOnly val=\"1\"/><c:dispBlanksAs "
-       "val=\"gap\"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr><a:endParaRPr "
+  // The plot area and the chart area without fill or line, as PowerPoint 2021 inserts a chart: the
+  // slide shows through (readers fill a chart area without c:spPr white).
+  constexpr const char* kClear = "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr>";
+  x += std::string(kClear) +
+       "</c:plotArea><c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend><c:plotVisOnly val=\"1\"/><c:dispBlanksAs "
+       "val=\"gap\"/></c:chart>" + kClear + "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr><a:endParaRPr "
        "lang=\"en-US\"/></a:p></c:txPr><c:externalData r:id=\"" +
        Escape(workbookRelId) + "\"><c:autoUpdate val=\"0\"/></c:externalData></c:chartSpace>";
   return x;

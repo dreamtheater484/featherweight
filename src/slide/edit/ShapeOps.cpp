@@ -962,7 +962,7 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
     if (Is(c, pkg::mce::kNamespace, "AlternateContent")) {
       // Its chosen branch's shape is placed (and its twins with it); the block moves out whole.
       pugi::xml_node chosen;
-      ForEachChild(group, [&](pugi::xml_node k) {
+      ForEachChosenChild(group, [&](pugi::xml_node k) {
         for (pugi::xml_node a = k; a; a = a.parent()) {
           if (a == c) chosen = k;
         }
@@ -1014,7 +1014,7 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
         std::string_view sk = LocalNameOf(s);
         if (sk == "grpSp") {
           std::vector<pugi::xml_node> kids;
-          ForEachChild(s, [&](pugi::xml_node c) {
+          ForEachChosenChild(s, [&](pugi::xml_node c) {
             std::string_view ck = LocalNameOf(c);
             if (ck == "sp" || ck == "cxnSp" || ck == "pic" || ck == "grpSp") kids.push_back(c);
             return true;

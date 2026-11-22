@@ -75,6 +75,9 @@ class Fonts {
 
   // `collection`: the fonts to use; null for the fonts installed on the PC. Tests pass their own.
   explicit Fonts(SubstituteFn substitute = {}, IDWriteFontCollection* collection = nullptr);
+  // The caller's choice from now on (a presentation's, once its deck is known); families already
+  // resolved keep theirs.
+  void SetSubstitute(SubstituteFn substitute) { substitute_ = std::move(substitute); }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;

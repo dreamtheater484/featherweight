@@ -49,6 +49,12 @@ class DrawingResources {
   // the target is missing or not a picture Featherweight reads. Linked pictures (r:link,
   // TargetMode="External") are never fetched (plan §4.7): don't resolve them.
   virtual std::shared_ptr<const Image> GetImage(std::string_view relId) = 0;
+  // The picture a relationship of the part's theme points to: a format scheme's blip fill (a
+  // background style's texture, through a:bgRef or a:fillRef). Null when there's none.
+  virtual std::shared_ptr<const Image> GetThemeImage(std::string_view relId) {
+    (void)relId;
+    return nullptr;
+  }
   // The root element of the XML part a relationship points to (SmartArt's drawing), or null.
   virtual pugi::xml_node GetPartXml(std::string_view relId) {
     (void)relId;
@@ -211,6 +217,7 @@ class PackageResources : public DrawingResources {
   std::shared_ptr<const Theme> GetTheme() override;
   const ColorMap& GetColorMap() override { return colorMap_; }
   std::shared_ptr<const Image> GetImage(std::string_view relId) override;
+  std::shared_ptr<const Image> GetThemeImage(std::string_view relId) override;
   pugi::xml_node GetPartXml(std::string_view relId) override;
   bool InPresentation() override { return part_.starts_with("/ppt/"); }
 

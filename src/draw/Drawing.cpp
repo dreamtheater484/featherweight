@@ -258,6 +258,17 @@ std::shared_ptr<const Image> PackageResources::GetImage(std::string_view relId) 
   return target.empty() ? nullptr : images_->Get(package_, target);
 }
 
+std::shared_ptr<const Image> PackageResources::GetThemeImage(std::string_view relId) {
+  // The theme FindTheme finds: the first in the part's chain (slide, layout, master) to have one.
+  for (const std::string& part : Chain(package_, part_)) {
+    std::string theme = TargetOfType(package_, part, "theme");
+    if (theme.empty()) continue;
+    std::string target = Target(package_, theme, relId);
+    return target.empty() ? nullptr : images_->Get(package_, target);
+  }
+  return nullptr;
+}
+
 pugi::xml_node PackageResources::GetPartXml(std::string_view relId) {
   std::string target = Target(package_, part_, relId);
   if (target.empty()) return {};

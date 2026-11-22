@@ -19,7 +19,7 @@
     fourth (expected repaired or refused: fwtool check calls them errors) and opens the first and the
     third as they are (recorded only; fwtool check: an error and a warning)
   - slide-jump-no-rid, slide-jump-empty-rid: hyperlinks.pptx with a link to slide 2 whose relationship
-    is gone, without r:id and with r:id="" (recorded only)
+    is gone, without r:id and with r:id="" (PowerPoint 2021 repairs both: expected repaired or refused)
   Every broken copy is expected to be "repaired" or "refused" (which of the two is recorded, not
   required: it's PowerPoint's choice); clean must be "ok".
 
@@ -95,12 +95,13 @@ $expected["section-slide-in-none"] = $anyway
 New-Variant "section-duplicate-id" "ppt/presentation.xml" { param($t) $t.Replace('id="{7C6D5E4F-3A2B-4C1D-8E9F-0A7B6C5D4E43}"', 'id="{4F3A2B1C-0D9E-4F8A-9B7C-6D5E4F3A2B10}"') } $sections
 $expected["section-duplicate-id"] = $broken
 # A link to another slide whose relationship is gone (as the edit layer left a link to a deleted slide,
-# 2026-11-22: PowerPoint repaired those decks): without r:id, and with r:id="". Recorded only.
+# 2026-11-22: PowerPoint repaired those decks): without r:id, and with r:id="". PowerPoint 2021 repairs
+# both (2026-11-22); fwtool check calls them errors.
 $hyperlinks = Join-Path $root "tests\office\presentations\hyperlinks.pptx"
 New-Variant "slide-jump-no-rid" "ppt/slides/slide1.xml" { param($t) $t.Replace('<a:hlinkClick r:id="rId4" action="ppaction://hlinksldjump"', '<a:hlinkClick action="ppaction://hlinksldjump"') } $hyperlinks
-$expected["slide-jump-no-rid"] = $anyway
+$expected["slide-jump-no-rid"] = $broken
 New-Variant "slide-jump-empty-rid" "ppt/slides/slide1.xml" { param($t) $t.Replace('<a:hlinkClick r:id="rId4" action="ppaction://hlinksldjump"', '<a:hlinkClick r:id="" action="ppaction://hlinksldjump"') } $hyperlinks
-$expected["slide-jump-empty-rid"] = $anyway
+$expected["slide-jump-empty-rid"] = $broken
 $garbage = Join-Path $dir "not-a-zip.pptx"
 $bytes = New-Object byte[] 4096
 (New-Object Random 7).NextBytes($bytes)

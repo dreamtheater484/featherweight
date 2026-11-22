@@ -5,10 +5,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
@@ -569,7 +568,7 @@ bool PresentationView::DesignCommand(int cmd) {
 namespace {
 
 constexpr std::string_view kRelImage = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
-constexpr uintmax_t kMaxPicture = 64ull << 20;  // bytes: a background picture bigger than this is refused
+constexpr size_t kMaxPicture = size_t{64} << 20;  // bytes: a background picture bigger than this is refused
 
 // The masters `slides` use (every master when empty), as indexes into the presentation's.
 std::vector<size_t> MastersOf(Presentation& deck, const std::vector<size_t>& slides) {
@@ -588,10 +587,17 @@ std::vector<size_t> MastersOf(Presentation& deck, const std::vector<size_t>& sli
   return out;
 }
 
+// A file name's extension, lower case, with its dot ("" when none).
+std::wstring ExtensionOf(const std::wstring& path) {
+  const size_t dot = path.find_last_of(L"./\\");
+  std::wstring ext = dot != std::wstring::npos && path[dot] == L'.' ? path.substr(dot) : std::wstring();
+  for (wchar_t& c : ext) c = static_cast<wchar_t>(towlower(c));
+  return ext;
+}
+
 // A picture's content type by its extension; empty for one a slide can't show.
 std::string PictureType(const std::wstring& path) {
-  std::wstring ext = std::filesystem::path(path).extension().wstring();
-  for (wchar_t& c : ext) c = static_cast<wchar_t>(towlower(c));
+  const std::wstring ext = ExtensionOf(path);
   if (ext == L".png") return "image/png";
   if (ext == L".jpg" || ext == L".jpeg" || ext == L".jfif") return "image/jpeg";
   if (ext == L".gif") return "image/gif";
@@ -646,18 +652,12 @@ bool PresentationView::SetBackground(const std::vector<size_t>& slides, const Ba
   std::string type;
   if (bg.kind == Background::Kind::Picture) {
     type = PictureType(picture);
-    std::error_code ec;
-    const uintmax_t size = std::filesystem::file_size(picture, ec);
-    if (type.empty() || ec || size == 0 || size > kMaxPicture) {
+    std::string read;
+    if (type.empty() || !util::ReadFileBytes(picture, read, kMaxPicture) || read.empty()) {
       host_.ViewMessage(BannerKind::Warning, L"That picture can't be used as a background.");
       return false;
     }
-    std::ifstream in(std::filesystem::path(picture), std::ios::binary);
-    bytes.resize(static_cast<size_t>(size));
-    if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
-      host_.ViewMessage(BannerKind::Warning, L"That picture couldn't be read.");
-      return false;
-    }
+    bytes.assign(read.begin(), read.end());
   }
   return Done(ed->Run(u"Format Background", [&] {
     std::string media;  // the picture's part, stored once for all the slides
@@ -666,9 +666,7 @@ bool PresentationView::SetBackground(const std::vector<size_t>& slides, const Ba
       if (!bytes.empty()) {
         const std::string part = ed->SlidePart(s);
         if (media.empty()) {
-          std::string ext = WideToUtf8(std::filesystem::path(picture).extension().wstring());
-          for (char& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-          media = ed->NewPartName("/ppt/media/image", ext);
+          media = ed->NewPartName("/ppt/media/image", WideToUtf8(ExtensionOf(picture)));
           rel = ed->AddPart(part, kRelImage, media, type, bytes);
         } else {
           rel = ed->AddRelationship(part, kRelImage, media);

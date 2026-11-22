@@ -978,6 +978,26 @@ void Checker::CheckPresentation() {
           if (!r.external && TypeIs(r.type, type) && pkg_.FindPart(r.targetPart)) out.push_back(&r);
       return out;
     };
+    // A link to another slide (ppaction://hlinksldjump) names that slide by a relationship. Without
+    // one, or with r:id="", PowerPoint 2021 repairs the deck (the proof's slide-jump variants,
+    // 2026-11-22); a dangling id is the registry's to report.
+    {
+      std::vector<pugi::xml_node> stack{p->dom.Root()};
+      size_t found = 0;
+      while (!stack.empty()) {
+        pugi::xml_node n = stack.back();
+        stack.pop_back();
+        for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling())
+          if (c.type() == pugi::node_element) stack.push_back(c);
+        const std::string_view local = LocalNameOf(n);
+        if ((local == "hlinkClick" || local == "hlinkHover") &&
+            std::string_view(n.attribute("action").value()).starts_with("ppaction://hlinksldjump") && RelIdOf(n).empty())
+          ++found;
+      }
+      if (found)
+        Error(p->name, std::to_string(found) + (found == 1 ? " link" : " links") +
+                           " to another slide without the slide's relationship (r:id): PowerPoint repairs the deck");
+    }
     if (kind == "slide") {
       auto layouts = targets("slideLayout");
       if (layouts.empty()) Error(p->name, "a slide with no layout");
