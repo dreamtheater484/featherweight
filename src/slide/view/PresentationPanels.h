@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "slide/view/NotesEdit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Controls.h"
 #include "ui/PanelButton.h"

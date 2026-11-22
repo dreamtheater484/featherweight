@@ -51,6 +51,7 @@ bool AsksHowToScale(draw::Size from, draw::Size to);
 // XML below is written with, so it matches the part it goes into.
 struct Prefixes {
   std::string a = "a", p = "p", r = "r";
+  bool declare = true;  // the root element declares them (a fragment the edit layer parses on its own)
 };
 
 // ---- Theme colors and themes ----

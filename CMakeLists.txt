@@ -98,6 +98,7 @@ add_subdirectory(src/text)
 add_subdirectory(src/slide)
 add_subdirectory(src/slide/render)
 add_subdirectory(src/slide/show)
+add_subdirectory(src/slide/objects)  # p2-objects: objects on slides
 add_subdirectory(src/slide/view)  # p1-view: the presentation tab
 add_subdirectory(tools/fwtool)
 target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview)

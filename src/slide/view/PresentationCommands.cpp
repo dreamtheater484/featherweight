@@ -14,6 +14,8 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/view/ObjectTool.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -105,6 +107,9 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  // p2-objects: the objects' keys, and undo and redo wherever the keys are.
+  const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
+  if (const int c = Ready() && (!keysInThumbs_ || undoKey) ? Objects().Shortcut(vk, mods) : 0) return c;
   if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
@@ -132,10 +137,11 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 
 CommandState PresentationView::QueryCommand(int cmd) {
   CommandState s;
+  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return s;  // p2-objects
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
-    case CmdSave: s.enabled = false; break;  // read-only until P2
+    case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp
     case CmdPresentation:
     case CmdSlideShowFromStart:
     case CmdSlideShowFromCurrent:
@@ -186,6 +192,7 @@ std::vector<int> PresentationView::Commands() {
   std::vector<int> out;
   for (const CommandName& n : kNames)
     if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
+  for (int c : Objects().Commands()) out.push_back(c);  // p2-objects
   // P2: the slides' commands.
   for (int cmd : {CmdSlideNew, CmdSlideDuplicate, CmdSlideDelete, CmdSlideHide, CmdSlideMoveUp, CmdSlideMoveDown,
                   CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
@@ -196,6 +203,7 @@ std::vector<int> PresentationView::Commands() {
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
   if (SlideCommand(cmd)) return true;  // P2: the slides' commands
   const size_t n = SlideCount();
   switch (cmd) {
@@ -293,6 +301,7 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
   };
   m.left = {print, layout};
   AddSlideTools(m);  // P2: ＋ Slide ▾ and Layout ▾ first
+  if (Ready()) Objects().AddTools(m);  // p2-objects: insert, arrange, format
 
   // ▶ Present ▾: from the beginning, or the list's choice.
   ToolItem present;
@@ -343,6 +352,8 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   // A right-click on a thumbnail is about that slide (and the others selected with it).
   if (const int t = ThumbAt(x, y); t >= 0 || gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y)))
     SlideContextMenu(m, t);  // P2: new, duplicate, delete, layout, hide
+  else if (gfx::Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p2-objects
+    Objects().ContextMenu(m, static_cast<float>(x), static_cast<float>(y));
   const bool any = SlideCount() > 0;
   if (LinkAt(x, y)) {
     AppendItem(m, CmdOpenSlideLink, L"Open link");
@@ -365,7 +376,7 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
   std::wstring slide = n ? L"Slide " + std::to_wstring(current_ + 1) + L" of " + std::to_wstring(n) : L"No slides";
   if (n && deck_->Hidden(current_)) slide += L" (hidden)";
   m.segments.push_back(slide);
-  m.segments.push_back(L"Read-only");
+  if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(L"Read-only");
   m.zoom = n > 0;
   m.zoomValue = Scale() / (96.0 / 72.0 * ui_);
   m.onZoom = [this](double z) {
@@ -602,12 +613,18 @@ void PresentationView::StartShow(bool fromCurrent) {
 }
 
 void PresentationView::ReadOnlyBanner() {
-  if (deck_ && deck_->HasMacros()) {
-    host_.ViewMessage(BannerKind::Info, L"This presentation is read-only, and its macros are kept but never run.");
+  // P2: only a deck the edit layer can't change says it's read-only, with the reason.
+  edit::Editor* ed = SlideEditor();
+  std::u16string why;
+  const bool editable = ed && ed->CanEdit(&why);
+  const bool macros = deck_ && deck_->HasMacros();
+  if (editable) {
+    if (macros) host_.ViewMessage(BannerKind::Info, L"This presentation's macros are kept but never run.");
     return;
   }
-  host_.ViewMessage(BannerKind::Info, L"This presentation is read-only: Featherweight shows and presents decks, "
-                                      L"and editing comes in a later version.");
+  std::wstring text = why.empty() ? std::wstring(L"This presentation is read-only.") : std::wstring(why.begin(), why.end());
+  if (macros) text += L" Its macros are kept but never run.";
+  host_.ViewMessage(BannerKind::Info, text);
 }
 
 }  // namespace fw::slide::view

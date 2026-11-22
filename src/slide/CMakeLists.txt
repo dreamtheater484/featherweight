@@ -8,6 +8,8 @@ add_library(fwslide STATIC
   TextStyles.cpp
   # P2 (p2-model): the edit layer, the .pptx writer and crash recovery.
   edit/DesignOps.cpp
+  edit/HeaderFooter.cpp  # p2-slides
+  edit/SlideDesignOps.cpp  # p2-slides
   edit/Edit.cpp
   edit/Journal.cpp
   edit/Parts.cpp
