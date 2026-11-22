@@ -68,6 +68,19 @@ class Deck {
   virtual Presentation* Model() { return nullptr; }
   // Bytes the deck keeps (model, caches), for the memory budget.
   virtual size_t MemoryUse() const { return 0; }
+
+  // ---- Layouts (P2, p2-slides: new slide, change layout) ----
+  struct LayoutChoice {
+    size_t index = 0;      // into the presentation's layouts
+    std::wstring name;     // as the deck names it ("Title and Content")
+  };
+  // The layouts slide `slide` can use: its master's, in the master's order. Empty without layouts.
+  virtual std::vector<LayoutChoice> LayoutsFor(size_t /*slide*/) const { return {}; }
+  // The layout slide `slide` uses (an index into the presentation's layouts), or -1.
+  virtual int LayoutOf(size_t /*slide*/) const { return -1; }
+  // Draws layout `layout` as the layout gallery shows it, in slide points: its background, its own
+  // and its master's shapes and its placeholders' prompts, without the date, footer and number.
+  virtual void PaintLayout(size_t /*layout*/, draw::Painter& /*p*/) {}
 };
 
 }  // namespace fw::slide::view
