@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/dreamtheater484/featherweight/releases/latest"><b>⬇ Download for Windows</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/dreamtheater484/featherweight/releases/tag/v0.95.0"><b>Try the 0.95 beta with Word documents</b></a>
+  <a href="https://github.com/dreamtheater484/featherweight/releases/tag/v3.0.0"><b>Try the 3.0 beta with documents and spreadsheets</b></a>
 </p>
 
 ![Featherweight with a highlight, a note preview and note markers](docs/screenshots/hero.png)
@@ -29,11 +29,12 @@ Featherweight opens PDFs instantly, fills in and saves forms, lets you highlight
 and prints. Then it stays out of your way. No account, no ads, no telemetry, no background services,
 and a 0.7 MB program.
 
-## Beta: Word documents (0.95)
+## Beta: Word documents and spreadsheets (3.0)
 
-[Featherweight 0.95 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v0.95.0) opens and edits
-Word documents, with its own engine. It doesn't use Word or any Office component, and it's still one small program
-(5.7 MB). It's a beta: try it on copies of documents that matter. The stable download above stays the PDF reader.
+[Featherweight 3.0 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v3.0.0) opens and edits
+Word documents and Excel workbooks, with its own engine. It doesn't use Word, Excel or any Office component, and it's
+still one small program (10 MB). It's a beta: try it on copies of files that matter. The stable download above stays
+the PDF reader.
 
 | Start screen: new documents and templates | Charts, as Word draws them |
 |---|---|
@@ -59,9 +60,18 @@ Word documents, with its own engine. It doesn't use Word or any Office component
 and the parts Featherweight doesn't edit are kept as they were. Before this beta, hundreds of documents went through
 tens of thousands of random edits, each saved copy then opened in Word.
 
+**Spreadsheets**
+- `.xlsx`, `.xlsm`, `.xltx`, older `.xls`, OpenDocument `.ods`, and `.csv` files; password-protected workbooks stay encrypted when saved
+- Formulas with Excel's functions, recalculated on several threads; number formats, styles, conditional formats and data validation
+- Tables, filters and sorting, charts and sparklines, pictures and shapes, notes and comments, protection and links
+- Pivot tables refresh to Excel's values, and simple ones can be made from a range
+- Page setup, printing and Export PDF; File → New for a blank workbook or your own templates
+- Saved workbooks open in Excel without a repair prompt: 624 workbooks went through 66,777 random edits, each saved copy checked
+
 **Known in this beta:**
 - Pages break where Word breaks them for about 94 % of documents. The goal for 2.0 is 97 %.
 - A `.doc` file's grouped drawings and plain lines aren't brought in yet.
+- An `.xls` file's charts and an `.ods` file's charts and shapes aren't read yet; the file opens without them.
 
 ## What's new in 0.9.4
 
@@ -139,7 +149,7 @@ Requires Windows 10 (version 1903 or later) or Windows 11, 64-bit.
 | Full screen, presentation | F11, F5 (Esc to leave) |
 | Save or close a note | Ctrl+Enter, Esc |
 
-In Word documents (0.95 beta):
+In Word documents (3.0 beta):
 
 | Action | Keys |
 |---|---|
