@@ -1087,6 +1087,28 @@ TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {
   }
   CHECK(s.End());
   CHECK(Near(s.At(50, 25), 0xFF0000));
+  // A quadrant turned 270 degrees whose text turns 90 on top of it reads upright, in the text's
+  // own rectangle (tdf145528 matrix in PowerPoint's PDF).
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm rot="16200000">)"
+                         R"(<a:off x="317500" y="-317500"/><a:ext cx="635000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"/>)"
+                         R"(</dsp:spPr><dsp:txBody><a:bodyPr/><a:p><a:r><a:t>Writer</a:t></a:r></a:p></dsp:txBody>)"
+                         R"(<dsp:txXfrm rot="5400000"><a:off x="0" y="0"/><a:ext cx="1270000" cy="476250"/></dsp:txXfrm>)"
+                         R"(</dsp:sp></dsp:spTree></dsp:drawing>)");
+  auto turned = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(turned != nullptr);
+  if (!turned) return;
+  const std::vector<TextBox> boxes = turned->TextBoxes();
+  CHECK(boxes.size() == 1u);
+  if (boxes.size() != 1u) return;
+  const Matrix total = Matrix::Rotate(boxes[0].rotation) * boxes[0].transform;
+  CHECK(std::fabs(total.m12) < 1e-3f && total.m11 > 0.99f);  // upright
+  // The box turns about its own center, which the shape's transform alone places.
+  const Point center =
+      boxes[0].transform.Apply({(boxes[0].rect.left + boxes[0].rect.right) / 2, (boxes[0].rect.top + boxes[0].rect.bottom) / 2});
+  CHECK(std::fabs(center.x - 50) < 1.f && std::fabs(center.y - 18.75f) < 1.f);  // the top of the frame
 }
 
 TEST(DrawingML_ShapeTree) {

@@ -623,12 +623,16 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   box.shape = s.id;
   Rect r = OutlineOf(s, {bounds.Width(), bounds.Height()}).textRect;
   if (s.text->hasTextXfrm) {
-    // SmartArt: the text's own box, from the shape's (both turn about their own centers).
+    // SmartArt: the text's own box, unturned in the drawing's coordinates, and its turn on top of
+    // the shape's (a quadrant at 270 degrees with text at 90 reads upright: PowerPoint's PDFs). Its
+    // center's offset from the shape's is turned into the shape's own frame.
     const Rect& t = s.text->textXfrm;
-    const float dx = (t.left + t.right - s.bounds.left - s.bounds.right) / 2, dy = (t.top + t.bottom - s.bounds.top - s.bounds.bottom) / 2;
+    const float ox = (t.left + t.right - s.bounds.left - s.bounds.right) / 2, oy = (t.top + t.bottom - s.bounds.top - s.bounds.bottom) / 2;
+    const float a = -s.rotation * 3.14159265f / 180, cs = std::cos(a), sn = std::sin(a);
+    const float dx = ox * cs - oy * sn, dy = ox * sn + oy * cs;
     const float cx = bounds.Width() / 2 + dx, cy = bounds.Height() / 2 + dy;
     r = {cx - t.Width() / 2, cy - t.Height() / 2, cx + t.Width() / 2, cy + t.Height() / 2};
-    box.rotation += s.text->textXfrmRotation - s.rotation;
+    box.rotation += s.text->textXfrmRotation;
   }
   box.rect = {r.left + box.insets.left, r.top + box.insets.top, r.right - box.insets.right, r.bottom - box.insets.bottom};
   if (box.rect.right < box.rect.left) box.rect.left = box.rect.right = (box.rect.left + box.rect.right) / 2;
