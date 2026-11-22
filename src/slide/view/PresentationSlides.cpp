@@ -455,8 +455,17 @@ void PresentationView::AddSlideTools(ToolbarModel& m) {
   design.checked = QueryCommand(CmdDesignPanel).checked;
   design.enabled = ready;
   design.priority = 5;
-  m.left.insert(m.left.begin(), {add, layout, design});
-  m.left[3].sepBefore = true;  // P1's print items after a separator
+  ToolItem hf;
+  hf.cmd = CmdHeaderFooter;
+  hf.glyph = icon::Page;
+  hf.tooltip = L"Header & footer: slide numbers, footer and date";
+  hf.menuLabel = L"Header & footer";
+  hf.toggle = true;
+  hf.checked = QueryCommand(CmdHeaderFooter).checked;
+  hf.enabled = ready && SlideCount() > 0;
+  hf.priority = 4;
+  m.left.insert(m.left.begin(), {add, layout, design, hf});
+  m.left[4].sepBefore = true;  // P1's print items after a separator
 }
 
 // ---------------------------------------------------------------------------
@@ -618,8 +627,13 @@ edit::Editor* PresentationView::SlideEditor() const {
     PresentationView* self = const_cast<PresentationView*>(this);
     // Every edit, undo and redo, whoever made it (the tab's slide edits, p2-objects, p2-text).
     ed->OnChange([self](const edit::Changes& c) { self->OnSlideEdits(c); });
+    self->OnEditorMade(*ed);
   }
   return ed;
+}
+
+void PresentationView::OnEditorMade(edit::Editor& /*ed*/) {
+  // p2-model: ed.SetJournal(file.Journal()) and the rest of PresentationFile's hookup.
 }
 
 void PresentationView::OnSlideEdits(const edit::Changes& c) {

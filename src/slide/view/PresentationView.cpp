@@ -88,6 +88,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
+  SlideEditor();  // P2: the deck's Editor made and listened to before anything can edit it (OnEditorMade)
   LayoutParts();
   return OpenResult::Ok;
 }

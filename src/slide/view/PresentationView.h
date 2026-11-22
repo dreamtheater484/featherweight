@@ -175,6 +175,9 @@ class PresentationView : public TabContent {
   bool CanEditSlides() const;
   // The deck's editor, which the tab listens to from the first time it's asked for (null: none).
   edit::Editor* SlideEditor() const;
+  // Right after the tab first gets the deck's Editor (at load), before any edit: p2-model's
+  // PresentationFile hooks the recovery journal in here (SetJournal).
+  void OnEditorMade(edit::Editor& ed);
   void OnSlideEdits(const edit::Changes& c);
   bool Done(const edit::Result& r) const;  // a banner saying why when it was refused
   void SelectSlides(const std::vector<size_t>& slides, size_t current);
