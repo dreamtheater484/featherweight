@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "Commands.h"
 #include "Util.h"
@@ -162,6 +163,99 @@ bool TextEditing::Begin(const TextTarget& t, std::optional<draw::Point> at) {
   return true;
 }
 
+bool TextEditing::BeginTextEdit(size_t slide, uint32_t shape) {
+  TextTarget t;
+  t.slide = slide;
+  t.shape = shape;
+  if (Begin(t)) return true;
+  t.row = t.column = 0;  // a table: its first cell
+  return Begin(t);
+}
+
+uint32_t TextEditing::TakeLeft() {
+  const uint32_t id = left_;
+  left_ = 0;
+  return id;
+}
+
+bool TextEditing::NextCell(bool back) {
+  const TextTarget t = session_->Target();
+  Presentation* p = model_ ? model_->Deck() : nullptr;
+  const SlideBase* part = model_ ? model_->Part(t) : nullptr;
+  const Shape* sh = part ? part->FindShape(t.shape) : nullptr;
+  const Table* table = p && sh ? p->GetTable(*sh, *part) : nullptr;
+  if (!table) return false;
+  const int rows = static_cast<int>(table->rows.size()), columns = static_cast<int>(table->columns.size());
+  int r = t.row, c = t.column;
+  for (int guard = rows * columns; guard > 0; --guard) {
+    if (back && --c < 0) {
+      c = columns - 1;
+      if (--r < 0) return false;  // the first cell: nowhere to go
+    } else if (!back && ++c >= columns) {
+      c = 0;
+      if (++r >= rows) return false;  // the last cell (PowerPoint adds a row there: a table op, not text's)
+    }
+    const TableCell* cell = table->Cell(r, c);
+    if (cell && !cell->covered) break;
+  }
+  TextTarget next = t;
+  next.row = r;
+  next.column = c;
+  if (!Begin(next)) return false;
+  session_->SelectAll();
+  Changed();
+  return true;
+}
+
+bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size_t slide) {
+  auto fail = [&](const char* why) {
+    std::fwprintf(stderr, L"%ls:%ls: %hs\n", op.c_str(), arg.c_str(), why);
+    std::fflush(stderr);
+    return true;
+  };
+  if (op == L"edit") {
+    Presentation* p = model_ ? model_->Deck() : nullptr;
+    if (!p || !deck_) return fail("text can't be edited in this deck");
+    const Slide* s = slide < p->SlideCount() ? p->GetSlide(slide) : nullptr;
+    if (!s) return fail("no such slide");
+    const Shape* found = nullptr;
+    std::vector<const Shape*> bodies;
+    for (const Shape& sh : s->shapes) {
+      const PlaceholderType type = sh.placeholder.type;
+      if ((arg == L"title" && (type == PlaceholderType::Title || type == PlaceholderType::CenteredTitle)) ||
+          (arg == L"subtitle" && type == PlaceholderType::Subtitle)) {
+        found = &sh;
+        break;
+      }
+      if (type == PlaceholderType::Body || type == PlaceholderType::Object) bodies.push_back(&sh);
+    }
+    if (!found && (arg == L"body" || arg == L"body2")) {
+      // Content placeholders in their layout's order (idx): Two Content's left one, then its right one.
+      std::stable_sort(bodies.begin(), bodies.end(),
+                       [](const Shape* a, const Shape* b) { return a->placeholder.index < b->placeholder.index; });
+      const size_t want = arg == L"body" ? 0 : 1;
+      if (want < bodies.size()) found = bodies[want];
+    }
+    if (!found) return fail("no such placeholder on this slide");
+    if (!BeginTextEdit(slide, found->id)) return fail("its text can't be edited");
+    return true;
+  }
+  if (op == L"fontsize" || op == L"fontcolor") {
+    if (!session_) return fail("no text is being edited");
+    bool ok = false;
+    if (op == L"fontsize") {
+      const float points = static_cast<float>(_wtof(arg.c_str()));
+      ok = points >= 1 && points <= 4000 && format::Size(*session_, points);
+    } else if (arg.size() == 6 && arg.find_first_not_of(L"0123456789abcdefABCDEF") == std::wstring::npos) {
+      ok = format::Color(*session_, FromHex(arg));
+    }
+    Changed();
+    if (!ok) return fail("not done");
+    return true;
+  }
+  return false;
+}
+
 void TextEditing::End() {
   if (!session_) return;
   session_.reset();
@@ -284,8 +378,16 @@ bool TextEditing::KeyDown(UINT vk, UINT mods) {
       case VK_BACK: s.Backspace(ctrl); break;
       case VK_DELETE: s.DeleteForward(ctrl); break;
       case VK_RETURN: shift ? s.LineBreak() : s.Enter(); break;
-      case VK_TAB: s.Tab(shift); break;
-      case VK_ESCAPE: End(); return true;
+      case VK_TAB:
+        // In a table, Tab goes to the next cell (Shift+Tab the one before), its text selected.
+        if (s.Target().Cell()) return NextCell(shift) || true;
+        s.Tab(shift);
+        break;
+      case VK_ESCAPE:
+        // The text is left; the shape stays selected (the tab asks TakeLeft for it).
+        left_ = s.Target().notes ? 0 : s.Target().shape;
+        End();
+        return true;
       default: handled = false; break;
     }
   }

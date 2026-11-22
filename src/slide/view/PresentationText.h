@@ -54,6 +54,15 @@ class TextEditing {
   // Starts editing `t`, the caret at a point (slide points) or at the end.
   bool Begin(const TextTarget& t, std::optional<draw::Point> at = std::nullopt);
   void End();
+  // Editing the text of shape `shape` on `slide`, the caret at its end; a table: its first cell
+  // (after inserting a text box or a table, p2-objects' Host::beginText).
+  bool BeginTextEdit(size_t slide, uint32_t shape);
+  // The shape whose text Esc left, once (the tab keeps it selected), else 0.
+  uint32_t TakeLeft();
+  // Script ops (scripts/build-deck.ps1): edit:title|subtitle|body|body2 (the caret at the end of that
+  // placeholder of `slide`), fontsize:<points> and fontcolor:<RRGGBB> (the selection, or the word at
+  // the caret). False for ops that aren't text's; one that can't do its job says why on stderr.
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg, size_t slide);
 
   // ---- Input (slide points) ----
   // A click on the slide: true when it went into text (the tab then drags with MouseMove).
@@ -92,6 +101,7 @@ class TextEditing {
   bool StartAt(size_t slide, const TextTarget& t);
   void Copy(bool cut);
   void OpenLinkPanel();  // Ctrl+K
+  bool NextCell(bool back);  // Tab in a table
   void Paste(bool textOnly);
 
   ViewHost& host_;
@@ -103,6 +113,7 @@ class TextEditing {
   struct Hide;
   std::unique_ptr<Hide> hide_;
   bool slideChanged_ = false;
+  uint32_t left_ = 0;  // TakeLeft's
   wchar_t highSurrogate_ = 0;
   double lastDoubleClick_ = -1e9;
   draw::Point lastDoubleAt_;
