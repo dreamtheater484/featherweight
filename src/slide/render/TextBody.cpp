@@ -341,7 +341,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       for (const text::GlyphPiece& g : para.lines.front().pieces)
         if (counts(g.run)) largest = std::max(largest, g.emSize);
     if (largest <= 0) largest = para.lines.empty() ? para.mark.size : emptySize(para.lines.front());
-    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
+    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value; };
     if (!first) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
