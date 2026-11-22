@@ -35,6 +35,9 @@ pugi::xml_node CellOf(pugi::xml_node frame, int row, int column) {
   return {};
 }
 
+// Typing in text holding an equation (HoldsMath): refused, so the equation isn't lost.
+Result MathRefused() { return Result::Fail(u"This text holds an equation, which Featherweight can't edit yet."); }
+
 // The text body of a target; when `edit`, in the part's copy being edited (made when missing).
 pugi::xml_node BodyOf(Editor::Impl& m, const TextTarget& t, bool edit, std::string* partOut = nullptr) {
   std::string part = TargetPart(m, t);
@@ -528,6 +531,7 @@ Result Editor::InsertText(const TextTarget& t, TextPos at, std::wstring_view tex
   std::string part;
   pugi::xml_node body = BodyOf(m, t, true, &part);
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (paras.empty()) {
     body.append_child((PrefixFor(body, kA, "a") + ":p").c_str());
@@ -547,6 +551,7 @@ Result Editor::DeleteText(const TextTarget& t, TextRange r) {
   std::string part;
   pugi::xml_node body = BodyOf(m, t, true, &part);
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
   if (Result c = CheckPos(paras, r.to); !c) return call.End(c);
@@ -564,6 +569,7 @@ Result Editor::ReplaceText(const TextTarget& t, TextRange r, std::wstring_view t
   std::string part;
   pugi::xml_node body = BodyOf(m, t, true, &part);
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
   if (Result c = CheckPos(paras, r.to); !c) return call.End(c);
@@ -602,6 +608,7 @@ Result Editor::SetText(const TextTarget& t, std::wstring_view text) {
   std::string part;
   pugi::xml_node body = BodyOf(m, t, true, &part);
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (HoldsMath(body)) return call.End(MathRefused());
   SetPlainText(body, Normalize(text));
   m.Touched(part, t.shape);
   return call.End({});
@@ -811,6 +818,8 @@ Result Editor::SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u1
   std::string part;
   pugi::xml_node body = BodyOf(m, t, true, &part);
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  // A body holding math is replaced only by one that keeps it (the app edits the Fallback's text).
+  if (HoldsMath(body) && !HoldsMath(doc.document_element())) return call.End(MathRefused());
   std::set<std::string> rels;
   for (const pkg::FoundRef& f : m.registry.Find(doc.document_element(), pkg::RefKind::RelationshipId)) rels.insert(std::string(f.Value()));
   const pkg::RelationshipSet* have = m.Rels(part);
