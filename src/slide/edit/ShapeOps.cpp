@@ -925,17 +925,34 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
     std::string_view k = LocalNameOf(shape);
     if (patch.fill || patch.line || patch.effects || patch.geometry) {
       if (k == "graphicFrame") return call.End(Result::Fail(u"A table's or chart's frame has no fill or outline of its own."));
-      pugi::xml_node props = P(shape, k == "grpSp" ? "grpSpPr" : "spPr");
-      if (!props) {
-        XfrmOf(shape, true);
-        props = P(shape, k == "grpSp" ? "grpSpPr" : "spPr");
-      }
-      auto apply = [&](const std::optional<std::string>& xml, int group) {
-        return !xml || ReplaceGroup(props, *xml, SpPrGroupOf, group);
+      // A group's formatting goes to the shapes in it, as PowerPoint's Format Shape does (p:grpSpPr
+      // holds no outline or geometry); frames in it are left as they are.
+      bool ok = true;
+      std::function<void(pugi::xml_node)> format = [&](pugi::xml_node s) {
+        std::string_view sk = LocalNameOf(s);
+        if (sk == "grpSp") {
+          std::vector<pugi::xml_node> kids;
+          ForEachChild(s, [&](pugi::xml_node c) {
+            std::string_view ck = LocalNameOf(c);
+            if (ck == "sp" || ck == "cxnSp" || ck == "pic" || ck == "grpSp") kids.push_back(c);
+            return true;
+          });
+          for (pugi::xml_node c : kids) format(Impl::Unwrap(c));
+          return;
+        }
+        if (sk != "sp" && sk != "cxnSp" && sk != "pic") return;
+        pugi::xml_node props = P(s, "spPr");
+        if (!props) {
+          XfrmOf(s, true);
+          props = P(s, "spPr");
+        }
+        auto apply = [&](const std::optional<std::string>& xml, int group) {
+          return !xml || ReplaceGroup(props, *xml, SpPrGroupOf, group);
+        };
+        if (!apply(patch.geometry, 1) || !apply(patch.fill, 2) || !apply(patch.line, 3) || !apply(patch.effects, 4)) ok = false;
       };
-      if (!apply(patch.geometry, 1) || !apply(patch.fill, 2) || !apply(patch.line, 3) || !apply(patch.effects, 4)) {
-        return call.End(Result::Fail(u"That formatting isn't DrawingML Featherweight can write."));
-      }
+      format(shape);
+      if (!ok) return call.End(Result::Fail(u"That formatting isn't DrawingML Featherweight can write."));
     }
     pugi::xml_node c = CNvPr(shape);
     if (patch.name) (c.attribute("name") ? c.attribute("name") : c.append_attribute("name")).set_value(Utf8(*patch.name).c_str());

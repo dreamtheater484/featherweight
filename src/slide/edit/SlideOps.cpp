@@ -682,6 +682,14 @@ std::string EnsureNotesMaster(Editor::Impl& m) {
   std::shared_ptr<pkg::XmlDom> dom = ParseDom(xml, m.deck.GetPackage().GetLimits(), master);
   if (!dom) return {};
   m.PutXml(themePart, themeDom, kTypeTheme);
+  // Its relationships come along (a picture fill names one): the same parts, shared within the deck.
+  if (const pkg::RelationshipSet* themeRels = m.Rels(slideTheme); themeRels && !themeRels->items.empty()) {
+    std::vector<pkg::Relationship> items = themeRels->items;
+    for (pkg::Relationship& r : items) {
+      if (!r.external) r.target = Editor::Impl::RelativeTarget(themePart, r.targetPart);
+    }
+    m.EditRels(themePart).items = std::move(items);
+  }
   m.PutXml(master, dom, kTypeNotesMaster);
   m.AddRel(master, kRelTheme, themePart);
   std::string rel = m.AddRel(pres, kRelNotesMaster, master);
