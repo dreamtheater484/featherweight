@@ -114,7 +114,7 @@ foreach ($e in $entries) {
     }
   }
   if (-not $row.error) {
-    $c = if (Test-Path $json) { Get-Content $json -Raw | ConvertFrom-Json } else { $null }
+    $c = if (Test-Path $json) { Get-Content $json -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     if ($c) {
       $row.ourSlides = [int]$c.oursPages
       $row.passing = [int]$c.passing

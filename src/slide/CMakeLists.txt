@@ -7,7 +7,7 @@ add_library(fwslide STATIC
   Tables.cpp
   TextStyles.cpp
   # P2 (p2-model): the edit layer, the .pptx writer and crash recovery.
-  edit/DesignOps.cpp
+  edit/DesignOps.cpp edit/TableGrid.cpp edit/TableOps.cpp
   edit/HeaderFooter.cpp  # p2-slides
   edit/SlideDesignOps.cpp  # p2-slides
   edit/Edit.cpp
@@ -23,6 +23,12 @@ add_library(fwslide STATIC
 target_include_directories(fwslide PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslide PUBLIC fwpkg fwcore fwdraw)
 target_compile_options(fwslide PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+# p2-slides' design operations run once per command: compiled for size.
+set_source_files_properties(edit/HeaderFooter.cpp edit/SlideDesignOps.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# p2-model: the edit layer runs once per edit, undo or save, never per frame: compiled for size.
+set_source_files_properties(edit/DesignOps.cpp edit/TableGrid.cpp edit/TableOps.cpp edit/Edit.cpp edit/Journal.cpp
+  edit/Parts.cpp edit/Save.cpp edit/ShapeClip.cpp edit/ShapeOps.cpp edit/SlideCopy.cpp edit/SlideOps.cpp edit/TextOps.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_eot.cpp")
