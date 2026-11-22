@@ -226,6 +226,28 @@ TEST(Chart_OtherTypesStayPlaceholders) {
   CHECK(!Read(empty.Root(), Colors(), c));
 }
 
+TEST(Chart_UnstatedChartAreaFillByProgram) {
+  // No chart-area c:spPr: white in a workbook or document, unfilled on a slide (PowerPoint shows
+  // the slide through it); a stated fill is drawn on a slide too.
+  // Whether something fills the whole chart area.
+  const auto filledArea = [](const std::string& xml, bool presentation) {
+    Parsed doc(xml);
+    Chart c;
+    if (!Read(doc.Root(), Colors(), c, nullptr, presentation)) return false;
+    const draw::Art art = Draw(c, {400, 300}, Colors(), L"Calibri");
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && b.right - b.left >= 399 && b.bottom - b.top >= 299) return true;
+    }
+    return false;
+  };
+  CHECK(filledArea(ColumnChart(), false));
+  CHECK(!filledArea(ColumnChart(), true));
+  std::string stated = ColumnChart();
+  stated.insert(stated.rfind("</c:chartSpace>"), "<c:spPr><a:solidFill><a:srgbClr val=\"FFFF00\"/></a:solidFill></c:spPr>");
+  CHECK(filledArea(stated, true));
+}
+
 TEST(Chart_BubblesByArea) {
   // Bubbles at (x, y) sized by area: four times the size, twice as wide; the largest a quarter of
   // the plot's smaller side across (PowerPoint's PDFs). A series each, so each has its own color.
