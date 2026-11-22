@@ -717,6 +717,8 @@ int ObjectTool::Shortcut(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (textEditing_ || !ctrl || alt) return 0;
   switch (vk) {
+    case 'Z': return shift ? CmdRedo : CmdUndo;  // the deck's undo (text editing has its own first)
+    case 'Y': return shift ? 0 : CmdRedo;
     case 'G': return shift ? CmdUngroupObjects : CmdGroupObjects;
     case VK_OEM_6: return shift ? CmdBringToFront : CmdBringForward;   // ]
     case VK_OEM_4: return shift ? CmdSendToBack : CmdSendBackward;     // [

@@ -106,7 +106,9 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
-  if (const int c = Ready() && !keysInThumbs_ ? Objects().Shortcut(vk, mods) : 0) return c;  // p2-objects
+  // p2-objects: the objects' keys, and undo and redo wherever the keys are.
+  const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
+  if (const int c = Ready() && (!keysInThumbs_ || undoKey) ? Objects().Shortcut(vk, mods) : 0) return c;
   if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
