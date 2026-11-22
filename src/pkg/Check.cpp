@@ -911,6 +911,45 @@ void Checker::CheckPresentation() {
   }
   if (masters.empty() && !slides.empty()) Error(main, "the deck has slides but lists no slide master (sldMasterIdLst)");
 
+  // Sections (p14:sectionLst in presentation.xml's extension list, P2: slide operations keep them).
+  // A section naming a slide id that isn't there is the registry's (an error). Warnings until
+  // PowerPoint's verdict is probed (scripts\powerpoint-open-check-proof.ps1, the section variants):
+  // a slide in two sections, a slide in none while the deck has sections, two sections with one id.
+  {
+    std::vector<std::string> slideIds;
+    pugi::xml_node sectionLst;
+    for (pugi::xml_node list : pres->dom.Root().children()) {
+      if (IsPresentationElement(list, "sldIdLst")) {
+        for (pugi::xml_node n : list.children())
+          if (IsPresentationElement(n, "sldId")) slideIds.emplace_back(n.attribute("id").value());
+      } else if (IsPresentationElement(list, "extLst")) {
+        for (pugi::xml_node ext : list.children())
+          for (pugi::xml_node c : ext.children())
+            if (c.type() == pugi::node_element && LocalNameOf(c) == "sectionLst") sectionLst = c;
+      }
+    }
+    if (sectionLst) {
+      std::map<std::string, std::string> sectionOf;  // slide id -> its section's name
+      std::set<std::string> sectionIds;
+      for (pugi::xml_node section : sectionLst.children()) {
+        if (section.type() != pugi::node_element || LocalNameOf(section) != "section") continue;
+        const std::string name = section.attribute("name").value();
+        if (!sectionIds.insert(section.attribute("id").value()).second)
+          Warn(main, "section " + Quote(name) + " has the id of another section");
+        for (pugi::xml_node list : section.children()) {
+          if (list.type() != pugi::node_element || LocalNameOf(list) != "sldIdLst") continue;
+          for (pugi::xml_node s : list.children()) {
+            if (s.type() != pugi::node_element || LocalNameOf(s) != "sldId") continue;
+            auto [it, fresh] = sectionOf.emplace(s.attribute("id").value(), name);
+            if (!fresh) Warn(main, "slide id " + it->first + " is in two sections, " + Quote(it->second) + " and " + Quote(name));
+          }
+        }
+      }
+      for (const std::string& id : slideIds)
+        if (!sectionOf.contains(id)) Warn(main, "slide id " + id + " is in no section, though the deck has sections");
+    }
+  }
+
   // Each master's layouts, from its sldLayoutIdLst.
   std::map<std::string, std::set<std::string>> layoutsOf;  // master -> layouts
   for (auto& p : parts_) {

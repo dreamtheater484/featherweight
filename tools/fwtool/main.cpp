@@ -92,6 +92,11 @@ constexpr const char* kUsage =
     "      one edit (100,000 formulas), inserting a row and undoing it, and saving (1,000,000 cells).\n"
     "      S3's: a table, a conditional format and a chart from a 1,000-row selection to screen,\n"
     "      and the chart drawn again after an edit to its data.\n"
+    "  fwtool bench --decks [--runs N] [--json FILE] [--budgets] <deck>...\n"
+    "      P2's editing budgets on each deck (deck-50.pptx), through the edit API, from the edit to the\n"
+    "      slide drawn again: a keystroke in a text box (< 16 ms typical, < 50 ms worst), new, duplicate,\n"
+    "      delete and move slide (< 50 ms each), undo of each (< 50 ms); saving timed for the record.\n"
+    "      With --budgets a missed budget fails; without the edit API in the build it always fails.\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
@@ -109,9 +114,10 @@ constexpr const char* kUsage =
     "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
     "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
     "      pages in DIR; lists its links, bookmarks, title and author.\n"
-    "  fwtool pdf-compare [--out DIR] [--json FILE] <reference.pdf> <ours.pdf>\n"
+    "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
-    "      by SSIM; a page passes at >= 0.95. --out writes failing pages side by side with the difference.\n"
+    "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
+    "      failing pages side by side with the difference.\n"
     "  fwtool pdf-compare --pngs DIR [--out DIR] [--json FILE] <reference.pdf>\n"
     "      The same against the pages the app drew, DIR\\page-1.png on (P1's slides: the script op\n"
     "      pagepngs:DIR|100 draws every slide, hidden ones too, as the screen does).\n"
@@ -150,7 +156,7 @@ constexpr const char* kUsage =
     "  fwtool spelling <file or folder>...\n"
     "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
     "      as the app does in idle time, and times both (plan §6.2, §11).\n"
-    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--workbooks] [--out DIR] [--json FILE] <file or folder>...\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--workbooks | --decks] [--out DIR] [--json FILE] <file or folder>...\n"
     "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
     "      document through the editor (typing, deletes and replacements across fields, bookmarks,\n"
     "      comments, content controls, tables and tracked changes, splits, joins, run, paragraph and\n"
@@ -171,6 +177,12 @@ constexpr const char* kUsage =
     "      the workbooks among the inputs (scripts/sheet-torture.ps1). --ops value,formula,...:\n"
     "      only those edits (names as reproducers write them). After the edits, undoing them all\n"
     "      must give the workbook as opened and redoing them the workbook as edited.\n"
+    "      Decks (P2), with --decks (then only the decks): each deck saved with no edits first (the save writes no part; the copy, in\n"
+    "      DIR/unchanged, for PowerPoint and the PDF comparison), then seeded edits through the edit API\n"
+    "      (new, duplicated, deleted, moved and hidden slides, layouts, typing, notes, shapes moved,\n"
+    "      resized, rotated, deleted, grouped, ungrouped, reordered and formatted, undo, redo), then\n"
+    "      save: the same checks as workbooks (scripts/deck-torture.ps1).\n"
+    "      Without the edit API in the build, every edit is refused.\n"
     "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
     "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
@@ -312,6 +324,7 @@ int wmain(int argc, wchar_t** argv) {
     if (arg == L"--reserialize-all") options.reserializeAll = true;
     else if (arg == L"--model") options.model = true;
     else if (arg == L"--workbooks") options.workbooks = true;
+    else if (arg == L"--decks") options.decks = true;
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
@@ -344,6 +357,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--values") options.values = true;
     else if (arg == L"--resave") options.resave = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
+    else if (arg == L"--min-ssim" && i + 1 < argc) options.minSsim = _wtof(argv[++i]);
     else if (arg == L"--folders" && i + 1 < argc) options.folders = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
