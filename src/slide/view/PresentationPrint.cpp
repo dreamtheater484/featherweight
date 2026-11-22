@@ -345,6 +345,7 @@ void PresentationView::ApplyState(const FileState& s) {
 }
 
 bool PresentationView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (SlideScriptOp(op, arg)) return true;  // P2: the slides' ops (PresentationSlides.cpp)
   // slide:N (1-based) goes to a slide; printlayout:slides|notes|handouts6 chooses what prints and
   // exports; printhidden:1 prints hidden slides too; notes:0 hides the notes pane.
   if (op == L"slide") {

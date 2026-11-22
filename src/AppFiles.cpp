@@ -12,6 +12,7 @@
 #include "pkg/Recovery.h"
 #include "sheet/view/WorkbookFile.h"
 #include "sheet/view/WorkbookView.h"
+#include "slide/view/PresentationView.h"
 #include "word/DocView.h"
 
 #include <algorithm>
@@ -85,6 +86,22 @@ void App::NewDocument(int kind) {
 
 void App::NewWorkbook() {
   auto view = fw::sheet::view::WorkbookView::NewWorkbook(*this, ++newWorkbooks_);
+  view->SetViewport(DocRect(), ui_);
+  std::wstring error;
+  if (view->Load(L"", error) == OpenResult::Failed) {
+    banner_.Show(BannerKind::Error, error, {}, 8000);
+    return;
+  }
+  view->ApplyState(FileState{});
+  tabs_.push_back(std::move(view));
+  ActivateTab(static_cast<int>(tabs_.size()) - 1);
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::NewPresentation() {
+  // A blank 16:9 deck on the Office theme, as PowerPoint makes one (P2, p2-slides).
+  auto view = fw::slide::view::PresentationView::NewPresentation(*this, ++newPresentations_);
   view->SetViewport(DocRect(), ui_);
   std::wstring error;
   if (view->Load(L"", error) == OpenResult::Failed) {
