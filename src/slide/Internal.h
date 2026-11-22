@@ -3,6 +3,7 @@
 #include <pugixml.hpp>
 
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +12,10 @@
 #include "pkg/Package.h"
 #include "pkg/XmlDom.h"
 #include "slide/Presentation.h"
+
+namespace fw::slide::edit {
+struct Changes;
+}
 
 // What the reader's files share. Internal to fwslide.
 namespace fw::slide::detail {
@@ -33,6 +38,8 @@ std::string TargetOf(const pkg::RelationshipSet* rels, std::string_view id);
 // A part parsed within the package's limits; null when it's missing or not well-formed (the reason
 // in `problem`).
 std::unique_ptr<pkg::XmlDom> ParsePart(const pkg::Package& package, std::string_view part, std::string* problem);
+// The same for a part of the deck as its edits left it (src/slide/edit).
+std::shared_ptr<const pkg::XmlDom> DomOf(const Presentation& deck, std::string_view part, std::string* problem);
 
 // EMUs to points; integers as attributes give them, `def` when missing.
 inline float Emu(pugi::xml_node n, const char* attr, double def = 0) { return EmuToPt(Number(n, attr, def)); }
@@ -57,5 +64,10 @@ std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_n
 
 // The master a part's text styles come from.
 const Master* MasterOf(const SlideBase& part);
+
+// After an edit (src/slide/edit): the model reads again what the parts with these keys
+// (pkg::PartKey; a part whose relationships changed counts) changed, or everything when `full`.
+// What it read again goes into the store's graveyard; `out` gets what changed for the view.
+void RefreshModel(Presentation& deck, const std::set<std::string>& parts, bool full, edit::Changes& out);
 
 }  // namespace fw::slide::detail

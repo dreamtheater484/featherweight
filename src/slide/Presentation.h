@@ -40,8 +40,16 @@
 //
 // Threads: the presentation may be used from several threads; GetSlide, Text, GetTable and
 // EmbeddedFonts take its lock. What they return stays valid and unchanged while the presentation
-// lives. DrawingResources objects are each for one thread.
+// lives, except that an edit (src/slide/edit, P2) replaces what it touched: the slides, notes and
+// texts an edit::Editor reports changed are read again, and the old ones stay valid only until
+// the next edit (drop them in the editor's change listener). Edits run on one thread, with nothing
+// reading the presentation from another meanwhile. DrawingResources objects are each for one thread.
 namespace fw::slide {
+
+namespace edit {
+class Editor;
+class PartStore;
+}  // namespace edit
 
 enum class FileFormat : uint8_t { Pptx, Pptm, Ppsx, Ppsm, Potx, Potm };
 
@@ -139,7 +147,10 @@ struct SlideBase {
  private:
   friend class Presentation;
   friend class Loader;
-  std::unique_ptr<pkg::XmlDom> dom_;
+  friend class edit::Editor;
+  // The part as read, or as the last edit left it (src/slide/edit): never changed once read.
+  std::shared_ptr<const pkg::XmlDom> dom_;
+  std::shared_ptr<const pkg::RelationshipSet> rels_;  // an edited part's relationships (else the package's)
   std::map<const void*, const Shape*> byText_;  // textNode's internal object -> shape
   std::map<uint32_t, const Shape*> byId_;
 };
@@ -319,9 +330,22 @@ class Presentation {
   // The text style a shape's text starts from (presentation.xml's p:defaultTextStyle).
   pugi::xml_node DefaultTextStyle() const { return defaultTextStyle_; }
 
+  // ---- Editing (P2: src/slide/edit). Parts as the edits left them: what the model reads. Without
+  // edits, the package's.
+  // A part's relationships (null when it has none).
+  const pkg::RelationshipSet* RelationshipsOf(std::string_view part) const;
+  // A part's bytes (an XML part edited as a DOM is serialized). False when there's no such part.
+  bool ReadPart(std::string_view part, std::vector<uint8_t>& out) const;
+  // The presentation part's name ("/ppt/presentation.xml").
+  const std::string& PresentationPart() const { return presentationPart_; }
+  // Edits since opening (src/slide/edit holds them); null before the first.
+  const edit::PartStore* Edits() const { return store_.get(); }
+
  private:
   Presentation();
   friend class Loader;
+  friend class edit::Editor;
+  friend class edit::PartStore;
   friend std::unique_ptr<Presentation> Read(std::unique_ptr<pkg::Package>, pkg::Status&);
 
   struct SlideRef {
@@ -336,7 +360,8 @@ class Presentation {
   draw::Size slideSize_{720, 540}, notesSize_{540, 720};
   int firstSlideNumber_ = 1;
   bool rtl_ = false;
-  std::unique_ptr<pkg::XmlDom> presentationDom_;
+  std::shared_ptr<const pkg::XmlDom> presentationDom_;
+  std::unique_ptr<edit::PartStore> store_;  // the edits (src/slide/edit); null until the first
   std::string presentationPart_;
   pugi::xml_node defaultTextStyle_;
   std::vector<SlideRef> slideRefs_;
@@ -356,7 +381,7 @@ class Presentation {
   std::map<std::pair<const void*, const void*>, std::unique_ptr<TextBody>> texts_;
   std::map<std::pair<const void*, const void*>, std::unique_ptr<Table>> tables_;
   bool tableStylesRead_ = false;
-  std::unique_ptr<pkg::XmlDom> tableStyles_;  // ppt/tableStyles.xml
+  std::shared_ptr<const pkg::XmlDom> tableStyles_;  // ppt/tableStyles.xml
   std::unique_ptr<pugi::xml_document> builtInStyles_;  // the built-in styles decks name without defining
   std::vector<std::unique_ptr<TextBody>> cellTexts_;
   mutable std::recursive_mutex mutex_;
