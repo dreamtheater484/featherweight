@@ -598,8 +598,9 @@ std::string LinkAction(const LinkTarget& link) {
 bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, const LinkTarget& target) {
   std::string rel;
   if (target.kind == LinkTarget::Kind::Url) {
-    if (target.url.empty()) return false;
-    rel = m.AddRel(part, kRelHyperlink, target.url, true);
+    const std::string url = XmlTextUtf8(target.url);
+    if (url.empty()) return false;
+    rel = m.AddRel(part, kRelHyperlink, url, true);
   } else if (target.kind == LinkTarget::Kind::Slide) {
     std::string slide = m.SlidePart(target.slide);
     if (slide.empty()) return false;
@@ -608,7 +609,7 @@ bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, cons
   std::string r = PrefixFor(link, kRelNs, "r");
   link.append_attribute((r + ":id").c_str()) = rel.c_str();
   if (std::string action = LinkAction(target); !action.empty()) link.append_attribute("action") = action.c_str();
-  if (!target.tooltip.empty()) link.append_attribute("tooltip") = target.tooltip.c_str();
+  if (!target.tooltip.empty()) link.append_attribute("tooltip") = XmlTextUtf8(target.tooltip).c_str();
   return true;
 }
 
@@ -695,6 +696,8 @@ Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int
 }
 
 Result Editor::InsertTextBox(size_t slide, const draw::Rect& r, std::wstring_view text, uint32_t* id) {
+  const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
+  text = clean;
   Call call(*this, u"Insert Text Box");
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);

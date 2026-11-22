@@ -141,7 +141,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
-    case CmdSave: s.enabled = false; break;  // read-only until P2
+    case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp
     case CmdPresentation:
     case CmdSlideShowFromStart:
     case CmdSlideShowFromCurrent:
