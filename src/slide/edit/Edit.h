@@ -208,6 +208,25 @@ struct CellPatch {
   std::optional<BodyProps::Anchor> anchor;
 };
 
+// Shapes copied with the parts they use (pictures, charts and their workbooks, media), self-contained:
+// pasted on any slide of any deck, even after the deck they came from is closed.
+struct ShapeClip {
+  struct Part {
+    std::string name, contentType;  // as it was named where it came from
+    std::vector<uint8_t> bytes;
+    struct Rel {
+      std::string id, type, target;  // target: an external address, or Part::name of another part here
+      bool external = false;
+    };
+    std::vector<Rel> rels;
+  };
+  std::vector<std::string> shapes;  // each shape's element, declaring its prefixes, as it was
+  std::vector<Part::Rel> rels;      // the slide's relationships the shapes name
+  std::vector<Part> parts;          // the parts those name, and theirs
+  const void* deck = nullptr;       // the deck it came from (a link to a slide works only there)
+  bool Empty() const { return shapes.empty(); }
+};
+
 // ---- Slides and design
 
 // Slide size changes: how the content follows (PowerPoint's Maximize and Ensure Fit).
@@ -320,6 +339,12 @@ class Editor {
   Result SetShapeXml(size_t slide, uint32_t id, std::string_view xml, std::u16string stepName);
   // The shape's element as XML declaring its prefixes (copy, the clipboard); empty when none.
   std::string ShapeXml(size_t slide, uint32_t id) const;
+  // Copy and paste (the clipboard, Ctrl+D on shapes): the shapes in z order with their parts.
+  // Pasting stores pictures once (shared with equal ones here), gives charts and other parts new
+  // names, renews shape ids that collide, keeps links to slides only within the same deck; the
+  // pasted shapes go on top in their order, where they were (the caller moves them). `ids` gets them.
+  ShapeClip CopyShapes(size_t slide, const std::vector<uint32_t>& ids) const;
+  Result PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint32_t>* ids = nullptr);
   // A hyperlink on the shape itself (clicking it in the show); nullopt removes it.
   Result SetShapeLink(size_t slide, uint32_t id, const std::optional<LinkTarget>& link);
 

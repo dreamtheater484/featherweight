@@ -265,6 +265,27 @@ TEST(SlideEditShapes) {
   CHECK(s->FindShape(group) == nullptr);
   CHECK_NEAR(s->FindShape(rect)->bounds.left, 310, 0.5);
   CHECK_NEAR(s->FindShape(rect)->bounds.Width(), 120, 0.5);
+  // Copy and paste with the picture: on the same deck it shares the picture's part.
+  ShapeClip clip = ed.CopyShapes(0, {pic, rect});
+  CHECK_EQ(clip.shapes.size(), size_t{2});
+  std::vector<uint32_t> pasted;
+  CHECK(ed.PasteShapes(0, clip, &pasted));
+  CHECK_EQ(pasted.size(), size_t{2});
+  s = deck->GetSlide(0);
+  CHECK(s->FindShape(pasted[0]) && s->FindShape(pasted[0]) != s->FindShape(pic));
+  std::vector<uint32_t> pastedHere = pasted;
+  // Into another deck: the picture comes along.
+  auto other = Open("layouts.pptx");
+  Editor ed2(*other);
+  CHECK(ed2.PasteShapes(0, clip, &pasted));
+  bool kind = false;
+  for (uint32_t id : pasted) kind = kind || other->GetSlide(0)->FindShape(id)->kind == Shape::Kind::Picture;
+  CHECK(kind);
+  std::vector<uint8_t> otherBytes;
+  CHECK(SaveToBytes(ed2, otherBytes).Ok());
+  auto otherAgain = OpenBytes(otherBytes);
+  CHECK(otherAgain && otherAgain->GetSlide(0)->shapes.size() == other->GetSlide(0)->shapes.size());
+  CHECK(ed.DeleteShapes(0, pastedHere));
   // Fill, crop, delete.
   ShapePatch fill;
   fill.fill = "<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:srgbClr val=\"FF0000\"/></a:solidFill>";

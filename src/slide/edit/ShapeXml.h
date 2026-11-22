@@ -20,6 +20,9 @@ bool ReplaceGroup(pugi::xml_node parent, std::string_view xml, const std::functi
 int SpPrGroupOf(std::string_view local);
 // The action attribute for a link target ("ppaction://hlinksldjump"...); empty for a web address.
 std::string LinkAction(const LinkTarget& link);
+// Puts a shape element on slide part `part` at z position `z` (-1: on top), renewing its ids that
+// collide with the slide's; `id` gets its cNvPr id. Inside a Call.
+Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, int z, uint32_t* id);
 // Fills an empty a:hlinkClick for `target`, adding the relationship of `part` it needs.
 bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, const LinkTarget& target);
 

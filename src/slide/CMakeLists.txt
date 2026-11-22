@@ -12,6 +12,7 @@ add_library(fwslide STATIC
   edit/Journal.cpp
   edit/Parts.cpp
   edit/Save.cpp
+  edit/ShapeClip.cpp
   edit/ShapeOps.cpp
   edit/SlideCopy.cpp
   edit/SlideOps.cpp

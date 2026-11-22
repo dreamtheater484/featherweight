@@ -436,8 +436,6 @@ bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, cons
 
 // ---- Editor: shapes
 
-namespace {
-
 // Puts a parsed shape on a slide: ids renewed against the slide's, at z position `z`.
 Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, int z, uint32_t* id) {
   pugi::xml_node root = m.Edit(part);
@@ -462,8 +460,6 @@ Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, in
   m.Touched(part, newId);
   return {};
 }
-
-}  // namespace
 
 Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int z) {
   Call call(*this, u"Insert Shape");
