@@ -8,7 +8,8 @@ target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
-add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp)
+add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp
+  PresentationFile.cpp)  # p2-model: saving and recovery
 target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwslideview PUBLIC fwslideviewcore)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
@@ -18,6 +19,8 @@ set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PROPE
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_view.cpp")
+  # p2-model: the tab's file (an app source, tested with temporary folders; FileSession.cpp comes with src/doc's).
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_file.cpp" PresentationFile.cpp)
   target_link_libraries(fw_tests PRIVATE fwslideviewcore)
   # The tab off-screen: find, the notes, handouts and notes pages, Export PDF, a .ppsx.
   add_test(NAME presentation_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
