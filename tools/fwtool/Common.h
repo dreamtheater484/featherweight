@@ -38,6 +38,7 @@ struct Options {
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
   bool scrolling = false;           // bench: time painting every page in order, and memory
+  bool slideText = false;           // bench: typing in a slide's text as the tab does (SlideTextBench.cpp)
   bool sheetEdits = false;          // bench: S2's editing budgets on made workbooks (SheetBench.cpp)
   int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
   unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
@@ -122,6 +123,7 @@ int RunSpelling(const Options& options);
 int RunTorture(const Options& options);
 int RunSheetEditBench(const Options& options);
 int RunDeckEditBench(const Options& options);  // bench --decks (DeckBench.cpp)
+int RunSlideTextBench(const Options& options);  // bench --slide-text (SlideTextBench.cpp)
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

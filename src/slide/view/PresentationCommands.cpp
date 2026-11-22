@@ -14,6 +14,8 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/view/PresentationText.h"
+#include "slide/view/TextFind.h"
 #include "slide/view/ObjectTool.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
@@ -107,6 +109,7 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
   // p2-objects: the objects' keys, and undo and redo wherever the keys are.
   const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
   if (const int c = Ready() && (!keysInThumbs_ || undoKey) ? Objects().Shortcut(vk, mods) : 0) return c;
@@ -136,6 +139,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return s;  // p2-objects
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
@@ -203,6 +207,7 @@ std::vector<int> PresentationView::Commands() {
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
   if (SlideCommand(cmd)) return true;  // P2: the slides' commands
   const size_t n = SlideCount();
@@ -301,6 +306,7 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
   };
   m.left = {print, layout};
   AddSlideTools(m);  // P2: ＋ Slide ▾ and Layout ▾ first
+  text_->AddToolbar(m);  // the text being edited: font, size, emphasis, color, alignment, lists
   if (Ready()) Objects().AddTools(m);  // p2-objects: insert, arrange, format
 
   // ▶ Present ▾: from the beginning, or the list's choice.
@@ -349,6 +355,10 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   if (!Ready()) return;
   downX_ = x;
   downY_ = y;
+  if (text_->Editing() && !gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y))) {
+    text_->FillContextMenu(m, current_, SlidePoint(x, y));
+    return;
+  }
   // A right-click on a thumbnail is about that slide (and the others selected with it).
   if (const int t = ThumbAt(x, y); t >= 0 || gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y)))
     SlideContextMenu(m, t);  // P2: new, duplicate, delete, layout, hide
@@ -391,6 +401,9 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
 void PresentationView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   matches_.clear();
   match_ = -1;
+  search_.query = query;  // p2-text: for Replace
+  search_.matchCase = matchCase;
+  search_.wholeWords = wholeWords;
   if (!Ready() || query.empty()) {
     host_.ViewInvalidate();
     return;
@@ -448,6 +461,53 @@ std::wstring PresentationView::SelectedText() {
     return text.substr(m.at, m.length);
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Replace (p2-text): the matches found again in the text as the edit layer has it, the current one
+// by its place among its slide's (or its notes') matches.
+
+bool PresentationView::CanReplace() const { return text_->Model() != nullptr; }
+
+bool PresentationView::ReplaceCurrent(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || match_ < 0 || match_ >= static_cast<int>(matches_.size())) return false;
+  const Match cur = matches_[static_cast<size_t>(match_)];
+  size_t rank = 0;
+  for (int i = 0; i < match_; ++i)
+    if (matches_[static_cast<size_t>(i)].slide == cur.slide && matches_[static_cast<size_t>(i)].notes == cur.notes) ++rank;
+  std::vector<TextMatch> here;
+  for (const TextMatch& m : fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords))
+    if (m.target.slide == cur.slide && m.target.notes == cur.notes) here.push_back(m);
+  if (rank >= here.size() || !ReplaceMatch(*model, here[rank], search_.query, search_.matchCase, with)) {
+    host_.ViewMessage(BannerKind::Warning, L"That text can't be replaced here.");
+    return false;
+  }
+  // Found again; the current match is the one after the replaced text.
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  size_t seen = 0;
+  for (size_t i = 0; i < matches_.size(); ++i) {
+    const Match& m = matches_[i];
+    const bool same = m.slide == cur.slide && m.notes == cur.notes;
+    if ((same && seen++ == rank) || m.slide > cur.slide || (m.slide == cur.slide && m.notes && !cur.notes)) {
+      match_ = static_cast<int>(i);
+      ShowMatch();
+      return true;
+    }
+  }
+  match_ = matches_.empty() ? -1 : 0;
+  ShowMatch();
+  return true;
+}
+
+int PresentationView::ReplaceAll(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || search_.query.empty()) return 0;
+  const int n = fw::slide::view::ReplaceAll(*model, fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords), with);
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  return n;
 }
 
 // ---------------------------------------------------------------------------

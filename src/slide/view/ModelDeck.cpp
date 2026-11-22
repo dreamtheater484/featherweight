@@ -98,6 +98,12 @@ class ModelDeck : public Deck {
       r->Draw(p, {0, 0, s.width, s.height}, filter);
     }
   }
+  void PaintPrompts(size_t i, draw::Painter& p, uint32_t skip) override {
+    if (render::SlideRender* r = Render(i)) {
+      const draw::Size s = deck_->SlideSize();
+      r->DrawPrompts(p, {0, 0, s.width, s.height}, Fonts(), skip);
+    }
+  }
   std::vector<LayoutChoice> LayoutsFor(size_t slide) const override;
   int LayoutOf(size_t slide) const override;
   void PaintLayout(size_t layout, draw::Painter& p) override;

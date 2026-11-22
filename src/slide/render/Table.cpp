@@ -120,6 +120,33 @@ std::vector<TextBlock::Link> TableRender::Links() const {
   return out;
 }
 
+bool TableRender::CellFrame(int row, int column, draw::TextBox& box, int& firstParagraph, int& paragraphs,
+                            float& contentHeight) const {
+  int base = 0;
+  for (const Cell& c : cells_) {
+    const int n = static_cast<int>(c.text.ParagraphBounds().size());
+    if (c.cell->row == row && c.cell->column == column) {
+      box = BoxFor(*c.cell, c.rect);
+      firstParagraph = base;
+      paragraphs = n;
+      contentHeight = c.text.ContentHeight();
+      return true;
+    }
+    base += n;
+  }
+  return false;
+}
+
+bool TableRender::CellAt(draw::Point at, int& row, int& column) const {
+  for (const Cell& c : cells_)
+    if (at.x >= c.rect.left && at.x < c.rect.right && at.y >= c.rect.top && at.y < c.rect.bottom) {
+      row = c.cell->row;
+      column = c.cell->column;
+      return true;
+    }
+  return false;
+}
+
 std::wstring TableRender::PlainText() const {
   std::wstring out;
   int row = -1;

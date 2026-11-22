@@ -18,6 +18,7 @@
 #include "draw/D2DPainter.h"
 #include "draw/Pdf.h"
 #include "draw/PrintJob.h"
+#include "slide/view/PresentationText.h"
 #include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlidePages.h"
@@ -318,6 +319,7 @@ void PresentationView::ApplyState(const FileState& s) {
 
 bool PresentationView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (SlideScriptOp(op, arg)) return true;  // P2: the slides' ops (PresentationSlides.cpp)
+  if (text_->ScriptOp(op, arg, current_)) return true;  // p2-text: edit:, fontsize:, fontcolor:
   if (Ready() && Objects().ScriptOp(op, arg)) return true;  // p2-objects: insert:, shapefill:
   // slide:N (1-based) goes to a slide; printlayout:slides|notes|handouts6 chooses what prints and
   // exports; printhidden:1 prints hidden slides too; notes:0 hides the notes pane.
