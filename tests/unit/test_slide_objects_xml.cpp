@@ -394,6 +394,10 @@ TEST(SlideObjectsXml_Chart) {
     pugi::xml_document doc;
     CHECK(doc.load_string(xml.c_str()));
     CHECK(Has(xml, "<c:externalData r:id=\"rId7\">"));
+    // The chart and plot areas without fill, in schema order (the slide shows through, as in PowerPoint).
+    const std::string clear = "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr>";
+    CHECK(Has(xml, ("</c:chart>" + clear + "<c:txPr>").c_str()));
+    CHECK(Has(xml, (clear + "</c:plotArea>").c_str()));
     ChartData back;
     CHECK(ReadChartData(doc.document_element(), back));
     CHECK_EQ(back.categories.size(), size_t{4});
