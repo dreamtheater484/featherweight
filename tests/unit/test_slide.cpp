@@ -508,6 +508,27 @@ void ReplaceBetween(std::string& s, const std::string& open, const std::string& 
 
 }  // namespace
 
+TEST(SlideParagraphDefaultRunPropsApply) {
+  // PowerPoint draws a run from its paragraph's own pPr/defRPr where the run doesn't say (corpus:
+  // edu-15-213-the-memory-hierarchy slide 11, Calibri 16 pt bold, not the default style's 42 pt).
+  std::string box =
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Box\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>"
+      "<a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"ctr\"><a:defRPr sz=\"1600\"><a:latin typeface=\"Calibri\"/></a:defRPr>"
+      "</a:pPr><a:r><a:rPr b=\"1\"/><a:t>Main</a:t></a:r><a:r><a:rPr sz=\"900\"/><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>";
+  auto deck = Modified({{"ppt/slides/slide1.xml", SlideXml(box)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const TextBody* b = TextOf(*deck, *deck->GetSlide(0), 2);
+  CHECK(b && b->paragraphs[0].runs.size() == 2);
+  if (!b || b->paragraphs[0].runs.size() != 2) return;
+  const RunProps& r = b->paragraphs[0].runs[0].props;
+  CHECK_NEAR(r.size, 16.f, 0.01f);
+  CHECK(r.bold);
+  CHECK(r.latin == L"Calibri");
+  CHECK_NEAR(b->paragraphs[0].runs[1].props.size, 9.f, 0.01f);
+  CHECK_NEAR(b->paragraphs[0].endProps.size, 16.f, 0.01f);
+}
+
 TEST(SlideBaseStylesAsPowerPointUsesThem) {
   // What PowerPoint 2021 showed for this deck (2026-11-20): text boxes and shapes start from the
   // default text style (22 pt green), never the master's other style (40 pt red); table cells take
