@@ -382,9 +382,11 @@ void ReadParagraphs(pugi::xml_node txBody, const Levels& lv, const Ctx& c, TextB
     pugi::xml_node pPr = A(p, "pPr");
     int level = std::clamp(static_cast<int>(Number(pPr, "lvl", 0)), 0, kLevels - 1);
     para.props = lv[level].para;
-    ApplyPPr(pPr, para.props, nullptr, c, c.owner);
+    // The paragraph's own defRPr is where its runs start (PowerPoint draws by it: Keynote and Mac
+    // PowerPoint write a text box's size and font there).
+    RunProps base = lv[level].run;
+    ApplyPPr(pPr, para.props, &base, c, c.owner);
     para.props.level = level;
-    const RunProps& base = lv[level].run;
     para.endProps = base;
     ForEachChild(p, [&](pugi::xml_node n) {
       std::string_view k = LocalNameOf(n);
