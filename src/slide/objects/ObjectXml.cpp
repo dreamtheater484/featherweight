@@ -320,65 +320,6 @@ ObjectKind KindOf(pugi::xml_node object) {
                                : ObjectKind::Other;
 }
 
-pugi::xml_node XfrmNode(pugi::xml_node object) {
-  if (KindOf(object) == ObjectKind::GraphicFrame) return Kid(object, kP, "xfrm");
-  return Kid(PropertiesOf(object, false), kA, "xfrm");
-}
-
-bool ReadXfrm(pugi::xml_node object, Xfrm& out) {
-  pugi::xml_node x = XfrmNode(object);
-  if (!x) return false;
-  out = Xfrm();
-  pugi::xml_node off = Kid(x, kA, "off"), ext = Kid(x, kA, "ext");
-  out.x = Int(off, "x");
-  out.y = Int(off, "y");
-  out.cx = std::max<int64_t>(0, Int(ext, "cx"));
-  out.cy = std::max<int64_t>(0, Int(ext, "cy"));
-  out.rot = static_cast<int32_t>(Int(x, "rot") % 21600000);
-  out.flipH = Flag(x, "flipH");
-  out.flipV = Flag(x, "flipV");
-  pugi::xml_node chOff = Kid(x, kA, "chOff"), chExt = Kid(x, kA, "chExt");
-  if (chOff && chExt) {
-    out.child = true;
-    out.chX = Int(chOff, "x");
-    out.chY = Int(chOff, "y");
-    out.chCx = Int(chExt, "cx");
-    out.chCy = Int(chExt, "cy");
-  }
-  return true;
-}
-
-void WriteXfrm(pugi::xml_node object, const Xfrm& v) {
-  pugi::xml_node x = XfrmNode(object);
-  if (!x) {
-    if (KindOf(object) == ObjectKind::GraphicFrame) {
-      pugi::xml_node after = Kid(object, kP, "nvGraphicFramePr");
-      const std::string name = NameIn(object, kP, "xfrm");
-      x = after ? object.insert_child_after(name.c_str(), after) : object.prepend_child(name.c_str());
-    } else {
-      pugi::xml_node pr = PropertiesOf(object, true);
-      if (!pr) return;
-      x = InsertOrdered(pr, kA, "xfrm", kSpPrOrder);
-    }
-  }
-  if (v.rot) SetInt(x, "rot", v.rot); else x.remove_attribute("rot");
-  if (v.flipH) SetAttr(x, "flipH", "1"); else x.remove_attribute("flipH");
-  if (v.flipV) SetAttr(x, "flipV", "1"); else x.remove_attribute("flipV");
-  constexpr std::initializer_list<std::string_view> order = {"off", "ext", "chOff", "chExt"};
-  pugi::xml_node off = Ensure(x, kA, "off", order), ext = Ensure(x, kA, "ext", order);
-  SetInt(off, "x", v.x);
-  SetInt(off, "y", v.y);
-  SetInt(ext, "cx", v.cx);
-  SetInt(ext, "cy", v.cy);
-  if (v.child) {
-    pugi::xml_node chOff = Ensure(x, kA, "chOff", order), chExt = Ensure(x, kA, "chExt", order);
-    SetInt(chOff, "x", v.chX);
-    SetInt(chOff, "y", v.chY);
-    SetInt(chExt, "cx", v.chCx);
-    SetInt(chExt, "cy", v.chCy);
-  }
-}
-
 Frame ToFrame(const Xfrm& x) {
   Frame f;
   f.rect = {ToPoints(x.x), ToPoints(x.y), ToPoints(x.x + x.cx), ToPoints(x.y + x.cy)};
@@ -621,57 +562,6 @@ draw::Rect PlacePicture(draw::Size natural, draw::Size slide) {
   w *= s;
   h *= s;
   return {(slide.width - w) / 2, (slide.height - h) / 2, (slide.width + w) / 2, (slide.height + h) / 2};
-}
-
-// ---- Grouping
-
-Xfrm GroupBox(const std::vector<Xfrm>& children) {
-  Xfrm g;
-  if (children.empty()) return g;
-  double l = 1e300, t = 1e300, r = -1e300, b = -1e300;
-  for (const Xfrm& c : children) {
-    if (c.rot == 0) {
-      l = std::min(l, double(c.x)), t = std::min(t, double(c.y));
-      r = std::max(r, double(c.x + c.cx)), b = std::max(b, double(c.y + c.cy));
-      continue;
-    }
-    const draw::Rect box = ToFrame(c).Bounds();
-    l = std::min(l, double(box.left) * kEmuPerPoint), t = std::min(t, double(box.top) * kEmuPerPoint);
-    r = std::max(r, double(box.right) * kEmuPerPoint), b = std::max(b, double(box.bottom) * kEmuPerPoint);
-  }
-  g.x = std::llround(l), g.y = std::llround(t);
-  g.cx = std::llround(r) - g.x, g.cy = std::llround(b) - g.y;
-  g.child = true;
-  g.chX = g.x, g.chY = g.y, g.chCx = g.cx, g.chCy = g.cy;
-  return g;
-}
-
-Xfrm Ungrouped(const Xfrm& g, const Xfrm& c) {
-  const double sx = g.child && g.chCx > 0 ? double(g.cx) / g.chCx : 1;
-  const double sy = g.child && g.chCy > 0 ? double(g.cy) / g.chCy : 1;
-  const double ox = static_cast<double>(g.child ? g.chX : g.x), oy = static_cast<double>(g.child ? g.chY : g.y);
-  // The child's centre in the group's box, from the box's centre.
-  double px = (c.x + c.cx / 2.0 - ox) * sx - g.cx / 2.0;
-  double py = (c.y + c.cy / 2.0 - oy) * sy - g.cy / 2.0;
-  if (g.flipH) px = -px;
-  if (g.flipV) py = -py;
-  const double a = g.rot / 60000.0 * 3.14159265358979323846 / 180.0;
-  const double rx = px * std::cos(a) - py * std::sin(a), ry = px * std::sin(a) + py * std::cos(a);
-  const double cx = g.x + g.cx / 2.0 + rx, cy = g.y + g.cy / 2.0 + ry;
-  Xfrm out = c;
-  out.cx = std::llround(c.cx * sx);
-  out.cy = std::llround(c.cy * sy);
-  out.x = std::llround(cx - out.cx / 2.0);
-  out.y = std::llround(cy - out.cy / 2.0);
-  int64_t rot = c.rot;
-  if (g.flipH != g.flipV) rot = -rot;
-  rot += g.rot;
-  rot %= 21600000;
-  if (rot < 0) rot += 21600000;
-  out.rot = static_cast<int32_t>(rot);
-  out.flipH = c.flipH != g.flipH;
-  out.flipV = c.flipV != g.flipV;
-  return out;
 }
 
 // ---- Format
