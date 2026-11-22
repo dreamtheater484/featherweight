@@ -117,6 +117,9 @@ class TextEditing {
   std::unique_ptr<Hide> hide_;
   bool slideChanged_ = false;
   uint32_t left_ = 0;  // TakeLeft's
+  // The edited text's colors: the slide's theme and color map when editing began (StartAt).
+  std::shared_ptr<const draw::Theme> theme_;
+  draw::ColorMap colorMap_;
   wchar_t highSurrogate_ = 0;
   double lastDoubleClick_ = -1e9;
   draw::Point lastDoubleAt_;

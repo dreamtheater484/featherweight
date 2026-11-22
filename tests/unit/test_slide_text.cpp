@@ -19,6 +19,7 @@
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
+#include "slide/render/TextBody.h"
 #include "slide/view/TextClip.h"
 #include "slide/view/TextDoc.h"
 #include "slide/view/TextFind.h"
@@ -704,4 +705,24 @@ TEST(SlideText_TypedTextIsWhatXmlCanHold) {
                               L'e', wchar_t(0xD83D), wchar_t(0xDE00)};
   doc.Insert(doc.End(), typed);
   CHECK(doc.Text(0) == std::wstring(L"xabcde") + wchar_t(0xD83D) + wchar_t(0xDE00));
+}
+
+// What spelling underlines on a slide: each of its own texts (not its layout's) with its block, the
+// body it was laid out from, and where it is on the slide.
+TEST(SlideText_TheSlidesTextsForSpelling) {
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>", "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Title</a:t></a:r></a:p>") +
+                     TextBox(4, 100, 300, 200, 40, "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Box text</a:t></a:r></a:p>", "<a:bodyPr/>"),
+                 2));
+  const std::vector<render::SlideRender::TextOnSlide> texts = f.slide->Texts();
+  REQUIRE(texts.size() == 2);
+  CHECK(texts[0].shape == 2u);
+  CHECK(texts[1].shape == 4u);
+  CHECK(texts[1].body->paragraphs[0].runs[0].text == L"Box text");
+  // "text" in the box, in slide points: inside the box.
+  const std::vector<draw::Rect> rects = texts[1].block->SelectionRects(0, 4, 0, 8);
+  REQUIRE(!rects.empty());
+  const draw::Point at = texts[1].toSlide.Apply({rects[0].left, rects[0].top});
+  CHECK(at.x > 100 && at.x < 300);
+  CHECK(at.y >= 299 && at.y < 340);
 }
