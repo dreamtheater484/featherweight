@@ -120,6 +120,24 @@ TextBlock::~TextBlock() = default;
 TextBlock::TextBlock(TextBlock&&) noexcept = default;
 TextBlock& TextBlock::operator=(TextBlock&&) noexcept = default;
 
+namespace {
+
+// Whether the face drawn for `family` has a legacy 'kern' table.
+bool KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
+  const text::Face* face = fonts.FaceFor(family, bold, italic);
+  if (!face) return false;
+  const void* data = nullptr;
+  UINT32 size = 0;
+  void* context = nullptr;
+  BOOL exists = FALSE;
+  if (FAILED(face->Get()->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
+    return false;
+  face->Get()->ReleaseFontTable(context);
+  return size > 4;
+}
+
+}  // namespace
+
 void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::slide::TextBody& body, const TextExtras& extras) {
   using fw::slide::Bullet;
   using fw::slide::RunProps;
@@ -153,7 +171,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.italic = s.complexItalic = r.italic;
     s.caps = r.caps == fw::slide::Caps::All ? text::Caps::All : r.caps == fw::slide::Caps::Small ? text::Caps::Small : text::Caps::None;
     s.letterSpacing = r.spacing;
-    s.kerningMinSize = r.kern;
+    // PowerPoint kerns only by a font's 'kern' table, not by its OpenType (GPOS) pairs: Public Sans
+    // (GPOS only) isn't kerned in its PDFs.
+    if (r.kern > 0 && KernTable(fonts, s.family, s.bold, s.italic)) s.kerningMinSize = r.kern;
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
     return s;
   };
