@@ -187,6 +187,87 @@ TEST(SlideEditDuplicateDeleteMoveHide) {
   CHECK(Digest(*deck) == edited);
 }
 
+// Every slide jump in `xml` names its target (r:id there, not empty).
+bool JumpsNameTheirSlide(const std::string& xml) {
+  for (size_t at = xml.find("hlinksldjump"); at != std::string::npos; at = xml.find("hlinksldjump", at + 1)) {
+    const size_t open = xml.rfind('<', at), close = xml.find('>', at);
+    const std::string element = xml.substr(open, close - open);
+    if (element.find(" r:id=\"") == std::string::npos || element.find(" r:id=\"\"") != std::string::npos) return false;
+  }
+  return true;
+}
+
+// Deleting a slide that others jump to: the links to it go everywhere (a shape's click and hover, a
+// run, a notes page, another slide), the text and shapes staying; a link to a slide that stays is
+// kept (p2-corpus's PowerPoint check: PowerPoint repairs a slide jump left without its r:id).
+TEST(SlideEditDeletingASlideDropsLinksToIt) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  CHECK(ed.DuplicateSlides({0}));
+  CHECK(ed.DuplicateSlides({0}));
+  CHECK(deck->SlideCount() >= 3);
+  const size_t last = deck->SlideCount() - 1;
+  const Shape* shape = FirstWithText(deck->GetSlide(0));
+  const Shape* other = FirstWithText(deck->GetSlide(1));
+  CHECK(shape != nullptr && other != nullptr);
+  if (!shape || !other) return;
+  const uint32_t id = shape->id, otherId = other->id;
+  LinkTarget toLast, toSecond;
+  toLast.kind = toSecond.kind = LinkTarget::Kind::Slide;
+  toLast.slide = last;
+  toSecond.slide = 1;
+  CHECK(ed.SetShapeLink(0, id, toLast));
+  // The shape's hover jumps there too.
+  std::string xml = ed.ShapeXml(0, id);
+  const size_t click = xml.find("hlinkClick ");
+  CHECK(click != std::string::npos);
+  const size_t start = xml.rfind('<', click), end = xml.find("/>", click) + 2;
+  std::string hover = xml.substr(start, end - start);
+  hover.replace(hover.find("hlinkClick"), 10, "hlinkHover");
+  xml.insert(end, hover);
+  CHECK(ed.SetShapeXml(0, id, xml, u"Hover"));
+  CHECK(ed.SetTextLink({0, id}, {{0, 0}, {0, 1}}, toSecond));
+  CHECK(ed.SetShapeLink(1, otherId, toLast));
+  CHECK(ed.SetNotesText(0, L"See the end"));
+  CHECK(ed.SetTextLink({0, ed.NotesShape(0), -1, -1, true}, {{0, 0}, {0, 3}}, toLast));
+  const std::string before = PartText(ed, ed.SlidePart(0));
+  CHECK(before.find("hlinkHover") != std::string::npos);
+  const std::wstring text = ed.ParagraphText({0, id}, 0);
+  const std::string gone = ed.SlidePart(last);
+
+  CHECK(ed.DeleteSlides({last}));
+  const std::string first = PartText(ed, ed.SlidePart(0)), second = PartText(ed, ed.SlidePart(1));
+  CHECK(first.find("hlinkHover") == std::string::npos);
+  CHECK(first.find("hlinksldjump") != std::string::npos);  // the run's link to the second slide
+  CHECK(JumpsNameTheirSlide(first));
+  CHECK(second.find("hlinkClick") == std::string::npos);
+  CHECK(ed.ParagraphText({0, id}, 0) == text);
+  const NotesSlide* notes = deck->GetSlide(0)->notes;
+  CHECK(notes != nullptr);
+  if (notes) {
+    const std::string n = PartText(ed, notes->part);
+    CHECK(n.find("hlinkClick") == std::string::npos);
+  }
+  CHECK(deck->GetSlide(0)->NotesText() == L"See the end");
+  // Saved: no slide jump without its target, and nothing leads to the deleted slide any more.
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+  if (!again) return;
+  CHECK(again->GetPackage().FindPart(gone) == nullptr);
+  Editor ed2(*again);
+  for (size_t i = 0; i < again->SlideCount(); ++i) {
+    CHECK(JumpsNameTheirSlide(PartText(ed2, ed2.SlidePart(i))));
+    if (const NotesSlide* ns = again->GetSlide(i)->notes) CHECK(JumpsNameTheirSlide(PartText(ed2, ns->part)));
+  }
+  CHECK(PartText(ed2, ed2.SlidePart(0)).find("hlinksldjump") != std::string::npos);
+  // Undone: the links are back.
+  CHECK(ed.Undo());
+  CHECK(PartText(ed, ed.SlidePart(0)) == before);
+}
+
 TEST(SlideEditTypingCoalescesAndFormats) {
   auto deck = Open("simple.pptx");
   CHECK(deck != nullptr);
