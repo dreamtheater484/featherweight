@@ -9,6 +9,7 @@
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
+#include "slide/edit/Transform.h"
 
 namespace fw::slide::edit {
 
@@ -134,106 +135,18 @@ std::pair<std::string, std::string> PictureType(const std::vector<uint8_t>& b) {
   return {};
 }
 
-// The element whose a:xfrm places a shape: spPr's, a group's grpSpPr's, or a graphic frame's p:xfrm.
-pugi::xml_node XfrmOf(pugi::xml_node shape, bool create) {
-  std::string_view k = LocalNameOf(shape);
-  if (k == "graphicFrame") {
-    pugi::xml_node x = P(shape, "xfrm");
-    if (!x && create) {
-      std::string p = PrefixFor(shape, kP, "p");
-      x = AddChildOrdered(shape, p + ":xfrm", {"graphic", "extLst"});
-    }
-    return x;
-  }
-  pugi::xml_node props = P(shape, k == "grpSp" ? "grpSpPr" : "spPr");
-  if (!props) {
-    if (!create) return {};
-    std::string p = PrefixFor(shape, kP, "p");
-    props = AddChildOrdered(shape, p + (k == "grpSp" ? ":grpSpPr" : ":spPr"), {"style", "txBody", "extLst", "sp", "pic", "grpSp", "graphicFrame", "cxnSp", "contentPart"});
-  }
-  pugi::xml_node x = A(props, "xfrm");
-  if (!x && create) {
-    std::string a = PrefixFor(props, kA, "a");
-    x = props.prepend_child((a + ":xfrm").c_str());
-  }
-  return x;
-}
 
-struct Box {
-  double x = 0, y = 0, w = 0, h = 0, rot = 0;  // EMU, degrees
-  bool flipH = false, flipV = false;
-  double chX = 0, chY = 0, chW = 0, chH = 0;
-  bool hasXfrm = false;
-};
-
-Box ReadBox(pugi::xml_node xfrm) {
-  Box b;
-  if (!xfrm) return b;
-  b.hasXfrm = true;
-  pugi::xml_node off = A(xfrm, "off"), ext = A(xfrm, "ext");
-  b.x = Number(off, "x", 0);
-  b.y = Number(off, "y", 0);
-  b.w = Number(ext, "cx", 0);
-  b.h = Number(ext, "cy", 0);
-  b.rot = Number(xfrm, "rot", 0) / 60000.0;
-  b.flipH = Bool(xfrm, "flipH", false);
-  b.flipV = Bool(xfrm, "flipV", false);
-  pugi::xml_node chOff = A(xfrm, "chOff"), chExt = A(xfrm, "chExt");
-  b.chX = Number(chOff, "x", b.x);
-  b.chY = Number(chOff, "y", b.y);
-  b.chW = Number(chExt, "cx", b.w);
-  b.chH = Number(chExt, "cy", b.h);
-  return b;
-}
 
 void SetAttr(pugi::xml_node n, const char* name, long long v) {
   (n.attribute(name) ? n.attribute(name) : n.append_attribute(name)).set_value(v);
 }
 
-void WriteBox(pugi::xml_node xfrm, const Box& b, bool group, bool rotate) {
-  std::string a = PrefixFor(xfrm, kA, "a");
-  auto child = [&](const char* local) {
-    pugi::xml_node c = A(xfrm, local);
-    if (!c) {
-      // Schema order: off, ext, chOff, chExt.
-      const char* order[] = {"off", "ext", "chOff", "chExt"};
-      pugi::xml_node before;
-      bool past = false;
-      for (const char* o : order) {
-        if (past && !before) before = A(xfrm, o);
-        if (std::string_view(o) == local) past = true;
-      }
-      c = before ? xfrm.insert_child_before((a + ":" + local).c_str(), before) : xfrm.append_child((a + ":" + local).c_str());
-    }
-    return c;
-  };
-  pugi::xml_node off = child("off"), ext = child("ext");
-  SetAttr(off, "x", std::llround(b.x));
-  SetAttr(off, "y", std::llround(b.y));
-  SetAttr(ext, "cx", std::max(0LL, std::llround(b.w)));
-  SetAttr(ext, "cy", std::max(0LL, std::llround(b.h)));
-  if (group) {
-    pugi::xml_node chOff = child("chOff"), chExt = child("chExt");
-    SetAttr(chOff, "x", std::llround(b.chX));
-    SetAttr(chOff, "y", std::llround(b.chY));
-    SetAttr(chExt, "cx", std::max(0LL, std::llround(b.chW)));
-    SetAttr(chExt, "cy", std::max(0LL, std::llround(b.chH)));
-  }
-  double rot = rotate ? std::fmod(b.rot, 360.0) : 0;
-  if (rot < 0) rot += 360;
-  long long r = std::llround(rot * 60000);
-  if (r % 21600000 == 0) {
-    xfrm.remove_attribute("rot");
-  } else {
-    SetAttr(xfrm, "rot", r);
-  }
-  for (auto [name, on] : {std::pair{"flipH", b.flipH}, std::pair{"flipV", b.flipV}}) {
-    if (on && rotate) {
-      (xfrm.attribute(name) ? xfrm.attribute(name) : xfrm.append_attribute(name)).set_value("1");
-    } else {
-      xfrm.remove_attribute(name);
-    }
-  }
+
+// Degrees clockwise as a:xfrm holds them: 60000ths, in [0, 21600000).
+int32_t Rot(double degrees) {
+  long long r = std::llround(std::fmod(degrees, 360.0) * 60000) % 21600000;
+  if (r < 0) r += 21600000;
+  return static_cast<int32_t>(r);
 }
 
 // A table frame resized: its columns and rows scaled to fill it, as PowerPoint does.
@@ -325,22 +238,21 @@ void SyncTwins(pugi::xml_node shape, unsigned what) {
   std::string_view k = LocalNameOf(shape);
   for (pugi::xml_node twin : TwinsOf(shape)) {
     std::string_view tk = LocalNameOf(twin);
-    if (what & kTwinBox) {
-      if (pugi::xml_node from = XfrmOf(shape, false)) {
-        Box s = ReadBox(from);
-        pugi::xml_node to = XfrmOf(twin, true);
-        Box t = ReadBox(to);
-        double oldW = t.w, oldH = t.h;
-        t.x = s.x;
-        t.y = s.y;
-        t.w = s.w;
-        t.h = s.h;
-        t.rot = s.rot;
-        t.flipH = s.flipH;
-        t.flipV = s.flipV;
-        WriteBox(to, t, tk == "grpSp", tk != "graphicFrame");
-        if (tk == "graphicFrame" && oldW > 0 && oldH > 0) ScaleTable(twin, t.w / oldW, t.h / oldH);
-      }
+    xfrm::Box src;
+    if ((what & kTwinBox) && xfrm::Read(shape, src)) {
+      xfrm::Box t;
+      xfrm::Read(twin, t);  // its own child space stays
+      const int64_t oldW = t.cx, oldH = t.cy;
+      const bool frame = tk == "graphicFrame";
+      t.x = src.x;
+      t.y = src.y;
+      t.cx = src.cx;
+      t.cy = src.cy;
+      t.rot = frame ? 0 : src.rot;
+      t.flipH = !frame && src.flipH;
+      t.flipV = !frame && src.flipV;
+      xfrm::Write(twin, t);
+      if (frame && oldW > 0 && oldH > 0) ScaleTable(twin, double(t.cx) / oldW, double(t.cy) / oldH);
     }
     pugi::xml_node from = P(shape, "spPr"), to = P(twin, "spPr");
     if (PlainShape(k) && PlainShape(tk) && from && to) {
@@ -377,7 +289,7 @@ unsigned TwinDifferences(pugi::xml_node a, pugi::xml_node b) {
     return out;
   };
   unsigned what = 0;
-  if (text(XfrmOf(a, false)) != text(XfrmOf(b, false))) what |= kTwinBox;
+  if (text(xfrm::XfrmOf(a, false)) != text(xfrm::XfrmOf(b, false))) what |= kTwinBox;
   for (auto [bit, g] : {std::pair{kTwinGeometry, 1}, {kTwinFill, 2}, {kTwinLine, 3}, {kTwinEffects, 4}}) {
     if (group(a, g) != group(b, g)) what |= bit;
   }
@@ -890,25 +802,26 @@ Result Editor::SetTransforms(size_t slide, const std::vector<std::pair<uint32_t,
     if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
     shape = Impl::Unwrap(shape);
     std::string_view k = LocalNameOf(shape);
-    pugi::xml_node xfrm = XfrmOf(shape, true);
-    Box b = ReadBox(xfrm);
-    double oldW = b.w, oldH = b.h;
-    b.x = t.bounds.left * kEmu;
-    b.y = t.bounds.top * kEmu;
-    b.w = t.bounds.Width() * kEmu;
-    b.h = t.bounds.Height() * kEmu;
-    b.rot = t.rotation;
-    b.flipH = t.flipH;
-    b.flipV = t.flipV;
-    bool group = k == "grpSp";
-    if (group && !A(xfrm, "chExt")) {
-      b.chX = b.x;
-      b.chY = b.y;
-      b.chW = oldW > 0 ? oldW : b.w;
-      b.chH = oldH > 0 ? oldH : b.h;
+    xfrm::Box b;
+    const bool had = xfrm::Read(shape, b);
+    const int64_t oldX = b.x, oldY = b.y, oldW = had ? b.cx : 0, oldH = had ? b.cy : 0;
+    const bool frame = k == "graphicFrame";
+    b.x = ToEmu(t.bounds.left);
+    b.y = ToEmu(t.bounds.top);
+    b.cx = std::max(0LL, ToEmu(t.bounds.Width()));
+    b.cy = std::max(0LL, ToEmu(t.bounds.Height()));
+    b.rot = frame ? 0 : Rot(t.rotation);
+    b.flipH = !frame && t.flipH;
+    b.flipV = !frame && t.flipV;
+    if (k == "grpSp" && !b.child) {  // a group without child space: its shapes are where its box was
+      b.child = true;
+      b.chX = had ? oldX : b.x;
+      b.chY = had ? oldY : b.y;
+      b.chCx = oldW > 0 ? oldW : b.cx;
+      b.chCy = oldH > 0 ? oldH : b.cy;
     }
-    WriteBox(xfrm, b, group, k != "graphicFrame");
-    if (k == "graphicFrame" && oldW > 0 && oldH > 0) ScaleTable(shape, b.w / oldW, b.h / oldH);
+    xfrm::Write(shape, b);
+    if (frame && oldW > 0 && oldH > 0) ScaleTable(shape, double(b.cx) / oldW, double(b.cy) / oldH);
     SyncTwins(shape, kTwinBox);
     m.Touched(part, id);
   }
@@ -989,7 +902,7 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
     if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
     if (PlaceholderOf(shape)) return call.End(Result::Fail(u"Placeholders can't be grouped."));
     shape = Impl::Unwrap(shape);
-    if (!XfrmOf(shape, false)) return call.End(Result::Fail(u"That shape can't be grouped."));
+    if (!xfrm::XfrmOf(shape, false)) return call.End(Result::Fail(u"That shape can't be grouped."));
     pugi::xml_node unit = UnitOf(shape);
     if (parent && unit.parent() != parent) return call.End(Result::Fail(u"Shapes in different groups can't be grouped together."));
     parent = unit.parent();
@@ -1001,22 +914,15 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
   for (pugi::xml_node c = parent.first_child(); c; c = c.next_sibling()) {
     if (std::find(members.begin(), members.end(), c) != members.end()) ordered.push_back(c);
   }
-  // The box around them (rotated boxes by their corners).
-  double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
-  for (pugi::xml_node s : shapes) {
-    Box b = ReadBox(XfrmOf(s, false));
-    double cx = b.x + b.w / 2, cy = b.y + b.h / 2, a = b.rot * 3.14159265358979323846 / 180;
-    for (auto [dx, dy] : {std::pair{-1.0, -1.0}, {1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}}) {
-      double px = dx * b.w / 2, py = dy * b.h / 2;
-      double rx = cx + px * std::cos(a) - py * std::sin(a), ry = cy + px * std::sin(a) + py * std::cos(a);
-      x0 = std::min(x0, rx);
-      y0 = std::min(y0, ry);
-      x1 = std::max(x1, rx);
-      y1 = std::max(y1, ry);
-    }
+  // The box around them (rotated ones by their corners).
+  std::vector<xfrm::Box> boxes;
+  for (pugi::xml_node sh : shapes) {
+    xfrm::Box b;
+    if (xfrm::Read(sh, b)) boxes.push_back(b);
   }
+  const xfrm::Box gb = xfrm::GroupBox(boxes);
   uint32_t next = Impl::NextShapeId(root);
-  std::string p = PrefixFor(parent, kP, "p"), a = PrefixFor(parent, kA, "a");
+  std::string p = PrefixFor(parent, kP, "p");
   pugi::xml_node group = parent.insert_child_after((p + ":grpSp").c_str(), ordered.back());
   pugi::xml_node nv = group.append_child((p + ":nvGrpSpPr").c_str());
   pugi::xml_node c = nv.append_child((p + ":cNvPr").c_str());
@@ -1024,14 +930,8 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
   c.append_attribute("name") = ("Group " + std::to_string(next - 1)).c_str();
   nv.append_child((p + ":cNvGrpSpPr").c_str());
   nv.append_child((p + ":nvPr").c_str());
-  pugi::xml_node props = group.append_child((p + ":grpSpPr").c_str());
-  pugi::xml_node xfrm = props.append_child((a + ":xfrm").c_str());
-  Box gb;
-  gb.x = gb.chX = x0;
-  gb.y = gb.chY = y0;
-  gb.w = gb.chW = x1 - x0;
-  gb.h = gb.chH = y1 - y0;
-  WriteBox(xfrm, gb, true, true);
+  group.append_child((p + ":grpSpPr").c_str());
+  xfrm::Write(group, gb);
   for (pugi::xml_node s : ordered) group.append_move(s);
   if (groupId) *groupId = next;
   m.Touched(part, next);
@@ -1048,9 +948,9 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
   pugi::xml_node group = Impl::FindShape(root, groupId);
   if (!group || LocalNameOf(group) != "grpSp") return call.End(Result::Fail(u"That isn't a group."));
   group = Impl::Unwrap(group);
-  Box g = ReadBox(XfrmOf(group, false));
-  double sx = g.chW > 0 ? g.w / g.chW : 1, sy = g.chH > 0 ? g.h / g.chH : 1;
-  double gcx = g.x + g.w / 2, gcy = g.y + g.h / 2, ga = g.rot * 3.14159265358979323846 / 180;
+  xfrm::Box g;
+  xfrm::Read(group, g);
+  const double sx = g.child && g.chCx > 0 ? double(g.cx) / g.chCx : 1, sy = g.child && g.chCy > 0 ? double(g.cy) / g.chCy : 1;
   pugi::xml_node parent = group.parent();
   if (ids) ids->clear();
   std::vector<pugi::xml_node> children;
@@ -1071,39 +971,16 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
       if (!chosen) continue;
       shape = Impl::Unwrap(chosen);
     }
-    pugi::xml_node xfrm = XfrmOf(shape, false);
-    if (xfrm) {
-      Box b = ReadBox(xfrm);
-      bool childGroup = LocalNameOf(shape) == "grpSp";
-      // Child space to the group's parent space: scale, then the group's flips and rotation about its center.
-      double w = b.w * sx, h = b.h * sy;
-      double cx = g.x + (b.x + b.w / 2 - g.chX) * sx, cy = g.y + (b.y + b.h / 2 - g.chY) * sy;
-      double rot = b.rot;
-      bool flipH = b.flipH, flipV = b.flipV;
-      if (g.flipH) {
-        cx = 2 * gcx - cx;
-        flipH = !flipH;
-        rot = -rot;
+    xfrm::Box b;
+    if (xfrm::Read(shape, b)) {
+      // Child space to the group's parent space (scale, the group's flips and rotation about its centre).
+      xfrm::Box nb = xfrm::Ungrouped(g, b);
+      if (LocalNameOf(shape) == "graphicFrame") {
+        nb.rot = 0;
+        nb.flipH = nb.flipV = false;
       }
-      if (g.flipV) {
-        cy = 2 * gcy - cy;
-        flipV = !flipV;
-        rot = -rot;
-      }
-      double dx = cx - gcx, dy = cy - gcy;
-      cx = gcx + dx * std::cos(ga) - dy * std::sin(ga);
-      cy = gcy + dx * std::sin(ga) + dy * std::cos(ga);
-      rot += g.rot;
-      Box nb = b;
-      nb.x = cx - w / 2;
-      nb.y = cy - h / 2;
-      nb.w = w;
-      nb.h = h;
-      nb.rot = rot;
-      nb.flipH = flipH;
-      nb.flipV = flipV;
-      WriteBox(xfrm, nb, childGroup, LocalNameOf(shape) != "graphicFrame");
-      if (LocalNameOf(shape) == "graphicFrame" && b.w > 0 && b.h > 0) ScaleTable(shape, sx, sy);
+      xfrm::Write(shape, nb);
+      if (LocalNameOf(shape) == "graphicFrame" && b.cx > 0 && b.cy > 0) ScaleTable(shape, sx, sy);
       SyncTwins(shape, kTwinBox);
     }
     pugi::xml_node moved = parent.insert_move_before(shape.parent() == group ? shape : c, group);
@@ -1148,7 +1025,7 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
         if (sk != "sp" && sk != "cxnSp" && sk != "pic") return;
         pugi::xml_node props = P(s, "spPr");
         if (!props) {
-          XfrmOf(s, true);
+          xfrm::XfrmOf(s, true);
           props = P(s, "spPr");
         }
         auto apply = [&](const std::optional<std::string>& xml, int group) {
