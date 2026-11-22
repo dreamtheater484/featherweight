@@ -13,6 +13,10 @@
   - missing-slide: the slide list names a relationship to a slide part that isn't there
   - duplicate-shape-id: two shapes on a slide with the same id (recorded only: PowerPoint may fix it silently)
   - not-a-zip: random bytes (refused)
+  - section-missing-slide, section-slide-twice, section-slide-in-none, section-duplicate-id: copies of
+    sections-custom-shows.pptx whose section list names a missing slide (expected repaired or refused),
+    lists a slide twice, leaves one out, or gives two sections one id (the last three recorded only:
+    PowerPoint's verdict sets fwtool check's severity for them)
   Every broken copy is expected to be "repaired" or "refused" (which of the two is recorded, not
   required: it's PowerPoint's choice); clean must be "ok".
 
@@ -34,10 +38,10 @@ $src = if ([IO.Path]::IsPathRooted($Source)) { $Source } else { Join-Path $root 
 $dir = Join-Path ([IO.Path]::GetTempPath()) "fw-powerpoint-open-proof-$PID"
 New-Item -ItemType Directory -Force $dir | Out-Null
 
-# Copies the deck and changes one part's text with $edit (a scriptblock: text in, text out).
-function New-Variant([string]$name, [string]$part, $edit) {
+# Copies the deck (or $from) and changes one part's text with $edit (a scriptblock: text in, text out).
+function New-Variant([string]$name, [string]$part, $edit, [string]$from = $src) {
   $path = Join-Path $dir "$name.pptx"
-  Copy-Item -LiteralPath $src $path
+  Copy-Item -LiteralPath $from $path
   if (-not $part) { return }
   $zip = [IO.Compression.ZipFile]::Open($path, [IO.Compression.ZipArchiveMode]::Update)
   try {
@@ -74,6 +78,19 @@ New-Variant "missing-slide" "ppt/_rels/presentation.xml.rels" { param($t) ([rege
 $expected["missing-slide"] = $broken
 New-Variant "duplicate-shape-id" "ppt/slides/slide1.xml" { param($t) ([regex]'<p:cNvPr id="3" ').Replace($t, '<p:cNvPr id="2" ', 1) }
 $expected["duplicate-shape-id"] = @("ok", "repaired", "refused")  # recorded only: PowerPoint may renumber them silently
+# Sections (p14:sectionLst), which P2's slide operations keep: what PowerPoint does with each defect
+# decides whether fwtool check calls it an error (src\pkg\Check.cpp). A section naming a missing slide
+# is an error already; the others are recorded only.
+$sections = Join-Path $root "tests\office\presentations\sections-custom-shows.pptx"
+$anyway = @("ok", "repaired", "refused")
+New-Variant "section-missing-slide" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldId id="261"/>', '<p14:sldId id="261"/><p14:sldId id="999"/>') } $sections
+$expected["section-missing-slide"] = $broken
+New-Variant "section-slide-twice" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldIdLst><p14:sldId id="261"/>', '<p14:sldIdLst><p14:sldId id="256"/><p14:sldId id="261"/>') } $sections
+$expected["section-slide-twice"] = $anyway
+New-Variant "section-slide-in-none" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldId id="261"/>', '') } $sections
+$expected["section-slide-in-none"] = $anyway
+New-Variant "section-duplicate-id" "ppt/presentation.xml" { param($t) $t.Replace('id="{7C6D5E4F-3A2B-4C1D-8E9F-0A7B6C5D4E43}"', 'id="{4F3A2B1C-0D9E-4F8A-9B7C-6D5E4F3A2B10}"') } $sections
+$expected["section-duplicate-id"] = $anyway
 $garbage = Join-Path $dir "not-a-zip.pptx"
 $bytes = New-Object byte[] 4096
 (New-Object Random 7).NextBytes($bytes)
