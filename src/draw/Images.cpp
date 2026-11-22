@@ -543,6 +543,43 @@ bool Image::Encoded(std::vector<uint8_t>& bytes) const {
   return reader_(bytes);
 }
 
+std::shared_ptr<const Bitmap> BoxResample(const Bitmap& source, int width, int height) {
+  const int sw = source.Width(), sh = source.Height();
+  if (width <= 0 || height <= 0 || sw <= 0 || sh <= 0 || !source.Pixels()) return nullptr;
+  // Per target index: the source indices it covers and their shares.
+  const auto spans = [](int from, int to) {
+    std::vector<std::vector<std::pair<int, float>>> out(static_cast<size_t>(to));
+    const double scale = static_cast<double>(from) / to;
+    for (int i = 0; i < to; ++i) {
+      const double a = i * scale, b = (i + 1) * scale;
+      for (int j = static_cast<int>(a); j < std::min(from, static_cast<int>(std::ceil(b))); ++j) {
+        const double w = std::min(b, j + 1.0) - std::max(a, static_cast<double>(j));
+        if (w > 0) out[static_cast<size_t>(i)].push_back({j, static_cast<float>(w / scale)});
+      }
+    }
+    return out;
+  };
+  const auto xs = spans(sw, width), ys = spans(sh, height);
+  std::vector<float> rows(static_cast<size_t>(width) * sh * 4);
+  for (int y = 0; y < sh; ++y) {
+    const uint8_t* s = source.Pixels() + static_cast<size_t>(y) * source.Stride();
+    float* d = rows.data() + static_cast<size_t>(y) * width * 4;
+    for (int x = 0; x < width; ++x)
+      for (const auto& [j, w] : xs[static_cast<size_t>(x)])
+        for (int k = 0; k < 4; ++k) d[x * 4 + k] += s[j * 4 + k] * w;
+  }
+  std::vector<uint8_t> px(static_cast<size_t>(width) * height * 4);
+  for (int y = 0; y < height; ++y)
+    for (int x = 0; x < width; ++x) {
+      float c[4] = {};
+      for (const auto& [j, w] : ys[static_cast<size_t>(y)])
+        for (int k = 0; k < 4; ++k) c[k] += rows[(static_cast<size_t>(j) * width + x) * 4 + k] * w;
+      for (int k = 0; k < 4; ++k)
+        px[(static_cast<size_t>(y) * width + x) * 4 + k] = static_cast<uint8_t>(std::clamp(c[k] + 0.5f, 0.f, 255.f));
+    }
+  return std::make_shared<Bitmap>(width, height, std::move(px));
+}
+
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height) {
   if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return nullptr;
   ComScope com;

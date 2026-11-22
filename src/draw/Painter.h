@@ -241,6 +241,9 @@ class Painter {
   virtual void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) = 0;
   // Whether DrawGlyphs wants each run's text (GlyphRun::text). The screen doesn't; PDF export does.
   virtual bool WantsText() const { return false; }
+  // The longest side, in pixels, of a see-through slide picture (PictureFill::baked): PowerPoint's
+  // PDFs keep such pictures at most 1536 pixels across (era-systems: 1920 x 1080 as 1536 x 864). 0: as decoded.
+  virtual int BakedPictureLimit() const { return 0; }
   // The bitmap (or its `src` part, in pixels) stretched to `dest`.
   virtual void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src = nullptr, float opacity = 1) = 0;
   // A vector picture stretched to `dest`. By default it is drawn as pixels at the device's

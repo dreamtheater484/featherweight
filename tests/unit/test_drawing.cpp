@@ -1050,6 +1050,19 @@ TEST(DrawingML_ChartIsPlaceholder) {
   CHECK(d && d->Extent().width == 100);
 }
 
+TEST(Images_BoxResampleAverages) {
+  // 5 x 1 to 4 x 1: each target pixel the mean of the 1.25 source pixels it covers.
+  std::vector<uint8_t> px;
+  for (int v : {0, 100, 200, 100, 0}) px.insert(px.end(), {static_cast<uint8_t>(v), static_cast<uint8_t>(v), static_cast<uint8_t>(v), 255});
+  Bitmap source(5, 1, std::move(px));
+  auto out = BoxResample(source, 4, 1);
+  CHECK(out && out->Width() == 4 && out->Height() == 1);
+  if (!out) return;
+  const uint8_t* p = out->Pixels();
+  CHECK(p[0] == 20 && p[4] == 140 && p[8] == 140 && p[12] == 20);  // (0 + .25*100)/1.25, (.75*100 + .5*200)/1.25
+  CHECK(p[3] == 255 && p[15] == 255);
+}
+
 TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {
   // PowerPoint keeps the data model's extension list as dgm:extLst: its dsp:dataModelExt names the
   // drawing Office saved, which is drawn.

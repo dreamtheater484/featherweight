@@ -154,6 +154,12 @@ void DrawPicture(Painter& p, const PictureFill& pic, const Rect& area) {
   const int pw = static_cast<int>(std::ceil(std::abs(W) * m.ScaleX())), ph = static_cast<int>(std::ceil(std::abs(H) * m.ScaleY()));
   std::shared_ptr<const Bitmap> px = pic.Pixels(std::clamp(pw, 1, 16384), std::clamp(ph, 1, 16384));
   if (!px || px->Width() == 0 || px->Height() == 0) return;
+  if (const int limit = p.BakedPictureLimit(); pic.baked && pic.alpha < 1 && limit > 0 && std::max(px->Width(), px->Height()) > limit) {
+    const float f = static_cast<float>(limit) / std::max(px->Width(), px->Height());
+    if (auto baked = BoxResample(*px, std::max(1, static_cast<int>(std::lround(px->Width() * f))),
+                                 std::max(1, static_cast<int>(std::lround(px->Height() * f)))))
+      px = std::move(baked);
+  }
   // Only the visible part of the bitmap; negative crops (padding) leave the rest empty.
   const float l = std::max(0.f, pic.crop.left), t = std::max(0.f, pic.crop.top);
   const float r = 1 - std::max(0.f, pic.crop.right), b = 1 - std::max(0.f, pic.crop.bottom);
