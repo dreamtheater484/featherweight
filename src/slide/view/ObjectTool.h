@@ -48,6 +48,9 @@ class ObjectTool {
     std::function<void(const std::wstring&)> refused;  // a banner: why an edit can't be made
     std::function<HWND()> window;
     std::function<void(size_t slide)> slideEdited;  // drop what was drawn of the slide
+    // Text editing starts in a shape (p2-text's BeginTextEdit): after inserting a text box, so
+    // typing goes into it. Unset: the text box is only selected.
+    std::function<void(uint32_t shape)> beginText;
   };
   explicit ObjectTool(Host host);
   ~ObjectTool();
@@ -78,6 +81,11 @@ class ObjectTool {
   std::vector<int> Commands() const;
   void AddTools(ToolbarModel& m);
   void ContextMenu(HMENU menu, float x, float y);
+
+  // Scripts (--script, the build-from-scratch deck): insert:table|<rows>x<cols>,
+  // insert:chart|column|bar|line|pie, insert:shape|<preset>|x,y,w,h, insert:textbox|x,y,w,h (points),
+  // shapefill:<RRGGBB>. False for other ops; what an op of these can't do goes to stderr.
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg);
 
   // Pictures dropped on the slide (files), at client pixels (-1: centred).
   bool TakesPictures(const std::vector<std::wstring>& files) const;
@@ -156,7 +164,9 @@ class ObjectTool {
   bool InsertPictures(const std::vector<std::wstring>& files, draw::Point at, bool centred);
   bool InsertPictureBytes(std::vector<uint8_t> bytes, draw::Point at, bool centred);
   bool InsertShape(int index);
+  bool InsertPreset(const std::string& preset, const draw::Rect& r);
   bool InsertTextBox();
+  bool InsertTextBox(const draw::Rect& r);
   bool InsertTable(int rows, int columns);
   bool InsertChart(int type);
   bool TableEdit(int cmd);
@@ -188,5 +198,9 @@ class ObjectTool {
   bool layersDue_ = false;
   D2D1_RECT_F layersRect_{};
 };
+
+// The open dialog for pictures (PNG, JPEG, GIF, BMP, TIFF, EMF, WMF, SVG): the files chosen, or none
+// when cancelled. Shared by inserting pictures and picture fills and backgrounds.
+std::vector<std::wstring> PickPictureFiles(HWND owner, bool several);
 
 }  // namespace fw::slide::view

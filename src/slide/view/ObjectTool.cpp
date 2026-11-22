@@ -10,12 +10,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cwctype>
 #include <fstream>
 #include <set>
 
 #include "Commands.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
+#include "draw/Geometry.h"
 #include "draw/Images.h"
 #include "slide/objects/Arrange.h"
 #include "slide/objects/ChartPart.h"
@@ -1570,27 +1572,34 @@ bool ObjectTool::InsertPictureBytes(std::vector<uint8_t> bytes, draw::Point at, 
 }
 
 bool ObjectTool::InsertShape(int index) {
-#if FW_SLIDE_EDIT
   const auto& gallery = ob::ShapeGallery();
-  if (index < 0 || index >= static_cast<int>(gallery.size()) || !Editable()) return false;
   Deck* deck = host_.deck();
-  fw::slide::edit::Editor* ed = deck->Editor();
+  if (index < 0 || index >= static_cast<int>(gallery.size()) || !deck) return false;
   const draw::Size s = deck->SlideSize();
-  const ob::ShapePreset& shape = gallery[static_cast<size_t>(index)];
+  const std::string preset = gallery[static_cast<size_t>(index)].preset;
+  // As PowerPoint without a drag: 2 x 1⅓ inches centred; a line 2 inches across.
+  const draw::Rect r = ob::IsLinePreset(preset)
+                           ? draw::Rect{s.width / 2 - 72, s.height / 2, s.width / 2 + 72, s.height / 2}
+                           : draw::Rect{s.width / 2 - 72, s.height / 2 - 48, s.width / 2 + 72, s.height / 2 + 48};
+  return InsertPreset(preset, r);
+}
+
+bool ObjectTool::InsertPreset(const std::string& preset, const draw::Rect& box) {
+#if FW_SLIDE_EDIT
+  if (!Editable()) return false;
+  fw::slide::edit::Editor* ed = host_.deck()->Editor();
   uint32_t id = 0;
   fw::slide::edit::Result r;
-  if (ob::IsLinePreset(shape.preset)) {
-    // A line: a connector, as PowerPoint draws it.
-    const uint32_t next = 2;  // the editor gives it an id of its own
+  if (ob::IsLinePreset(preset)) {
+    // A line: a connector, as PowerPoint draws it (the editor gives it an id of its own).
     const std::string xml = ob::NewObjectXml([&](pugi::xml_node tree) {
       ob::Xfrm x;
-      x.x = ob::ToEmu(s.width / 2 - 72), x.y = ob::ToEmu(s.height / 2), x.cx = ob::ToEmu(144), x.cy = 0;
-      return ob::AppendLine(tree, next, x, std::string_view(shape.preset) == "straightConnector1");
+      x.x = ob::ToEmu(box.left), x.y = ob::ToEmu(box.top), x.cx = ob::ToEmu(box.Width()), x.cy = ob::ToEmu(box.Height());
+      return ob::AppendLine(tree, 2, x, preset == "straightConnector1");
     });
     r = ed->InsertShape(host_.current(), xml, &id, -1);
   } else {
-    const draw::Rect box{s.width / 2 - 72, s.height / 2 - 48, s.width / 2 + 72, s.height / 2 + 48};
-    r = ed->InsertAutoShape(host_.current(), shape.preset, box, &id);
+    r = ed->InsertAutoShape(host_.current(), preset, box, &id);
   }
   if (!r) {
     Refused(W(r.message));
@@ -1602,19 +1611,24 @@ bool ObjectTool::InsertShape(int index) {
   level_ = 0;
   return true;
 #else
-  (void)index;
+  (void)preset;
+  (void)box;
   return Editable();
 #endif
 }
 
 bool ObjectTool::InsertTextBox() {
+  Deck* deck = host_.deck();
+  if (!deck) return false;
+  const draw::Size s = deck->SlideSize();
+  return InsertTextBox(draw::Rect{s.width / 2 - 120, s.height / 2 - 18, s.width / 2 + 120, s.height / 2 + 18});
+}
+
+bool ObjectTool::InsertTextBox(const draw::Rect& r) {
 #if FW_SLIDE_EDIT
   if (!Editable()) return false;
-  Deck* deck = host_.deck();
-  const draw::Size s = deck->SlideSize();
   uint32_t id = 0;
-  const draw::Rect r{s.width / 2 - 120, s.height / 2 - 18, s.width / 2 + 120, s.height / 2 + 18};
-  const fw::slide::edit::Result res = deck->Editor()->InsertTextBox(host_.current(), r, L"", &id);
+  const fw::slide::edit::Result res = host_.deck()->Editor()->InsertTextBox(host_.current(), r, L"", &id);
   if (!res) {
     Refused(W(res.message));
     return false;
@@ -1623,8 +1637,10 @@ bool ObjectTool::InsertTextBox() {
   Map();
   selection_ = {id};
   level_ = 0;
+  if (host_.beginText) host_.beginText(id);  // the caret in it, as PowerPoint does
   return true;
 #else
+  (void)r;
   return Editable();
 #endif
 }
@@ -1647,6 +1663,7 @@ bool ObjectTool::InsertTable(int rows, int columns) {
   Map();
   selection_ = {id};
   level_ = 0;
+  if (host_.beginText) host_.beginText(id);  // the caret in the first cell
   return true;
 #else
   (void)rows;
@@ -2029,25 +2046,8 @@ bool ObjectTool::Execute(int cmd) {
     case CmdChartPie: return InsertChart(3);
     case CmdInsertPicture: {
       if (!Editable()) return false;
-      // The file dialog: several pictures at once.
-      std::vector<wchar_t> buf(32768, L'\0');
-      OPENFILENAMEW ofn{};
-      ofn.lStructSize = sizeof ofn;
-      ofn.hwndOwner = host_.window ? host_.window() : nullptr;
-      ofn.lpstrFilter =
-          L"Pictures\0*.png;*.jpg;*.jpeg;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff;*.emf;*.wmf;*.svg\0All files\0*.*\0";
-      ofn.lpstrFile = buf.data();
-      ofn.nMaxFile = static_cast<DWORD>(buf.size());
-      ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_NOCHANGEDIR;
-      if (!GetOpenFileNameW(&ofn)) return true;
-      std::vector<std::wstring> files;
-      const std::wstring first(buf.data());
-      const wchar_t* p = buf.data() + first.size() + 1;
-      if (!*p) {
-        files.push_back(first);
-      } else {
-        for (; *p; p += std::wcslen(p) + 1) files.push_back(first + L"\\" + p);
-      }
+      const std::vector<std::wstring> files = PickPictureFiles(host_.window ? host_.window() : nullptr, true);
+      if (files.empty()) return true;
       const draw::Size s = host_.deck()->SlideSize();
       return InsertPictures(files, {s.width / 2, s.height / 2}, true);
     }
@@ -2221,6 +2221,92 @@ void ObjectTool::AddTools(ToolbarModel& m) {
     crop.checked = cropMode_;
     m.left.push_back(crop);
   }
+}
+
+namespace {
+
+// "x,y,w,h" in points.
+bool ParseBox(const std::wstring& text, draw::Rect& r) {
+  float v[4];
+  size_t at = 0;
+  for (int i = 0; i < 4; ++i) {
+    const size_t end = text.find(L',', at);
+    if ((end == std::wstring::npos) != (i == 3)) return false;
+    const std::wstring part = text.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at);
+    wchar_t* stop = nullptr;
+    v[i] = std::wcstof(part.c_str(), &stop);
+    if (part.empty() || (stop && *stop)) return false;
+    at = end + 1;
+  }
+  r = {v[0], v[1], v[0] + std::max(0.f, v[2]), v[1] + std::max(0.f, v[3])};
+  return true;
+}
+
+}  // namespace
+
+bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op != L"insert" && op != L"shapefill") return false;
+  Map();
+  auto fail = [&](const wchar_t* why) {
+    fwprintf(stderr, L"%ls:%ls: %ls\n", op.c_str(), arg.c_str(), why);
+    return true;
+  };
+  if (op == L"shapefill") {
+    if (arg.size() != 6 || !std::all_of(arg.begin(), arg.end(), [](wchar_t c) { return std::iswxdigit(c) != 0; }))
+      return fail(L"not a color RRGGBB");
+    const uint32_t rgb = static_cast<uint32_t>(std::wcstoul(arg.c_str(), nullptr, 16));
+    if (selection_.empty()) return fail(L"nothing selected");
+    return SetFillColor(rgb, false) ? true : fail(L"not done");
+  }
+  const size_t bar = arg.find(L'|');
+  const std::wstring what = arg.substr(0, bar), rest = bar == std::wstring::npos ? std::wstring() : arg.substr(bar + 1);
+  if (what == L"table") {
+    const size_t x = rest.find_first_of(L"xX");
+    const int rows = x == std::wstring::npos ? 0 : _wtoi(rest.substr(0, x).c_str());
+    const int cols = x == std::wstring::npos ? 0 : _wtoi(rest.substr(x + 1).c_str());
+    if (rows < 1 || cols < 1 || rows > 75 || cols > 75) return fail(L"table|<rows>x<columns>, 1 to 75 each");
+    return InsertTable(rows, cols) ? true : fail(L"not done");
+  }
+  if (what == L"chart") {
+    for (int i = 0; i < 4; ++i)
+      if (fw::ToLower(rest) == fw::ToLower(kChartNames[i])) return InsertChart(i) ? true : fail(L"not done");
+    return fail(L"chart|column, bar, line or pie");
+  }
+  if (what == L"shape") {
+    const size_t b2 = rest.find(L'|');
+    draw::Rect r;
+    if (b2 == std::wstring::npos || !ParseBox(rest.substr(b2 + 1), r)) return fail(L"shape|<preset>|x,y,w,h");
+    const std::string preset = fw::WideToUtf8(rest.substr(0, b2));
+    if (!ob::IsLinePreset(preset) && !draw::Geometry::Preset(preset)) return fail(L"no such preset");
+    return InsertPreset(preset, r) ? true : fail(L"not done");
+  }
+  if (what == L"textbox") {
+    draw::Rect r;
+    if (!ParseBox(rest, r)) return fail(L"textbox|x,y,w,h");
+    return InsertTextBox(r) ? true : fail(L"not done");
+  }
+  return fail(L"insert:table, chart, shape or textbox");
+}
+
+std::vector<std::wstring> PickPictureFiles(HWND owner, bool several) {
+  std::vector<wchar_t> buf(32768, L'\0');
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof ofn;
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = L"Pictures\0*.png;*.jpg;*.jpeg;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff;*.emf;*.wmf;*.svg\0All files\0*.*\0";
+  ofn.lpstrFile = buf.data();
+  ofn.nMaxFile = static_cast<DWORD>(buf.size());
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR | (several ? OFN_ALLOWMULTISELECT : 0);
+  std::vector<std::wstring> files;
+  if (!GetOpenFileNameW(&ofn)) return files;
+  const std::wstring first(buf.data());
+  const wchar_t* p = buf.data() + first.size() + 1;
+  if (!several || !*p) {
+    files.push_back(first);
+    return files;
+  }
+  for (; *p; p += std::wcslen(p) + 1) files.push_back(first + L"\\" + p);
+  return files;
 }
 
 void ObjectTool::ContextMenu(HMENU menu, float x, float y) {
