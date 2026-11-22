@@ -13,6 +13,7 @@
 #include "draw/D2DPainter.h"
 #include "slide/view/Deck.h"
 #include "slide/view/TextClip.h"
+#include "slide/view/TextFind.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModelEdit.h"
@@ -218,6 +219,58 @@ bool TextEditing::NextCell(bool back) {
   session_->SelectAll();
   Changed();
   return true;
+}
+
+bool TextEditing::NextMisspelling(size_t slide, const std::function<void(size_t)>& goTo) {
+  if (!model_ || !deck_) return false;
+  if (!checker_) {
+    checker_ = std::make_unique<fw::text::SpellChecker>();
+    spelling_ = std::make_unique<SlideSpelling>(*checker_);
+  }
+  if (!checker_->Available()) {
+    host_.ViewMessage(BannerKind::Info, L"Spelling can't be checked on this PC.");
+    return false;
+  }
+  // The texts in order, and where to start: the caret's text, else the current slide's first.
+  std::vector<TextTarget> texts;
+  ForEachText(*model_, false, [&](const TextTarget& t, const TextBody&) {
+    texts.push_back(t);
+    return true;
+  });
+  if (texts.empty()) return false;
+  size_t start = 0;
+  TextPos after{};
+  const bool inText = session_ && !session_->Target().notes;
+  if (inText) {
+    after = session_->SelTo();
+    start = static_cast<size_t>(std::find(texts.begin(), texts.end(), session_->Target()) - texts.begin());
+    if (start == texts.size()) start = 0;
+  } else {
+    while (start < texts.size() && texts[start].slide < slide) ++start;
+    if (start == texts.size()) start = 0;
+  }
+  // Round the deck once; the caret's own text twice (after the caret, then before it).
+  for (size_t k = 0; k <= texts.size(); ++k) {
+    const TextTarget t = texts[(start + k) % texts.size()];
+    const std::unique_ptr<TextDoc> doc = OpenText(*model_, t);
+    if (!doc) continue;
+    for (const SpellError& e : spelling_->Check(doc->Resolved())) {
+      const TextPos from{e.para, e.from};
+      if (inText && k == 0 && from < after) continue;
+      if (inText && k == texts.size() && !(from < after)) continue;
+      if (session_ && session_->Target() == t) {
+        session_->Select(from, {e.para, e.to});
+      } else {
+        if (goTo && t.slide != slide) goTo(t.slide);
+        if (!Begin(t)) continue;
+        session_->Select(from, {e.para, e.to});
+      }
+      Changed();
+      return true;
+    }
+  }
+  host_.ViewMessage(BannerKind::Info, L"No spelling errors were found.");
+  return false;
 }
 
 bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size_t slide) {
@@ -550,6 +603,7 @@ std::optional<RECT> TextEditing::CaretRect(const D2D1_RECT_F& rc) const {
 // Commands
 
 int TextEditing::Shortcut(UINT vk, UINT mods) const {
+  if (vk == VK_F7 && !(mods & (kModCtrl | kModShift | kModAlt)) && model_) return CmdSpelling;
   if (!session_) return 0;
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (ctrl && !alt && !shift && vk == 'K') return CmdInsertLink;
@@ -559,6 +613,7 @@ int TextEditing::Shortcut(UINT vk, UINT mods) const {
 }
 
 bool TextEditing::Owns(int cmd) const {
+  if (cmd == CmdSpelling) return model_ != nullptr;
   if (!session_) return false;
   if (cmd == CmdInsertLink) return true;
   if (cmd >= CmdSpellSuggest && cmd < CmdSpellSuggest + 20) return true;
@@ -567,6 +622,12 @@ bool TextEditing::Owns(int cmd) const {
 
 CommandState TextEditing::Query(int cmd) {
   CommandState s;
+  if (cmd == CmdSpelling) {
+    s.enabled = model_ != nullptr;
+    s.label = L"Spelling: next error";
+    s.shortcut = L"F7";
+    return s;
+  }
   if (!session_) return s;
   const TextLook look = LookOf(*session_);
   s.enabled = true;

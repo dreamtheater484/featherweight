@@ -207,6 +207,10 @@ std::vector<int> PresentationView::Commands() {
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (cmd == CmdSpelling && text_->Owns(cmd)) {  // p2-text: F7, maybe on another slide
+    text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
+    return true;
+  }
   if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
   if (SlideCommand(cmd)) return true;  // P2: the slides' commands
