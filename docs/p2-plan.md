@@ -78,3 +78,12 @@ As P1 and S2 (`docs/p1-plan.md` and `docs/s2-plan.md`, "Rules"), plus:
 - **Questions:** Roy asked not to be asked unless it's unavoidable. Decide within this plan and record the decision below; ask the coordinator, not Roy.
 
 ## Decisions during P2
+
+**p2-model (2026-11-22):**
+- Edits are part-level copy-on-write: published part DOMs never change; an edit clones the parts it touches and publishes them; undo steps keep the versions from before and swap them back. The package stays the file as opened (never changed); edits live in a part store over it (parts, relationship sets, content types), so a save writes a snapshot on a worker thread while editing goes on.
+- After an edit the model reads again only what changed (the slides touched; everything after a master, layout, theme, size or notes-master change). Replaced objects live one edit longer, so pointers stay valid until the change listeners have run.
+- The recovery journal records part states, not operations: replaying needs no knowledge of the operations, so a later exe replays an older journal, and each write holds only the parts changed since the last one.
+- Deleting slides or shapes only removes references; the writer leaves out parts that were reachable when the file was opened and aren't now (undo needs nothing back; unused pictures and charts leave the file). Parts the file had unreachable stay.
+- Deleting a slide others link to: the link's relationship goes and its r:id is emptied, as PowerPoint leaves it. Deleting shapes removes their animation effects (emptied time-node lists collapse up to p:timing), builds and connector ends. Editing a shape inside mc:AlternateContent replaces the block with the chosen branch (§4.3 rule 1).
+- Duplicating a slide copies its charts, SmartArt, embeddings, tags and notes, shares pictures, media and its layout, leaves comments out and renews p14:creationId. Notes on a deck without a notes master: one is made as PowerPoint's default, on a copy of the slide master's theme.
+- The Editor lives in the tab's ModelDeck (p2-objects' Deck::Editor()); PresentationFile (FileSession) does the tab's saving, backup and recovery.
