@@ -23,7 +23,9 @@
 #include "slide/view/TextDoc.h"
 #include "slide/view/TextFind.h"
 #include "slide/view/TextFormat.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/TextModel.h"
+#include "slide/view/TextModelEdit.h"
 #include "slide/view/TextSession.h"
 #include "slide/view/TextSpell.h"
 #include "text/Fonts.h"
@@ -624,4 +626,70 @@ TEST(SlideText_SpellingInTheRunsLanguage) {
   CHECK_EQ(errors[0].to, 10u);
   // The same text again: from the cache (the same object).
   CHECK(&spelling.Check(f.session->Doc().Resolved()) == &errors);
+}
+
+// p2-model's edit layer under the session (EditTextModel, as the tab uses it): typing is one undo
+// step there and the deck shows it, a caret move starts a new step, undo takes edits back and the
+// session follows, and a link names a relationship of the slide added in the same step.
+TEST(SlideText_TypesThroughTheEditLayer) {
+  auto deck = Modified(Slide1(TextBox(4, 100, 100, 300, 60, "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Hello</a:t></a:r></a:p>",
+                                      "<a:bodyPr wrap=\"square\"/>")));
+  REQUIRE(deck != nullptr);
+  fw::slide::edit::Editor editor(*deck);
+  EditTextModel model(*deck, editor);
+  fw::text::Fonts fonts;
+  auto slide = render::SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  render::SlideRender::TextFrame frame;
+  REQUIRE(slide->FindText(4, -1, -1, frame));
+  TextTarget t;
+  t.shape = 4;
+  TextSession session(model, t, fonts);
+  REQUIRE(session.Start(frame, {}));
+  auto shown = [&deck] {
+    const Slide* s = deck->GetSlide(0);
+    const TextBody* body = deck->Text(*s->FindShape(4), *s);
+    std::wstring out;
+    if (!body) return out;
+    for (const Paragraph& p : body->paragraphs) {
+      for (const TextRun& r : p.runs) out += r.text;
+      out += L"|";
+    }
+    return out;
+  };
+  session.MoveCaret(TextSession::Move::End, false);
+  for (wchar_t c : std::wstring(L" world")) CHECK(session.Type(std::wstring(1, c)));
+  CHECK(shown() == L"Hello world|");
+  CHECK_EQ(editor.UndoNames().size(), size_t{1});
+  CHECK(editor.UndoName() == u"Typing");
+  session.MoveCaret(TextSession::Move::Start, false);
+  CHECK(session.Type(L">"));
+  CHECK(session.Type(L" "));
+  CHECK(shown() == L"> Hello world|");
+  CHECK_EQ(editor.UndoNames().size(), size_t{2});
+  CHECK(session.Enter());
+  CHECK(shown() == L"> |Hello world|");
+  // A link over "world", its relationship added in the same step.
+  session.Select({1, 6}, {1, 11});
+  model.BeginGroup(u"Hyperlink");
+  const std::string rel = model.AddLink(t, L"https://example.com/", -1);
+  CHECK(!rel.empty());
+  CHECK(format::SetLink(session, rel, false, L""));
+  model.EndGroup();
+  CHECK(editor.UndoName() == u"Hyperlink");
+  CHECK(Xml(model.Body(t)).find("r:id=\"" + rel + "\"") != std::string::npos);
+  // A relationship the slide doesn't have is refused, and the text stays as it was.
+  session.Select({1, 0}, {1, 5});
+  CHECK(!format::SetLink(session, "rId999", false, L""));
+  CHECK(!session.TakeError().empty());
+  CHECK(session.Doc().Text(1) == L"Hello world");
+  // Undo, step by step, with the session following.
+  const size_t steps = editor.UndoNames().size();
+  CHECK(editor.Undo());
+  session.ModelChanged();
+  CHECK(Xml(model.Body(t)).find("hlinkClick") == std::string::npos);
+  CHECK(editor.Undo(steps - 1));
+  session.ModelChanged();
+  CHECK(shown() == L"Hello|");
+  CHECK(session.Doc().Text(0) == L"Hello");
+  CHECK(session.Caret().para == 0);
 }
