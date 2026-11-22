@@ -361,6 +361,7 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   downY_ = y;
   if (text_->Editing() && !gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y))) {
     text_->FillContextMenu(m, current_, SlidePoint(x, y));
+    Objects().TableContextMenu(m);  // p2-objects: a table cell's rows, columns, merge and split
     return;
   }
   // A right-click on a thumbnail is about that slide (and the others selected with it).

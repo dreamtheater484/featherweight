@@ -24,6 +24,16 @@ ObjectTool& PresentationView::Objects() const {
     h.beginText = [self](uint32_t id) {
       if (self->text_->BeginTextEdit(self->current_, id)) self->objects_->SetTextEditing(true);
     };
+    // p2-text: the table cell being edited is the one row and column commands, merge and split work at.
+    h.tableCells = [self](uint32_t table, int& row0, int& col0, int& row1, int& col1) {
+      TextSession* s = self->text_->Session();
+      if (!s) return false;
+      const TextTarget& t = s->Target();
+      if (t.slide != self->current_ || t.notes || t.shape != table || !t.Cell()) return false;
+      row0 = row1 = t.row;
+      col0 = col1 = t.column;
+      return true;
+    };
     // h.slideEdited stays unset: what was drawn of edited slides (thumbnails, the slide's bitmap, the
     // Deck's caches) is the tab's own Editor listener's job (OnSlideEdits, p2-slides), which follows
     // slides by id and redraws only the touched ones (agreed with p2-objects, 2026-11-22).

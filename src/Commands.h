@@ -528,4 +528,7 @@ enum Cmd : int {
   CmdTableDeleteRow,
   CmdTableDeleteColumn,
   CmdDuplicateObjects,           // Ctrl+D with objects selected
+  CmdTableMergeCells,            // the cells chosen in a table (text editing's) become one
+  CmdTableSplitCell,             // a merged cell back into its cells
+  CmdTableLayoutMenu,            // the toolbar's Layout dropdown with a table selected
 };
