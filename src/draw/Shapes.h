@@ -29,6 +29,9 @@ struct PictureFill : PixelHolder, std::enable_shared_from_this<PictureFill> {
   uint8_t tileAlign = 0;               // 0-8: tl, t, tr, l, ctr, r, bl, b, br
   // Recoloring: a:blip's effects and VML's picture settings.
   float alpha = 1;
+  // On a slide: PowerPoint's PDF export bakes a picture it draws see-through into a bitmap at most
+  // Painter::BakedPictureLimit() pixels across.
+  bool baked = false;
   bool grayscale = false;
   float biLevel = -1;                  // threshold 0-1; negative: off
   bool duotone = false;

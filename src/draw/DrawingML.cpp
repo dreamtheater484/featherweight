@@ -153,7 +153,10 @@ class Reader {
     ForEachChild(blip, [&](pugi::xml_node e) {
       if (NamespaceOf(e) != kA) return true;
       std::string_view k = LocalNameOf(e);
-      if (k == "alphaModFix") pic->alpha = std::clamp(Percent(e, "amt", 100000), 0.f, 1.f);
+      if (k == "alphaModFix") {
+        pic->alpha = std::clamp(Percent(e, "amt", 100000), 0.f, 1.f);
+        pic->baked = ctx_.resources.InPresentation();
+      }
       else if (k == "grayscl") pic->grayscale = true;
       else if (k == "biLevel") pic->biLevel = std::clamp(Percent(e, "thresh", 50000), 0.f, 1.f);
       else if (k == "lum") {
