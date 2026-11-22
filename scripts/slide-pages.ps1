@@ -54,6 +54,14 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $decks = Join-Path $Out "decks"
 New-Item -ItemType Directory -Force $decks | Out-Null
 $diffs = Join-Path $Out "failing"
+# fwtool pdf-compare; what it says goes to <json>.log. A deck it can't compare (no JSON) is reported as
+# one, not the end of the run: Windows PowerShell stops at a native command's error output under "Stop".
+# fwtool reads paths of at most 260 characters, so keep -Out short.
+function Invoke-Compare([string[]]$CompareArgs) {
+  $json = $CompareArgs[[array]::IndexOf($CompareArgs, "--json") + 1]
+  $ErrorActionPreference = "Continue"
+  & $Fwtool pdf-compare @CompareArgs 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath "$json.log" -Encoding utf8
+}
 
 $deckExt = '(?i)\.(pptx|pptm|ppsx|ppsm|potx|potm)$'
 $entries = @($manifest.files | Where-Object { $_.source -match $deckExt -and $Folders -contains ($_.source -split '/')[0] -and $_.pdf -and -not $_.error } | Sort-Object source)
@@ -94,7 +102,7 @@ foreach ($e in $entries) {
             $row.error = "no PDF from fwtool slides (exit code $($p.ExitCode))" + $(if ($said) { ": $said" } else { "" })
           } else {
             if ($pdf.FullName -ne $first) { Move-Item -Force $pdf.FullName $first }
-            & $Fwtool pdf-compare --json $json --out $diffs $refPdf $first *> $null
+            Invoke-Compare @("--json", $json, "--out", $diffs, $refPdf, $first)
           }
         }
       } else {
@@ -108,7 +116,7 @@ foreach ($e in $entries) {
         $said = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ }) -join "; "
         $row.error = "no slides drawn (exit code $($p.ExitCode))" + $(if ($said) { ": $said" } else { "" })
       } else {
-        & $Fwtool pdf-compare --pngs $pngs --json $json --out $diffs $refPdf *> $null
+        Invoke-Compare @("--pngs", $pngs, "--json", $json, "--out", $diffs, $refPdf)
       }
       }
     }
@@ -123,7 +131,8 @@ foreach ($e in $entries) {
       $row.inkSsim = @($c.pages | ForEach-Object { [Math]::Round([double]$_.inkSsim, 4) })
       $row.inkPassing = @($row.inkSsim | Where-Object { $_ -ge 0.95 }).Count
     } else {
-      $row.error = "pdf-compare wrote nothing"
+      $said = @(Get-Content "$json.log" -ErrorAction SilentlyContinue | Where-Object { $_ }) -join "; "
+      $row.error = "pdf-compare wrote nothing" + $(if ($said) { ": $said" } else { "" })
     }
   }
   $rows += [pscustomobject]$row
