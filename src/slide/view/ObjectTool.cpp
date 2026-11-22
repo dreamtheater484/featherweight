@@ -11,10 +11,10 @@
 #include <cmath>
 #include <cstring>
 #include <cwctype>
-#include <fstream>
 #include <set>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Geometry.h"
@@ -88,21 +88,25 @@ bool IsPictureName(const std::wstring& path) {
 }
 
 std::vector<uint8_t> ReadFileBytes(const std::wstring& path) {
-  std::vector<uint8_t> out;
-  std::ifstream f(path, std::ios::binary);
-  if (!f) return out;
-  f.seekg(0, std::ios::end);
-  const std::streamoff n = f.tellg();
-  if (n <= 0 || static_cast<uint64_t>(n) > kMaxPictureFile) return out;
-  out.resize(static_cast<size_t>(n));
-  f.seekg(0);
-  f.read(reinterpret_cast<char*>(out.data()), n);
-  if (!f) out.clear();
-  return out;
+  std::string bytes;
+  if (!util::ReadFileBytes(path, bytes, kMaxPictureFile)) return {};
+  return std::vector<uint8_t>(bytes.begin(), bytes.end());
+}
+
+// Test runs (--snapshot) keep a clipboard of their own (util::UsePrivateClipboard): copied objects
+// stay in the process there, valid until anything else is copied.
+struct PrivateObjects {
+  unsigned long sequence = 0;
+  std::string bytes;
+};
+PrivateObjects& Private() {
+  static PrivateObjects p;
+  return p;
 }
 
 std::vector<uint8_t> ClipboardBytes(UINT format) {
   std::vector<uint8_t> out;
+  if (util::UsingPrivateClipboard()) return out;  // never the user's clipboard in a test run
   if (!format || !IsClipboardFormatAvailable(format) || !OpenClipboard(nullptr)) return out;
   if (HANDLE h = GetClipboardData(format)) {
     if (const void* p = GlobalLock(h)) {
@@ -1299,7 +1303,13 @@ bool ObjectTool::Copy(bool cut) {
     if (std::find(selection_.begin(), selection_.end(), o.id) != selection_.end()) ids.push_back(o.id);
   const Clip clip = ed->CopyShapes(host_.current(), ids);
   if (clip.Empty()) return false;
-  const std::string data = Encode(clip);
+  std::string data = Encode(clip);
+  if (util::UsingPrivateClipboard()) {
+    util::SetClipboardText(std::wstring());  // replaces whatever was copied before, as EmptyClipboard does
+    Private() = {util::ClipboardSequence(), std::move(data)};
+    if (cut) DeleteSelection();
+    return true;
+  }
   if (!OpenClipboard(host_.window ? host_.window() : nullptr)) return false;
   EmptyClipboard();
   if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, data.size())) {
@@ -1328,7 +1338,9 @@ bool ObjectTool::Paste() {
   const size_t slide = host_.current();
   const draw::Size size = deck->SlideSize();
   // Objects copied in Featherweight (any slide, any deck): the editor pastes them with their parts.
-  const std::vector<uint8_t> own = ClipboardBytes(ObjectsFormat());
+  std::vector<uint8_t> own;
+  if (!util::UsingPrivateClipboard()) own = ClipboardBytes(ObjectsFormat());
+  else if (Private().sequence == util::ClipboardSequence()) own.assign(Private().bytes.begin(), Private().bytes.end());
   Clip clip;
   if (!own.empty() && Decode(std::string_view(reinterpret_cast<const char*>(own.data()), own.size()), clip)) {
     std::vector<uint32_t> pasted;
@@ -1344,7 +1356,7 @@ bool ObjectTool::Paste() {
     return true;
   }
   // Pictures: files, a PNG, or a bitmap.
-  if (IsClipboardFormatAvailable(CF_HDROP) && OpenClipboard(nullptr)) {
+  if (!util::UsingPrivateClipboard() && IsClipboardFormatAvailable(CF_HDROP) && OpenClipboard(nullptr)) {
     std::vector<std::wstring> files;
     if (HDROP drop = static_cast<HDROP>(GetClipboardData(CF_HDROP))) {
       const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
@@ -1361,11 +1373,7 @@ bool ObjectTool::Paste() {
   if (bytes.empty()) bytes = DibToBmp(ClipboardBytes(CF_DIB));
   if (!bytes.empty()) return InsertPictureBytes(std::move(bytes), {size.width / 2, size.height / 2}, true);
   // Text: a new text box with it.
-  const std::vector<uint8_t> text = ClipboardBytes(CF_UNICODETEXT);
-  if (text.size() >= 2) {
-    std::wstring t(reinterpret_cast<const wchar_t*>(text.data()), text.size() / sizeof(wchar_t));
-    t.erase(std::find(t.begin(), t.end(), L'\0'), t.end());
-    if (t.empty()) return false;
+  if (const std::wstring t = util::GetClipboardText(); !t.empty()) {
     uint32_t id = 0;
     const draw::Rect r{size.width / 2 - 180, size.height / 2 - 20, size.width / 2 + 180, size.height / 2 + 20};
     const fw::slide::edit::Result res = ed->InsertTextBox(slide, r, t, &id);
