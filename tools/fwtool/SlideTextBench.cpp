@@ -115,8 +115,7 @@ class Screen {
       draw::D2DPainter painter(dc_.Get());
       const draw::Matrix toScreen = draw::Matrix::Scale(scale_, scale_);
       const sl::view::TextFrame& f = s.Frame();
-      const draw::Matrix m = f.toSlide * toScreen;
-      dc_->SetTransform(D2D1::Matrix3x2F(m.m11, m.m12, m.m21, m.m22, m.dx, m.dy));
+      painter.Transform(f.toSlide * toScreen);  // through the painter, as the tab draws it
       s.Block().Draw(painter, nullptr, s.Target().shape);
     }
     dc_->EndDraw();
