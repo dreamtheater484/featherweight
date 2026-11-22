@@ -264,6 +264,25 @@ TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
   CHECK(std::fabs(p[1].bounds.top - p[0].bounds.bottom - 12.f) < 0.05f);
 }
 
+TEST(SlideRender_SimulatedBoldKeepsAdvances) {
+  // Calibri Light has no bold: PowerPoint emboldens it in place, its advances as the light face's.
+  auto width = [](bool bold) {
+    const std::string rPr = std::string("<a:rPr sz=\"4400\" kern=\"0\"") + (bold ? " b=\"1\"" : " b=\"0\"") +
+                            "><a:latin typeface=\"Calibri Light\"/></a:rPr>";
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            "<a:p><a:pPr><a:buNone/></a:pPr><a:r>" + rPr + "<a:t>Geopolitical</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const float regular = width(false), bold = width(true);
+  CHECK(regular > 0);
+  CHECK(std::fabs(bold - regular) < 0.5f);
+}
+
 TEST(SlideRender_OutlinedTextIsStroked) {
   // A run with no fill and a red a:ln: its glyphs' outlines in red.
   auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",

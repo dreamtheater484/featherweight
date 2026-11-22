@@ -174,6 +174,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     // PowerPoint kerns only by a font's 'kern' table, not by its OpenType (GPOS) pairs: Public Sans
     // (GPOS only) isn't kerned in its PDFs.
     if (r.kern > 0 && KernTable(fonts, s.family, s.bold, s.italic)) s.kerningMinSize = r.kern;
+    s.simulatedBoldKeepsAdvances = true;  // PowerPoint's (cbs deck: Calibri Light bold, 6 % narrower than DirectWrite's)
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
     return s;
   };

@@ -64,6 +64,9 @@ struct TextStyle {
   float baselineShift = 0;   // w:position: raised (positive) or lowered
   float kerningMinSize = 0;  // w:kern: kern pairs from this size up; 0: no kerning
   bool ligatures = false;    // w14:ligatures standard (or more): standard ligatures
+  // A bold the font lacks, simulated, keeps the regular face's advances (PowerPoint's); otherwise
+  // DirectWrite widens them, as Word's text is.
+  bool simulatedBoldKeepsAdvances = false;
   Caps caps = Caps::None;    // w:caps, w:smallCaps
   VerticalAlign verticalAlign = VerticalAlign::Baseline;  // w:vertAlign
   bool hidden = false;         // w:vanish: laid out as if absent

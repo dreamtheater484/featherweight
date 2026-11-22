@@ -44,11 +44,14 @@ class Face {
   DWRITE_FONT_WEIGHT Weight() const { return weight_; }
   DWRITE_FONT_STYLE Style() const { return style_; }
   FontMetrics Metrics(float size) const;
+  // The same face without DirectWrite's bold and oblique simulations (itself when it has none).
+  IDWriteFontFace* Plain() const;
   // The glyph's advance for one character at `size` points, without shaping; 0 if it's missing.
   float Advance(wchar_t c, float size) const;
 
  private:
   Microsoft::WRL::ComPtr<IDWriteFontFace> face_;
+  mutable Microsoft::WRL::ComPtr<IDWriteFontFace> plain_;  // Plain(), made on first use
   std::wstring family_;
   DWRITE_FONT_WEIGHT weight_;
   DWRITE_FONT_STYLE style_;
