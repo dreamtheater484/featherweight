@@ -10,9 +10,9 @@ add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp
 # clipboard, find, spelling, links).
 target_sources(fwslideviewcore PRIVATE TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp)
 target_link_libraries(fwslideviewcore PUBLIC fwdoc fwproof)
-# Formatting, the clipboard, find and spelling run once per command: compiled for size (typing's
-# path, TextDoc and TextSession, stays compiled for speed).
-set_source_files_properties(TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp PROPERTIES
+# Text editing is compiled for size: a keystroke is a few hundred microseconds of it either way
+# (fwtool bench --slide-text), well inside the 16 ms budget.
+set_source_files_properties(TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
