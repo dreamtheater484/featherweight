@@ -12,6 +12,7 @@
 #include "Commands.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlideGallery.h"
 #include "ui/Anim.h"
@@ -237,15 +238,8 @@ bool PresentationView::SlideCommand(int cmd) {
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdSlideNew: {
-      // After the current slide, on the layout PowerPoint picks: the current slide's, except after
-      // a title slide, where it's the master's next layout ("Title and Content").
-      int layout = -1;
-      if (n) {
-        layout = deck_->LayoutOf(current_);
-        const std::vector<Deck::LayoutChoice> all = deck_->LayoutsFor(current_);
-        if (all.size() > 1 && static_cast<int>(all[0].index) == layout) layout = static_cast<int>(all[1].index);
-      }
-      InsertSlide(n ? current_ + 1 : 0, layout);
+      // After the current slide, on the layout PowerPoint picks (NewSlideLayout).
+      InsertSlide(n ? current_ + 1 : 0, -1);
       return true;
     }
     case CmdSlideNewMenu:
@@ -512,34 +506,176 @@ std::vector<uint32_t> PresentationView::SlideIds() const {
 
 void PresentationView::SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all) {
   const std::vector<int> old = OldIndexes(idsBefore, SlideIds());
+  // The current slide and the selection follow their slides; a slide gone leaves the one now in
+  // its place current.
+  const size_t n = SlideCount();
+  std::vector<size_t> selected;
+  size_t current = SIZE_MAX;
+  for (size_t i = 0; i < old.size(); ++i) {
+    if (old[i] < 0) continue;
+    const size_t o = static_cast<size_t>(old[i]);
+    if (selection_.Selected(o)) selected.push_back(i);
+    if (o == current_) current = i;
+  }
+  if (current == SIZE_MAX) current = n ? std::min(current_, n - 1) : 0;
+  if (current != current_) {
+    current_ = current;
+    sx_ = sy_ = 0;
+    notesScroll_ = 0;
+  }
+  if (std::find(selected.begin(), selected.end(), current_) == selected.end()) selected.assign(n ? 1 : 0, current_);
+  selection_.Reset(n, current_);
+  if (n) selection_.Set(selected, current_);
   FollowSlides(thumbCache_, old);
+  thumbCache_.resize(n);
   for (size_t i : touched)
     if (i < thumbCache_.size()) thumbCache_[i].bitmap.Reset();
-  if (all)
+  if (all) {
     for (Thumb& th : thumbCache_) th.bitmap.Reset();
+    layoutPictures_.clear();
+  }
   slideBitmap_.Reset();
   slideBitmapOf_ = SIZE_MAX;
+  links_.clear();
   linksOf_ = SIZE_MAX;
-  layoutPictures_.clear();
   matches_.clear();
   match_ = -1;
-  if (current_ >= SlideCount()) current_ = SlideCount() ? SlideCount() - 1 : 0;
   ClampScroll();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
 }
 
+edit::Editor* PresentationView::SlideEditor() const {
+  edit::Editor* ed = deck_ ? deck_->Editor() : nullptr;
+  if (ed && !editListening_) {
+    editListening_ = true;
+    editIds_ = SlideIds();
+    PresentationView* self = const_cast<PresentationView*>(this);
+    // Every edit, undo and redo, whoever made it (the tab's slide edits, p2-objects, p2-text).
+    ed->OnChange([self](const edit::Changes& c) { self->OnSlideEdits(c); });
+  }
+  return ed;
+}
+
+void PresentationView::OnSlideEdits(const edit::Changes& c) {
+  if (!deck_) return;
+  const std::vector<uint32_t> before = editIds_;
+  editIds_ = SlideIds();
+  const bool all = c.allSlides || c.slideSize;
+  // What the deck prepared follows the slides, then goes for the ones that changed (their model
+  // objects were read again: what was built from them is stale).
+  if (c.slideList) deck_->Reorder(OldIndexes(before, editIds_));
+  std::vector<size_t> touched;
+  for (const edit::SlideChange& sc : c.slides)
+    if (sc.index >= 0 && static_cast<size_t>(sc.index) < SlideCount()) {
+      touched.push_back(static_cast<size_t>(sc.index));
+      if (!all) deck_->Invalidate(static_cast<size_t>(sc.index));
+    }
+  if (all)
+    for (size_t i = 0; i < SlideCount(); ++i) deck_->Invalidate(i);
+  SlidesChanged(before, touched, all);
+  DesignChanged();
+}
+
 bool PresentationView::CanEditSlides() const {
-  // The edit layer (p2-model) isn't in this build yet: the tab stays read-only.
-  host_.ViewMessage(BannerKind::Info, L"Editing slides comes with the edit layer; this build shows and presents decks.");
+  edit::Editor* ed = SlideEditor();
+  std::u16string why;
+  if (ed && ed->CanEdit(&why)) return true;
+  host_.ViewMessage(BannerKind::Warning, why.empty() ? std::wstring(L"This presentation can't be edited.") : std::wstring(why.begin(), why.end()));
   return false;
 }
 
-bool PresentationView::InsertSlide(size_t /*at*/, int /*layout*/) { return CanEditSlides(); }
-bool PresentationView::DuplicateSlides(const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::DeleteSlides(const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::MoveSlides(const std::vector<size_t>& /*slides*/, size_t /*gap*/) { return CanEditSlides(); }
-bool PresentationView::HideSlides(const std::vector<size_t>& /*slides*/, bool /*hide*/) { return CanEditSlides(); }
-bool PresentationView::SetSlidesLayout(const std::vector<size_t>& /*slides*/, int /*layout*/) { return CanEditSlides(); }
+bool PresentationView::Done(const edit::Result& r) const {
+  if (!r.ok)
+    host_.ViewMessage(BannerKind::Warning,
+                      r.message.empty() ? std::wstring(L"That change couldn't be made.") : std::wstring(r.message.begin(), r.message.end()));
+  return r.ok;
+}
+
+void PresentationView::SelectSlides(const std::vector<size_t>& slides, size_t current) {
+  const size_t n = SlideCount();
+  if (!n) return;
+  current = std::min(current, n - 1);
+  if (current != current_) {
+    current_ = current;
+    sx_ = sy_ = 0;
+    notesScroll_ = 0;
+    slideBitmap_.Reset();
+  }
+  selection_.Reset(n, current_);
+  std::vector<size_t> valid;
+  for (size_t i : slides)
+    if (i < n) valid.push_back(i);
+  if (!valid.empty()) selection_.Set(valid, current_);
+  ScrollThumbIntoView(current_);
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+int PresentationView::NewSlideLayout() const {
+  if (!deck_ || SlideCount() == 0) return 0;
+  const int l = deck_->LayoutOf(current_);
+  if (l < 0) return 0;
+  // After a title slide PowerPoint goes on with the master's next layout (Title and Content).
+  const Presentation* model = deck_->Model();
+  if (model && static_cast<size_t>(l) < model->Layouts().size() && IsTitleLayout(model->Layouts()[static_cast<size_t>(l)].get())) {
+    const std::vector<Deck::LayoutChoice> choices = deck_->LayoutsFor(current_);
+    for (size_t k = 0; k + 1 < choices.size(); ++k)
+      if (choices[k].index == static_cast<size_t>(l)) return static_cast<int>(choices[k + 1].index);
+  }
+  return l;
+}
+
+bool PresentationView::InsertSlide(size_t at, int layout) {
+  if (!CanEditSlides()) return false;
+  at = std::min(at, SlideCount());
+  if (layout < 0) layout = NewSlideLayout();
+  if (!Done(SlideEditor()->NewSlide(at, static_cast<size_t>(layout)))) return false;
+  SelectSlides({at}, at);
+  return true;
+}
+
+bool PresentationView::DuplicateSlides(const std::vector<size_t>& slides) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  std::vector<uint32_t> ids;
+  if (!Done(SlideEditor()->DuplicateSlides(slides, &ids))) return false;
+  // The copies selected, as PowerPoint leaves them.
+  const std::vector<uint32_t> now = SlideIds();
+  std::vector<size_t> copies;
+  for (uint32_t id : ids)
+    if (auto it = std::find(now.begin(), now.end(), id); it != now.end()) copies.push_back(static_cast<size_t>(it - now.begin()));
+  if (!copies.empty()) SelectSlides(copies, copies.front());
+  return true;
+}
+
+bool PresentationView::DeleteSlides(const std::vector<size_t>& slides) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->DeleteSlides(slides));
+}
+
+bool PresentationView::MoveSlides(const std::vector<size_t>& slides, size_t gap) {
+  if (slides.empty() || !MoveChanges(SlideCount(), slides, gap) || !CanEditSlides()) return false;
+  const size_t to = MovedTo(SlideCount(), slides, gap);
+  // The current slide stays current where it went.
+  std::vector<size_t> sorted = slides;
+  std::sort(sorted.begin(), sorted.end());
+  const auto at = std::find(sorted.begin(), sorted.end(), current_);
+  const size_t offset = at == sorted.end() ? 0 : static_cast<size_t>(at - sorted.begin());
+  if (!Done(SlideEditor()->MoveSlides(sorted, to))) return false;
+  std::vector<size_t> moved;
+  for (size_t k = 0; k < sorted.size(); ++k) moved.push_back(to + k);
+  SelectSlides(moved, to + offset);
+  return true;
+}
+
+bool PresentationView::HideSlides(const std::vector<size_t>& slides, bool hide) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->HideSlides(slides, hide));
+}
+
+bool PresentationView::SetSlidesLayout(const std::vector<size_t>& slides, int layout) {
+  if (slides.empty() || layout < 0 || !CanEditSlides()) return false;
+  return Done(SlideEditor()->SetLayout(slides, static_cast<size_t>(layout)));
+}
 
 }  // namespace fw::slide::view

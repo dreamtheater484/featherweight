@@ -23,6 +23,10 @@ class Fonts;
 namespace fw::slide::show {
 class SlideRenderer;
 }
+namespace fw::slide::edit {
+struct Changes;
+struct Result;
+}
 
 namespace fw::slide::view {
 
@@ -168,6 +172,14 @@ class PresentationView : public TabContent {
   // Edits through the edit layer (each one undo step). False, with a banner saying why, when the
   // deck can't be edited.
   bool CanEditSlides() const;
+  // The deck's editor, which the tab listens to from the first time it's asked for (null: none).
+  edit::Editor* SlideEditor() const;
+  void OnSlideEdits(const edit::Changes& c);
+  bool Done(const edit::Result& r) const;  // a banner saying why when it was refused
+  void SelectSlides(const std::vector<size_t>& slides, size_t current);
+  int NewSlideLayout() const;  // Ctrl+M's layout: the current slide's (after a title slide, the next one)
+  mutable bool editListening_ = false;
+  mutable std::vector<uint32_t> editIds_;  // the slides' ids as the last change left them
   bool InsertSlide(size_t at, int layout);
   bool DuplicateSlides(const std::vector<size_t>& slides);
   bool DeleteSlides(const std::vector<size_t>& slides);

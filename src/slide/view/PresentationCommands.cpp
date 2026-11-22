@@ -14,6 +14,7 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -365,7 +366,7 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
   std::wstring slide = n ? L"Slide " + std::to_wstring(current_ + 1) + L" of " + std::to_wstring(n) : L"No slides";
   if (n && deck_->Hidden(current_)) slide += L" (hidden)";
   m.segments.push_back(slide);
-  m.segments.push_back(L"Read-only");
+  if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(L"Read-only");
   m.zoom = n > 0;
   m.zoomValue = Scale() / (96.0 / 72.0 * ui_);
   m.onZoom = [this](double z) {
@@ -602,12 +603,18 @@ void PresentationView::StartShow(bool fromCurrent) {
 }
 
 void PresentationView::ReadOnlyBanner() {
-  if (deck_ && deck_->HasMacros()) {
-    host_.ViewMessage(BannerKind::Info, L"This presentation is read-only, and its macros are kept but never run.");
+  // P2: only a deck the edit layer can't change says it's read-only, with the reason.
+  edit::Editor* ed = SlideEditor();
+  std::u16string why;
+  const bool editable = ed && ed->CanEdit(&why);
+  const bool macros = deck_ && deck_->HasMacros();
+  if (editable) {
+    if (macros) host_.ViewMessage(BannerKind::Info, L"This presentation's macros are kept but never run.");
     return;
   }
-  host_.ViewMessage(BannerKind::Info, L"This presentation is read-only: Featherweight shows and presents decks, "
-                                      L"and editing comes in a later version.");
+  std::wstring text = why.empty() ? std::wstring(L"This presentation is read-only.") : std::wstring(why.begin(), why.end());
+  if (macros) text += L" Its macros are kept but never run.";
+  host_.ViewMessage(BannerKind::Info, text);
 }
 
 }  // namespace fw::slide::view
