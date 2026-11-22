@@ -147,12 +147,6 @@ Result Editor::SetTheme(size_t master, std::string_view themeXml) {
   return call.End({});
 }
 
-Result Editor::SetHeaderFooter(const std::vector<size_t>& slides, const HeaderFooter& hf) {
-  (void)slides;
-  (void)hf;
-  return Result::Fail(u"Header and footer can't be changed yet.");
-}
-
 Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& slides, size_t at, bool keepSourceDesign,
                             std::vector<uint32_t>* ids) {
   if (keepSourceDesign) return Result::Fail(u"Keeping the source formatting isn't available yet.");

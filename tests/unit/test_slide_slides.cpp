@@ -17,6 +17,7 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/SlideDesign.h"
 #include "slide/view/SlideHeaderFooter.h"
@@ -442,4 +443,54 @@ TEST(SlideDesign_ReadBackground) {
     CHECK_EQ(ColorSchemeOf(*blank->GetSlide(0)), 0);
     CHECK(ReadBackground(*blank->GetSlide(0)).kind == Background::Kind::Theme);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Header & footer through the edit layer (src/slide/edit/HeaderFooter.cpp)
+
+TEST(SlideHeaderFooter_EditAndUndo) {
+  fw::pkg::Status status;
+  auto deck = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  fw::slide::edit::Editor ed(*deck);
+  CHECK(ed.NewSlide(1, 1));  // a Title and Content slide after the title slide
+  CHECK_EQ(deck->SlideCount(), 2u);
+  fw::slide::edit::HeaderFooter hf;
+  hf.slideNumber = hf.footer = hf.date = true;
+  hf.footerText = L"Quarterly review";
+  hf.dateFormat = "datetime4";
+  hf.notOnTitle = true;
+  CHECK(ed.SetHeaderFooter({}, hf));
+  // The title slide shows none; the other all three, as its layout places them.
+  const HeaderFooterSettings title = ReadHeaderFooter(*deck->GetSlide(0));
+  CHECK(!title.date && !title.footer && !title.slideNumber);
+  const HeaderFooterSettings two = ReadHeaderFooter(*deck->GetSlide(1));
+  CHECK(two.date && two.dateAuto && two.dateFormat == 4);
+  CHECK(two.footer && two.footerText == L"Quarterly review");
+  CHECK(two.slideNumber);
+  // Shown: the number is the slide's.
+  const fw::slide::Slide* s = deck->GetSlide(1);
+  const fw::slide::Shape* num = s->FindPlaceholder(fw::slide::PlaceholderType::SlideNumber);
+  CHECK(num != nullptr);
+  if (num) {
+    const fw::slide::TextBody* body = deck->Text(*num, *s);
+    CHECK(body && !body->paragraphs.empty() && !body->paragraphs[0].runs.empty() && body->paragraphs[0].runs[0].text == L"2");
+  }
+  // Fixed date, no footer, on slide 2 only; then the title slide too.
+  hf.dateFixed = true;
+  hf.dateText = L"1 April";
+  hf.footer = false;
+  CHECK(ed.SetHeaderFooter({1}, hf));
+  const HeaderFooterSettings fixed = ReadHeaderFooter(*deck->GetSlide(1));
+  CHECK(fixed.date && !fixed.dateAuto && fixed.dateFixed == L"1 April" && !fixed.footer && fixed.slideNumber);
+  hf.notOnTitle = false;
+  CHECK(ed.SetHeaderFooter({0}, hf));
+  CHECK(ReadHeaderFooter(*deck->GetSlide(0)).slideNumber);
+  // Undo, step by step, back to none.
+  CHECK(ed.Undo(3));
+  CHECK(!ReadHeaderFooter(*deck->GetSlide(1)).footer && !ReadHeaderFooter(*deck->GetSlide(1)).slideNumber);
+  CHECK(ed.Redo(1));
+  CHECK(ReadHeaderFooter(*deck->GetSlide(1)).footerText == L"Quarterly review");
+  CHECK(!ed.SetHeaderFooter({7}, hf));  // no such slide: refused, nothing changed
 }
