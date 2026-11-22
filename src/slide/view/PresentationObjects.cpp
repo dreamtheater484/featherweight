@@ -19,23 +19,9 @@ ObjectTool& PresentationView::Objects() const {
     h.invalidate = [self] { self->host_.ViewInvalidate(); };
     h.refused = [self](const std::wstring& why) { self->host_.ViewMessage(BannerKind::Warning, why); };
     h.window = [self] { return self->host_.ViewHwnd(); };
-    // An edit (or undo) changed a slide (SIZE_MAX: any): what was drawn of it goes.
-    h.slideEdited = [self](size_t slide) {
-      if (!self->deck_) return;
-      const size_t n = self->deck_->SlideCount();
-      if (self->thumbCache_.size() != n || slide == SIZE_MAX) {
-        self->thumbCache_.assign(n, {});
-        for (size_t i = 0; i < n; ++i) self->deck_->Invalidate(i);
-      } else if (slide < n) {
-        self->thumbCache_[slide].bitmap.Reset();
-        self->deck_->Invalidate(slide);
-      }
-      self->slideBitmap_.Reset();
-      self->links_.clear();
-      self->linksOf_ = SIZE_MAX;
-      self->host_.ViewStateChanged();
-      self->host_.ViewInvalidate();
-    };
+    // h.slideEdited stays unset: what was drawn of edited slides (thumbnails, the slide's bitmap, the
+    // Deck's caches) is the tab's own Editor listener's job (OnSlideEdits, p2-slides), which follows
+    // slides by id and redraws only the touched ones (agreed with p2-objects, 2026-11-22).
     objects_ = std::make_unique<ObjectTool>(std::move(h));
   }
   return *objects_;
