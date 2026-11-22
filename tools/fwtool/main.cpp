@@ -109,9 +109,10 @@ constexpr const char* kUsage =
     "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
     "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
     "      pages in DIR; lists its links, bookmarks, title and author.\n"
-    "  fwtool pdf-compare [--out DIR] [--json FILE] <reference.pdf> <ours.pdf>\n"
+    "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
-    "      by SSIM; a page passes at >= 0.95. --out writes failing pages side by side with the difference.\n"
+    "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
+    "      failing pages side by side with the difference.\n"
     "  fwtool pdf-compare --pngs DIR [--out DIR] [--json FILE] <reference.pdf>\n"
     "      The same against the pages the app drew, DIR\\page-1.png on (P1's slides: the script op\n"
     "      pagepngs:DIR|100 draws every slide, hidden ones too, as the screen does).\n"
@@ -351,6 +352,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--values") options.values = true;
     else if (arg == L"--resave") options.resave = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
+    else if (arg == L"--min-ssim" && i + 1 < argc) options.minSsim = _wtof(argv[++i]);
     else if (arg == L"--folders" && i + 1 < argc) options.folders = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
