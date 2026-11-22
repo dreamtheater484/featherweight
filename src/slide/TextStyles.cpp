@@ -437,11 +437,12 @@ const draw::Theme& ThemeOf(const SlideBase& shownOn) {
 namespace detail {
 
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,
-                                      const SlideBase& shownOn) {
+                                      const SlideBase& shownOn, pugi::xml_node workingCopy) {
   auto out = std::make_unique<TextBody>();
   // A shape's own text body (a placeholder's textNode is in its merged copy); SmartArt's dsp:txBody
-  // and the like come as a stand-in shape whose textNode is the body itself.
-  pugi::xml_node txBody = shape.drawNode == shape.node ? shape.textNode : P(shape.node, "txBody");
+  // and the like come as a stand-in shape whose textNode is the body itself. Text being edited
+  // (P2) is a working copy of it.
+  pugi::xml_node txBody = workingCopy ? workingCopy : shape.drawNode == shape.node ? shape.textNode : P(shape.node, "txBody");
   out->node = txBody;
   out->body = ReadBody(A(shape.textNode, "bodyPr"));
   Ctx c{deck, owner, shownOn, ThemeOf(shownOn), {}};

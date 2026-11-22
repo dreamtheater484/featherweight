@@ -47,8 +47,9 @@ Placeholder ReadPlaceholder(pugi::xml_node shape);
 Hyperlink ReadHyperlink(pugi::xml_node link, const SlideBase& owner, const Presentation& deck);
 
 // TextStyles.cpp: a shape's text resolved for the part it is shown on.
+// `workingCopy`: a copy of its text body being edited (P2), resolved in its place.
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,
-                                      const SlideBase& shownOn);
+                                      const SlideBase& shownOn, pugi::xml_node workingCopy = {});
 // A text body with no placeholder chain (table cells): the default text style, then the table
 // style's text properties (a:tcTxStyle) in the order given, then the body's own.
 std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_node txBody, const SlideBase& owner,

@@ -64,6 +64,36 @@ class ModelDeck : public Deck {
   bool PaintNotesPage(size_t i, draw::Painter& p, draw::Rect& slideBox) override;
   std::vector<draw::Rect> TextRects(size_t slide, size_t block, size_t from, size_t length) override;
   size_t MemoryUse() const override { return bytes_; }
+  render::SlideRender* Rendered(size_t i) override { return Render(i); }
+  text::Fonts* LayoutFonts() override { return &Fonts(); }
+  void Invalidate(size_t i) override {
+    // Slides added or removed: everything prepared goes.
+    if (deck_->SlideCount() != renders_.size()) {
+      renders_.clear();
+      blocks_.clear();
+      blocksRead_.clear();
+      renders_.resize(deck_->SlideCount());
+      blocks_.resize(deck_->SlideCount());
+      blocksRead_.assign(deck_->SlideCount(), false);
+      return;
+    }
+    if (i >= renders_.size()) return;
+    renders_[i].reset();
+    blocks_[i].clear();
+    blocksRead_[i] = false;
+  }
+  void PaintFiltered(size_t i, draw::Painter& p, render::DrawFilter* filter) override {
+    if (render::SlideRender* r = Render(i)) {
+      const draw::Size s = deck_->SlideSize();
+      r->Draw(p, {0, 0, s.width, s.height}, filter);
+    }
+  }
+  void PaintPrompts(size_t i, draw::Painter& p, uint32_t skip) override {
+    if (render::SlideRender* r = Render(i)) {
+      const draw::Size s = deck_->SlideSize();
+      r->DrawPrompts(p, {0, 0, s.width, s.height}, Fonts(), skip);
+    }
+  }
 
  private:
   const Slide* Get(size_t i) const { return i < deck_->SlideCount() ? deck_->GetSlide(i) : nullptr; }
