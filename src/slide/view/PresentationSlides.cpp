@@ -682,6 +682,8 @@ bool PresentationView::CopySlides(bool cut) {
   return !cut || DeleteSlides(slides);
 }
 
+bool PresentationView::SlidesOnClipboard() const { return Clip().Current(); }
+
 bool PresentationView::PasteSlides(bool keepSource) {
   SlideClip& clip = Clip();
   if (!clip.Current() || !CanEditSlides()) return false;
@@ -694,7 +696,14 @@ bool PresentationView::PasteSlides(bool keepSource) {
   }
   const size_t at = SlideCount() ? current_ + 1 : 0;
   std::vector<uint32_t> ids;
-  if (!Done(SlideEditor()->InsertSlides(*source, clip.slides, at, keepSource, &ids))) return false;
+  edit::Editor* ed = SlideEditor();
+  if (keepSource && !ed->InsertSlides(*source, clip.slides, at, true, &ids)) {
+    // Until the edit layer keeps a source's design (p2-model), the slides come in this deck's.
+    if (!Done(ed->InsertSlides(*source, clip.slides, at, false, &ids))) return false;
+    host_.ViewMessage(BannerKind::Info, L"Pasted in this presentation's design: keeping the source formatting comes later.");
+  } else if (!keepSource && !Done(ed->InsertSlides(*source, clip.slides, at, false, &ids))) {
+    return false;
+  }
   const std::vector<uint32_t> now = SlideIds();
   std::vector<size_t> pasted;
   for (uint32_t id : ids)

@@ -236,6 +236,7 @@ class PresentationView : public TabContent {
   // keeping their own.
   bool CopySlides(bool cut);
   bool PasteSlides(bool keepSource);
+  bool SlidesOnClipboard() const;  // slides copied here are still what the clipboard holds
   // Design (PresentationDesign.cpp): a built-in theme or theme colors on the masters of `slides`
   // (every master when empty), a background on `slides` (every slide with `all`), slide numbers,
   // footer and date, the slide size, the notes.
