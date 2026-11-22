@@ -307,11 +307,19 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     // the first line's largest font.
     // The bullet (run 0) doesn't count: a bullet at 150 % leaves its line as high (PowerPoint's PDFs).
     const auto counts = [&](uint32_t run) { return !para.bullet || run != 0; };
+    // A line with nothing drawn on it (a line break alone) is as high as the break's own size; one
+    // after the last break, the paragraph mark's.
+    const auto emptySize = [&](const text::Line& line) {
+      if (line.start < para.text.size())
+        for (size_t i = para.runStart.size(); i-- > 0;)
+          if (para.runStart[i] <= line.start) return counts(static_cast<uint32_t>(i)) ? para.styles[i].size : para.mark.size;
+      return para.mark.size;
+    };
     float largest = 0;
     if (!para.lines.empty())
       for (const text::GlyphPiece& g : para.lines.front().pieces)
         if (counts(g.run)) largest = std::max(largest, g.emSize);
-    if (largest <= 0) largest = para.mark.size;
+    if (largest <= 0) largest = para.lines.empty() ? para.mark.size : emptySize(para.lines.front());
     auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
     if (!first) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
@@ -324,7 +332,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (counts(g.run)) size = std::max(size, g.emSize);
       for (const text::InlineObject& o : line.objects)
         if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
-      if (size <= 0) size = para.mark.size;
+      if (size <= 0) size = emptySize(line);
       const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
       const float above = line.ascent + line.descent > 0 ? pitch * line.ascent / (line.ascent + line.descent) : 0;

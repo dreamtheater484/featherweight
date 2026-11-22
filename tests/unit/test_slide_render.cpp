@@ -195,6 +195,25 @@ TEST(SlideRender_BigBulletKeepsTheLineHeight) {
   CHECK(std::fabs(big - plain) < 0.5f);
 }
 
+TEST(SlideRender_LineBreakAloneIsItsOwnSize) {
+  // A paragraph starting with an 18-pt a:br in a 40-pt body: the empty first line is 1.2 x 18 high
+  // (PowerPoint's PDFs), so the paragraph is as high as one that breaks after 18-pt text.
+  auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                          "<a:p><a:pPr><a:buNone/></a:pPr><a:br><a:rPr sz=\"1800\"/></a:br><a:r><a:rPr sz=\"1800\"/>"
+                                          "<a:t>Text</a:t></a:r><a:endParaRPr sz=\"4000\"/></a:p>"
+                                          "<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:rPr sz=\"1800\"/><a:t>X</a:t></a:r><a:br>"
+                                          "<a:rPr sz=\"1800\"/></a:br><a:r><a:rPr sz=\"1800\"/><a:t>Text</a:t></a:r>"
+                                          "<a:endParaRPr sz=\"4000\"/></a:p>"),
+                              2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  const float empty = p[0].bounds.bottom - p[0].bounds.top, full = p[1].bounds.bottom - p[1].bounds.top;
+  CHECK(std::fabs(empty - full) < 0.5f);
+}
+
 TEST(SlideRender_OutlinedTextIsStroked) {
   // A run with no fill and a red a:ln: its glyphs' outlines in red.
   auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
