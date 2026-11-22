@@ -140,17 +140,6 @@ UINT ObjectsFormat() {
   return f;
 }
 
-// The clipboard's own format: the objects' XML and the parts their relationships name.
-struct ClipPart {
-  std::string id, type, target, contentType;  // target: the part name, or an external address
-  bool external = false;
-  std::string bytes;
-};
-struct ClipObjects {
-  std::vector<std::string> xml;
-  std::vector<ClipPart> parts;
-};
-
 void PutString(std::string& out, const std::string& s) {
   out += std::to_string(s.size());
   out += '\n';
@@ -171,86 +160,79 @@ bool GetString(std::string_view& in, std::string& s) {
   return true;
 }
 
-std::string Encode(const ClipObjects& c) {
-  std::string out = "FWSO1\n";
-  PutString(out, std::to_string(c.xml.size()));
-  for (const std::string& x : c.xml) PutString(out, x);
-  PutString(out, std::to_string(c.parts.size()));
-  for (const ClipPart& p : c.parts) {
-    for (const std::string* s : {&p.id, &p.type, &p.target, &p.contentType}) PutString(out, *s);
-    PutString(out, p.external ? "1" : "0");
-    PutString(out, p.bytes);
+#if FW_SLIDE_EDIT
+// The clipboard's own format: the editor's ShapeClip (the shapes and the parts they use), flattened.
+// The deck it came from counts only within this process (links to its slides work only there).
+using Clip = fw::slide::edit::ShapeClip;
+
+void PutRels(std::string& out, const std::vector<Clip::Part::Rel>& rels) {
+  PutString(out, std::to_string(rels.size()));
+  for (const Clip::Part::Rel& r : rels) {
+    PutString(out, r.id);
+    PutString(out, r.type);
+    PutString(out, r.target);
+    PutString(out, r.external ? "1" : "0");
   }
-  return out;
 }
 
-bool Decode(std::string_view in, ClipObjects& c) {
-  if (in.substr(0, 6) != "FWSO1\n") return false;
-  in.remove_prefix(6);
-  std::string n;
-  if (!GetString(in, n)) return false;
-  const size_t objects = static_cast<size_t>(std::strtoul(n.c_str(), nullptr, 10));
-  if (objects > 10000) return false;
-  c.xml.resize(objects);
-  for (std::string& x : c.xml)
-    if (!GetString(in, x)) return false;
-  if (!GetString(in, n)) return false;
-  const size_t parts = static_cast<size_t>(std::strtoul(n.c_str(), nullptr, 10));
-  if (parts > 10000) return false;
-  c.parts.resize(parts);
-  for (ClipPart& p : c.parts) {
+bool GetCount(std::string_view& in, size_t& n) {
+  std::string s;
+  if (!GetString(in, s) || s.empty() || s.size() > 6) return false;
+  n = static_cast<size_t>(std::strtoul(s.c_str(), nullptr, 10));
+  return n <= 100000;
+}
+
+bool GetRels(std::string_view& in, std::vector<Clip::Part::Rel>& rels) {
+  size_t n = 0;
+  if (!GetCount(in, n)) return false;
+  rels.resize(n);
+  for (Clip::Part::Rel& r : rels) {
     std::string ext;
-    if (!GetString(in, p.id) || !GetString(in, p.type) || !GetString(in, p.target) || !GetString(in, p.contentType) ||
-        !GetString(in, ext) || !GetString(in, p.bytes))
-      return false;
-    p.external = ext == "1";
+    if (!GetString(in, r.id) || !GetString(in, r.type) || !GetString(in, r.target) || !GetString(in, ext)) return false;
+    r.external = ext == "1";
   }
   return true;
 }
 
-// The r:embed, r:link, r:id (and r:pict, r:dm...) values in an element, in order.
-void RelIds(pugi::xml_node n, std::vector<std::string>& out) {
-  for (pugi::xml_node c = n; c;) {
-    if (c.type() == pugi::node_element)
-      for (pugi::xml_attribute a : c.attributes())
-        if (pkg::NamespaceOf(c, a) == "http://schemas.openxmlformats.org/officeDocument/2006/relationships" &&
-            std::find(out.begin(), out.end(), a.value()) == out.end())
-          out.push_back(a.value());
-    if (c.first_child()) {
-      c = c.first_child();
-      continue;
-    }
-    while (c && c != n && !c.next_sibling()) c = c.parent();
-    if (!c || c == n) break;
-    c = c.next_sibling();
+std::string Encode(const Clip& c) {
+  std::string out = "FWSO2\n";
+  PutString(out, std::to_string(GetCurrentProcessId()) + ":" + std::to_string(reinterpret_cast<uintptr_t>(c.deck)));
+  PutString(out, std::to_string(c.shapes.size()));
+  for (const std::string& x : c.shapes) PutString(out, x);
+  PutRels(out, c.rels);
+  PutString(out, std::to_string(c.parts.size()));
+  for (const Clip::Part& p : c.parts) {
+    PutString(out, p.name);
+    PutString(out, p.contentType);
+    PutString(out, std::string(p.bytes.begin(), p.bytes.end()));
+    PutRels(out, p.rels);
   }
+  return out;
 }
 
-void RenameRelIds(pugi::xml_node n, const std::vector<std::pair<std::string, std::string>>& map) {
-  for (pugi::xml_node c = n; c;) {
-    if (c.type() == pugi::node_element)
-      for (pugi::xml_attribute a : c.attributes())
-        if (pkg::NamespaceOf(c, a) == "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
-          for (const auto& [from, to] : map)
-            if (from == a.value()) {
-              a.set_value(to.c_str());
-              break;
-            }
-    if (c.first_child()) {
-      c = c.first_child();
-      continue;
-    }
-    while (c && c != n && !c.next_sibling()) c = c.parent();
-    if (!c || c == n) break;
-    c = c.next_sibling();
+bool Decode(std::string_view in, Clip& c) {
+  if (in.substr(0, 6) != "FWSO2\n") return false;
+  in.remove_prefix(6);
+  std::string origin;
+  if (!GetString(in, origin)) return false;
+  const std::string self = std::to_string(GetCurrentProcessId()) + ":";
+  if (origin.rfind(self, 0) == 0)
+    c.deck = reinterpret_cast<const void*>(static_cast<uintptr_t>(std::strtoull(origin.c_str() + self.size(), nullptr, 10)));
+  size_t n = 0;
+  if (!GetCount(in, n)) return false;
+  c.shapes.resize(n);
+  for (std::string& x : c.shapes)
+    if (!GetString(in, x)) return false;
+  if (!GetRels(in, c.rels) || !GetCount(in, n)) return false;
+  c.parts.resize(n);
+  for (Clip::Part& p : c.parts) {
+    std::string bytes;
+    if (!GetString(in, p.name) || !GetString(in, p.contentType) || !GetString(in, bytes) || !GetRels(in, p.rels)) return false;
+    p.bytes.assign(bytes.begin(), bytes.end());
   }
+  return !c.shapes.empty();
 }
-
-std::string Extension(std::string_view part) {
-  const size_t dot = part.find_last_of('.'), slash = part.find_last_of('/');
-  return dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash) ? std::string()
-                                                                                         : std::string(part.substr(dot));
-}
+#endif
 
 struct TableSize {
   int columns, rows;
@@ -1310,54 +1292,13 @@ bool ObjectTool::Copy(bool cut) {
   if (selection_.empty()) return false;
   Deck* deck = host_.deck();
   fw::slide::edit::Editor* ed = deck ? deck->Editor() : nullptr;
-  Presentation* model = deck ? deck->Model() : nullptr;
-  if (!ed || !model) return false;
-  const size_t slide = host_.current();
-  const fw::slide::Slide* s = model->GetSlide(slide);
-  ClipObjects clip;
-  std::vector<std::string> ids;
+  if (!ed) return false;
   // In the slide's order, bottom to top, so pasting keeps it.
-  for (const ob::ObjectInfo& o : Map().Objects()) {
-    if (std::find(selection_.begin(), selection_.end(), o.id) == selection_.end()) continue;
-    std::string xml = ed->ShapeXml(slide, o.id);
-    if (xml.empty()) continue;
-    pugi::xml_document doc;
-    if (doc.load_string(xml.c_str())) RelIds(doc.document_element(), ids);
-    clip.xml.push_back(std::move(xml));
-  }
-  if (clip.xml.empty()) return false;
-  for (const std::string& id : ids) {
-    const pkg::Relationship* rel = s && s->relationships ? s->relationships->Find(id) : nullptr;
-    if (!rel) continue;
-    ClipPart p;
-    p.id = rel->id;
-    p.type = rel->type;
-    p.external = rel->external;
-    p.target = rel->external ? rel->target : rel->targetPart;
-    if (!rel->external) {
-      std::vector<uint8_t> bytes;
-      if (!ed->ReadPart(rel->targetPart, bytes)) continue;
-      p.bytes.assign(bytes.begin(), bytes.end());
-      p.contentType = std::string(model->GetPackage().ContentTypeOf(rel->targetPart));
-      // A chart's embedded workbook comes along (its first package relationship).
-      if (rel->type == ob::kChartRelType)
-        if (const pkg::RelationshipSet* cr = model->GetPackage().RelationshipsOf(rel->targetPart))
-          for (const pkg::Relationship& sub : cr->items)
-            if (sub.type == ob::kPackageRelType && !sub.external) {
-              std::vector<uint8_t> wb;
-              if (!ed->ReadPart(sub.targetPart, wb)) continue;
-              ClipPart w;
-              w.id = rel->id + "#" + sub.id;
-              w.type = sub.type;
-              w.target = sub.targetPart;
-              w.contentType = std::string(model->GetPackage().ContentTypeOf(sub.targetPart));
-              w.bytes.assign(wb.begin(), wb.end());
-              clip.parts.push_back(std::move(w));
-              break;
-            }
-    }
-    clip.parts.push_back(std::move(p));
-  }
+  std::vector<uint32_t> ids;
+  for (const ob::ObjectInfo& o : Map().Objects())
+    if (std::find(selection_.begin(), selection_.end(), o.id) != selection_.end()) ids.push_back(o.id);
+  const Clip clip = ed->CopyShapes(host_.current(), ids);
+  if (clip.Empty()) return false;
   const std::string data = Encode(clip);
   if (!OpenClipboard(host_.window ? host_.window() : nullptr)) return false;
   EmptyClipboard();
@@ -1386,59 +1327,16 @@ bool ObjectTool::Paste() {
   fw::slide::edit::Editor* ed = deck->Editor();
   const size_t slide = host_.current();
   const draw::Size size = deck->SlideSize();
-  // Objects copied in Featherweight.
+  // Objects copied in Featherweight (any slide, any deck): the editor pastes them with their parts.
   const std::vector<uint8_t> own = ClipboardBytes(ObjectsFormat());
-  ClipObjects clip;
+  Clip clip;
   if (!own.empty() && Decode(std::string_view(reinterpret_cast<const char*>(own.data()), own.size()), clip)) {
-    fw::slide::edit::EditGroup group(*ed, u"Paste");
-    const std::string slidePart = ed->SlidePart(slide);
-    std::vector<std::pair<std::string, std::string>> renamed;
-    for (const ClipPart& p : clip.parts) {
-      if (p.id.find('#') != std::string::npos) continue;  // a chart's workbook: with its chart below
-      std::string id;
-      if (p.external) {
-        id = ed->AddRelationship(slidePart, p.type, p.target, true);
-      } else if (p.type == ob::kChartRelType) {
-        std::string xml = p.bytes;
-        const std::string chartPart = ed->NewPartName("/ppt/charts/chart", ".xml");
-        id = ed->AddPart(slidePart, p.type, chartPart, p.contentType.empty() ? ob::kChartContentType : p.contentType,
-                         std::vector<uint8_t>(xml.begin(), xml.end()));
-        // Its workbook again, under the chart's relationship id the chart part names.
-        for (const ClipPart& w : clip.parts)
-          if (w.id.rfind(p.id + "#", 0) == 0) {
-            const std::string wbPart = ed->NewPartName("/ppt/embeddings/Microsoft_Excel_Worksheet", Extension(w.target));
-            const std::string wid = ed->AddPart(chartPart, w.type, wbPart, w.contentType, std::vector<uint8_t>(w.bytes.begin(), w.bytes.end()));
-            const std::string oldId = w.id.substr(p.id.size() + 1);
-            if (!wid.empty() && wid != oldId) {
-              pugi::xml_document cd;
-              if (cd.load_buffer(xml.data(), xml.size())) {
-                RenameRelIds(cd.document_element(), {{oldId, wid}});
-                std::string fixed = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n" + ob::ToXml(cd.document_element());
-                ed->WritePart(chartPart, std::vector<uint8_t>(fixed.begin(), fixed.end()));
-              }
-            }
-          }
-      } else {
-        const std::string stem = p.type == ob::kImageRelType ? "/ppt/media/image" : "/ppt/media/media";
-        id = ed->AddPart(slidePart, p.type, ed->NewPartName(stem, Extension(p.target)), p.contentType,
-                         std::vector<uint8_t>(p.bytes.begin(), p.bytes.end()));
-      }
-      if (!id.empty()) renamed.push_back({p.id, id});
-    }
     std::vector<uint32_t> pasted;
-    for (const std::string& xml : clip.xml) {
-      pugi::xml_document doc;
-      if (!doc.load_string(xml.c_str())) continue;
-      RenameRelIds(doc.document_element(), renamed);
-      uint32_t id = 0;
-      const fw::slide::edit::Result r = ed->InsertShape(slide, ob::ToXml(doc.document_element()), &id, -1);
-      if (!r) {
-        Refused(W(r.message));
-        return false;
-      }
-      pasted.push_back(id);
+    const fw::slide::edit::Result r = ed->PasteShapes(slide, clip, &pasted);
+    if (!r) {
+      Refused(W(r.message));
+      return false;
     }
-    group.done = true;
     Edited();
     Map();
     selection_ = pasted;
