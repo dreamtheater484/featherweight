@@ -87,6 +87,23 @@ bool IsPictureName(const std::wstring& path) {
   return false;
 }
 
+// Whether a text body holds any characters (a:p/a:r/a:t, a:p/a:fld/a:t). A shape with an empty one
+// moves when dragged, as one without text does (PowerPoint's); a double-click puts the caret in it.
+bool HasText(pugi::xml_node body) {
+  for (pugi::xml_node para : body.children())
+    for (pugi::xml_node run : para.children())
+      for (pugi::xml_node t : run.children()) {
+        const char* name = t.name();
+        const char* colon = std::strrchr(name, ':');
+        if (std::strcmp(colon ? colon + 1 : name, "t") == 0 && *t.child_value()) return true;
+      }
+  return false;
+}
+
+bool EmptyText(const ob::ObjectInfo& o) {
+  return o.shape && o.shape->textNode && !o.placeholder && !o.shape->textBox && !HasText(o.shape->textNode);
+}
+
 std::vector<uint8_t> ReadFileBytes(const std::wstring& path) {
   std::string bytes;
   if (!util::ReadFileBytes(path, bytes, kMaxPictureFile)) return {};
@@ -401,8 +418,9 @@ bool ObjectTool::WantsPress(float x, float y) const {
   if (!id) return false;
   const ob::ObjectInfo* o = map_.Find(id);
   if (!o || !o->shape) return false;
-  // Objects without text are the objects'; text bodies are text editing's, except at their edge.
-  const bool text = o->shape->textNode || o->shape->kind == fw::slide::Shape::Kind::Table;
+  // Objects without text are the objects' (an empty text body too, except a placeholder's: that
+  // takes the caret); text bodies are text editing's, except at their edge.
+  const bool text = (o->shape->textNode && !EmptyText(*o)) || o->shape->kind == fw::slide::Shape::Kind::Table;
   if (!text || o->kind == ob::ObjectKind::Group) return true;
   if (std::find(selection_.begin(), selection_.end(), id) != selection_.end()) {
     const float edge = Tolerance() * 0.75f;
@@ -454,6 +472,7 @@ bool ObjectTool::MouseDown(float x, float y, UINT mods, bool doubleClick) {
       host_.invalidate();
       return true;
     }
+    if (o && EmptyText(*o)) return false;  // text editing's: the caret in the empty shape
   }
   if (!id) {
     // The empty slide: a marquee (Shift/Ctrl add to the selection).
