@@ -21,6 +21,7 @@
 #include "slide/render/SlideRender.h"
 #include "slide/view/TextClip.h"
 #include "slide/view/TextDoc.h"
+#include "slide/view/TextFind.h"
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModel.h"
 #include "slide/view/TextSession.h"
@@ -587,4 +588,21 @@ TEST(SlideText_CopyAndPasteKeepTheLook) {
   CHECK(Paste(s, *f.model, clip.html, clip.rtf, L"x\r\ny", true));
   CHECK_EQ(s.Doc().ParagraphCount(), 2u);
   CHECK(s.Doc().Text(1).starts_with(L"yHello"));
+}
+
+TEST(SlideText_FindAndReplaceAcrossTheDeck) {
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>",
+                         "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>One two one, someone</a:t></a:r></a:p>"),
+                 2));
+  std::vector<TextMatch> all = FindAll(*f.model, L"one", false, false);
+  CHECK_EQ(all.size(), size_t{3});
+  std::vector<TextMatch> words = FindAll(*f.model, L"one", false, true);
+  REQUIRE(words.size() == 2);
+  CHECK(words[0].from == (TextPos{0, 0}));
+  CHECK(words[1].from == (TextPos{0, 8}));
+  CHECK_EQ(FindAll(*f.model, L"one", true, true).size(), size_t{1});
+  CHECK_EQ(ReplaceAll(*f.model, words, L"three"), 2);
+  CHECK(f.model->Committed().find("three two three, someone") != std::string::npos);
+  CHECK_EQ(f.model->steps.back(), std::u16string(u"Replace All"));
 }
