@@ -1,0 +1,26 @@
+#pragma once
+
+#include <functional>
+#include <string>
+#include <string_view>
+
+#include "slide/edit/EditInternal.h"
+
+// DrawingML writing the shape and text operations share. Internal to src/slide/edit.
+namespace fw::slide::edit {
+
+// A fill element for a color (a:solidFill, a:noFill), declaring its prefix; empty for Inherit.
+std::string ColorFillXml(const ColorSpec& c);
+// Replaces `parent`'s children of group `group` (groupOf maps a local name to its schema group, -1
+// for none) with the element in `xml` (empty: removes them), put in schema order. False when `xml`
+// isn't one element of that group.
+bool ReplaceGroup(pugi::xml_node parent, std::string_view xml, const std::function<int(std::string_view)>& groupOf,
+                  int group);
+// spPr's child groups in schema order (xfrm 0, geometry 1, fill 2, ln 3, effects 4, scene3d 5, sp3d 6).
+int SpPrGroupOf(std::string_view local);
+// The action attribute for a link target ("ppaction://hlinksldjump"...); empty for a web address.
+std::string LinkAction(const LinkTarget& link);
+// Fills an empty a:hlinkClick for `target`, adding the relationship of `part` it needs.
+bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, const LinkTarget& target);
+
+}  // namespace fw::slide::edit

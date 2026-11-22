@@ -198,8 +198,8 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
     if (!id.empty()) {
       if (!tableStylesRead_) {
         tableStylesRead_ = true;
-        std::string part = TargetOfType(package_->RelationshipsOf(presentationPart_), "tableStyles");
-        tableStyles_ = ParsePart(*package_, part, nullptr);
+        std::string part = TargetOfType(RelationshipsOf(presentationPart_), "tableStyles");
+        tableStyles_ = DomOf(*this, part, nullptr);
       }
       if (tableStyles_) {
         ForEachChild(tableStyles_->Root(), [&](pugi::xml_node s) {
