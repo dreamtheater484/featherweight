@@ -48,6 +48,8 @@ class Theme {
   static std::shared_ptr<const Theme> Parse(std::string_view xml);
   // For files without a theme: Office's (2013 and later) colors, fonts and formats.
   static const std::shared_ptr<const Theme>& Default();
+  // That theme's part (a:theme, without the XML declaration): what new files carry.
+  static std::string_view DefaultXml();
 
   const std::string& Name() const { return name_; }
   Color GetColor(ThemeColor c) const { return colors_[static_cast<int>(c)]; }

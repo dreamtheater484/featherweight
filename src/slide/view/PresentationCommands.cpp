@@ -107,6 +107,7 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
   if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
+  if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
   if (ctrl && !alt) {
@@ -134,6 +135,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState PresentationView::QueryCommand(int cmd) {
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
+  if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
     case CmdSave: s.enabled = false; break;  // read-only until P2
@@ -187,12 +189,18 @@ std::vector<int> PresentationView::Commands() {
   std::vector<int> out;
   for (const CommandName& n : kNames)
     if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
+  // P2: the slides' commands.
+  for (int cmd : {CmdSlideNew, CmdSlideDuplicate, CmdSlideDelete, CmdSlideHide, CmdSlideMoveUp, CmdSlideMoveDown,
+                  CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
+                  CmdHeaderFooter, CmdSlideSize169, CmdSlideSize43})
+    out.push_back(cmd);
   return out;
 }
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
   if (text_->Owns(cmd)) return text_->Execute(cmd);
+  if (SlideCommand(cmd)) return true;  // P2: the slides' commands
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdPresentation:
@@ -288,6 +296,7 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
     if (v.index >= 0 && v.index < static_cast<int>(std::size(kLayouts))) Execute(kLayouts[v.index].cmd);
   };
   m.left = {print, layout};
+  AddSlideTools(m);  // P2: ＋ Slide ▾ and Layout ▾ first
   text_->AddToolbar(m);  // the text being edited: font, size, emphasis, color, alignment, lists
 
   // ▶ Present ▾: from the beginning, or the list's choice.
@@ -336,12 +345,13 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   if (!Ready()) return;
   downX_ = x;
   downY_ = y;
-  if (text_->Editing()) {
+  if (text_->Editing() && !gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y))) {
     text_->FillContextMenu(m, current_, SlidePoint(x, y));
     return;
   }
-  // A right-click on a thumbnail is about that slide.
-  if (const int t = ThumbAt(x, y); t >= 0) GoToSlide(static_cast<size_t>(t));
+  // A right-click on a thumbnail is about that slide (and the others selected with it).
+  if (const int t = ThumbAt(x, y); t >= 0 || gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y)))
+    SlideContextMenu(m, t);  // P2: new, duplicate, delete, layout, hide
   const bool any = SlideCount() > 0;
   if (LinkAt(x, y)) {
     AppendItem(m, CmdOpenSlideLink, L"Open link");

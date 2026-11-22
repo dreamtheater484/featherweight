@@ -434,6 +434,10 @@ const draw::Theme& ThemeOf(const SlideBase& shownOn) {
 
 }  // namespace
 
+std::wstring DateFieldText(std::string_view type, const std::string& lang) {
+  return type.starts_with("datetime") ? DateField(type, lang) : std::wstring();
+}
+
 namespace detail {
 
 std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& shape, const SlideBase& owner,

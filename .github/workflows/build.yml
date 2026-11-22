@@ -67,6 +67,23 @@ jobs:
             build/torture/repro/
           if-no-files-found: ignore
 
+      # P2's deck torture test, CI subset: each public deck saved without edits (no part written),
+      # then seeded edits through the edit API, a save, fwtool check, the model reading it back, and
+      # the validator. PowerPoint's open check runs on the Office reference PC (without -Ci).
+      - name: Deck torture test (fwtool torture --decks and the validator)
+        shell: pwsh
+        run: scripts\deck-torture.ps1 -Ci
+
+      - name: Upload the deck torture test's reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck-torture
+          path: |
+            build/deck-torture/summary.md
+            build/deck-torture/repro/
+          if-no-files-found: ignore
+
       - name: Smoke test (render a PDF, a Word document and a presentation off-screen)
         shell: pwsh
         run: |

@@ -15,6 +15,9 @@
 #include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
 #include "slide/view/PresentationText.h"
+#include "slide/view/NewDeck.h"
+#include "slide/view/PresentationPanels.h"
+#include "slide/view/SlideGallery.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -59,6 +62,7 @@ PresentationView::PresentationView(ViewHost& host, std::wstring path, std::uniqu
     : host_(host), path_(std::move(path)), deck_(std::move(deck)), text_(std::make_unique<TextEditing>(host)) {
   if (deck_) thumbCache_.resize(deck_->SlideCount());
   text_->Attach(deck_.get(), deck_ ? deck_->Editor() : nullptr);  // p2-text
+  selection_.Reset(SlideCount(), 0);
 }
 
 PresentationView::~PresentationView() {
@@ -66,16 +70,24 @@ PresentationView::~PresentationView() {
   if (showing_ && fw::slide::show::Running()) fw::slide::show::Stop();
 }
 
+std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& host, int number) {
+  auto view = std::make_unique<PresentationView>(host, std::wstring());
+  view->untitled_ = L"Presentation" + std::to_wstring(number);
+  view->newDeck_ = true;
+  return view;
+}
+
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = OpenDeck(path_, why);
+  deck_ = newDeck_ ? OpenDeckFromBytes(BlankPresentation(), why) : OpenDeck(path_, why);
   if (!deck_) {
-    error = FileNameOf(path_) + L": " + why;
+    error = Title() + L": " + why;
     return OpenResult::Failed;
   }
   thumbCache_.assign(deck_->SlideCount(), {});
   text_->Attach(deck_.get(), deck_->Editor());  // p2-text: read-only when the deck has no editor
+  selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
@@ -83,7 +95,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   return OpenResult::Ok;
 }
 
-std::wstring PresentationView::Title() const { return FileNameOf(path_); }
+std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -211,6 +223,11 @@ void PresentationView::GoToSlide(size_t slide) {
     notesScroll_ = 0;
     slideBitmap_.Reset();
   }
+  // Going to a slide outside the selection selects it alone (P2).
+  if (selection_.Count() != SlideCount() || !selection_.Selected(current_) || selection_.Current() != current_) {
+    if (selection_.Count() == SlideCount() && selection_.Selected(current_)) selection_.Set(selection_.Indices(), current_);
+    else selection_.Reset(SlideCount(), current_);
+  }
   ScrollThumbIntoView(current_);
   host_.ViewStateChanged();
   host_.ViewInvalidate();
@@ -220,6 +237,18 @@ void PresentationView::GoToSlide(size_t slide) {
 // Drawing
 
 ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h, bool editing) {
+  return RenderBitmapWith(dc, w, h, [&](draw::Painter& p) {
+    if (editing) {
+      deck_->PaintFiltered(slide, p, text_->Filter(slide));
+      deck_->PaintPrompts(slide, p, text_->EditingShape(slide));
+    } else {
+      deck_->Paint(slide, p);
+    }
+  });
+}
+
+ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmapWith(ID2D1DeviceContext* dc, UINT w, UINT h,
+                                                        const std::function<void(draw::Painter&)>& paint) {
   ID2D1DeviceContext* ctx = OffscreenContext(dc);
   if (!ctx || !deck_ || w == 0 || h == 0) return nullptr;
   ComPtr<ID2D1Bitmap1> bmp;
@@ -233,12 +262,7 @@ ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size
     const draw::Size s = deck_->SlideSize();
     ctx->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
     draw::D2DPainter painter(ctx);
-    if (editing) {
-      deck_->PaintFiltered(slide, painter, text_->Filter(slide));
-      deck_->PaintPrompts(slide, painter, text_->EditingShape(slide));
-    } else {
-      deck_->Paint(slide, painter);
-    }
+    paint(painter);
   }
   ctx->SetTransform(D2D1::Matrix3x2F::Identity());
   const HRESULT hr = ctx->EndDraw();
@@ -284,6 +308,7 @@ void PresentationView::DrawThumbnails(Canvas& c, ID2D1DeviceContext* dc) {
     const D2D1_RECT_F row{r.row.left, r.row.top, r.row.right, r.row.bottom};
     const D2D1_RECT_F pic{r.slide.left, r.slide.top, r.slide.right, r.slide.bottom};
     if (static_cast<int>(i) == hoverThumb_ && i != current_) c.Fill(row, p.hover);
+    DrawThumbSelection(c, rows, i);
     const bool hidden = deck_->Hidden(i);
     // The number; a hidden slide's is crossed out, as PowerPoint marks it.
     const D2D1_RECT_F num{r.number.left, r.number.top, r.number.right, r.number.bottom};
@@ -304,10 +329,13 @@ void PresentationView::DrawThumbnails(Canvas& c, ID2D1DeviceContext* dc) {
     }
     if (i == current_) {
       c.StrokeRound(Inflate(pic, 2.5f * ui_, 2.5f * ui_), 3 * ui_, p.accent, 2 * ui_);
+    } else if (selection_.Count() == rows.size() && selection_.Selected(i)) {  // P2: selected with it
+      c.StrokeRound(Inflate(pic, 2.0f * ui_, 2.0f * ui_), 3 * ui_, Alpha(p.accent, 0.75f), 1.5f * ui_);
     } else {
       c.Stroke(pic, Alpha(p.chromeBorder, 0.8f), std::max(1.0f, ui_ * 0.75f));
     }
   }
+  DrawDropMarker(c);
   c.PopClip();
 }
 
@@ -476,11 +504,13 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   }
   if (const int t = ThumbAt(x, y); t >= 0) {
     keysInThumbs_ = true;
-    GoToSlide(static_cast<size_t>(t));
+    text_->End();  // p2-text
+    ThumbsMouseDown(t, mods, x, y);  // P2: selection, and a drag to move slides
     return;
   }
   if (Contains(thumbs_, fx, fy)) {
     keysInThumbs_ = true;
+    text_->End();  // p2-text
     return;
   }
   keysInThumbs_ = false;
@@ -520,7 +550,13 @@ void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
       ClampScroll();
       host_.ViewInvalidate();
       return;
-    default: break;
+    case Drag::Slides: ThumbsDragMove(x, y); return;
+    default:
+      if (thumbPress_) {
+        ThumbsDragMove(x, y);
+        if (drag_ == Drag::Slides) return;
+      }
+      break;
   }
   const int hover = ThumbAt(x, y);
   if (hover != hoverThumb_) {
@@ -535,6 +571,7 @@ void PresentationView::OnMouseUp(int /*x*/, int /*y*/, int /*button*/, UINT /*mo
     const float maxNotes = std::max(kMinNotes, (vp_.bottom - vp_.top) / ui_ * 0.6f);
     notesHeight_ = std::min(notesHeight_, maxNotes);
   }
+  if (drag_ == Drag::Slides || thumbPress_) ThumbsDragEnd(drag_ == Drag::Slides);
   drag_ = Drag::None;
 }
 
@@ -581,8 +618,10 @@ void PresentationView::OnWheel(int delta, bool horizontal, UINT mods, int x, int
 }
 
 bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
-  if (deck_ && text_->KeyDown(vk, mods)) return true;
-  if (!deck_ || (mods & (kModCtrl | kModAlt))) return false;
+  if (!deck_) return false;
+  if (keysInThumbs_ && ThumbsKeyDown(vk, mods)) return true;  // P2: the thumbnails' keys
+  if (!keysInThumbs_ && text_->KeyDown(vk, mods)) return true;  // p2-text: the text being edited
+  if (mods & (kModCtrl | kModAlt)) return false;
   switch (vk) {
     case VK_UP:
     case VK_LEFT:

@@ -1321,6 +1321,7 @@ void App::Execute(int cmd) {
     // A new document, workbook or presentation comes with that kind's editor.
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Workbook)) NewWorkbook();
+    if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Presentation)) NewPresentation();
     return;
   }
   if (cmd >= CmdNewTemplate && cmd < CmdNewTemplate + EmptyState::kTemplateCount) {
@@ -2625,6 +2626,7 @@ void App::RunScript(const std::wstring& script) {
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
         if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
       if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
+      else if (fw::EqualsNoCase(arg, L"presentation")) NewPresentation();  // new:presentation (P2)
       else NewDocument(kind);
     } else if (op == L"edited") {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).

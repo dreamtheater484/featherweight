@@ -93,6 +93,18 @@ class Deck {
   // The editor's prompts in empty placeholders (not for the show, printing or PDF); `skip`: the one
   // being typed in.
   virtual void PaintPrompts(size_t /*slide*/, draw::Painter& /*p*/, uint32_t /*skip*/) {}
+  // ---- Layouts (P2, p2-slides: new slide, change layout) ----
+  struct LayoutChoice {
+    size_t index = 0;      // into the presentation's layouts
+    std::wstring name;     // as the deck names it ("Title and Content")
+  };
+  // The layouts slide `slide` can use: its master's, in the master's order. Empty without layouts.
+  virtual std::vector<LayoutChoice> LayoutsFor(size_t /*slide*/) const { return {}; }
+  // The layout slide `slide` uses (an index into the presentation's layouts), or -1.
+  virtual int LayoutOf(size_t /*slide*/) const { return -1; }
+  // Draws layout `layout` as the layout gallery shows it, in slide points: its background, its own
+  // and its master's shapes and its placeholders' prompts, without the date, footer and number.
+  virtual void PaintLayout(size_t /*layout*/, draw::Painter& /*p*/) {}
 };
 
 }  // namespace fw::slide::view
