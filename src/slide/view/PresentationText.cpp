@@ -325,6 +325,7 @@ bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size
 void TextEditing::End() {
   if (!session_) return;
   session_.reset();
+  cellTo_.reset();
   if (linkPanel_ && host_.ViewShownPanel() == linkPanel_.get()) host_.ViewShowPanel(nullptr);
   if (editor_) editor_->EndTyping();  // typing here again later is a new step
   slideChanged_ = true;
@@ -391,6 +392,15 @@ bool TextEditing::MouseDown(size_t slide, draw::Point at, bool doubleClick, UINT
     lastDoubleClick_ = now;
     lastDoubleAt_ = at;
   }
+  // Shift+click in another cell of the table being edited: a block of cells.
+  int row = -1, column = -1;
+  if (session_ && session_->Target().Cell() && session_->Target().slide == slide && (mods & kModShift) &&
+      CellUnder(at, row, column) && (row != session_->Target().row || column != session_->Target().column)) {
+    cellTo_ = {row, column};
+    Changed();
+    return true;
+  }
+  cellTo_.reset();
   // In the text being edited: the caret, a word, a paragraph.
   if (session_ && session_->Target().slide == slide && !session_->Target().notes && session_->Contains(at)) {
     session_->PointerDown(at, clicks, (mods & kModShift) != 0);
@@ -412,8 +422,30 @@ bool TextEditing::MouseDown(size_t slide, draw::Point at, bool doubleClick, UINT
 
 void TextEditing::MouseMove(draw::Point at) {
   if (!session_) return;
-  session_->PointerDrag(at);
+  // A drag out of the edited cell into another of its table selects the block of cells between.
+  int row = -1, column = -1;
+  if (session_->Target().Cell() && CellUnder(at, row, column) &&
+      (row != session_->Target().row || column != session_->Target().column)) {
+    cellTo_ = {row, column};
+  } else {
+    if (cellTo_) cellTo_.reset();
+    session_->PointerDrag(at);
+  }
   host_.ViewInvalidate();
+  host_.ViewStateChanged();
+}
+
+bool TextEditing::CellUnder(draw::Point at, int& row, int& column) const {
+  if (!session_ || !deck_ || !session_->Target().Cell()) return false;
+  render::SlideRender* r = deck_->Rendered(session_->Target().slide);
+  return r && r->CellAt(session_->Target().shape, at, row, column);
+}
+
+std::optional<std::array<int, 4>> TextEditing::CellRange() const {
+  if (!session_ || !session_->Target().Cell()) return std::nullopt;
+  const int r0 = session_->Target().row, c0 = session_->Target().column;
+  const int r1 = cellTo_ ? cellTo_->first : r0, c1 = cellTo_ ? cellTo_->second : c0;
+  return std::array<int, 4>{std::min(r0, r1), std::min(c0, c1), std::max(r0, r1), std::max(c0, c1)};
 }
 
 bool TextEditing::OverText(size_t slide, draw::Point at) {
@@ -425,6 +457,7 @@ bool TextEditing::OverText(size_t slide, draw::Point at) {
 
 bool TextEditing::KeyDown(UINT vk, UINT mods) {
   if (!session_) return false;
+  if (cellTo_ && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) cellTo_.reset();
   TextSession& s = *session_;
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   using M = TextSession::Move;
@@ -521,11 +554,30 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
     // The text itself, laid out after the last keystroke.
     session_->Block().Draw(painter, nullptr, session_->Target().shape);
     painter.Restore();
-    // The selection over it.
+    // The selection over it: a block of cells, or the text's.
+    const D2D1_COLOR_F sel = pal.selection;
+    if (const auto range = CellRange(); range && cellTo_) {
+      render::SlideRender* table = deck_->Rendered(slide);
+      for (int row = (*range)[0]; table && row <= (*range)[2]; ++row)
+        for (int col = (*range)[1]; col <= (*range)[3]; ++col) {
+          render::SlideRender::TextFrame cf;
+          if (!table->FindText(session_->Target().shape, row, col, cf)) continue;
+          const draw::Rect& b = cf.box.rect;
+          draw::Path cell;
+          cell.MoveTo({b.left - cf.box.insets.left, b.top - cf.box.insets.top});
+          cell.LineTo({b.right + cf.box.insets.right, b.top - cf.box.insets.top});
+          cell.LineTo({b.right + cf.box.insets.right, b.bottom + cf.box.insets.bottom});
+          cell.LineTo({b.left - cf.box.insets.left, b.bottom + cf.box.insets.bottom});
+          cell.Close();
+          painter.Save();
+          painter.Transform(cf.toSlide * toScreen);
+          painter.FillPath(cell, draw::Brush::Solid({sel.r, sel.g, sel.b, 0.4f}));
+          painter.Restore();
+        }
+    }
     painter.Save();
     painter.Transform(toScreen);
-    const D2D1_COLOR_F sel = pal.selection;
-    for (const auto& q : session_->SelectionQuads()) {
+    for (const auto& q : cellTo_ ? std::vector<std::array<draw::Point, 4>>() : session_->SelectionQuads()) {
       draw::Path p;
       p.MoveTo(q[0]);
       p.LineTo(q[1]);
@@ -537,7 +589,7 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
     painter.Restore();
   }
   // The caret: a thin line, in screen pixels.
-  if (!session_->HasSelection()) {
+  if (!session_->HasSelection() && !cellTo_) {
     const TextSession::CaretLine line = session_->CaretGeometry();
     const draw::Point a = toScreen.Apply(line.top), b = toScreen.Apply(line.bottom);
     c.Line(std::round(a.x) + 0.5f, a.y, std::round(b.x) + 0.5f, b.y, D2D1::ColorF(0, 0, 0, 1), std::max(1.0f, k * 0.75f));
