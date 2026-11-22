@@ -453,7 +453,10 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
   c.colors.theme = &c.theme;
   c.colors.colorMap = &shownOn.colorMap;
   Levels lv = Defaults(c);
-  ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
+  // Placeholders start from the master's text styles alone; only text boxes and shapes start from
+  // the presentation's default text style (PowerPoint 2021: corpus decks whose default style is
+  // bold italic show regular placeholder text).
+  if (!shape.placeholder) ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
   // The master's text style for this kind of text.
   if (const Master* m = MasterOf(owner)) {
     pugi::xml_node style;

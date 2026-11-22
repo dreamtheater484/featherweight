@@ -122,7 +122,7 @@ struct SlideBase {
   draw::ColorMap colorMap;                   // in effect: the part's override, else its master's
   // The background in effect (the part's, else its layout's, else its master's) as a rectangle
   // shape filling the slide, for draw::Drawing::FromShapeTree; its pictures are in
-  // backgroundOwner's relationships. Null when there is none (white).
+  // backgroundOwner's relationships. A chain without one gets PowerPoint's default, a solid bg1.
   pugi::xml_node background;
   const SlideBase* backgroundOwner = nullptr;
   bool showMasterShapes = true;               // showMasterSp

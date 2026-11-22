@@ -1479,7 +1479,11 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Color text = ch.textColor.value_or(kText);
   const float ts = std::clamp(ch.textSize, 1.0f, 72.0f), tts = std::clamp(ch.titleSize, 1.0f, 96.0f);
   const float corner = ch.roundedCorners ? std::min(10.0f, std::min(W, H) / 6) : 0;
-  b.Mark(corner > 0 ? Path::RoundedRect({0, 0, W, H}, corner, corner) : Path::FromRect({0, 0, W, H}), ch.area, kWhite,
+  // The chart area: white unless it says (Excel, Word); in a presentation, unfilled unless it says,
+  // so the slide shows through (PowerPoint).
+  Look area = ch.area;
+  if (ch.presentation && !area.fill) area.noFill = true;
+  b.Mark(corner > 0 ? Path::RoundedRect({0, 0, W, H}, corner, corner) : Path::FromRect({0, 0, W, H}), area, kWhite,
          ch.presentation ? std::nullopt : std::optional<Color>(kGray), 0.75f);
   // The room inside the chart area's padding; the title and legend take theirs from it unless
   // they overlay the plot.

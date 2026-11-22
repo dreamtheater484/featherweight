@@ -1,6 +1,13 @@
+#include <windows.h>
+
+#include <dwrite.h>
+#include <wrl/client.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
+#include "draw/CloudFonts.h"
 #include "draw/Xml.h"
 #include "slide/render/SlideRender.h"
 #include "slide/render/Table.h"
@@ -18,6 +25,59 @@ draw::Rect Bounds(const draw::Matrix& m, draw::Size size) {
   for (const draw::Point& q : pts)
     r = {std::min(r.left, q.x), std::min(r.top, q.y), std::max(r.right, q.x), std::max(r.bottom, q.y)};
   return r;
+}
+
+// Whether Windows has the family.
+bool Installed(const std::wstring& family) {
+  static Microsoft::WRL::ComPtr<IDWriteFontCollection> fonts = [] {
+    Microsoft::WRL::ComPtr<IDWriteFactory> dw;
+    Microsoft::WRL::ComPtr<IDWriteFontCollection> c;
+    if (SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                      reinterpret_cast<IUnknown**>(dw.GetAddressOf()))))
+      dw->GetSystemFontCollection(&c);
+    return c;
+  }();
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  return fonts && SUCCEEDED(fonts->FindFamilyName(family.c_str(), &index, &exists)) && exists;
+}
+
+// A family the PC doesn't have, as PowerPoint replaces it (p1-corpus: missing sans faces such as
+// Open Sans, Montserrat or Poppins drawn sans, not in Times New Roman): fwtext's table (Aptos,
+// Helvetica...), Windows' FontSubstitutes, else by the name, fixed-pitch and serif faces as such,
+// everything else in Arial.
+std::wstring PresentationSubstitute(std::wstring_view family) {
+  if (family.empty() || family.size() > 64) return {};
+  if (std::wstring_view known = text::Fonts::BuiltInSubstitute(family); !known.empty()) return std::wstring(known);
+  const std::wstring name(family);
+  wchar_t value[128] = {};
+  DWORD bytes = sizeof value;
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes", name.c_str(),
+                   RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS && value[0]) {
+    std::wstring s = value;
+    if (size_t comma = s.find(L','); comma != std::wstring::npos) s.resize(comma);  // "Arial,0": a charset
+    return s;
+  }
+  std::wstring lower = name;
+  for (wchar_t& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+  // "Open Sans SemiBold": a weight of a family (a cloud font's), which PowerPoint draws in it.
+  for (std::wstring_view weight : {L" thin", L" extralight", L" ultralight", L" light", L" semilight", L" regular", L" medium",
+                                   L" semibold", L" demibold", L" extrabold", L" ultrabold", L" bold", L" black", L" heavy"}) {
+    if (lower.size() > weight.size() && lower.ends_with(weight)) {
+      std::wstring base = name.substr(0, name.size() - weight.size());
+      if (draw::CloudFontsHave(base) || Installed(base)) return base;
+      lower.resize(lower.size() - weight.size());
+      break;
+    }
+  }
+  const auto has = [&](std::wstring_view word) { return lower.find(word) != std::wstring::npos; };
+  if (has(L"mono") || has(L"courier") || has(L"consol") || has(L"typewriter") || has(L"code")) return L"Courier New";
+  if (!has(L"sans") && (has(L"serif") || has(L"times") || has(L"roman") || has(L"garamond") || has(L"georgia") ||
+                        has(L"baskerville") || has(L"caslon") || has(L"bodoni") || has(L"didot") || has(L"palatino") ||
+                        has(L"minion") || has(L"cambria") || has(L"century") || has(L"book") || has(L"slab") ||
+                        has(L"mincho") || has(L"song") || has(L"ming")))
+    return L"Times New Roman";
+  return L"Arial";
 }
 
 draw::Rect Transformed(const draw::Matrix& m, const draw::Rect& r) {
@@ -406,6 +466,7 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck) {
     names.push_back(f.typeface);
   }
   if (!files.empty()) fonts.UseDocumentFonts(files, names);
+  fonts.SetSubstitute(PresentationSubstitute);
 }
 
 }  // namespace fw::slide::render

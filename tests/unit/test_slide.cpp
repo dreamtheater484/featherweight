@@ -680,3 +680,45 @@ TEST(SlideCorpusDecksResolve) {
   }
   std::printf("  %d corpus decks, %d with something skipped\n", decks, withProblems);
 }
+
+TEST(SlidePlaceholdersIgnoreDefaultTextStyle) {
+  // A bold italic default text style reaches text boxes, not placeholders (PowerPoint 2021, corpus).
+  std::string pres = PartText("simple.pptx", "/ppt/presentation.xml");
+  for (size_t at = pres.find("<a:defRPr sz=\"1800\""); at != std::string::npos; at = pres.find("<a:defRPr sz=\"1800\"", at + 1)) {
+    pres.insert(at + 9, " b=\"1\" i=\"1\"");
+  }
+  std::string box =
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"7\" name=\"Box\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>"
+      "<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Box</a:t></a:r></a:p></p:txBody></p:sp>";
+  std::string slide = SlideXml(
+      PhShape(2, "<p:ph type=\"title\"/>", "<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>T</a:t></a:r></a:p>") +
+      PhShape(3, "<p:ph idx=\"1\"/>", "<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>B</a:t></a:r></a:p>") + box);
+  const char* rels =
+      "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+      "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\""
+      " Target=\"../slideLayouts/slideLayout2.xml\"/></Relationships>";
+  auto deck = Modified({{"ppt/presentation.xml", pres}, {"ppt/slides/slide1.xml", slide}, {"ppt/slides/_rels/slide1.xml.rels", rels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  for (uint32_t id : {2u, 3u}) {
+    const TextBody* t = TextOf(*deck, *s, id);
+    CHECK(t && !t->paragraphs[0].runs[0].props.bold && !t->paragraphs[0].runs[0].props.italic);
+  }
+  const TextBody* b = TextOf(*deck, *s, 7);
+  CHECK(b && b->paragraphs[0].runs[0].props.bold && b->paragraphs[0].runs[0].props.italic);
+}
+
+TEST(SlideMissingBackgroundIsBg1) {
+  // No background anywhere: PowerPoint fills the slide with bg1 through the shown slide's color map.
+  std::string master = PartText("simple.pptx", "/ppt/slideMasters/slideMaster1.xml");
+  ReplaceBetween(master, "<p:bg>", "</p:bg>", "");
+  auto deck = Modified({{"ppt/slideMasters/slideMaster1.xml", master}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  CHECK(s->background && s->backgroundOwner == s);
+  CHECK(std::string_view(s->background.child("p:spPr").child("a:solidFill").child("a:schemeClr").attribute("val").value()) == "bg1");
+  auto res = deck->Resources(*s->backgroundOwner, *s);
+  CHECK(draw::Drawing::FromShapeTree(s->background, *res) != nullptr);
+}
