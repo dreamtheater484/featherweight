@@ -411,22 +411,43 @@ Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
   for (pugi::xml_node n : gone) n.parent().remove_child(n);
   pkg::RelationshipSet& presRels = m.EditRels(pres);
   std::erase_if(presRels.items, [&](const pkg::Relationship& r) { return rels.count(r.id) > 0; });
-  // Links from the other slides to these stop working, as PowerPoint leaves them: the link's
-  // relationship goes and its r:id is emptied.
-  for (size_t i = 0; i < list.size(); ++i) {
-    if (parts.count(pkg::PartKey(list[i].part))) continue;
-    const pkg::RelationshipSet* sr = m.Rels(list[i].part);
+  // Links to these slides from what stays (other slides, notes pages, layouts, masters) go: an
+  // a:hlinkClick, a:hlinkHover or a:hlinkMouseOver that jumps to one is dropped, its text or shape kept
+  // without the link, and the relationship goes. (PowerPoint repairs a slide jump left without r:id.)
+  std::set<std::string> going = parts;  // the deleted slides and their notes pages
+  for (size_t i : slides) {
+    if (const pkg::RelationshipSet* sr = m.Rels(list[i].part)) {
+      for (const pkg::Relationship& r : sr->items) {
+        if (!r.external && r.type.ends_with("/notesSlide")) going.insert(pkg::PartKey(r.targetPart));
+      }
+    }
+  }
+  for (const std::string& name : m.store.PartNames()) {
+    if (going.count(pkg::PartKey(name))) continue;
+    const pkg::RelationshipSet* sr = m.Rels(name);
     if (!sr) continue;
     std::set<std::string> dead;
     for (const pkg::Relationship& r : sr->items) {
       if (!r.external && parts.count(pkg::PartKey(r.targetPart)) && r.type.ends_with("/slide")) dead.insert(r.id);
     }
     if (dead.empty()) continue;
-    pugi::xml_node sroot = m.Edit(list[i].part);
-    for (const pkg::FoundRef& f : m.registry.Find(sroot, pkg::RefKind::RelationshipId)) {
-      if (f.attr && dead.count(std::string(f.Value()))) pugi::xml_attribute(f.attr).set_value("");
+    auto uses = [&](pugi::xml_node root) {
+      std::vector<pkg::FoundRef> found;
+      for (const pkg::FoundRef& f : m.registry.Find(root, pkg::RefKind::RelationshipId)) {
+        if (f.attr && dead.count(std::string(f.Value()))) found.push_back(f);
+      }
+      return found;
+    };
+    if (!uses(m.Root(name)).empty()) {  // the part copied only when it names them
+      std::vector<pugi::xml_node> links;
+      for (const pkg::FoundRef& f : uses(m.Edit(name))) {
+        const std::string_view k = LocalNameOf(f.element);
+        if (k == "hlinkClick" || k == "hlinkHover" || k == "hlinkMouseOver") links.push_back(f.element);
+        else pugi::xml_attribute(f.attr).set_value("");  // not a link: nothing known names a slide otherwise
+      }
+      for (pugi::xml_node n : links) n.parent().remove_child(n);
     }
-    pkg::RelationshipSet& edited = m.EditRels(list[i].part);
+    pkg::RelationshipSet& edited = m.EditRels(name);
     std::erase_if(edited.items, [&](const pkg::Relationship& r) { return dead.count(r.id) > 0; });
   }
   // The show's slide range stays within the deck.
