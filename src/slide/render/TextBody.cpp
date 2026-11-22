@@ -357,7 +357,10 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       if (size <= 0) size = emptySize(line);
       const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
-      const float above = line.ascent + line.descent > 0 ? pitch * line.ascent / (line.ascent + line.descent) : 0;
+      const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
+      // Spacing under single takes its reduction off the line's top: the part below the baseline
+      // stays (cbs deck at 90 %: 28-pt text 0.72 pt and a 44-pt title 1.16 pt higher than shared out).
+      const float above = pitch < natural ? std::max(0.f, pitch - natural * (1 - share)) : pitch * share;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
