@@ -106,6 +106,9 @@ function Get-TestPassword([string]$path) {
   "featherweight"
 }
 
+# UTF-8 without a BOM, so every read of these files says -Encoding UTF8: Windows PowerShell reads a
+# file without a BOM as ANSI, and each read and rewrite turned the manifest's € into â‚¬ (a deck run
+# rewrites the manifest after every deck, so it grew to 1.4 GB).
 function Write-Json($value, [string]$path) {
   [IO.File]::WriteAllText($path, ($value | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 }
@@ -639,7 +642,7 @@ function Get-CopyOf([string]$source, [string]$sourceRoot) {
 
 $refManifest = Join-Path $root "tests\office\reference\manifest.json"
 if (-not $ExcelPrinter -and (Test-Path $refManifest)) {
-  $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer
+  $ExcelPrinter = [string](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.printer
 }
 
 # Each job: the source file, its name in the manifest, and its PDF relative to the output folder.
@@ -656,7 +659,7 @@ if ($Corpus) {
   }
   New-Item -ItemType Directory -Force $outRoot | Out-Null
   $manifestPath = Join-Path $outRoot "manifest.json"
-  if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
+  if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files) }
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
   # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
   # scripts\make-sheet-copies.ps1).
@@ -666,7 +669,7 @@ if ($Corpus) {
     foreach ($c in $CorpusFolders) { if ($corpusNames -notcontains $c) { throw "-CorpusFolders: $c isn't one of $($corpusNames -join ', ')." } }
     $corpusNames = $CorpusFolders
     # The other folders' entries stay as they are.
-    $prior = if (Test-Path $manifestPath) { @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) } else { @() }
+    $prior = if (Test-Path $manifestPath) { @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files) } else { @() }
     $kept = @($prior | Where-Object { $CorpusFolders -notcontains ($_.source -split '/')[0] })
     $old = @($old | Where-Object { $CorpusFolders -contains ($_.source -split '/')[0] })
   }
@@ -693,7 +696,7 @@ if ($Corpus) {
   $names = @($Folders | ForEach-Object { Split-Path -Leaf $_ })
   if (Test-Path $manifestPath) {
     # Entries of folders that aren't rendered this time stay as they are.
-    $previousFiles = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files)
+    $previousFiles = @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files)
     $kept = @($previousFiles | Where-Object { $names -notcontains ($_.source -split '/')[0] })
   }
   foreach ($folder in $Folders) {
@@ -744,7 +747,7 @@ try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
 
 # Excel must lay out as it did for the references (-ExcelStandardWidth): one Excel, a blank sheet.
 if (-not $ExcelStandardWidth -and (Test-Path $refManifest)) {
-  $ExcelStandardWidth = [double](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.standardWidth
+  $ExcelStandardWidth = [double](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.standardWidth
 }
 if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) {
   $probeFile = Join-Path $tmp "probe.json"
@@ -755,7 +758,7 @@ if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) 
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $probeArgs
   $done = $p.WaitForExit(120000)
   if (-not $done) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  $probed = if (Test-Path $probeFile) { Get-Content $probeFile -Raw | ConvertFrom-Json } else { $null }
+  $probed = if (Test-Path $probeFile) { Get-Content $probeFile -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
   if ($probed) { Stop-Started @($probed.pid) $apps["Excel"].Exe $(if ($done) { 15000 } else { 0 }) }
   if (-not $probed -or $probed.error) {
     $mutex.ReleaseMutex()
@@ -778,7 +781,7 @@ function Write-Manifest([bool]$final) {
   }
   # The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
   $facts = $script:excelFacts
-  if (-not $facts -and (Test-Path $manifestPath)) { $facts = (Get-Content $manifestPath -Raw | ConvertFrom-Json).excel }
+  if (-not $facts -and (Test-Path $manifestPath)) { $facts = (Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).excel }
   if ($facts) { $manifest.excel = $facts }
   if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the documents here
   $done = @{}
@@ -858,7 +861,7 @@ foreach ($job in $jobs) {
     $finished = $p.WaitForExit($limit * 1000)
     # Office is stuck, usually on a prompt: end the child.
     if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
+    $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     # The child ends the Office it started; if it hung or died, that's done here, so no hidden Office
     # is left to block the next file.
     if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }
