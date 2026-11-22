@@ -24,14 +24,16 @@ ObjectTool& PresentationView::Objects() const {
     h.beginText = [self](uint32_t id) {
       if (self->text_->BeginTextEdit(self->current_, id)) self->objects_->SetTextEditing(true);
     };
-    // p2-text: the table cell being edited is the one row and column commands, merge and split work at.
+    // p2-text: the cells chosen while a table cell is edited (a block dragged or Shift+clicked, else
+    // the edited cell) are where row and column commands, merge and split work.
     h.tableCells = [self](uint32_t table, int& row0, int& col0, int& row1, int& col1) {
       TextSession* s = self->text_->Session();
       if (!s) return false;
       const TextTarget& t = s->Target();
-      if (t.slide != self->current_ || t.notes || t.shape != table || !t.Cell()) return false;
-      row0 = row1 = t.row;
-      col0 = col1 = t.column;
+      if (t.slide != self->current_ || t.notes || t.shape != table) return false;
+      const std::optional<std::array<int, 4>> r = self->text_->CellRange();  // a block, else the edited cell
+      if (!r) return false;
+      row0 = (*r)[0], col0 = (*r)[1], row1 = (*r)[2], col1 = (*r)[3];
       return true;
     };
     // h.slideEdited stays unset: what was drawn of edited slides (thumbnails, the slide's bitmap, the

@@ -726,10 +726,13 @@ void ObjectTool::FinishDrag(UINT mods) {
 
 int ObjectTool::Shortcut(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
-  if (textEditing_ || !ctrl || alt) return 0;
+  if (!ctrl || alt) return 0;
+  // The deck's one undo, also while text is edited (typing is the editor's steps too; text editing
+  // reads its text back after an undo).
+  if (vk == 'Z') return shift ? CmdRedo : CmdUndo;
+  if (vk == 'Y') return shift ? 0 : CmdRedo;
+  if (textEditing_) return 0;
   switch (vk) {
-    case 'Z': return shift ? CmdRedo : CmdUndo;  // the deck's undo (text editing has its own first)
-    case 'Y': return shift ? 0 : CmdRedo;
     case 'G': return shift ? CmdUngroupObjects : CmdGroupObjects;
     case VK_OEM_6: return shift ? CmdBringToFront : CmdBringForward;   // ]
     case VK_OEM_4: return shift ? CmdSendToBack : CmdSendBackward;     // [
@@ -1953,7 +1956,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
 #if FW_SLIDE_EDIT
     case CmdUndo:
     case CmdRedo: {
-      if (textEditing_ || !editable) return false;
+      if (!editable) return false;
       fw::slide::edit::Editor* ed = host_.deck()->Editor();
       s.enabled = cmd == CmdUndo ? ed->CanUndo() : ed->CanRedo();
       const std::u16string name = cmd == CmdUndo ? ed->UndoName() : ed->RedoName();
@@ -2037,7 +2040,7 @@ bool ObjectTool::Execute(int cmd) {
 #if FW_SLIDE_EDIT
     case CmdUndo:
     case CmdRedo: {
-      if (textEditing_ || !Editable(false)) return false;
+      if (!Editable(false)) return false;
       fw::slide::edit::Editor* ed = host_.deck()->Editor();
       const fw::slide::edit::Result r = cmd == CmdUndo ? ed->Undo() : ed->Redo();
       if (!r) Refused(W(r.message));
