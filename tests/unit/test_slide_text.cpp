@@ -19,6 +19,7 @@
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
+#include "slide/view/TextClip.h"
 #include "slide/view/TextDoc.h"
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModel.h"
@@ -553,4 +554,37 @@ TEST(SlideText_ChangeCaseKeepsTheRuns) {
   CHECK_EQ(s.Doc().Resolved().paragraphs[0].runs.size(), size_t{2});
   CHECK(format::ChangeCase(s));
   CHECK(s.Doc().Text(0) == L"HELLO WORLD");
+}
+
+TEST(SlideText_CopyAndPasteKeepTheLook) {
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>",
+                         "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Hello </a:t></a:r><a:r><a:rPr lang=\"en-US\" b=\"1\" sz=\"3000\"/><a:t>world</a:t></a:r></a:p>"),
+                 2));
+  TextSession& s = *f.session;
+  s.Select({0, 6}, {0, 11});
+  const TextClipboard clip = CopySelection(s, *f.model);
+  CHECK(clip.text == L"world");
+  CHECK(clip.rtf.find("\\b") != std::string::npos);
+  CHECK(clip.html.find("<!--fw-slide-text:") != std::string::npos);
+  // Featherweight's own copy pastes whole: bold, 30 points.
+  s.Select({0, 0}, {0, 0});
+  CHECK(Paste(s, *f.model, clip.html, clip.rtf, clip.text, false));
+  CHECK(s.Doc().Text(0) == L"worldHello world");
+  CHECK(s.Caret() == (TextPos{0, 5}));
+  CHECK(s.Doc().Resolved().paragraphs[0].runs[0].props.bold);
+  CHECK_NEAR(s.Doc().Resolved().paragraphs[0].runs[0].props.size, 30, 0.01);
+  CHECK_EQ(f.model->steps.back(), std::u16string(u"Paste"));
+  // From Word (RTF): the emphasis stays, the size is the destination's.
+  s.Select(s.Doc().End(), s.Doc().End());
+  CHECK(Paste(s, *f.model, "", clip.rtf, clip.text, false));
+  CHECK(s.Doc().Text(0) == L"worldHello worldworld");
+  const TextRun& last = s.Doc().Resolved().paragraphs[0].runs.back();
+  CHECK(last.props.bold);
+  CHECK_NEAR(last.props.size, 30, 0.01);  // the run before it (where it goes) is 30 points too
+  // As text: the look of where it goes.
+  s.Select({0, 0}, {0, 5});
+  CHECK(Paste(s, *f.model, clip.html, clip.rtf, L"x\r\ny", true));
+  CHECK_EQ(s.Doc().ParagraphCount(), 2u);
+  CHECK(s.Doc().Text(1).starts_with(L"yHello"));
 }

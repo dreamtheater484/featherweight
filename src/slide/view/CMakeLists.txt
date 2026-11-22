@@ -6,7 +6,7 @@
 add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp)
 # p2-text: text editing on slides, headless (the working copy, caret and selection, formatting,
 # clipboard, find, spelling, links).
-target_sources(fwslideviewcore PRIVATE TextDoc.cpp TextSession.cpp TextFormat.cpp)
+target_sources(fwslideviewcore PRIVATE TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp)
 target_link_libraries(fwslideviewcore PUBLIC fwdoc)
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
