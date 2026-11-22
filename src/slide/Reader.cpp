@@ -795,6 +795,20 @@ const TextBody* Presentation::Text(const Shape& shape, const SlideBase& shownOn)
   return it->second.get();
 }
 
+std::unique_ptr<TextBody> Presentation::ResolveTextBody(const Shape& shape, pugi::xml_node txBody,
+                                                        const SlideBase& shownOn) const {
+  if (!txBody || !shape.owner) return nullptr;
+  std::lock_guard lock(mutex_);
+  return ResolveText(*this, shape, *shape.owner, shownOn, txBody);
+}
+
+std::unique_ptr<TextBody> Presentation::ResolveCellText(const Shape& table, const TableCell& cell, pugi::xml_node txBody,
+                                                        const SlideBase& shownOn) const {
+  if (!txBody || !table.owner) return nullptr;
+  std::lock_guard lock(mutex_);
+  return ResolvePlainText(*this, txBody, *table.owner, shownOn, cell.textStyles);
+}
+
 const TextBody* Presentation::TextOf(pugi::xml_node txBody, const SlideBase& owner, const SlideBase& shownOn) {
   if (!txBody) return nullptr;
   if (const Shape* s = owner.ShapeOfText(txBody)) return Text(*s, shownOn);

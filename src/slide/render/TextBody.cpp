@@ -102,6 +102,7 @@ struct TextBlock::Impl {
     std::shared_ptr<const draw::Image> picture;  // a picture bullet, at its U+FFFC
     bool empty = true;
     bool bullet = false;  // the first run is the bullet and its tab
+    uint32_t first = 0;   // where the paragraph's own text starts in `text` (after the bullet)
   };
   struct LinkRun {
     size_t para;
@@ -219,8 +220,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     };
     // The bullet: a character, a number or a picture, then a tab to the text. Its font, size and
     // color follow the first run unless the paragraph says otherwise.
-    if (!para.empty && pp.bullet.kind != Bullet::Kind::None) {
-      RunProps bp = src.runs.front().props;
+    const bool bulletShown = !para.empty || static_cast<int>(m.paras.size() - 1) == extras.bulletEmptyParagraph;
+    if (bulletShown && pp.bullet.kind != Bullet::Kind::None) {
+      RunProps bp = para.empty ? src.endProps : src.runs.front().props;
       const Bullet& b = pp.bullet;
       if (b.color) {
         bp.color = *b.color;
@@ -248,6 +250,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       if (!t.empty()) {
         add(t + L'\t', bp, nullptr);
         para.bullet = true;
+        para.first = static_cast<uint32_t>(para.text.size());
       }
     }
     for (const fw::slide::TextRun& r : src.runs) {
@@ -498,6 +501,191 @@ std::vector<TextBlock::Link> TextBlock::Links() const {
     for (size_t i = 0; i < p.lines.size(); ++i)
       for (const auto& [x0, x1] : p.lines[i].Ranges(l.start, l.end))
         out.push_back({Transformed(impl_->toBox, {p.origins[i].x + x0, p.rows[i].first, p.origins[i].x + x1, p.rows[i].second}), l.link});
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Editing (P2): carets, hit testing and selection over the laid-out lines.
+
+draw::Matrix TextBlock::ToSlide(const draw::Matrix& boxToSlide) const {
+  const Impl& m = *impl_;
+  draw::Matrix t = m.toBox;
+  if (boxToSlide.m11 * boxToSlide.m22 - boxToSlide.m12 * boxToSlide.m21 < 0) {
+    const float cx = (m.rect.left + m.rect.right) / 2;
+    t = t * draw::Matrix{-1, 0, 0, 1, 2 * cx, 0};
+  }
+  return t * boxToSlide;
+}
+
+size_t TextBlock::ParagraphCount() const { return impl_->paras.size(); }
+
+uint32_t TextBlock::ParagraphLength(size_t para) const {
+  if (para >= impl_->paras.size()) return 0;
+  const Impl::Para& p = impl_->paras[para];
+  return static_cast<uint32_t>(p.text.size()) - p.first;
+}
+
+namespace {
+
+// The line of `lines` holding text offset `t`: at a boundary the next line, unless `lineEnd` and the
+// line above wrapped there.
+size_t LineOf(const std::vector<text::Line>& lines, uint32_t t, bool lineEnd) {
+  if (lines.empty()) return 0;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const text::Line& l = lines[i];
+    if (t < l.end) return i;
+    if (t == l.end) {
+      if (i + 1 == lines.size()) return i;
+      if (lineEnd && l.ending == text::LineEnd::Wrap) return i;
+    }
+  }
+  return lines.size() - 1;
+}
+
+}  // namespace
+
+TextBlock::Caret TextBlock::CaretAt(size_t para, uint32_t offset, bool lineEnd) const {
+  const Impl& m = *impl_;
+  Caret c;
+  if (m.paras.empty()) return c;
+  para = std::min(para, m.paras.size() - 1);
+  const Impl::Para& p = m.paras[para];
+  const uint32_t t = std::min<uint32_t>(p.first + offset, static_cast<uint32_t>(p.text.size()));
+  if (p.lines.empty()) return c;
+  const size_t li = LineOf(p.lines, t, lineEnd);
+  const text::Line& line = p.lines[li];
+  c.x = p.origins[li].x + line.CaretX(std::clamp(t, line.start, line.end));
+  c.top = p.rows[li].first;
+  c.bottom = p.rows[li].second;
+  return c;
+}
+
+namespace {
+
+// The offset nearest x on a line, kept off the bullet and before a line break's character.
+uint32_t OffsetOnLine(const text::Line& line, float x, uint32_t first, const std::wstring& text, bool& lineEnd) {
+  uint32_t t = std::clamp(line.HitTest(x), line.start, line.end);
+  lineEnd = false;
+  if (t == line.end && line.end > line.start) {
+    if (line.ending == text::LineEnd::LineBreak && line.end - 1 < text.size() && text[line.end - 1] == L'\u000B') t = line.end - 1;
+    else if (line.ending == text::LineEnd::Wrap) lineEnd = true;
+  }
+  return std::max(t, first);
+}
+
+}  // namespace
+
+TextBlock::Hit TextBlock::HitTest(draw::Point pt) const {
+  const Impl& m = *impl_;
+  Hit h;
+  if (m.paras.empty()) return h;
+  // The line whose row holds y; above the first, the first; below the last, the last; between
+  // paragraphs (their spacing), the nearer.
+  size_t bestPara = 0, bestLine = 0;
+  float best = 1e30f;
+  for (size_t pi = 0; pi < m.paras.size(); ++pi) {
+    const Impl::Para& p = m.paras[pi];
+    for (size_t li = 0; li < p.rows.size(); ++li) {
+      // Columns: only lines of the column under x count, unless none does.
+      const float left = p.origins[li].x + std::min(p.lines[li].left, p.lines[li].contentLeft);
+      const float right = p.origins[li].x + std::max(p.lines[li].right, p.lines[li].contentRight);
+      const float dx = pt.x < left ? left - pt.x : pt.x > right ? pt.x - right : 0;
+      const float dy = pt.y < p.rows[li].first ? p.rows[li].first - pt.y : pt.y > p.rows[li].second ? pt.y - p.rows[li].second : 0;
+      const float d = dy + dx * 4;  // across columns, x decides
+      if (d < best) {
+        best = d;
+        bestPara = pi;
+        bestLine = li;
+      }
+    }
+  }
+  const Impl::Para& p = m.paras[bestPara];
+  h.para = bestPara;
+  if (p.lines.empty()) return h;
+  const uint32_t t = OffsetOnLine(p.lines[bestLine], pt.x - p.origins[bestLine].x, p.first, p.text, h.lineEnd);
+  h.offset = t - p.first;
+  return h;
+}
+
+std::pair<uint32_t, uint32_t> TextBlock::LineRange(size_t para, uint32_t offset, bool lineEnd) const {
+  const Impl& m = *impl_;
+  if (para >= m.paras.size()) return {0, 0};
+  const Impl::Para& p = m.paras[para];
+  if (p.lines.empty()) return {0, 0};
+  const uint32_t t = std::min<uint32_t>(p.first + offset, static_cast<uint32_t>(p.text.size()));
+  const text::Line& line = p.lines[LineOf(p.lines, t, lineEnd)];
+  uint32_t end = line.end;
+  if (line.ending == text::LineEnd::LineBreak && end > line.start && end - 1 < p.text.size() && p.text[end - 1] == L'\u000B') --end;
+  const uint32_t start = std::max(line.start, p.first);
+  return {start - p.first, std::max(end, start) - p.first};
+}
+
+bool TextBlock::Vertical(size_t para, uint32_t offset, bool lineEnd, int direction, float x, Hit& out) const {
+  const Impl& m = *impl_;
+  if (para >= m.paras.size() || m.paras[para].lines.empty()) return false;
+  const Impl::Para& p = m.paras[para];
+  const uint32_t t = std::min<uint32_t>(p.first + offset, static_cast<uint32_t>(p.text.size()));
+  size_t pi = para, li = LineOf(p.lines, t, lineEnd);
+  if (direction < 0) {
+    if (li > 0) {
+      --li;
+    } else {
+      do {
+        if (pi == 0) return false;
+        --pi;
+      } while (m.paras[pi].lines.empty());
+      li = m.paras[pi].lines.size() - 1;
+    }
+  } else {
+    if (li + 1 < p.lines.size()) {
+      ++li;
+    } else {
+      do {
+        if (pi + 1 >= m.paras.size()) return false;
+        ++pi;
+      } while (m.paras[pi].lines.empty());
+      li = 0;
+    }
+  }
+  const Impl::Para& q = m.paras[pi];
+  out.para = pi;
+  out.offset = OffsetOnLine(q.lines[li], x - q.origins[li].x, q.first, q.text, out.lineEnd) - q.first;
+  return true;
+}
+
+bool TextBlock::IsStop(size_t para, uint32_t offset) const {
+  const Impl& m = *impl_;
+  if (para >= m.paras.size()) return true;
+  const Impl::Para& p = m.paras[para];
+  const uint32_t t = p.first + offset;
+  if (t >= p.text.size()) return true;
+  for (const text::Line& l : p.lines)
+    if (t >= l.start && t < l.end) return l.IsCaretStop(t);
+  return true;
+}
+
+std::vector<draw::Rect> TextBlock::SelectionRects(size_t fromPara, uint32_t fromOffset, size_t toPara, uint32_t toOffset) const {
+  const Impl& m = *impl_;
+  std::vector<draw::Rect> out;
+  for (size_t pi = fromPara; pi <= toPara && pi < m.paras.size(); ++pi) {
+    const Impl::Para& p = m.paras[pi];
+    const uint32_t len = static_cast<uint32_t>(p.text.size());
+    const uint32_t s = pi == fromPara ? std::min(len, p.first + fromOffset) : p.first;
+    const uint32_t e = pi == toPara ? std::min(len, p.first + toOffset) : len;
+    for (size_t li = 0; li < p.lines.size(); ++li) {
+      const text::Line& l = p.lines[li];
+      const uint32_t a = std::max(s, l.start), b = std::min(e, l.end);
+      const float top = p.rows[li].first, bottom = p.rows[li].second, ox = p.origins[li].x;
+      if (a < b)
+        for (const auto& [x0, x1] : l.Ranges(a, b)) out.push_back({ox + x0, top, ox + x1, bottom});
+      // The paragraph's mark, when the selection goes on past it: a space's width.
+      if (pi < toPara && li + 1 == p.lines.size()) {
+        const float x = ox + l.CaretX(l.end);
+        const float w = std::max(2.f, 0.25f * p.mark.size);
+        out.push_back({x, top, x + w, bottom});
+      }
+    }
   }
   return out;
 }

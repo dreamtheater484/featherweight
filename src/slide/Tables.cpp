@@ -333,6 +333,7 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
     }
     if (pugi::xml_node fill = FillChild(tcPr)) cell.fill = ReadCellFill(fill, t->colors, theme);
 
+    cell.textStyles = textStyles;
     if (pugi::xml_node txBody = A(cell.node, "txBody")) {
       cellTexts_.push_back(ResolvePlainText(*this, txBody, *shape.owner, shownOn, textStyles));
       cell.text = cellTexts_.back().get();

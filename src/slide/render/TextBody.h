@@ -24,6 +24,8 @@ struct TextExtras {
   draw::ColorContext colors;  // the slide's: hyperlinks take its hlink color
   // A picture bullet: the image of relationship `rel` of part `part`; null when there's none.
   std::function<std::shared_ptr<const draw::Image>(const std::string& part, const std::string& rel)> picture;
+  // Editing: this empty paragraph shows its bullet (the caret is in it), as PowerPoint's editor does.
+  int bulletEmptyParagraph = -1;
 };
 
 class TextBlock {
@@ -50,6 +52,43 @@ class TextBlock {
   std::vector<Link> Links() const;
   // The text without bullets: paragraphs and line breaks as '\n'.
   std::wstring PlainText() const;
+
+  // ---- Editing (P2, p2-text) ----
+  // Positions are (paragraph, offset): the offset counts the paragraph's runs as the model resolved
+  // them (a run's text, 1 for a line break, a field's text as shown), without the bullet. Points are
+  // in "text coordinates" unless said: ToSlide maps them where the block is drawn.
+  struct Caret {
+    float x = 0, top = 0, bottom = 0;  // text coordinates
+  };
+  // The text coordinates -> the slide's, for a box drawn with `boxToSlide` (what the painter's
+  // transform is when Draw runs: the box's transform and its place). Mirrored shapes keep their text
+  // readable, as Draw does.
+  draw::Matrix ToSlide(const draw::Matrix& boxToSlide) const;
+  size_t ParagraphCount() const;
+  uint32_t ParagraphLength(size_t para) const;  // offsets laid out (a very long body may be cut)
+  // The caret before `offset`. At a wrapped line's end, `lineEnd` puts it at the end of the line
+  // above rather than the start of the next.
+  Caret CaretAt(size_t para, uint32_t offset, bool lineEnd = false) const;
+  // The position nearest a point (text coordinates); `lineEnd` says it's at the end of a wrapped line.
+  struct Hit {
+    size_t para = 0;
+    uint32_t offset = 0;
+    bool lineEnd = false;
+  };
+  Hit HitTest(draw::Point text) const;
+  // The line holding a position: its start and end offsets (the end before a line break's
+  // character, else where the next line starts).
+  std::pair<uint32_t, uint32_t> LineRange(size_t para, uint32_t offset, bool lineEnd = false) const;
+  // The position on the line above (direction < 0) or below nearest `x` (text coordinates); false
+  // at the first or last line.
+  bool Vertical(size_t para, uint32_t offset, bool lineEnd, int direction, float x, Hit& out) const;
+  // Whether a caret may stop at the offset (not inside a surrogate pair or a grapheme).
+  bool IsStop(size_t para, uint32_t offset) const;
+  // The rectangles [from, to) covers, text coordinates, line by line. A selection going past a
+  // paragraph's end shows a little of its mark.
+  std::vector<draw::Rect> SelectionRects(size_t fromPara, uint32_t fromOffset, size_t toPara, uint32_t toOffset) const;
+  // Where the text starts and ends vertically (text coordinates), for autofit.
+  float TextHeight() const { return ContentHeight(); }
 
  private:
   struct Impl;

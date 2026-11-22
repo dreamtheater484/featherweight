@@ -97,6 +97,9 @@ constexpr const char* kUsage =
     "      slide drawn again: a keystroke in a text box (< 16 ms typical, < 50 ms worst), new, duplicate,\n"
     "      delete and move slide (< 50 ms each), undo of each (< 50 ms); saving timed for the record.\n"
     "      With --budgets a missed budget fails; without the edit API in the build it always fails.\n"
+    "  fwtool bench --slide-text [--runs N] [--json FILE] [--budgets] <deck>...\n"
+    "      Typing in a slide's text as the presentation tab does (p2-text: the working copy, the body laid\n"
+    "      out, the edit committed, the text drawn over the slide's bitmap): < 16 ms typical, < 50 ms worst.\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
@@ -365,6 +368,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--typing") options.typing = true;
     else if (arg == L"--scrolling") options.scrolling = true;
     else if (arg == L"--sheet-edits") options.sheetEdits = true;
+    else if (arg == L"--slide-text") options.slideText = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
