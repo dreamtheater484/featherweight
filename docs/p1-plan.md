@@ -102,6 +102,7 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - Probe on two decks: ExportAsFixedFormat with the print intent (called early-bound through Office's interop assembly) writes exactly the same pictures as Save As; the screen intent writes smaller ones.
   - The resampled pictures are the ones with transparency (`alphaModFix`) or flattened transparent groups, which PowerPoint rasterizes at its own resolution in any PDF. Pictures without effects keep their size.
   - So the references stay as made, and this resampling is a known measurement artifact (p1-render reached the same conclusion for `alphaModFix` pictures).
+  - Coordinator: Save As stays the reference. Featherweight's slide PDFs bake see-through (`alphaModFix`) pictures at most 1536 px across, as every PowerPoint PDF export does (p1-render `b27a4905`). That's PDF output only: the slide view keeps them at full resolution, as PowerPoint shows them. A light `slide-pages -Through app` cross-check (the public set and about 20 corpus decks) compares the app's own drawing with fwtool's.
 - **2026-11-22: no criterion change yet** (coordinator).
   - p1-render and p1-model work through the cause list, biggest first: font fallback (sans faces drawn in Times New Roman), text 1–2 px off, texture backgrounds, `defaultTextStyle` bold/italic applied to placeholders, layout `clrMapOvr`, then charts, SmartArt and WordArt.
   - p1-corpus re-measures on the newest p1-int after each round of fixes.
