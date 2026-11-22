@@ -1661,6 +1661,9 @@ foreach ($f in $files) { $byId[$f.id] = $f }
 foreach ($res in $results) {
   $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
   $e = if ($w.entry) { $w.entry } else { $w.candidate }
+  # A deck's extension follows its main part (.pptx, .ppsx or .potx), not the URL or the candidate:
+  # PowerPoint refuses a presentation named .potx ("its file extension has changed").
+  if ($w.format -eq "pptx" -and -not $Rescreen -and $res.facts -and $res.facts.kind) { $w.ext = $res.facts.kind }
   $dest = Join-Path $Out "$($w.format)\$($e.category)\$($res.id)$($w.ext)"
   if ($res.reasons.Count) {
     "REJECTED {0}: {1}" -f $res.id, ($res.reasons -join "; ")
