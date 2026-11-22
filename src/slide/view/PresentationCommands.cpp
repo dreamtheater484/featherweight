@@ -14,6 +14,7 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -105,6 +106,7 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  if (const int c = Ready() ? Objects().Shortcut(vk, mods) : 0) return c;  // p2-objects
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
   if (ctrl && !alt) {
@@ -131,6 +133,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 
 CommandState PresentationView::QueryCommand(int cmd) {
   CommandState s;
+  if (Ready() && Objects().Query(cmd, s)) return s;  // p2-objects
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
     case CmdSave: s.enabled = false; break;  // read-only until P2
@@ -184,11 +187,13 @@ std::vector<int> PresentationView::Commands() {
   std::vector<int> out;
   for (const CommandName& n : kNames)
     if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
+  for (int c : Objects().Commands()) out.push_back(c);  // p2-objects
   return out;
 }
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (Objects().Execute(cmd)) return true;  // p2-objects
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdPresentation:
@@ -284,6 +289,7 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
     if (v.index >= 0 && v.index < static_cast<int>(std::size(kLayouts))) Execute(kLayouts[v.index].cmd);
   };
   m.left = {print, layout};
+  if (Ready()) Objects().AddTools(m);  // p2-objects: insert, arrange, format
 
   // ▶ Present ▾: from the beginning, or the list's choice.
   ToolItem present;
@@ -333,6 +339,8 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   downY_ = y;
   // A right-click on a thumbnail is about that slide.
   if (const int t = ThumbAt(x, y); t >= 0) GoToSlide(static_cast<size_t>(t));
+  else if (gfx::Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p2-objects
+    Objects().ContextMenu(m, static_cast<float>(x), static_cast<float>(y));
   const bool any = SlideCount() > 0;
   if (LinkAt(x, y)) {
     AppendItem(m, CmdOpenSlideLink, L"Open link");

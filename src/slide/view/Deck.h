@@ -6,9 +6,19 @@
 #include <vector>
 
 #include "draw/Painter.h"
+namespace fw::slide::edit {
+class Editor;
+}
 
 namespace fw::slide {
 class Presentation;
+}
+namespace fw::slide::render {
+class SlideRender;
+class DrawFilter;
+}
+namespace fw::text {
+class Fonts;
 }
 
 // What the presentation tab reads from a deck (P1, plan §8): the slides' sizes, text, notes and
@@ -66,8 +76,23 @@ class Deck {
   }
   // p1-model's presentation behind the deck, for the slide show; null for a deck without one (tests).
   virtual Presentation* Model() { return nullptr; }
+  // The deck's editor (P2, src/slide/edit), made on first use; null for a deck without a model.
+  virtual edit::Editor* Editor() { return nullptr; }
   // Bytes the deck keeps (model, caches), for the memory budget.
   virtual size_t MemoryUse() const { return 0; }
+
+  // ---- Editing (P2) ----
+  // The slide prepared for drawing (null for a deck without a renderer), and the fonts its text is
+  // laid out with.
+  virtual render::SlideRender* Rendered(size_t /*slide*/) { return nullptr; }
+  virtual text::Fonts* LayoutFonts() { return nullptr; }
+  // The model changed on this slide (or its notes): what was prepared from it goes.
+  virtual void Invalidate(size_t /*slide*/) {}
+  // Paint, leaving out what the filter turns down (the text being typed, drawn live over it).
+  virtual void PaintFiltered(size_t slide, draw::Painter& p, render::DrawFilter* /*filter*/) { Paint(slide, p); }
+  // The editor's prompts in empty placeholders (not for the show, printing or PDF); `skip`: the one
+  // being typed in.
+  virtual void PaintPrompts(size_t /*slide*/, draw::Painter& /*p*/, uint32_t /*skip*/) {}
 };
 
 }  // namespace fw::slide::view

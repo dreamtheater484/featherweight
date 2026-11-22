@@ -3,6 +3,7 @@
 #include <pugixml.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -174,5 +175,19 @@ void SetTableOption(pugi::xml_node frame, const char* option, bool on);
 
 // The element as text (no declaration, no formatting), for the clipboard and tests.
 std::string ToXml(pugi::xml_node node);
+// The element as text declaring the p:, a: and r: namespaces it may use (what the edit layer's
+// InsertShape and SetShapeXml take).
+std::string Standalone(pugi::xml_node object);
+// A new object's element, made by `build` into a scratch slide tree, as Standalone text.
+std::string NewObjectXml(const std::function<pugi::xml_node(pugi::xml_node tree)>& build);
+
+// The shapes gallery (Insert > Shapes), in PowerPoint's order: preset names and PowerPoint's names
+// for them ("Arrow: Right"). Lines first: "line" and "straightConnector1" are connectors.
+struct ShapePreset {
+  const char* preset;
+  const char* name;
+};
+const std::vector<ShapePreset>& ShapeGallery();
+bool IsLinePreset(std::string_view preset);
 
 }  // namespace fw::slide::objects

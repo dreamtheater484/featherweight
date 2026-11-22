@@ -22,6 +22,8 @@ class SlideRenderer;
 
 namespace fw::slide::view {
 
+class ObjectTool;
+
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
 // slide fitted to the window (or zoomed) in the middle, the speaker notes below it, and "Slide n
 // of m" in the status bar. Read-only until P2. Page Up/Down, Home and End go through the slides;
@@ -61,7 +63,7 @@ class PresentationView : public TabContent {
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
-  bool Dragging() const override { return drag_ != Drag::None; }
+  bool Dragging() const override;
   bool HasKeyFocus() const override { return false; }
 
   int ShortcutFor(UINT vk, UINT mods) const override;
@@ -92,6 +94,8 @@ class PresentationView : public TabContent {
   FileState State() const override;
   void ApplyState(const FileState& s) override;
   bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
+  bool TakesPictures(const std::vector<std::wstring>& files) const override;
+  void DropPictures(const std::vector<std::wstring>& files, int x, int y) override;
 
   // ---- The deck ----
   size_t SlideCount() const { return deck_ ? deck_->SlideCount() : 0; }
@@ -138,6 +142,9 @@ class PresentationView : public TabContent {
   std::wstring SlideText(size_t slide) const;
   void ShowMatch();
   void ReadOnlyBanner();
+
+  // ---- Objects on the slide (P2, p2-objects: ObjectTool)
+  ObjectTool& Objects() const;
 
   // ---- Printing (PresentationPrint.cpp)
   std::vector<size_t> PrintedSlides() const;
@@ -205,6 +212,8 @@ class PresentationView : public TabContent {
   mutable size_t linksOf_ = SIZE_MAX;
 
   PrintSettings print_;
+
+  mutable std::unique_ptr<ObjectTool> objects_;  // made on first use
 };
 
 }  // namespace fw::slide::view

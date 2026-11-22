@@ -469,4 +469,40 @@ enum Cmd : int {
   CmdPrintNotes,                 // or notes pages
   CmdPrintHidden,                // hidden slides print too
   CmdPrintFrame,                 // a frame around the slides on handouts and notes pages
+
+  // Objects on slides (P2, p2-objects): 3500-3549. Inserting also uses the shared
+  // CmdInsertPicture, CmdInsertTextBox, CmdInsertRectangle... CmdInsertCallout, CmdInsertTable,
+  // CmdInsertChart and CmdChartColumn/Bar/Line/Pie; CmdDeleteObject, CmdPictureCrop, CmdShapePanel.
+  CmdInsertShape = 3500,         // the toolbar's Shapes ▾ (its list inserts one)
+  CmdGroupObjects,               // Ctrl+G
+  CmdUngroupObjects,             // Ctrl+Shift+G
+  CmdBringToFront,               // Ctrl+Shift+]
+  CmdBringForward,               // Ctrl+]
+  CmdSendBackward,               // Ctrl+[
+  CmdSendToBack,                 // Ctrl+Shift+[
+  CmdObjAlignLeft,               // align, in this order: left, center, right, top, middle, bottom
+  CmdObjAlignCenter,
+  CmdObjAlignRight,
+  CmdObjAlignTop,
+  CmdObjAlignMiddle,
+  CmdObjAlignBottom,
+  CmdDistributeHorizontally,
+  CmdDistributeVertically,
+  CmdAlignToSlide,               // align and distribute to the slide, not the selection
+  CmdArrangeMenu,                // the toolbar's Arrange ▾
+  CmdRotateRight90,
+  CmdRotateLeft90,
+  CmdFlipHorizontal,
+  CmdFlipVertical,
+  CmdObjectFill,                 // the toolbar's fill color
+  CmdObjectOutline,              // outline color
+  CmdObjectOutlineWeight,
+  CmdObjectShadow,               // a shadow, on or off
+  CmdTableRowAbove,
+  CmdTableRowBelow,
+  CmdTableColumnLeft,
+  CmdTableColumnRight,
+  CmdTableDeleteRow,
+  CmdTableDeleteColumn,
+  CmdDuplicateObjects,           // Ctrl+D with objects selected
 };

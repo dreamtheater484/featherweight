@@ -1092,4 +1092,84 @@ std::string ToXml(pugi::xml_node node) {
   return out.str();
 }
 
+std::string Standalone(pugi::xml_node object) {
+  pugi::xml_document doc;
+  pugi::xml_node copy = doc.append_copy(object);
+  for (auto [ns, fallback] : {std::pair{kP, "p"}, std::pair{kA, "a"}, std::pair{kR, "r"}}) {
+    const std::string prefix = PrefixFor(object, ns, fallback);
+    const std::string attr = prefix.empty() ? std::string("xmlns") : "xmlns:" + prefix;
+    if (!copy.attribute(attr.c_str())) copy.append_attribute(attr.c_str()).set_value(std::string(ns).c_str());
+  }
+  return ToXml(copy);
+}
+
+std::string NewObjectXml(const std::function<pugi::xml_node(pugi::xml_node tree)>& build) {
+  pugi::xml_document doc;
+  doc.load_string(
+      "<p:spTree xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+      "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+      "xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"/>");
+  pugi::xml_node made = build(doc.document_element());
+  return made ? Standalone(made) : std::string();
+}
+
+const std::vector<ShapePreset>& ShapeGallery() {
+  static const std::vector<ShapePreset> kGallery = {
+      {"line", "Line"},
+      {"straightConnector1", "Arrow"},
+      {"rect", "Rectangle"},
+      {"roundRect", "Rectangle: Rounded Corners"},
+      {"snip1Rect", "Rectangle: Single Corner Snipped"},
+      {"ellipse", "Oval"},
+      {"triangle", "Isosceles Triangle"},
+      {"rtTriangle", "Right Triangle"},
+      {"parallelogram", "Parallelogram"},
+      {"trapezoid", "Trapezoid"},
+      {"diamond", "Diamond"},
+      {"pentagon", "Regular Pentagon"},
+      {"hexagon", "Hexagon"},
+      {"octagon", "Octagon"},
+      {"plus", "Cross"},
+      {"donut", "Circle: Hollow"},
+      {"can", "Cylinder"},
+      {"cube", "Cube"},
+      {"frame", "Frame"},
+      {"heart", "Heart"},
+      {"lightningBolt", "Lightning Bolt"},
+      {"sun", "Sun"},
+      {"moon", "Moon"},
+      {"smileyFace", "Smiley Face"},
+      {"cloud", "Cloud"},
+      {"rightArrow", "Arrow: Right"},
+      {"leftArrow", "Arrow: Left"},
+      {"upArrow", "Arrow: Up"},
+      {"downArrow", "Arrow: Down"},
+      {"leftRightArrow", "Arrow: Left-Right"},
+      {"upDownArrow", "Arrow: Up-Down"},
+      {"chevron", "Arrow: Chevron"},
+      {"homePlate", "Arrow: Pentagon"},
+      {"mathPlus", "Plus Sign"},
+      {"mathMinus", "Minus Sign"},
+      {"mathMultiply", "Multiplication Sign"},
+      {"mathEqual", "Equals"},
+      {"flowChartProcess", "Flowchart: Process"},
+      {"flowChartDecision", "Flowchart: Decision"},
+      {"flowChartInputOutput", "Flowchart: Data"},
+      {"flowChartTerminator", "Flowchart: Terminator"},
+      {"flowChartDocument", "Flowchart: Document"},
+      {"star4", "Star: 4 Points"},
+      {"star5", "Star: 5 Points"},
+      {"star6", "Star: 6 Points"},
+      {"star8", "Star: 8 Points"},
+      {"wave", "Wave"},
+      {"wedgeRectCallout", "Speech Bubble: Rectangle"},
+      {"wedgeRoundRectCallout", "Speech Bubble: Rectangle with Corners Rounded"},
+      {"wedgeEllipseCallout", "Speech Bubble: Oval"},
+      {"cloudCallout", "Thought Bubble: Cloud"},
+  };
+  return kGallery;
+}
+
+bool IsLinePreset(std::string_view preset) { return preset == "line" || preset == "straightConnector1"; }
+
 }  // namespace fw::slide::objects

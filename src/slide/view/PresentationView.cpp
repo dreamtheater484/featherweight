@@ -1,6 +1,7 @@
 // The presentation tab: its parts, drawing, thumbnails at idle, and the mouse and keys.
 
 #include "slide/view/PresentationView.h"
+#include "slide/view/ObjectTool.h"
 
 #include <dwrite.h>
 
@@ -253,6 +254,9 @@ void PresentationView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   }
   DrawThumbnails(c, dc);
   DrawSlide(c, dc);
+  c.PushClip(view_);
+  Objects().Draw(c, dc);  // p2-objects: frames, handles, guides, a drag's layers
+  c.PopClip();
   DrawNotes(c);
   if (showPending_) {
     // After the first frame, so the tab is there to come back to.
@@ -435,6 +439,7 @@ bool PresentationView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
 void PresentationView::ReleaseDeviceResources() {
   for (Thumb& th : thumbCache_) th.bitmap.Reset();
   slideBitmap_.Reset();
+  if (objects_) objects_->ReleaseDeviceResources();
 }
 
 void PresentationView::OnDeactivated() {
@@ -474,6 +479,7 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
       FollowLink(*link);
       return;
     }
+    if (Objects().MouseDown(fx, fy, mods, doubleClick)) return;  // p2-objects
     const D2D1_RECT_F rc = SlideRect();
     if (Width(rc) > Width(view_) || Height(rc) > Height(view_)) {
       drag_ = Drag::Pan;
@@ -483,8 +489,12 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   }
 }
 
-void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
+void PresentationView::OnMouseMove(int x, int y, UINT mods) {
   if (!deck_) return;
+  if (objects_ && objects_->Dragging()) {  // p2-objects
+    objects_->MouseMove(static_cast<float>(x), static_cast<float>(y), mods);
+    return;
+  }
   switch (drag_) {
     case Drag::Splitter:
       notesHeight_ = std::max(kMinNotes, downValue_ - static_cast<float>(y - downY_) / ui_);
@@ -507,7 +517,11 @@ void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
   }
 }
 
-void PresentationView::OnMouseUp(int /*x*/, int /*y*/, int /*button*/, UINT /*mods*/) {
+void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
+  if (objects_ && objects_->Dragging()) {  // p2-objects
+    objects_->MouseUp(static_cast<float>(x), static_cast<float>(y), mods);
+    return;
+  }
   if (drag_ == Drag::Splitter) {
     // Dragged nearly shut: the notes close, as PowerPoint's do.
     const float maxNotes = std::max(kMinNotes, (vp_.bottom - vp_.top) / ui_ * 0.6f);
@@ -559,6 +573,7 @@ void PresentationView::OnWheel(int delta, bool horizontal, UINT mods, int x, int
 }
 
 bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
+  if (deck_ && !keysInThumbs_ && Objects().KeyDown(vk, mods)) return true;  // p2-objects
   if (!deck_ || (mods & (kModCtrl | kModAlt))) return false;
   switch (vk) {
     case VK_UP:
@@ -580,6 +595,8 @@ HCURSOR PresentationView::CursorAt(int x, int y) {
                  hand = LoadCursor(nullptr, IDC_HAND), all = LoadCursor(nullptr, IDC_SIZEALL);
   if (drag_ == Drag::Splitter || (notesShown_ && Contains(Inflate(splitter_, 0, 2 * ui_), (float)x, (float)y))) return ns;
   if (drag_ == Drag::Pan) return all;
+  if (deck_ && (Contains(view_, (float)x, (float)y) || Objects().Dragging()))  // p2-objects
+    if (HCURSOR h = Objects().Cursor(static_cast<float>(x), static_cast<float>(y))) return h;
   if (LinkAt(x, y)) return hand;
   return arrow;
 }
