@@ -8,6 +8,7 @@
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
+#include "slide/edit/TableGrid.h"
 
 namespace fw::slide::edit {
 
@@ -497,6 +498,73 @@ void ForRange(pugi::xml_node body, TextRange r, const std::function<void(pugi::x
   }
 }
 
+// The text of each paragraph of a body (a:t in order, a:br as a line break): a body and its Fallback
+// copy compared.
+void TextOf(pugi::xml_node n, std::string& out) {
+  for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling()) {
+    if (c.type() != pugi::node_element) continue;
+    if (Is(c, kA, "t")) out += c.text().get();
+    else if (Is(c, kA, "br")) out += '\n';
+    else TextOf(c, out);
+  }
+}
+
+std::vector<std::string> ParagraphTexts(pugi::xml_node body) {
+  std::vector<std::string> out;
+  for (pugi::xml_node para : Paragraphs(body)) TextOf(para, out.emplace_back());
+  return out;
+}
+
+// A text body being edited. In mc:AlternateContent that fwdraw draws by its Fallback (a Choice holding
+// math) an edit of the Choice wouldn't show, so the Fallback's copy (the same shape or frame by id, the
+// same table grid, the same text) gets the edited body too (Sync); without such a copy the edit is
+// refused (p2-plan's AlternateContent decision).
+struct Edited {
+  pugi::xml_node body, twin;
+  bool refused = false;
+  void Sync() {
+    if (!twin) return;
+    for (pugi::xml_node c = twin.first_child(); c;) {
+      pugi::xml_node next = c.next_sibling();
+      twin.remove_child(c);
+      c = next;
+    }
+    for (pugi::xml_node c = body.first_child(); c; c = c.next_sibling()) InsertCopy(twin, c);
+  }
+};
+
+Edited EditBody(Editor::Impl& m, const TextTarget& t, std::string* part) {
+  Edited e;
+  e.body = BodyOf(m, t, true, part);
+  pugi::xml_node choice;
+  for (pugi::xml_node n = e.body; n && n.type() == pugi::node_element && !choice; n = n.parent()) {
+    if (Is(n, pkg::mce::kNamespace, "Choice")) choice = n;
+  }
+  if (!choice) return e;
+  pugi::xml_node fallback = DrawnBranch(choice.parent());
+  if (!Is(fallback, pkg::mce::kNamespace, "Fallback")) return e;  // the Choice is what's drawn
+  e.refused = true;
+  if (HoldsMath(e.body)) return e;  // the Fallback has a picture of it (and must never get a14:m)
+  auto byId = [&](pugi::xml_node branch) {
+    pugi::xml_node c = branch.find_node(
+        [&](pugi::xml_node n) { return Is(n, kP, "cNvPr") && n.attribute("id").as_uint() == t.shape; });
+    return c ? c.parent().parent() : pugi::xml_node();
+  };
+  pugi::xml_node mine = byId(choice), theirs = byId(fallback);
+  if (!mine || !theirs || LocalNameOf(mine) != LocalNameOf(theirs)) return e;
+  pugi::xml_node twin;
+  if (t.row >= 0 || t.column >= 0) {
+    if (table::Rows(mine) != table::Rows(theirs) || table::Columns(mine) != table::Columns(theirs)) return e;
+    twin = A(CellOf(theirs, t.row, t.column), "txBody");
+  } else {
+    twin = P(theirs, "txBody");
+  }
+  if (!twin || ParagraphTexts(twin) != ParagraphTexts(e.body)) return e;
+  e.twin = twin;
+  e.refused = false;
+  return e;
+}
+
 }  // namespace
 
 // ---- Editor: text
@@ -529,8 +597,10 @@ Result Editor::InsertText(const TextTarget& t, TextPos at, std::wstring_view tex
   Call call(*this, u"Typing", &t);
   Impl& m = *impl_;
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (paras.empty()) {
@@ -540,6 +610,7 @@ Result Editor::InsertText(const TextTarget& t, TextPos at, std::wstring_view tex
   if (Result r = CheckPos(paras, at); !r) return call.End(r);
   TextPos e = Insert(body, at, text);
   if (end) *end = e;
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -549,13 +620,16 @@ Result Editor::DeleteText(const TextTarget& t, TextRange r) {
   Impl& m = *impl_;
   if (r.to < r.from) std::swap(r.from, r.to);
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
   if (Result c = CheckPos(paras, r.to); !c) return call.End(c);
   Delete(body, r);
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -567,8 +641,10 @@ Result Editor::ReplaceText(const TextTarget& t, TextRange r, std::wstring_view t
   Impl& m = *impl_;
   if (r.to < r.from) std::swap(r.from, r.to);
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   if (HoldsMath(body)) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
@@ -596,6 +672,7 @@ Result Editor::ReplaceText(const TextTarget& t, TextRange r, std::wstring_view t
     for (size_t i = r.from.paragraph; i <= e.paragraph && i < now.size(); ++i) MergeRuns(now[i]);
   }
   if (end) *end = e;
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -606,10 +683,13 @@ Result Editor::SetText(const TextTarget& t, std::wstring_view text) {
   Call call(*this, u"Typing");
   Impl& m = *impl_;
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   if (HoldsMath(body)) return call.End(MathRefused());
   SetPlainText(body, Normalize(text));
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -619,8 +699,10 @@ Result Editor::SetRunProps(const TextTarget& t, TextRange r, const RunPatch& pat
   Impl& m = *impl_;
   if (r.to < r.from) std::swap(r.from, r.to);
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
   if (Result c = CheckPos(paras, r.to); !c) return call.End(c);
@@ -628,6 +710,7 @@ Result Editor::SetRunProps(const TextTarget& t, TextRange r, const RunPatch& pat
     ApplyRunPatch(LocalNameOf(n) == "endParaRPr" ? n : RunProps(n), patch);
   });
   for (size_t i = r.from.paragraph; i <= r.to.paragraph; ++i) MergeRuns(Paragraphs(body)[i]);
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -636,8 +719,10 @@ Result Editor::SetParagraphProps(const TextTarget& t, size_t first, size_t last,
   Call call(*this, u"Paragraph");
   Impl& m = *impl_;
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (first > last || last >= paras.size()) return call.End(Result::Fail(u"Those paragraphs aren't in the text."));
   auto spacing = [](const char* local, const Spacing& s) {
@@ -688,6 +773,7 @@ Result Editor::SetParagraphProps(const TextTarget& t, size_t first, size_t last,
       }
     }
   }
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -696,8 +782,10 @@ Result Editor::SetBodyProps(const TextTarget& t, const BodyPatch& patch) {
   Call call(*this, u"Format Text");
   Impl& m = *impl_;
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   pugi::xml_node bodyPr = A(body, "bodyPr");
   if (!bodyPr) bodyPr = body.prepend_child((PrefixFor(body, kA, "a") + ":bodyPr").c_str());
   if (patch.anchor) {
@@ -751,6 +839,7 @@ Result Editor::SetBodyProps(const TextTarget& t, const BodyPatch& patch) {
     }
     scaleAttrs(fit);
   }
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -760,8 +849,10 @@ Result Editor::SetTextLink(const TextTarget& t, TextRange r, const std::optional
   Impl& m = *impl_;
   if (r.to < r.from) std::swap(r.from, r.to);
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   std::vector<pugi::xml_node> paras = Paragraphs(body);
   if (Result c = CheckPos(paras, r.from); !c) return call.End(c);
   if (Result c = CheckPos(paras, r.to); !c) return call.End(c);
@@ -804,6 +895,7 @@ Result Editor::SetTextLink(const TextTarget& t, TextRange r, const std::optional
       return old.count(rel.id) && !used.count(rel.id) && (rel.type.ends_with("/hyperlink") || rel.type.ends_with("/slide"));
     });
   }
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }
@@ -816,10 +908,13 @@ Result Editor::SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u1
     return call.End(Result::Fail(u"That isn't text Featherweight can paste."));
   }
   std::string part;
-  pugi::xml_node body = BodyOf(m, t, true, &part);
+  Edited edited = EditBody(m, t, &part);
+  pugi::xml_node body = edited.body;
   if (!body) return call.End(Result::Fail(u"That shape has no text."));
+  if (edited.refused) return call.End(MathRefused());
   // A body holding math is replaced only by one that keeps it (the app edits the Fallback's text).
   if (HoldsMath(body) && !HoldsMath(doc.document_element())) return call.End(MathRefused());
+  if (edited.twin && HoldsMath(doc.document_element())) return call.End(MathRefused());  // not into the Fallback
   std::set<std::string> rels;
   for (const pkg::FoundRef& f : m.registry.Find(doc.document_element(), pkg::RefKind::RelationshipId)) rels.insert(std::string(f.Value()));
   const pkg::RelationshipSet* have = m.Rels(part);
@@ -833,6 +928,7 @@ Result Editor::SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u1
   }
   for (pugi::xml_node c = doc.document_element().first_child(); c; c = c.next_sibling()) InsertCopy(body, c);
   if (Paragraphs(body).empty()) body.append_child((PrefixFor(body, kA, "a") + ":p").c_str());
+  edited.Sync();
   m.Touched(part, t.shape);
   return call.End({});
 }

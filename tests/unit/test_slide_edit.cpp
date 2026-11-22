@@ -482,13 +482,14 @@ TEST(SlideEditKeepsAlternateContentAroundEditedShapes) {
   CHECK(ed.Run(u"Test", [&] {
     return ed.WritePart(part, std::vector<uint8_t>(xml.begin(), xml.end())) ? Result{} : Result::Fail(u"write");
   }));
-  CHECK(ed.SetRunProps({0, 90}, {{0, 0}, {0, 4}}, RunPatch{.bold = true}));
+  // Its text: fwdraw draws the Fallback's picture for math (p1-render), and the Fallback has no copy of
+  // the text to keep in step, so formatting it is refused (it wouldn't show).
+  CHECK(!ed.SetRunProps({0, 90}, {{0, 0}, {0, 4}}, RunPatch{.bold = true}));
   std::string after = PartText(ed, part);
   CHECK(after.find("AlternateContent") != std::string::npos);
   CHECK(after.find("Choice") != std::string::npos);
   CHECK(after.find("Fallback") != std::string::npos);
   CHECK(after.find("a14:m") != std::string::npos);
-  CHECK(after.find("b=\"1\"") != std::string::npos);
   // fwdraw draws the Fallback's picture for math (p1-render), the edit layer edits the Choice. Its text
   // holds an equation, so typing, setting it and a body without the math are refused (the app would type
   // into the Fallback's text); formatting isn't.
@@ -524,7 +525,7 @@ TEST(SlideEditKeepsAlternateContentAroundEditedShapes) {
   CHECK(ed.SetShapeXml(0, 90, shapeXml, u"Test"));
   after = PartText(ed, part);
   CHECK(count("00FF00") == 2 && count("FF0000") == 0);
-  CHECK(count("Fallback") == 2 && count("a14:m") >= 1 && count("b=\"1\"") >= 1);
+  CHECK(count("Fallback") == 2 && count("a14:m") >= 1);
   CHECK(count("x=\"127000\" y=\"254000\"") == 2);
   // Saved and opened again: still one block with both branches.
   std::vector<uint8_t> bytes;
@@ -534,6 +535,72 @@ TEST(SlideEditKeepsAlternateContentAroundEditedShapes) {
   CHECK(ed.DeleteShapes(0, {90}));
   after = PartText(ed, part);
   CHECK(count("id=\"90\"") == 0);
+}
+
+// A table holding math sits whole in mc:AlternateContent, and fwdraw draws its Fallback (p1-render). Typing
+// in a cell without math reaches both branches, so the screen and apps taking the Fallback show it
+// (p2-text's snapshot finding on edu-cs-2110-sorting slide 14); a cell whose Fallback text differs, and the
+// math cell, are refused.
+TEST(SlideEditTextInMathTablesReachesTheFallback) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  std::string part = ed.SlidePart(0);
+  std::string xml = PartText(ed, part);
+  auto cell = [](const std::string& para) {
+    return "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>" + para + "</a:p></a:txBody><a:tcPr/></a:tc>";
+  };
+  auto run = [](const std::string& text) { return "<a:r><a:rPr lang=\"en-US\"/><a:t>" + text + "</a:t></a:r>"; };
+  auto frame = [&](const std::string& mathCell, const std::string& lastCell) {
+    return "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"91\" name=\"Table\"/><p:cNvGraphicFramePr/><p:nvPr/>"
+           "</p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"1828800\" cy=\"740664\"/></p:xfrm><a:graphic>"
+           "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr/><a:tblGrid>"
+           "<a:gridCol w=\"914400\"/><a:gridCol w=\"914400\"/></a:tblGrid><a:tr h=\"370332\">" +
+           cell(run("Sort")) + cell(mathCell) + "</a:tr><a:tr h=\"370332\">" + cell(run("Merge")) + cell(lastCell) +
+           "</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+  };
+  const std::string math =
+      "<a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath><m:r>"
+      "<m:t>n</m:t></m:r></m:oMath></m:oMathPara></a14:m>";
+  const std::string block =
+      "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+      "<mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">" +
+      frame(math, run("Yes")) + "</mc:Choice><mc:Fallback>" + frame("<a:endParaRPr lang=\"en-US\"/>", run("Ja")) +
+      "</mc:Fallback></mc:AlternateContent>";
+  xml.insert(xml.rfind("</p:spTree>"), block);
+  CHECK(ed.Run(u"Test", [&] {
+    return ed.WritePart(part, std::vector<uint8_t>(xml.begin(), xml.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  auto count = [&](std::string_view s) {
+    const std::string now = PartText(ed, part);
+    size_t n = 0;
+    for (size_t i = now.find(s); i != std::string::npos; i = now.find(s, i + 1)) ++n;
+    return n;
+  };
+  // A cell without math whose Fallback copy has the same text: typed and formatted in both.
+  CHECK(ed.InsertText({0, 91, 1, 0}, {0, 5}, L" sort"));
+  CHECK(count(">Merge sort<") == 2);
+  CHECK(ed.SetRunProps({0, 91, 1, 0}, {{0, 0}, {0, 5}}, RunPatch{.bold = true}));
+  CHECK(count("b=\"1\"") == 2);
+  // Its Fallback text differs ("Ja"), and the math cell: refused, nothing changed.
+  const std::string before = PartText(ed, part);
+  CHECK(!ed.InsertText({0, 91, 1, 1}, {0, 0}, L"x"));
+  CHECK(!ed.InsertText({0, 91, 0, 1}, {0, 0}, L"x"));
+  CHECK(!ed.SetRunProps({0, 91, 0, 1}, {{0, 0}, {0, 0}}, RunPatch{.bold = true}));
+  CHECK(PartText(ed, part) == before);
+  CHECK(count("<a14:m>") == 1);  // never copied into the Fallback
+  // Saved and read again: the block and both branches' text.
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+  if (again) {
+    Editor ed2(*again);
+    const std::string saved = PartText(ed2, ed2.SlidePart(0));
+    size_t n = 0;
+    for (size_t i = saved.find("> sort<"); i != std::string::npos; i = saved.find("> sort<", i + 1)) ++n;  // after the bold "Merge"
+    CHECK(n == 2);
+  }
 }
 
 // A group inside mc:AlternateContent (as PowerPoint writes a group holding math): z order, moves and
