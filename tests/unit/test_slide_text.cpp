@@ -837,3 +837,27 @@ TEST(SlideText_RandomEditsHoldUndoAndSave) {
     }
   }
 }
+
+// Typing into a new text box that grows to its text (spAutoFit): one undo takes back everything
+// typed, not just the first letter (p2-objects' finding: the resize split the typing step).
+TEST(SlideText_TypingThatResizesIsOneUndo) {
+  auto deck = Modified(Slide1(TextBox(4, 100, 60, 300, 40, "<a:p><a:endParaRPr lang=\"en-US\"/></a:p>",
+                                      "<a:bodyPr wrap=\"square\"><a:spAutoFit/></a:bodyPr>")));
+  REQUIRE(deck != nullptr);
+  fw::slide::edit::Editor editor(*deck);
+  EditTextModel model(*deck, editor);
+  fw::text::Fonts fonts;
+  auto slide = render::SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  render::SlideRender::TextFrame frame;
+  REQUIRE(slide->FindText(4, -1, -1, frame));
+  TextTarget t;
+  t.shape = 4;
+  TextSession session(model, t, fonts);
+  REQUIRE(session.Start(frame, {}));
+  for (wchar_t c : std::wstring(L"Hello world")) CHECK(session.Type(std::wstring(1, c)));
+  CHECK(session.Doc().Text(0) == L"Hello world");
+  CHECK(editor.UndoName() == u"Typing");
+  CHECK(editor.Undo());
+  session.ModelChanged();
+  CHECK(session.Doc().Text(0).empty());
+}
