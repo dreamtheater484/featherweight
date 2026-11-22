@@ -152,14 +152,17 @@ std::string OwnCopy(const TextSession& s) {
       const std::string_view k = LocalNameOf(c);
       if (k == "hlinkClick" || k == "hlinkMouseOver") {
         const std::string id(RelId(c, "id"));
-        // Find a resolved link with this id in the body.
+        // What the link does, from a resolved run with this id (several runs may share it: once).
+        bool found = false;
         for (const Paragraph& p : s.Doc().Resolved().paragraphs)
           for (const TextRun& r : p.runs) {
+            if (found) break;
             pugi::xml_node h = A(A(r.node, "rPr"), k == "hlinkClick" ? "hlinkClick" : "hlinkMouseOver");
             if (!h || RelId(h, "id") != id) continue;
             const Hyperlink& link = k == "hlinkClick" ? r.props.click : r.props.hover;
             if (link.action == Hyperlink::Action::Url) c.append_attribute("fw-url") = link.url.c_str();
             if (link.action == Hyperlink::Action::Slide) c.append_attribute("fw-slide") = link.slide;
+            found = true;
           }
         for (pugi::xml_attribute at = c.first_attribute(); at;) {
           pugi::xml_attribute next = at.next_attribute();
@@ -196,8 +199,10 @@ std::vector<pugi::xml_node> OwnParagraphs(pugi::xml_document& doc, std::string_v
         if (k == "hlinkClick" || k == "hlinkMouseOver") {
           const std::string url = c.attribute("fw-url").value();
           const int slide = c.attribute("fw-slide") ? c.attribute("fw-slide").as_int(-1) : -1;
-          c.remove_attribute("fw-url");
-          c.remove_attribute("fw-slide");
+          while (c.remove_attribute("fw-url")) {
+          }
+          while (c.remove_attribute("fw-slide")) {
+          }
           const std::string id = !url.empty() ? model.AddLink(s.Target(), Utf8ToWide(url), -1)
                                  : slide >= 0  ? model.AddLink(s.Target(), L"", slide)
                                                : std::string();
