@@ -96,7 +96,7 @@ $typingFloorMs = 1         # a typing change smaller than this is noise
 $deckTypingBudget = 16; $deckTypingWorstBudget = 50; $deckOpBudget = 50; $deckUndoBudget = 50  # ms
 
 $ledgerPath = Join-Path $root "tests\budgets\ledger.json"
-$ledger = Get-Content $ledgerPath -Raw | ConvertFrom-Json
+$ledger = Get-Content $ledgerPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $sizes = @($ledger.sizes | Where-Object { $_ })
 $timingEntries = @($ledger.timings | Where-Object { $_ })
 $typingEntries = @($ledger.typing | Where-Object { $_ })
@@ -254,7 +254,7 @@ if (($Timings -or $TrackTimings) -and $exe) {
     $typingJson = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-typing-$PID.json"
     ""
     & $Fwtool bench --typing --runs $Runs --json $typingJson $longPath | Out-Host
-    $typingFile = if (Test-Path $typingJson) { (Get-Content $typingJson -Raw | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
+    $typingFile = if (Test-Path $typingJson) { (Get-Content $typingJson -Raw -Encoding UTF8 | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
     if ($LASTEXITCODE -eq 0 -and $typingFile) {
       $typing = [ordered]@{ document = $longDoc; pages = $typingFile.pages; typicalMs = $typingFile.typicalMs
                             worstMs = $typingFile.worstMs; places = @($typingFile.places) }
@@ -282,7 +282,7 @@ if (($Timings -or $TrackTimings) -and $exe) {
     Remove-Item $deckJson -ErrorAction SilentlyContinue
   }
   Remove-Item $longDir -Recurse -ErrorAction SilentlyContinue
-  $bench = if (Test-Path $benchJson) { Get-Content $benchJson -Raw | ConvertFrom-Json } else { $null }
+  $bench = if (Test-Path $benchJson) { Get-Content $benchJson -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
   Remove-Item $benchJson -ErrorAction SilentlyContinue
   $timingFailures = New-Object Collections.Generic.List[string]
   if ($benchFailed -or -not $bench) { $timingFailures.Add("fwtool bench-app didn't measure every scenario.") }
@@ -392,7 +392,7 @@ if ($Large -and $exe) {
   ""
   & $Fwtool bench-app --runs $Runs --json $largeJson $exe @paths | Out-Host
   $largeFailed = $LASTEXITCODE -ne 0
-  $largeBench = if (Test-Path $largeJson) { Get-Content $largeJson -Raw | ConvertFrom-Json } else { $null }
+  $largeBench = if (Test-Path $largeJson) { Get-Content $largeJson -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
   Remove-Item $largeJson -ErrorAction SilentlyContinue
   $largeFailures = New-Object Collections.Generic.List[string]
   if ($largeFailed -or -not $largeBench) { $largeFailures.Add("fwtool bench-app didn't measure every large file.") }
