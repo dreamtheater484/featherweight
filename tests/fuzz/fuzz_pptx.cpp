@@ -830,7 +830,7 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   const std::string undone = Digest(*deck);
   if (undone != asRead) PrintDifference("undoing everything gives another deck (as read, undone)", asRead, undone);
   Check(undone == asRead);
-  Check(ed.Redo(ed.RedoNames().size()).ok);
+  Check(ed.Redo(history).ok);  // not what the edits themselves undid and left undone
   const std::string redone = Digest(*deck);
   if (redone != edited) PrintDifference("redoing everything gives another deck (edited, redone)", edited, redone);
   Check(redone == edited);

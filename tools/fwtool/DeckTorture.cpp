@@ -32,6 +32,7 @@
 #if __has_include("slide/edit/Edit.h") && __has_include("slide/edit/Save.h")
 #include "slide/edit/Edit.h"
 #include "slide/edit/Save.h"
+#include "slide/edit/SlideDesignOps.h"
 #define FW_SLIDE_EDIT 1
 #else
 #define FW_SLIDE_EDIT 0
@@ -54,7 +55,8 @@ constexpr struct {
     {Op::Resize, "resize"},      {Op::Rotate, "rotate"},        {Op::DeleteShape, "delete"},
     {Op::Group, "group"},        {Op::Ungroup, "ungroup"},      {Op::Order, "order"},
     {Op::Format, "format"},      {Op::Undo, "undo"},            {Op::Redo, "redo"},
-    {Op::Save, "save"},
+    {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
+    {Op::HeaderFooter, "header-footer"},
 };
 
 const char* OpName(Op op) {
@@ -176,6 +178,9 @@ std::string FormatEdit(const Edit& e) {
     case Op::Undo:
     case Op::Redo: s += " " + std::to_string(e.count); break;
     case Op::Save: break;
+    case Op::Theme:
+    case Op::MasterShapes: s += " " + std::to_string(e.slide) + " " + e.arg; break;
+    case Op::HeaderFooter: s += " " + std::to_string(e.slide) + " " + e.arg + " " + Quote(e.text); break;
   }
   if (!e.target.empty()) s += " # " + e.target;
   return s;
@@ -230,6 +235,19 @@ bool ParseEdit(std::string_view line, Edit& e) {
       return s.empty();
     }
     case Op::Save: return s.empty();
+    case Op::Theme:
+    case Op::MasterShapes: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (e.op == Op::Theme) return (e.arg == "light" || e.arg == "dark") && s.empty();
+      return (e.arg == "on" || e.arg == "off") && s.empty();
+    }
+    case Op::HeaderFooter: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (e.arg.empty() || e.arg.find_first_not_of(e.arg == "-" ? "-" : "nfdt") != std::string::npos) return false;
+      return Unquote(s, e.text) && s.empty();
+    }
     default: break;
   }
   if (!IsShapeOp(e.op) || !ParseShapeRef(NextWord(s), e.slide, ids) || ids.size() != 1) return false;
@@ -413,6 +431,40 @@ class EditTarget : public DeckTarget {
         return editor_.SetRunProps(t, {{0, 0}, {n - 1, editor_.ParagraphText(t, n - 1).size()}}, p);
       }
       case Op::Save: return {};
+      case Op::Theme: {
+        // As the Design tab's themes change a master: colors, fonts, light or dark, the background.
+        constexpr const char* kA = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        constexpr const char* kP = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const bool dark = e.arg == "dark";
+        ed::ThemeDesign d;
+        d.name = dark ? "Torture Dark" : "Torture Light";
+        std::string scheme = std::string("<a:clrScheme xmlns:a=\"") + kA + "\" name=\"" + d.name + "\">" +
+                             "<a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1>"
+                             "<a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>"
+                             "<a:dk2><a:srgbClr val=\"1F3A5F\"/></a:dk2><a:lt2><a:srgbClr val=\"E8EEF4\"/></a:lt2>";
+        const char* accents[] = {"2E75B6", "C55A11", "548235", "BF9000", "7030A0", "1B8A8F"};
+        for (int i = 0; i < 6; ++i)
+          scheme += "<a:accent" + std::to_string(i + 1) + "><a:srgbClr val=\"" + accents[i] + "\"/></a:accent" + std::to_string(i + 1) + ">";
+        scheme += "<a:hlink><a:srgbClr val=\"0563C1\"/></a:hlink><a:folHlink><a:srgbClr val=\"954F72\"/></a:folHlink></a:clrScheme>";
+        d.colorScheme = scheme;
+        d.major = "Segoe UI Semibold";
+        d.minor = "Segoe UI";
+        d.dark = dark ? 1 : 0;
+        if (dark)
+          d.background = std::string("<p:bg xmlns:p=\"") + kP + "\" xmlns:a=\"" + kA +
+                         "\"><p:bgPr><a:solidFill><a:srgbClr val=\"1E1E1E\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>";
+        return ed::ApplyThemeDesign(editor_, slide, d);
+      }
+      case Op::MasterShapes: return ed::SetShowMasterShapes(editor_, {slide}, e.arg == "on");
+      case Op::HeaderFooter: {
+        ed::HeaderFooter hf;
+        hf.slideNumber = e.arg.find('n') != std::string::npos;
+        hf.footer = e.arg.find('f') != std::string::npos;
+        hf.footerText = text;
+        hf.date = e.arg.find('d') != std::string::npos;
+        hf.notOnTitle = e.arg.find('t') != std::string::npos;
+        return editor_.SetHeaderFooter(e.slide < 0 ? std::vector<size_t>{} : std::vector<size_t>{slide}, hf);
+      }
     }
     return {};
   }
@@ -527,7 +579,7 @@ class Generator {
         {Op::Type, 20}, {Op::Format, 9}, {Op::Move, 9}, {Op::Resize, 6}, {Op::Rotate, 3}, {Op::DeleteShape, 6},
         {Op::Group, 4}, {Op::Ungroup, 2}, {Op::Order, 3}, {Op::NewSlide, 5}, {Op::Duplicate, 6},
         {Op::DeleteSlide, 5}, {Op::MoveSlide, 6}, {Op::Hide, 2}, {Op::Layout, 4}, {Op::Notes, 3},
-        {Op::Undo, 4}, {Op::Redo, 2}, {Op::Save, 1},
+        {Op::Undo, 4}, {Op::Redo, 2}, {Op::Save, 1}, {Op::Theme, 1}, {Op::MasterShapes, 1}, {Op::HeaderFooter, 2},
     };
     uint32_t total = 0;
     for (const auto& w : kWeights) total += w.weight;
@@ -545,6 +597,29 @@ class Generator {
       case Op::Undo: e.count = 1 + rng_.Below(3); return true;
       case Op::Redo: e.count = 1 + rng_.Below(2); return true;
       case Op::Save: return true;
+      case Op::Theme: {
+        if (deck.Masters().empty()) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(deck.Masters().size())));
+        e.arg = rng_.Chance(30) ? "dark" : "light";
+        e.target = "a master with " + std::to_string(deck.Masters()[static_cast<size_t>(e.slide)]->layouts.size()) + " layouts";
+        return true;
+      }
+      case Op::MasterShapes: {
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        e.arg = deck.GetSlide(static_cast<size_t>(e.slide))->showMasterShapes ? "off" : "on";
+        return true;
+      }
+      case Op::HeaderFooter: {
+        if (!slides) return false;
+        e.slide = rng_.Chance(50) ? -1 : static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        for (char c : std::string("nfdt"))
+          if (rng_.Chance(c == 't' ? 30 : 50)) e.arg += c;
+        if (e.arg.empty()) e.arg = "-";
+        e.text = kTyped[rng_.Below(static_cast<uint32_t>(std::size(kTyped)))];
+        e.target = e.slide < 0 ? "every slide" : "one slide";
+        return true;
+      }
       case Op::NewSlide:
       case Op::Layout: {
         if (!layouts || (e.op == Op::Layout && !slides)) return false;
