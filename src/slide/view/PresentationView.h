@@ -13,6 +13,8 @@
 #include "TabContent.h"
 #include "slide/view/Deck.h"
 #include "slide/view/SlideLayout.h"
+#include "slide/view/SlideDesign.h"
+#include "slide/view/SlideHeaderFooter.h"
 #include "slide/view/SlideOrder.h"
 
 namespace fw::text {
@@ -40,6 +42,8 @@ class PresentationView : public TabContent {
   // A view of a deck that's already open (tests).
   PresentationView(ViewHost& host, std::wstring path, std::unique_ptr<Deck> deck);
   ~PresentationView() override;
+  // A new, untitled presentation ("Presentation1"): PowerPoint's blank 16:9 deck (P2).
+  static std::unique_ptr<PresentationView> NewPresentation(ViewHost& host, int number);
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Presentation; }
@@ -152,6 +156,7 @@ class PresentationView : public TabContent {
   void ThumbsDragMove(int x, int y);
   void ThumbsDragEnd(bool drop);
   bool ThumbsKeyDown(UINT vk, UINT mods);
+  bool SlideScriptOp(const std::wstring& op, const std::wstring& arg);
   void DrawThumbSelection(gfx::Canvas& c, const std::vector<ThumbRow>& rows, size_t i);
   void DrawDropMarker(gfx::Canvas& c);
   int SlideShortcut(UINT vk, UINT mods) const;
@@ -169,6 +174,26 @@ class PresentationView : public TabContent {
   bool MoveSlides(const std::vector<size_t>& slides, size_t gap);
   bool HideSlides(const std::vector<size_t>& slides, bool hide);
   bool SetSlidesLayout(const std::vector<size_t>& slides, int layout);
+  // Design (PresentationDesign.cpp): a built-in theme or theme colors on the masters of `slides`
+  // (every master when empty), a background on `slides` (every slide with `all`), slide numbers,
+  // footer and date, the slide size, the notes.
+  bool ApplyTheme(int theme, const std::vector<size_t>& slides);
+  bool ApplyColors(int scheme, const std::vector<size_t>& slides);
+  bool SetBackground(const std::vector<size_t>& slides, const Background& bg, const std::wstring& picture);
+  bool ResetBackground(const std::vector<size_t>& slides);
+  bool ApplyHeaderFooter(const HeaderFooterSettings& s, const std::vector<size_t>& slides);
+  bool SetSlideSize(int choice, int scale);
+  bool SetNotes(size_t slide, const std::wstring& text);
+  // The Design and Header & footer panels (PresentationPanels.h).
+  class DesignPanel;
+  class HeaderFooterPanel;
+  std::unique_ptr<DesignPanel> designPanel_;
+  std::unique_ptr<HeaderFooterPanel> hfPanel_;
+  void OpenDesign(int tab);
+  void OpenHeaderFooter();
+  bool DesignCommandState(int cmd, CommandState& s);
+  bool DesignCommand(int cmd);
+  void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
   // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
   void SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all);
   std::vector<uint32_t> SlideIds() const;
@@ -182,6 +207,8 @@ class PresentationView : public TabContent {
 
   ViewHost& host_;
   std::wstring path_;
+  std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  bool newDeck_ = false;
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).

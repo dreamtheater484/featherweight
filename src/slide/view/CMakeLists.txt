@@ -5,18 +5,18 @@
 #  - fwslideview: the tab (a TabContent) on the app's shell; linked into the exe only.
 add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp
   # P2, p2-slides: the thumbnails' selection and moves, design data, slide numbers, footer and date.
-  SlideOrder.cpp SlideDesign.cpp SlideHeaderFooter.cpp)
+  SlideOrder.cpp SlideDesign.cpp SlideHeaderFooter.cpp NewDeck.cpp)
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp
-  PresentationSlides.cpp SlideGallery.cpp)  # P2, p2-slides
+  PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp)  # P2, p2-slides
 target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwslideview PUBLIC fwslideviewcore)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 # Commands, menus and printing run once per click: compiled for size.
-set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp SlideGallery.cpp PROPERTIES
+set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
 if(TARGET fw_tests)

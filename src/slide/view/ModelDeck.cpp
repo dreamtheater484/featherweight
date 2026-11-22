@@ -1,4 +1,5 @@
 #include "slide/view/ModelDeck.h"
+#include "slide/view/NewDeck.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -279,6 +280,8 @@ void ModelDeck::PaintLayout(size_t layout, draw::Painter& p) {
 
 }  // namespace
 
+std::unique_ptr<Deck> DeckOf(std::unique_ptr<pkg::Snapshot> snap, std::wstring& error);
+
 std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
   pkg::Status status;
   std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path, {}, status);
@@ -286,6 +289,19 @@ std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
     error = L"The file couldn't be read.";
     return nullptr;
   }
+  return DeckOf(std::move(snap), error);
+}
+
+std::unique_ptr<Deck> OpenDeckFromBytes(std::vector<uint8_t> bytes, std::wstring& error) {
+  if (bytes.empty()) {
+    error = L"The presentation couldn't be made.";
+    return nullptr;
+  }
+  return DeckOf(pkg::Snapshot::FromBytes(std::move(bytes)), error);
+}
+
+std::unique_ptr<Deck> DeckOf(std::unique_ptr<pkg::Snapshot> snap, std::wstring& error) {
+  pkg::Status status;
   const size_t bytes = static_cast<size_t>(snap->Size());
   std::unique_ptr<pkg::Package> package = pkg::Package::Open(std::move(snap), pkg::Limits::Default(), status);
   std::unique_ptr<Presentation> deck = package && status.Ok() ? Read(std::move(package), status) : nullptr;

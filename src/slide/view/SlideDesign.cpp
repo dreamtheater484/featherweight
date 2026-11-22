@@ -5,6 +5,9 @@
 #include <cstdio>
 
 #include "core/Strings.h"
+#include "draw/Theme.h"
+#include "draw/Xml.h"
+#include "slide/Presentation.h"
 #include "pkg/XmlWriter.h"
 
 namespace fw::slide::view {
@@ -158,6 +161,56 @@ const std::vector<GradientPreset>& GradientPresets() {
       {L"Bottom to top", 270}, {L"Right to left", 180},
   };
   return presets;
+}
+
+namespace {
+uint32_t Rgb24(const draw::Color& c) {
+  auto ch = [](float v) { return static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255)); };
+  return (ch(c.r) << 16) | (ch(c.g) << 8) | ch(c.b);
+}
+}  // namespace
+
+Background ReadBackground(const fw::slide::SlideBase& slide) {
+  using namespace draw::xml;
+  Background bg;
+  bg.kind = Background::Kind::Theme;
+  bg.hideGraphics = !slide.showMasterShapes;
+  // The reader gives the background in effect as a shape: its spPr holds the fill.
+  // (a theme background, p:bgRef, is a style reference there and has no fill of its own).
+  const pugi::xml_node spPr = Child(slide.background, kP, "spPr");
+  const draw::ColorContext ctx{slide.theme.get(), &slide.colorMap, std::nullopt};
+  if (pugi::xml_node solid = A(spPr, "solidFill")) {
+    bg.kind = Background::Kind::Solid;
+    if (auto c = draw::ReadColor(solid, ctx)) bg.color = Rgb24(*c);
+  } else if (pugi::xml_node grad = A(spPr, "gradFill")) {
+    bg.kind = Background::Kind::Gradient;
+    std::vector<pugi::xml_node> stops;
+    ForEachChild(A(grad, "gsLst"), [&](pugi::xml_node gs) {
+      stops.push_back(gs);
+      return true;
+    });
+    if (!stops.empty()) {
+      if (auto c = draw::ReadColor(stops.front(), ctx)) bg.color = Rgb24(*c);
+      if (auto c = draw::ReadColor(stops.back(), ctx)) bg.color2 = Rgb24(*c);
+    }
+    bg.angle = static_cast<int>(std::lround(Number(A(grad, "lin"), "ang", 5400000) / 60000)) % 360;
+  } else if (A(spPr, "blipFill")) {
+    bg.kind = Background::Kind::Picture;
+  } else if (!slide.background) {
+    bg.kind = Background::Kind::Solid;  // none: white
+  }
+  return bg;
+}
+
+int ColorSchemeOf(const fw::slide::SlideBase& slide) {
+  if (!slide.theme) return -1;
+  const std::vector<ColorScheme>& all = ColorSchemes();
+  for (size_t i = 0; i < all.size(); ++i) {
+    bool same = true;
+    for (int k = 0; k < 12 && same; ++k) same = Rgb24(slide.theme->GetColor(static_cast<draw::ThemeColor>(k))) == (all[i].colors[k] & 0xFFFFFF);
+    if (same) return static_cast<int>(i);
+  }
+  return -1;
 }
 
 const std::vector<BuiltInTheme>& BuiltInThemes() {

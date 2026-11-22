@@ -171,6 +171,8 @@ const std::shared_ptr<const Theme>& Theme::Default() {
   return theme;
 }
 
+std::string_view Theme::DefaultXml() { return kDefaultTheme; }
+
 bool Theme::Read() {
   pugi::xml_node root = dom_.Root();
   if (!Is(root, kA, "theme")) return false;

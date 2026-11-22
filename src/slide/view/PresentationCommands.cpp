@@ -188,7 +188,8 @@ std::vector<int> PresentationView::Commands() {
     if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
   // P2: the slides' commands.
   for (int cmd : {CmdSlideNew, CmdSlideDuplicate, CmdSlideDelete, CmdSlideHide, CmdSlideMoveUp, CmdSlideMoveDown,
-                  CmdSlideMoveFirst, CmdSlideMoveLast})
+                  CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
+                  CmdHeaderFooter, CmdSlideSize169, CmdSlideSize43})
     out.push_back(cmd);
   return out;
 }

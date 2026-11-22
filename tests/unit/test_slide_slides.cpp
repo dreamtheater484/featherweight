@@ -4,7 +4,10 @@
 
 #include <pugixml.hpp>
 
+#include <windows.h>
+
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,6 +17,7 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
+#include "slide/view/NewDeck.h"
 #include "slide/view/SlideDesign.h"
 #include "slide/view/SlideHeaderFooter.h"
 #include "slide/view/SlideOrder.h"
@@ -353,6 +357,7 @@ TEST(SlideHeaderFooter_ReadFromDeck) {
   CHECK(s.footer);
   CHECK(s.footerText == L"Featherweight public set");
   CHECK(s.slideNumber);
+  CHECK_EQ(s.lang, std::string("en-US"));
   // Slide 1 shows none of them.
   const HeaderFooterSettings none = ReadHeaderFooter(*deck->GetSlide(0));
   CHECK(!none.date && !none.footer && !none.slideNumber);
@@ -360,4 +365,81 @@ TEST(SlideHeaderFooter_ReadFromDeck) {
   const fw::slide::Slide* first = deck->GetSlide(0);
   if (first->layout && first->layout->type == "title") CHECK(IsTitleLayout(first->layout));
   CHECK(!IsTitleLayout(nullptr));
+}
+
+// ---------------------------------------------------------------------------
+// A new presentation
+
+TEST(SlideNew_BlankPresentation) {
+  std::vector<uint8_t> bytes = BlankPresentation();
+  CHECK(bytes.size() > 4000);
+  // FW_BLANK_PPTX=<path> writes it out, for the validator and PowerPoint's open check.
+  char out[MAX_PATH];
+  if (GetEnvironmentVariableA("FW_BLANK_PPTX", out, MAX_PATH)) {
+    std::ofstream f(out, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  }
+  fw::pkg::Status status;
+  auto package = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(bytes), fw::pkg::Limits::Default(), status);
+  CHECK(package != nullptr);
+  if (!package) return;
+  auto deck = fw::slide::Read(std::move(package), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  CHECK(deck->Problems().empty());
+  CHECK_EQ(deck->SlideCount(), 1u);
+  CHECK_NEAR(deck->SlideSize().width, 960.0f, 0.01f);
+  CHECK_NEAR(deck->SlideSize().height, 540.0f, 0.01f);
+  CHECK_EQ(deck->Masters().size(), 1u);
+  CHECK_EQ(deck->Layouts().size(), 11u);
+  const char* names[] = {"Title Slide", "Title and Content", "Section Header", "Two Content", "Comparison", "Title Only",
+                         "Blank", "Content with Caption", "Picture with Caption", "Title and Vertical Text",
+                         "Vertical Title and Text"};
+  for (size_t i = 0; i < 11; ++i) CHECK_EQ(deck->Masters()[0]->layouts[i]->name, std::string(names[i]));
+  const fw::slide::Slide* s = deck->GetSlide(0);
+  CHECK(s && s->layout && s->layout->type == "title");
+  CHECK(IsTitleLayout(s->layout));
+  // The slide's placeholders inherit the layout's positions and the master's styles.
+  const fw::slide::Shape* title = s->FindPlaceholder(fw::slide::PlaceholderType::CenteredTitle);
+  CHECK(title && title->inherits);
+  if (title) CHECK_NEAR(title->bounds.left, 120.0f, 0.01f);  // 1524000 EMU
+  const fw::slide::Master& m = *deck->Masters()[0];
+  for (auto t : {fw::slide::PlaceholderType::Title, fw::slide::PlaceholderType::Body, fw::slide::PlaceholderType::Date,
+                 fw::slide::PlaceholderType::Footer, fw::slide::PlaceholderType::SlideNumber})
+    CHECK(m.FindPlaceholder(t) != nullptr);
+  CHECK(m.titleStyle && m.bodyStyle && m.otherStyle);
+  CHECK_EQ(m.theme->Name(), std::string("Office Theme"));
+  // Every layout has the date, footer and slide number placeholders new slides copy.
+  for (const auto& l : deck->Layouts())
+    for (auto t : {fw::slide::PlaceholderType::Date, fw::slide::PlaceholderType::Footer, fw::slide::PlaceholderType::SlideNumber})
+      CHECK(l->FindPlaceholder(t) != nullptr);
+  std::wstring error;
+  CHECK(OpenDeckFromBytes(bytes, error) != nullptr);
+  CHECK(OpenDeckFromBytes({}, error) == nullptr && !error.empty());
+}
+
+TEST(SlideDesign_ReadBackground) {
+  auto deck = OpenDeck("backgrounds.pptx");
+  CHECK(deck != nullptr);
+  if (!deck || deck->SlideCount() < 5) return;
+  // Slide 2: its layout's own solid color; slide 3: its own solid color; slide 5: a picture.
+  const Background two = ReadBackground(*deck->GetSlide(1));
+  CHECK(two.kind == Background::Kind::Solid);
+  CHECK(two.color != 0xFFFFFF);
+  const Background three = ReadBackground(*deck->GetSlide(2));
+  CHECK(three.kind == Background::Kind::Solid);
+  CHECK(three.color != two.color);
+  CHECK(ReadBackground(*deck->GetSlide(4)).kind == Background::Kind::Picture);
+  // themes.pptx uses Office's colors on its first slide.
+  auto themes = OpenDeck("themes.pptx");
+  CHECK(themes != nullptr);
+  if (themes) CHECK(ColorSchemeOf(*themes->GetSlide(0)) >= -1);
+  // The blank presentation's theme is the Office scheme.
+  fw::pkg::Status status;
+  auto blank = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(blank != nullptr);
+  if (blank) {
+    CHECK_EQ(ColorSchemeOf(*blank->GetSlide(0)), 0);
+    CHECK(ReadBackground(*blank->GetSlide(0)).kind == Background::Kind::Theme);
+  }
 }

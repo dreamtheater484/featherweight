@@ -14,6 +14,8 @@
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
+#include "slide/view/NewDeck.h"
+#include "slide/view/PresentationPanels.h"
 #include "slide/view/SlideGallery.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
@@ -65,12 +67,19 @@ PresentationView::~PresentationView() {
   if (showing_ && fw::slide::show::Running()) fw::slide::show::Stop();
 }
 
+std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& host, int number) {
+  auto view = std::make_unique<PresentationView>(host, std::wstring());
+  view->untitled_ = L"Presentation" + std::to_wstring(number);
+  view->newDeck_ = true;
+  return view;
+}
+
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = OpenDeck(path_, why);
+  deck_ = newDeck_ ? OpenDeckFromBytes(BlankPresentation(), why) : OpenDeck(path_, why);
   if (!deck_) {
-    error = FileNameOf(path_) + L": " + why;
+    error = Title() + L": " + why;
     return OpenResult::Failed;
   }
   thumbCache_.assign(deck_->SlideCount(), {});
@@ -82,7 +91,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   return OpenResult::Ok;
 }
 
-std::wstring PresentationView::Title() const { return FileNameOf(path_); }
+std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Layout

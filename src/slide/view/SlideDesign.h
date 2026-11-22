@@ -13,6 +13,10 @@
 // (compact data: twelve colors, two fonts, light or dark, a background), and backgrounds. The XML
 // these give is what the edit operations write (theme parts' a:clrScheme and a:fontScheme, a
 // master's p:clrMap, p:bg). Headless.
+namespace fw::slide {
+struct SlideBase;
+}
+
 namespace fw::slide::view {
 
 // ---- Slide size ----
@@ -84,6 +88,11 @@ struct GradientPreset {
   int angle;
 };
 const std::vector<GradientPreset>& GradientPresets();
+// The background a slide shows now, as Format Background starts from: its own p:bg, else its
+// layout's or master's. Colors resolved against the slide's theme. A picture fill reads as Picture.
+Background ReadBackground(const fw::slide::SlideBase& slide);
+// The color scheme the slide's theme matches, or -1.
+int ColorSchemeOf(const fw::slide::SlideBase& slide);
 
 // A built-in theme: a color scheme, heading and body fonts, light or dark text, a background.
 struct BuiltInTheme {

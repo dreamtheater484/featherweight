@@ -26,6 +26,7 @@ struct HeaderFooterSettings {
   bool footer = false;
   std::wstring footerText;
   bool notOnTitle = false;   // left off slides with a title slide layout
+  std::string lang;          // the placeholders' runs' language (empty: en-US): the date's format
   bool operator==(const HeaderFooterSettings&) const = default;
 };
 

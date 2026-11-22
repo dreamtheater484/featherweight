@@ -139,11 +139,13 @@ HeaderFooterSettings ReadHeaderFooter(const Slide& slide) {
       if (!Is(p, kA, "p")) return true;
       if (!text.empty()) text += L' ';
       text += ParagraphText(p);
-      if (dateType.empty())
-        ForEachChild(p, [&](pugi::xml_node n) {
-          if (Is(n, kA, "fld") && std::string_view(n.attribute("type").value()).starts_with("datetime")) dateType = n.attribute("type").value();
-          return dateType.empty();
-        });
+      ForEachChild(p, [&](pugi::xml_node n) {
+        if (Is(n, kA, "fld") && dateType.empty() && std::string_view(n.attribute("type").value()).starts_with("datetime"))
+          dateType = n.attribute("type").value();
+        // The runs' language: the date's format and the new runs' lang follow it.
+        if (s.lang.empty() && (Is(n, kA, "r") || Is(n, kA, "fld"))) s.lang = A(n, "rPr").attribute("lang").value();
+        return true;
+      });
       return true;
     });
     switch (t) {

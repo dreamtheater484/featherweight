@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "Commands.h"
+#include "core/Strings.h"
 #include "slide/Presentation.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlideGallery.h"
@@ -208,6 +210,7 @@ bool PresentationView::SlideCommandState(int cmd, CommandState& s) {
       s.enabled = any && !sel.empty() && MoveChanges(n, sel, cmd == CmdSlideMoveLast ? n : std::min(n, sel.back() + 2));
       break;
     default:
+      if (DesignCommandState(cmd, s)) return true;  // PresentationDesign.cpp
       if (cmd >= CmdSlideLayoutPick && cmd < CmdSlideLayoutPick + 20) {
         const std::vector<Deck::LayoutChoice> layouts = any ? deck_->LayoutsFor(current_) : std::vector<Deck::LayoutChoice>();
         const size_t k = static_cast<size_t>(cmd - CmdSlideLayoutPick);
@@ -270,6 +273,7 @@ bool PresentationView::SlideCommand(int cmd) {
       return true;
     }
     default:
+      if (DesignCommand(cmd)) return true;  // PresentationDesign.cpp
       if (cmd >= CmdSlideLayoutPick && cmd < CmdSlideLayoutPick + 20 && n) {
         const std::vector<Deck::LayoutChoice> layouts = deck_->LayoutsFor(current_);
         const size_t k = static_cast<size_t>(cmd - CmdSlideLayoutPick);
@@ -302,6 +306,8 @@ void PresentationView::SlideContextMenu(HMENU m, int thumb) {
     menu::AppendSubmenu(m, sub, L"Layout");
   }
   AppendItem(m, CmdSlideHide, many ? L"Hide slides" : L"Hide slide", any, any && deck_->Hidden(current_));
+  AppendItem(m, CmdFormatBackground, L"Format background…", any);
+  AppendItem(m, CmdResetBackground, L"Reset background", any);
   AppendSeparator(m);
 }
 
@@ -392,8 +398,106 @@ void PresentationView::AddSlideTools(ToolbarModel& m) {
   layout.menuLabel = L"Slide layout";
   layout.enabled = ready && SlideCount() > 0 && !galleryLayouts_.empty();
   layoutGallery_->enabled = layout.enabled;
-  m.left.insert(m.left.begin(), {add, layout});
-  m.left[2].sepBefore = true;  // P1's print items after a separator
+  ToolItem design;
+  design.cmd = CmdDesignPanel;
+  design.glyph = icon::Color;
+  design.tooltip = L"Design: themes, theme colors, background, slide size";
+  design.toggle = true;
+  design.checked = QueryCommand(CmdDesignPanel).checked;
+  design.enabled = ready;
+  design.priority = 5;
+  m.left.insert(m.left.begin(), {add, layout, design});
+  m.left[3].sepBefore = true;  // P1's print items after a separator
+}
+
+// ---------------------------------------------------------------------------
+// Script ops (--script; p2-corpus's build-from-scratch run and the timing runs)
+
+bool PresentationView::SlideScriptOp(const std::wstring& op, const std::wstring& arg) {
+  auto refuse = [&](const std::wstring& why) {
+    fwprintf(stderr, L"%ls:%ls: %ls\n", op.c_str(), arg.c_str(), why.c_str());
+    fflush(stderr);
+    return true;
+  };
+  if (!Ready()) return false;
+  if (op == L"select") {
+    // select:2,4-6 (1-based): those slides, the first of them shown.
+    std::vector<size_t> picked;
+    for (const std::wstring& part : Split(arg, L',')) {
+      const size_t dash = part.find(L'-');
+      int a = 0, b = 0;
+      if (!ParseInt(part.substr(0, dash), a)) continue;
+      b = a;
+      if (dash != std::wstring::npos && !ParseInt(part.substr(dash + 1), b)) continue;
+      for (int k = std::max(1, a); k <= b && k <= static_cast<int>(SlideCount()); ++k) picked.push_back(static_cast<size_t>(k - 1));
+    }
+    if (picked.empty()) return refuse(L"no such slides");
+    GoToSlide(picked.front());
+    selection_.Set(picked, picked.front());
+    keysInThumbs_ = true;
+    host_.ViewInvalidate();
+    return true;
+  }
+  if (op == L"layout") {
+    if (!SlideCount()) return refuse(L"no slide");
+    for (const Deck::LayoutChoice& l : deck_->LayoutsFor(current_))
+      if (EqualsNoCase(l.name, arg)) {
+        if (!SetSlidesLayout(SelectedSlides(), static_cast<int>(l.index))) refuse(L"refused");
+        return true;
+      }
+    return refuse(L"no layout of that name");
+  }
+  if (op == L"theme") {
+    const std::vector<BuiltInTheme>& themes = BuiltInThemes();
+    for (size_t i = 0; i < themes.size(); ++i)
+      if (EqualsNoCase(themes[i].name, arg)) {
+        if (!ApplyTheme(static_cast<int>(i), {})) refuse(L"refused");
+        return true;
+      }
+    return refuse(L"no built-in theme of that name");
+  }
+  if (op == L"colors") {
+    const std::vector<ColorScheme>& schemes = ColorSchemes();
+    for (size_t i = 0; i < schemes.size(); ++i)
+      if (EqualsNoCase(schemes[i].name, arg)) {
+        if (!ApplyColors(static_cast<int>(i), {})) refuse(L"refused");
+        return true;
+      }
+    return refuse(L"no theme colors of that name");
+  }
+  if (op == L"notestext") {
+    // notestext:<text>, '|' between paragraphs: the current slide's notes as typed.
+    std::wstring text = arg;
+    std::replace(text.begin(), text.end(), L'|', L'\n');
+    if (!SlideCount() || !SetNotes(current_, text)) refuse(L"refused");
+    return true;
+  }
+  if (op == L"headerfooter") {
+    // headerfooter:slidenumber=1|footer=<text>|date=1|datefixed=<text>|dateformat=N|title=0,
+    // applied to every slide (title=0: not on title slides).
+    HeaderFooterSettings hf;
+    for (const std::wstring& part : Split(arg, L'|')) {
+      const size_t eq = part.find(L'=');
+      const std::wstring key = ToLower(part.substr(0, eq)), value = eq == std::wstring::npos ? L"1" : part.substr(eq + 1);
+      int n = 0;
+      if (key == L"slidenumber") hf.slideNumber = value != L"0";
+      else if (key == L"footer") hf.footer = !value.empty(), hf.footerText = value;
+      else if (key == L"date") hf.date = value != L"0";
+      else if (key == L"datefixed") hf.date = true, hf.dateAuto = false, hf.dateFixed = value;
+      else if (key == L"dateformat" && ParseInt(value, n)) hf.dateFormat = n;
+      else if (key == L"title") hf.notOnTitle = value == L"0";
+    }
+    if (!ApplyHeaderFooter(hf, {})) refuse(L"refused");
+    return true;
+  }
+  if (op == L"slidesize") {
+    // slidesize:16:9|4:3, with ,fit or ,max for how the content scales.
+    const int choice = arg.rfind(L"4:3", 0) == 0 ? 1 : 0;
+    const int scale = arg.find(L"max") != std::wstring::npos ? 0 : 1;
+    if (!SetSlideSize(choice, scale)) refuse(L"refused");
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
