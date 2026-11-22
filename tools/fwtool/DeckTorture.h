@@ -36,6 +36,11 @@ enum class Op : uint8_t {
   Undo,        // count steps
   Redo,
   Save,        // a save in the middle: checked as the last one is, then the edits go on
+  // Design (p2-slides):
+  Theme,        // master `slide` (an index into the deck's masters) gets a built-in-like theme; arg: light, dark
+  MasterShapes, // arg on, off: the master's and layout's graphics shown on `slide`
+  HeaderFooter, // `slide` (-1: every slide) gets slide numbers, a footer and a date as arg says: letters of
+                // "n" (number), "f" (footer, `text`), "d" (date), "t" (not on the title slide), or "-"
 };
 
 // One edit, as reproducers keep it. Slides are indexes at the moment the edit is applied; shapes are
@@ -57,7 +62,7 @@ struct Edit {
 //   new-slide 3 L2 / duplicate 2 / delete-slide 4 / move-slide 2 5 / hide 1 on / layout 1 L4 /
 //   type 2#5 end "text" / notes 2 "text" / move 2#5 12.5 -30 / resize 2#5 1.2 0.8 / rotate 2#5 45 /
 //   delete 2#5 / group 2#5,7,9 / ungroup 2#11 / order 2#5 front / format 2#5 fill=C00000 /
-//   undo 2 / redo 1 / save,
+//   undo 2 / redo 1 / save / theme 0 dark / master-shapes 2 off / header-footer -1 nf "footer text",
 //   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);
