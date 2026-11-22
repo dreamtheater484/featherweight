@@ -1,6 +1,7 @@
 // The presentation tab's objects (P2, p2-objects): the ObjectTool made for the tab, and how its
 // edits reach what the tab has drawn. The tool itself is in ObjectTool.cpp.
 
+#include "Commands.h"
 #include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Banner.h"
@@ -38,6 +39,12 @@ ObjectTool& PresentationView::Objects() const {
     objects_ = std::make_unique<ObjectTool>(std::move(h));
   }
   return *objects_;
+}
+
+bool PresentationView::ObjectsTake(int cmd) const {
+  if (!keysInThumbs_) return true;
+  return cmd != CmdCut && cmd != CmdCopy && cmd != CmdPaste && cmd != CmdSelectAll && cmd != CmdDeleteObject &&
+         cmd != CmdDuplicateObjects;
 }
 
 bool PresentationView::Dragging() const { return drag_ != Drag::None || (objects_ && objects_->Dragging()); }

@@ -1,4 +1,5 @@
 #include "slide/view/ModelDeck.h"
+#include "slide/view/NewDeck.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -96,6 +97,9 @@ class ModelDeck : public Deck {
       r->Draw(p, {0, 0, s.width, s.height}, filter);
     }
   }
+  std::vector<LayoutChoice> LayoutsFor(size_t slide) const override;
+  int LayoutOf(size_t slide) const override;
+  void PaintLayout(size_t layout, draw::Painter& p) override;
 
  private:
   const Slide* Get(size_t i) const { return i < deck_->SlideCount() ? deck_->GetSlide(i) : nullptr; }
@@ -267,7 +271,60 @@ bool ModelDeck::PaintNotesPage(size_t i, draw::Painter& p, draw::Rect& slideBox)
   return true;
 }
 
+std::vector<Deck::LayoutChoice> ModelDeck::LayoutsFor(size_t slide) const {
+  std::vector<LayoutChoice> out;
+  const Slide* s = Get(slide);
+  const Master* master = s ? s->master : nullptr;
+  if (!master && !deck_->Masters().empty()) master = deck_->Masters().front().get();
+  if (!master) return out;
+  const auto& all = deck_->Layouts();
+  for (const Layout* l : master->layouts)
+    for (size_t i = 0; i < all.size(); ++i)
+      if (all[i].get() == l) out.push_back({i, Utf8ToWide(l->name.empty() ? l->type : l->name)});
+  return out;
+}
+
+int ModelDeck::LayoutOf(size_t slide) const {
+  const Slide* s = Get(slide);
+  if (!s || !s->layout) return -1;
+  const auto& all = deck_->Layouts();
+  for (size_t i = 0; i < all.size(); ++i)
+    if (all[i].get() == s->layout) return static_cast<int>(i);
+  return -1;
+}
+
+void ModelDeck::PaintLayout(size_t layout, draw::Painter& p) {
+  const auto& all = deck_->Layouts();
+  if (layout >= all.size()) return;
+  const Layout& l = *all[layout];
+  // The gallery leaves out the date, footer and slide number, as PowerPoint's does.
+  struct Filter : render::DrawFilter {
+    std::vector<uint32_t> skip;
+    bool Shape(uint32_t id) override { return id == 0 || std::find(skip.begin(), skip.end(), id) == skip.end(); }
+  } filter;
+  for (const Shape& sh : l.shapes)
+    if (sh.placeholder.type == PlaceholderType::Date || sh.placeholder.type == PlaceholderType::Footer ||
+        sh.placeholder.type == PlaceholderType::SlideNumber)
+      filter.skip.push_back(sh.id);
+  const draw::Size size = deck_->SlideSize();
+  if (std::unique_ptr<render::SlideRender> r = render::SlideRender::Make(*deck_, l, Fonts()))
+    r->Draw(p, {0, 0, size.width, size.height}, &filter);
+  // The placeholders' outlines, dotted, as PowerPoint's gallery shows where content goes.
+  draw::Pen pen;
+  pen.brush = draw::Brush::Solid({0.55f, 0.55f, 0.55f, 1});
+  pen.width = std::max(1.0f, size.width / 160);
+  pen.dashes = {2, 1.5f};
+  for (const Shape& sh : l.shapes) {
+    if (!sh.placeholder || sh.hidden || std::find(filter.skip.begin(), filter.skip.end(), sh.id) != filter.skip.end()) continue;
+    draw::Rect b = sh.bounds;
+    for (const Shape* up = sh.inherits; b.Width() <= 0 && up; up = up->inherits) b = up->bounds;
+    if (b.Width() > 0 && b.Height() > 0) p.StrokePath(draw::Path::FromRect(b), pen);
+  }
+}
+
 }  // namespace
+
+std::unique_ptr<Deck> DeckOf(std::unique_ptr<pkg::Snapshot> snap, std::wstring& error);
 
 std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
   pkg::Status status;
@@ -276,6 +333,19 @@ std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
     error = L"The file couldn't be read.";
     return nullptr;
   }
+  return DeckOf(std::move(snap), error);
+}
+
+std::unique_ptr<Deck> OpenDeckFromBytes(std::vector<uint8_t> bytes, std::wstring& error) {
+  if (bytes.empty()) {
+    error = L"The presentation couldn't be made.";
+    return nullptr;
+  }
+  return DeckOf(pkg::Snapshot::FromBytes(std::move(bytes)), error);
+}
+
+std::unique_ptr<Deck> DeckOf(std::unique_ptr<pkg::Snapshot> snap, std::wstring& error) {
+  pkg::Status status;
   const size_t bytes = static_cast<size_t>(snap->Size());
   std::unique_ptr<pkg::Package> package = pkg::Package::Open(std::move(snap), pkg::Limits::Default(), status);
   std::unique_ptr<Presentation> deck = package && status.Ok() ? Read(std::move(package), status) : nullptr;

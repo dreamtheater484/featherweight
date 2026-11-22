@@ -470,6 +470,29 @@ enum Cmd : int {
   CmdPrintHidden,                // hidden slides print too
   CmdPrintFrame,                 // a frame around the slides on handouts and notes pages
 
+  // Slides in the presentation tab (P2, p2-slides): 3420-3459. Cut, copy, paste, delete and select
+  // all in the thumbnails use CmdCut, CmdCopy, CmdPaste, CmdSlideDelete and CmdSelectAll.
+  CmdSlideNew = 3420,            // Ctrl+M: after the current slide, on the layout the gallery shows first
+  CmdSlideNewMenu,               // the toolbar's ＋ Slide ▾: the layout gallery
+  CmdSlideDuplicate,             // Ctrl+D: the selected slides, after the last of them
+  CmdSlideDelete,                // Delete in the thumbnails
+  CmdSlideHide,                  // the selected slides skipped by the show, or shown again
+  CmdSlideLayoutMenu,            // Layout ▾: the selected slides' layout
+  CmdSlideMoveUp,                // Ctrl+Up in the thumbnails
+  CmdSlideMoveDown,              // Ctrl+Down
+  CmdSlideMoveFirst,             // Ctrl+Shift+Up
+  CmdSlideMoveLast,              // Ctrl+Shift+Down
+  CmdSlideSizePanel,             // Design > Slide size: 16:9 or 4:3, and how the content scales
+  CmdSlideSize169,               // the slide size, directly
+  CmdSlideSize43,
+  CmdDesignPanel,                // Design: themes and theme colors
+  CmdFormatBackground,           // Format background: solid, gradient, picture; this slide or all
+  CmdResetBackground,            // the selected slides' backgrounds back to their layout's
+  CmdHeaderFooter,               // Insert > Header & footer: date, slide number, footer
+  CmdPasteSlidesDestination,     // paste copied slides with this presentation's design (Ctrl+V's)
+  CmdPasteSlidesSource,          // paste copied slides keeping their own design
+  CmdNotesFocus,                 // the keyboard into the speaker notes
+  CmdSlideLayoutPick = 3440,     // + index into the current slide's master's layouts (up to 20): Layout ▸
   // Objects on slides (P2, p2-objects): 3500-3549. Inserting also uses the shared
   // CmdInsertPicture, CmdInsertTextBox, CmdInsertRectangle... CmdInsertCallout, CmdInsertTable,
   // CmdInsertChart and CmdChartColumn/Bar/Line/Pie; CmdDeleteObject, CmdPictureCrop, CmdShapePanel.

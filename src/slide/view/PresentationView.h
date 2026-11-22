@@ -5,6 +5,7 @@
 #include <d2d1_1.h>
 #include <wrl/client.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,6 +13,9 @@
 #include "TabContent.h"
 #include "slide/view/Deck.h"
 #include "slide/view/SlideLayout.h"
+#include "slide/view/SlideDesign.h"
+#include "slide/view/SlideHeaderFooter.h"
+#include "slide/view/SlideOrder.h"
 
 namespace fw::text {
 class Fonts;
@@ -23,6 +27,7 @@ class SlideRenderer;
 namespace fw::slide::view {
 
 class ObjectTool;
+class SlideGallery;
 
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
 // slide fitted to the window (or zoomed) in the middle, the speaker notes below it, and "Slide n
@@ -38,6 +43,8 @@ class PresentationView : public TabContent {
   // A view of a deck that's already open (tests).
   PresentationView(ViewHost& host, std::wstring path, std::unique_ptr<Deck> deck);
   ~PresentationView() override;
+  // A new, untitled presentation ("Presentation1"): PowerPoint's blank 16:9 deck (P2).
+  static std::unique_ptr<PresentationView> NewPresentation(ViewHost& host, int number);
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Presentation; }
@@ -132,6 +139,9 @@ class PresentationView : public TabContent {
   ID2D1Bitmap* ThumbBitmap(ID2D1DeviceContext* dc, size_t slide, bool make);
   // The slide drawn into a bitmap `w` x `h` pixels (null when it couldn't be).
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h);
+  // Anything drawn in slide points into such a bitmap (P2: the layout gallery's pictures).
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmapWith(ID2D1DeviceContext* dc, UINT w, UINT h,
+                                                        const std::function<void(draw::Painter&)>& paint);
 
   // ---- Commands (PresentationCommands.cpp)
   void StartShow(bool fromCurrent);
@@ -145,6 +155,55 @@ class PresentationView : public TabContent {
 
   // ---- Objects on the slide (P2, p2-objects: ObjectTool)
   ObjectTool& Objects() const;
+  // Whether the objects get a command: not the clipboard or select all while the keys are in the thumbnails.
+  bool ObjectsTake(int cmd) const;
+  // ---- Slides (P2, p2-slides: PresentationSlides.cpp): the thumbnails as an editor
+  // A click on thumbnail `t` with the modifier keys; true when it was handled.
+  void ThumbsMouseDown(int t, UINT mods, int x, int y);
+  void ThumbsDragMove(int x, int y);
+  void ThumbsDragEnd(bool drop);
+  bool ThumbsKeyDown(UINT vk, UINT mods);
+  bool SlideScriptOp(const std::wstring& op, const std::wstring& arg);
+  void DrawThumbSelection(gfx::Canvas& c, const std::vector<ThumbRow>& rows, size_t i);
+  void DrawDropMarker(gfx::Canvas& c);
+  int SlideShortcut(UINT vk, UINT mods) const;
+  bool SlideCommandState(int cmd, CommandState& s);
+  bool SlideCommand(int cmd);
+  void SlideContextMenu(HMENU menu, int thumb);
+  void AddSlideTools(ToolbarModel& m);
+  std::vector<size_t> SelectedSlides() const;
+  // Edits through the edit layer (each one undo step). False, with a banner saying why, when the
+  // deck can't be edited.
+  bool CanEditSlides() const;
+  bool InsertSlide(size_t at, int layout);
+  bool DuplicateSlides(const std::vector<size_t>& slides);
+  bool DeleteSlides(const std::vector<size_t>& slides);
+  bool MoveSlides(const std::vector<size_t>& slides, size_t gap);
+  bool HideSlides(const std::vector<size_t>& slides, bool hide);
+  bool SetSlidesLayout(const std::vector<size_t>& slides, int layout);
+  // Design (PresentationDesign.cpp): a built-in theme or theme colors on the masters of `slides`
+  // (every master when empty), a background on `slides` (every slide with `all`), slide numbers,
+  // footer and date, the slide size, the notes.
+  bool ApplyTheme(int theme, const std::vector<size_t>& slides);
+  bool ApplyColors(int scheme, const std::vector<size_t>& slides);
+  bool SetBackground(const std::vector<size_t>& slides, const Background& bg, const std::wstring& picture);
+  bool ResetBackground(const std::vector<size_t>& slides);
+  bool ApplyHeaderFooter(const HeaderFooterSettings& s, const std::vector<size_t>& slides);
+  bool SetSlideSize(int choice, int scale);
+  bool SetNotes(size_t slide, const std::wstring& text);
+  // The Design and Header & footer panels (PresentationPanels.h).
+  class DesignPanel;
+  class HeaderFooterPanel;
+  std::unique_ptr<DesignPanel> designPanel_;
+  std::unique_ptr<HeaderFooterPanel> hfPanel_;
+  void OpenDesign(int tab);
+  void OpenHeaderFooter();
+  bool DesignCommandState(int cmd, CommandState& s);
+  bool DesignCommand(int cmd);
+  void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
+  // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
+  void SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all);
+  std::vector<uint32_t> SlideIds() const;
 
   // ---- Printing (PresentationPrint.cpp)
   std::vector<size_t> PrintedSlides() const;
@@ -155,6 +214,8 @@ class PresentationView : public TabContent {
 
   ViewHost& host_;
   std::wstring path_;
+  std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  bool newDeck_ = false;
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).
@@ -189,8 +250,25 @@ class PresentationView : public TabContent {
   size_t slideBitmapOf_ = SIZE_MAX;
   UINT slideBitmapW_ = 0, slideBitmapH_ = 0;
 
+  // The selected slides (P2): the thumbnails' selection, the current slide always in it.
+  SlideSelection selection_;
+  // A drag of the selected thumbnails: armed on the press, moving once the pointer has gone a few
+  // pixels; `dropGap_` is the gap it would drop into (SIZE_MAX: none shown).
+  bool thumbPress_ = false;
+  size_t dropGap_ = SIZE_MAX;
+  float dragY_ = 0;
+  int pendingCollapse_ = -1;  // a plain click on a slide of a multi-selection: it alone, unless it drags
+  // ＋ Slide ▾ and Layout ▾ (their pictures: the deck's layouts as P1's renderer draws them, made
+  // when a gallery opens and kept while the deck and the picture size stay).
+  std::unique_ptr<SlideGallery> newSlideGallery_, layoutGallery_;
+  std::vector<Deck::LayoutChoice> galleryLayouts_;
+  std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> layoutPictures_;  // by the presentation's layout index
+  UINT layoutPictureW_ = 0;
+  void PaintLayoutPicture(gfx::Canvas& c, size_t layout, const D2D1_RECT_F& r);
+  void PrepareGalleries();
+
   // Mouse.
-  enum class Drag { None, Splitter, ThumbBar, Pan };
+  enum class Drag { None, Splitter, ThumbBar, Pan, Slides };
   Drag drag_ = Drag::None;
   int downX_ = 0, downY_ = 0;
   float downValue_ = 0, downValue2_ = 0;

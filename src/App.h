@@ -188,6 +188,7 @@ class App : public PdfHost, public DropHost {
   void InitFiles(bool userFolders);
   void NewDocument(int kind = 0);  // fw::doc::docx::Template
   void NewWorkbook();               // "Book1"
+  void NewPresentation();           // "Presentation1" (P2)
   // At startup: documents a crash left unsaved, offered in a banner.
   void OfferRecovery();
   void RecoverDocuments(bool open);  // Recover, or Discard
@@ -315,6 +316,7 @@ class App : public PdfHost, public DropHost {
   // Files
   std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
   int newDocuments_ = 0;
+  int newPresentations_ = 0;  // Presentation1, Presentation2 (P2)
   int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)
   static constexpr int kUserTemplateCount = 16;
   std::vector<std::wstring> userTemplates_;  // as the last menu listed them (CmdUserTemplate)
