@@ -47,6 +47,8 @@ param(
   [string]$Record,
   [string]$Json,
   [string]$Fwtool,
+  # The Python with python-pptx that makes the timed decks (another worktree's venv will do).
+  [string]$VenvPython,
   # With -Record: sizes measured elsewhere, such as on CI, whose log prints the command.
   [string]$Toolset, [long]$ExeBytes, [long]$DownloadBytes
 )
@@ -235,7 +237,7 @@ if (($Timings -or $TrackTimings) -and $exe) {
     & python tests\office\make_long_docs.py $longDir 300 | Out-Null
     if (Test-Path (Join-Path $longDir $longDoc)) { $files += (Join-Path $longDir $longDoc) }
   }
-  $venvPython = Join-Path $root ".venv\Scripts\python.exe"
+  $venvPython = if ($VenvPython) { $VenvPython } else { Join-Path $root ".venv\Scripts\python.exe" }
   if (Test-Path $venvPython) {
     New-Item -ItemType Directory -Force $longDir | Out-Null
     & $venvPython -I tests\office\make_budget_files.py --decks $longDir | Out-Null
