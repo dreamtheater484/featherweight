@@ -209,4 +209,28 @@ pugi::xml_node DirectChild(pugi::xml_node parent, std::string_view ns, std::stri
 // `after` (the names that come after it), else at the end.
 pugi::xml_node AddChildOrdered(pugi::xml_node parent, std::string_view qname, std::initializer_list<std::string_view> after);
 
+// Child elements in order, mc:AlternateContent replaced by the children of the branch MCE chooses
+// (pkg::mce::SelectBranch). Every walk of the edit layer uses this, not fwdraw's ForEachChild: fwdraw
+// draws a Choice holding math by its Fallback picture, but edits go to the Choice and keep the Fallback in
+// step (finding the Fallback's shape would make Unwrap replace the block, the math with it).
+template <class F>
+bool ForEachChosenChild(pugi::xml_node parent, F&& f, int depth = 0) {
+  for (pugi::xml_node c = parent.first_child(); c; c = c.next_sibling()) {
+    if (c.type() != pugi::node_element) continue;
+    if (IsElement(c, pkg::mce::kNamespace, "AlternateContent")) {
+      if (depth < 8) {
+        pugi::xml_node branch = pkg::mce::SelectBranch(c, Understood());
+        if (branch && !ForEachChosenChild(branch, f, depth + 1)) return false;
+      }
+      continue;
+    }
+    if (!f(c)) return false;
+  }
+  return true;
+}
+
+// A text body holding Office math (a14:m). Its text isn't changed (typing, deleting, replacing, setting):
+// the app shows and edits the Fallback's picture and text, and the equation would be lost.
+bool HoldsMath(pugi::xml_node body);
+
 }  // namespace fw::slide::edit

@@ -215,7 +215,7 @@ void MapPlaceholders(pugi::xml_node slideRoot, pugi::xml_node layoutRoot, std::s
     bool taken = false;
   };
   std::vector<LayoutPh> layout;
-  ForEachChild(layoutTree, [&](pugi::xml_node c) {
+  ForEachChosenChild(layoutTree, [&](pugi::xml_node c) {
     if (pugi::xml_node ph = PlaceholderOf(c)) layout.push_back({ph});
     return true;
   });
@@ -309,7 +309,7 @@ Result Editor::NewSlide(size_t at, size_t layout, uint32_t* id) {
   std::shared_ptr<pkg::XmlDom> dom = ParseDom(xml, deck_.GetPackage().GetLimits(), part);
   pugi::xml_node tree = P(P(dom->Root(), "cSld"), "spTree");
   uint32_t next = 2;
-  ForEachChild(P(P(layoutRoot, "cSld"), "spTree"), [&](pugi::xml_node c) {
+  ForEachChosenChild(P(P(layoutRoot, "cSld"), "spTree"), [&](pugi::xml_node c) {
     pugi::xml_node ph = PlaceholderOf(c);
     std::string_view t = ph.attribute("type").value();
     if (!ph || t == "dt" || t == "ftr" || t == "sldNum" || t == "hdr") return true;
@@ -592,7 +592,7 @@ std::string NotesPartOf(const Editor::Impl& m, std::string_view slidePart) {
 // The body placeholder (ph type="body") of a notes part's shape tree.
 pugi::xml_node NotesBody(pugi::xml_node root) {
   pugi::xml_node found;
-  ForEachChild(P(P(root, "cSld"), "spTree"), [&](pugi::xml_node c) {
+  ForEachChosenChild(P(P(root, "cSld"), "spTree"), [&](pugi::xml_node c) {
     if (std::string_view(PlaceholderOf(c).attribute("type").value()) == "body") found = c;
     return !found;
   });
@@ -786,6 +786,7 @@ Result Editor::SetNotesText(size_t slide, std::wstring_view text) {
     txBody.append_child((a + ":bodyPr").c_str());
     txBody.append_child((a + ":lstStyle").c_str());
   }
+  if (HoldsMath(txBody)) return call.End(Result::Fail(u"These notes hold an equation, which Featherweight can't edit yet."));
   SetPlainText(txBody, text);
   return call.End({});
 }

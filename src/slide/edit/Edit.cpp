@@ -648,7 +648,7 @@ pugi::xml_node Editor::Impl::FindShape(pugi::xml_node root, uint32_t id) {
   while (!stack.empty() && !found) {
     pugi::xml_node parent = stack.back();
     stack.pop_back();
-    ForEachChild(parent, [&](pugi::xml_node c) {
+    ForEachChosenChild(parent, [&](pugi::xml_node c) {
       std::string_view k = LocalNameOf(c);
       if (k != "sp" && k != "pic" && k != "cxnSp" && k != "graphicFrame" && k != "grpSp" && k != "contentPart") return true;
       pugi::xml_node nv;
@@ -681,6 +681,10 @@ uint32_t Editor::Impl::NextShapeId(pugi::xml_node root) {
     }
   }
   return max + 1;
+}
+
+bool HoldsMath(pugi::xml_node body) {
+  return body && body.find_node([](pugi::xml_node n) { return Is(n, kA14, "m"); });
 }
 
 pugi::xml_node Editor::Impl::Unwrap(pugi::xml_node shape) {

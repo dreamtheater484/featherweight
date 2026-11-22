@@ -489,6 +489,16 @@ TEST(SlideEditKeepsAlternateContentAroundEditedShapes) {
   CHECK(after.find("Fallback") != std::string::npos);
   CHECK(after.find("a14:m") != std::string::npos);
   CHECK(after.find("b=\"1\"") != std::string::npos);
+  // fwdraw draws the Fallback's picture for math (p1-render), the edit layer edits the Choice. Its text
+  // holds an equation, so typing, setting it and a body without the math are refused (the app would type
+  // into the Fallback's text); formatting isn't.
+  CHECK(!ed.InsertText({0, 90}, {0, 0}, L"z"));
+  CHECK(!ed.SetText({0, 90}, L"z"));
+  CHECK(!ed.SetTextBodyXml({0, 90},
+                           "<a:txBody xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:bodyPr/>"
+                           "<a:p><a:r><a:t>z</a:t></a:r></a:p></a:txBody>",
+                           u"Test", false));
+  CHECK(PartText(ed, part) == after);
   auto count = [&](std::string_view s) {
     size_t n = 0;
     for (size_t i = after.find(s); i != std::string::npos; i = after.find(s, i + 1)) ++n;
