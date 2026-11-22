@@ -15,17 +15,10 @@
 // FUZZ_PPTX_STEPS=n makes only the first n edits (the same ones); FUZZ_PPTX_TRACE prints each edit.
 //
 // FUZZ_PPTX_OPEN=1 adds the checks of findings reported to their owner and not fixed yet (the
-// replay test in CI runs without them; the edits made are the same). Remove each once it's fixed:
-//   1. (p2-model, 2026-11-22) Typing or deleting text that's refused right after typing in the same
-//      place takes that typing back (Call reopens the typing step, then cancels all of it).
-//      tests/office/presentations/template.potx, FUZZ_PPTX_STEPS=6.
-//   2. (p2-model, 2026-11-22) Text with characters XML doesn't allow (U+0001, a lone surrogate,
-//      U+FFFE) is taken and saved: the part doesn't parse any more. Here they're typed only then.
-//      tests/office/presentations/charts.pptx, FUZZ_PPTX_STEPS=23 (InsertTextBox "a\u0001z").
-//   3. (p2-model, 2026-11-22) After the journal's replay, the save writes the parts its "back to the
-//      file's own" records name ([Content_Types].xml, rels) anew instead of copying them: the same
-//      content, other bytes. Without FUZZ_PPTX_OPEN the replay's save is compared canonicalized.
-//      tests/office/presentations/bullets.pptx, FUZZ_PPTX_STEPS=1.
+// replay test in CI runs without them; the edits made are the same). Remove each once it's fixed.
+// None is open now (p2-model fixed the first three on 2026-11-22: a refused edit after typing took
+// the typing back; characters XML doesn't allow were saved; the replay's save rewrote the parts the
+// journal's "back to the file's own" records name).
 //
 // An input is a zip, or parts as text as fuzz_check reads them: each part starts on a line
 // "@<part name>", and the rest of the input up to the next such line is its content.
@@ -359,7 +352,6 @@ struct State {
 
 void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint32_t step) {
   int& groups = state.groups;
-  const bool afterTyping = state.typing;
   state.typing = false;
   deck.LoadAll();
   const size_t count = deck.SlideCount();
@@ -385,8 +377,8 @@ void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint
   auto text = [&]() -> std::wstring {
     const bool hostile = rng.Chance(3);
     const uint32_t i = rng.Below(hostile ? std::size(kHostile) : std::size(kTexts));
-    // Characters XML doesn't allow are refused or dropped only with FUZZ_PPTX_OPEN (finding 2).
-    return typed = hostile && state.open ? kHostile[i] : kTexts[i % std::size(kTexts)];
+    // Characters XML doesn't allow are dropped by the edit layer (lone surrogates become U+FFFD).
+    return typed = hostile ? kHostile[i] : kTexts[i % std::size(kTexts)];
   };
   auto rect = [&]() {
     const draw::Size size = deck.SlideSize();
@@ -693,10 +685,8 @@ void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint
     const std::string shown = typed.empty() ? std::string() : " \"" + Esc(typed) + "\"";
     std::fprintf(stderr, "edit %u: %s on slide %zu%s: %s\n", step, name, slide, shown.c_str(), r.ok ? "done" : ("refused: " + why).c_str());
   }
-  // A refused edit changes nothing. Typing or deleting text refused right after typing takes that
-  // typing back (finding 1): checked only with FUZZ_PPTX_OPEN.
-  const bool typingEdit = std::string_view(name) == "InsertText" || std::string_view(name) == "DeleteText";
-  if (!r.ok && (state.open || !(afterTyping && typingEdit))) {
+  // A refused edit changes nothing (refused right after typing in the same place, the typing stays).
+  if (!r.ok) {
     const std::string after = Digest(deck);
     if (after != before) PrintDifference((std::string("refused ") + name + " changed the deck").c_str(), before, after);
     Check(after == before);
@@ -792,7 +782,7 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   }
 
   // The journal makes every edit again on the deck read again: the same deck, and its save the same
-  // parts (byte for byte only with FUZZ_PPTX_OPEN: finding 3).
+  // parts, byte for byte.
   edit::Editor replayed(*again);
   size_t applied = 0;
   edit::Result r = edit::Replay(replayed, records, &applied);
@@ -809,15 +799,11 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   Check(ok == edit::SaveToBytes(replayed, savedAgain).Ok());
   if (ok) {
     const auto partsAgain = PartsOf(savedAgain, limits);
-    const bool strict = state.open;
     Check(parts.size() == partsAgain.size());
     for (size_t i = 0; i < parts.size(); ++i) {
       Check(parts[i].first == partsAgain[i].first);
-      std::string a = parts[i].second, b = partsAgain[i].second;
-      if (a != b && !strict && (parts[i].first.ends_with(".xml") || parts[i].first.ends_with(".rels"))) {
-        std::string ca, cb;
-        if (CanonicalizeXml(a, ca, limits, parts[i].first).Ok() && CanonicalizeXml(b, cb, limits, parts[i].first).Ok()) a = ca, b = cb;
-      }
+      const std::string& a = parts[i].second;
+      const std::string& b = partsAgain[i].second;
       if (a != b) PrintDifference(("the replay saves " + parts[i].first + " otherwise (edited, replayed)").c_str(), a, b);
       Check(a == b);
     }

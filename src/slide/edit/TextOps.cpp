@@ -521,6 +521,8 @@ bool Editor::Impl::ContinueTyping(const TextTarget& t) {
 }
 
 Result Editor::InsertText(const TextTarget& t, TextPos at, std::wstring_view text, TextPos* end) {
+  const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
+  text = clean;
   Call call(*this, u"Typing", &t);
   Impl& m = *impl_;
   std::string part;
@@ -554,6 +556,8 @@ Result Editor::DeleteText(const TextTarget& t, TextRange r) {
 }
 
 Result Editor::ReplaceText(const TextTarget& t, TextRange r, std::wstring_view text, TextPos* end) {
+  const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
+  text = clean;
   Call call(*this, u"Replace");
   Impl& m = *impl_;
   if (r.to < r.from) std::swap(r.from, r.to);
@@ -591,6 +595,8 @@ Result Editor::ReplaceText(const TextTarget& t, TextRange r, std::wstring_view t
 }
 
 Result Editor::SetText(const TextTarget& t, std::wstring_view text) {
+  const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
+  text = clean;
   Call call(*this, u"Typing");
   Impl& m = *impl_;
   std::string part;

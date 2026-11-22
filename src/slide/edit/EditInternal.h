@@ -68,6 +68,10 @@ struct Editor::Impl {
     std::shared_ptr<pkg::ContentTypes> types;
     bool full = false;
     std::map<std::string, std::set<uint32_t>> shapes;  // slide part key -> shapes touched
+    // Back to the file's own (a journal's replay): the store's edit of these goes, so a save copies
+    // them byte for byte again. PartKey -> name.
+    std::map<std::string, std::string> originalParts, originalRels;
+    bool typesOriginal = false;
   } work;
   int calls = 0;  // Editor calls under way: only the outermost publishes
 
@@ -87,6 +91,10 @@ struct Editor::Impl {
   void PutXml(std::string_view part, std::shared_ptr<pkg::XmlDom> dom, std::string_view contentType);
   void PutBytes(std::string_view part, std::vector<uint8_t> bytes, std::string_view contentType);
   void Remove(std::string_view part);  // the part, its relationships and its content type override
+  // A part, a part's relationships, the content types: back to the file's own (journal replay).
+  void Original(std::string_view part);
+  void OriginalRels(std::string_view source);
+  void OriginalTypes();
   void Full() { work.full = true; }
   void Touched(std::string_view slidePart, uint32_t shape);
 
@@ -106,6 +114,8 @@ struct Editor::Impl {
   void Open(std::u16string name);
   void Close();
   void Cancel();
+  // A refused call that had reopened the typing step: the step goes back to the undo list unchanged.
+  void Reshelve();
   void Swap(Step& s, Changes& out);  // undo or redo
   void Notify(Changes c);
   uint64_t StateSerial() const { return undo.empty() ? 0 : undo.back().serial; }
@@ -148,7 +158,8 @@ class Call {
   Call(Editor& ed, std::u16string name, const TextTarget* typing = nullptr)
       : impl_(ed.Internals()), own_(impl_.open.empty() && impl_.calls == 0) {
     if (own_) {
-      if (!(typing && impl_.ContinueTyping(*typing))) impl_.Open(std::move(name));
+      continued_ = typing && impl_.ContinueTyping(*typing);
+      if (!continued_) impl_.Open(std::move(name));
       if (typing) {
         impl_.open.back().typing = true;
         impl_.open.back().target = *typing;
@@ -164,17 +175,26 @@ class Call {
   Result End(Result r) {
     ended_ = true;
     r = impl_.EndCall(std::move(r));
-    if (own_) r.ok ? impl_.Close() : impl_.Cancel();
+    // A refused call changed nothing (its work isn't published): a typing step it reopened goes back
+    // as it was, with the typing before it.
+    if (own_) r.ok ? impl_.Close() : continued_ ? impl_.Reshelve() : impl_.Cancel();
     return r;
   }
   Editor::Impl& impl_;
 
  private:
   bool own_;
+  bool continued_ = false;
   bool ended_ = false;
 };
 
 // XML building helpers.
+// Text as XML 1.0 can hold it (plan decision, fuzz finding): the characters it doesn't allow are
+// dropped (tab, line feed and carriage return stay; with `breaks` also '\v', which the text operations
+// turn into a:br), lone surrogates become U+FFFD. Not _xHHHH_: a:t is plain xsd:string.
+std::wstring XmlText(std::wstring_view s, bool breaks = false);
+std::string XmlTextUtf8(std::string_view utf8);
+// UTF-8 for the XML: XmlText first, so nothing written can make a part that doesn't parse.
 std::string Utf8(std::wstring_view s);
 std::wstring Wide(std::string_view s);
 // Parses a fragment (an element with the prefixes it uses declared) and returns a document holding it.

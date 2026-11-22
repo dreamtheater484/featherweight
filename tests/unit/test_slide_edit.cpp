@@ -534,3 +534,83 @@ TEST(SlideEditNotesMasterThemeKeepsRelationships) {
   auto again = OpenBytes(bytes);
   CHECK(again && again->GetPackage().FindPart("/ppt/media/themepicture.png") != nullptr);
 }
+
+// fuzz_pptx findings (p2-corpus, 2026-11-22).
+// 1. A refused text edit right after typing in the same place undoes only itself: the typing stays,
+//    in the same step, and typing goes on in it.
+TEST(SlideEditRefusedAfterTypingKeepsTyping) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  const Shape* shape = FirstWithText(deck->GetSlide(0));
+  CHECK(shape != nullptr);
+  if (!shape) return;
+  const TextTarget t{0, shape->id};
+  const std::wstring before = ed.ParagraphText(t, 0);
+  CHECK(ed.InsertText(t, {0, 0}, L"Hi "));
+  CHECK(!ed.DeleteText(t, {{99, 0}, {99, 1}}));
+  CHECK(!ed.InsertText(t, {99, 0}, L"x"));
+  CHECK(ed.ParagraphText(t, 0) == L"Hi " + before);
+  CHECK_EQ(ed.UndoNames().size(), size_t{1});
+  CHECK(ed.InsertText(t, {0, 3}, L"there "));
+  CHECK_EQ(ed.UndoNames().size(), size_t{1});
+  CHECK(ed.Undo());
+  CHECK(ed.ParagraphText(t, 0) == before);
+}
+
+// 2. Characters XML 1.0 can't hold are dropped wherever text comes in (lone surrogates become
+//    U+FFFD), so the save writes parts that parse.
+TEST(SlideEditDropsCharactersXmlCantHold) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  uint32_t id = 0;
+  CHECK(ed.InsertTextBox(0, {72, 72, 300, 120}, L"a\x0001z\xFFFE\xFFFF\xD800!", &id));
+  const TextTarget t{0, id};
+  CHECK(ed.ParagraphText(t, 0) == L"az\xFFFD!");
+  CHECK(ed.InsertText(t, {0, 0}, L"\x0002\x001F"));
+  CHECK(ed.ParagraphText(t, 0) == L"az\xFFFD!");
+  CHECK(ed.SetNotesText(0, L"n\x0007o\xDC00tes"));
+  ShapePatch names;
+  names.name = L"Box\x0001";
+  names.altText = L"alt\xFFFF";
+  CHECK(ed.SetShapeProps(0, {id}, names));
+  const std::string xml = ed.ShapeXml(0, id);
+  CHECK(xml.find("name=\"Box\"") != std::string::npos && xml.find("descr=\"alt\"") != std::string::npos);
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+}
+
+// 3. A journal replayed after a crash keeps what was back to the file's own as the file's own: the
+//    save copies every part byte for byte ([Content_Types].xml and rels included).
+TEST(SlideEditReplayKeepsOriginals) {
+  std::vector<uint8_t> original = FileBytes(Generated() / "layouts.pptx");
+  auto deck = OpenBytes(original);
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  Journal journal;
+  ed.SetJournal(&journal);
+  CHECK(ed.NewSlide(0, 0));
+  CHECK(ed.Undo());
+  const std::string all = journal.All(ed);
+  auto fresh = OpenBytes(original);
+  CHECK(fresh != nullptr);
+  Editor ed2(*fresh);
+  CHECK(Replay(ed2, all));
+  std::vector<uint8_t> bytes;
+  std::vector<std::string> written;
+  CHECK(SaveToBytes(ed2, bytes, &written).Ok());
+  CHECK(written.empty());
+  // And after a real edit kept and one undone: only the kept edit's parts are written.
+  CHECK(ed.SetNotesText(0, L"kept"));
+  auto fresh2 = OpenBytes(original);
+  Editor ed3(*fresh2);
+  CHECK(Replay(ed3, journal.All(ed)));
+  std::vector<std::string> written2;
+  CHECK(SaveToBytes(ed3, bytes, &written2).Ok());
+  std::vector<std::string> expected;
+  CHECK(SaveToBytes(ed, bytes, &expected).Ok());
+  CHECK(written2 == expected);
+}

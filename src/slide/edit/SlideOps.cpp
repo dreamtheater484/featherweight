@@ -740,6 +740,8 @@ std::string MakeNotesSlide(Editor::Impl& m, std::string_view slidePart) {
 }
 
 Result Editor::SetNotesText(size_t slide, std::wstring_view text) {
+  const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
+  text = clean;
   Call call(*this, u"Edit Notes");
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
