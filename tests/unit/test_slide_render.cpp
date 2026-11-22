@@ -214,6 +214,20 @@ TEST(SlideRender_LineBreakAloneIsItsOwnSize) {
   CHECK(std::fabs(empty - full) < 0.5f);
 }
 
+TEST(SlideRender_FirstLineStaysInTheTextArea) {
+  // marL 0 with a 27-pt hanging indent: PowerPoint starts the first line at the text area's edge.
+  auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                          "<a:p><a:pPr marL=\"0\" indent=\"-342900\"><a:buNone/></a:pPr><a:r><a:t>Hangs</a:t></a:r></a:p>"
+                                          "<a:p><a:pPr marL=\"0\" indent=\"0\"><a:buNone/></a:pPr><a:r><a:t>Hangs</a:t></a:r></a:p>"),
+                              2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  CHECK(std::fabs(p[0].bounds.left - p[1].bounds.left) < 0.5f);
+}
+
 TEST(SlideRender_OutlinedTextIsStroked) {
   // A run with no fill and a red a:ln: its glyphs' outlines in red.
   auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
