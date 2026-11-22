@@ -25,6 +25,7 @@
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModel.h"
 #include "slide/view/TextSession.h"
+#include "slide/view/TextSpell.h"
 #include "text/Fonts.h"
 
 using namespace fw::slide;
@@ -605,4 +606,22 @@ TEST(SlideText_FindAndReplaceAcrossTheDeck) {
   CHECK_EQ(ReplaceAll(*f.model, words, L"three"), 2);
   CHECK(f.model->Committed().find("three two three, someone") != std::string::npos);
   CHECK_EQ(f.model->steps.back(), std::u16string(u"Replace All"));
+}
+
+TEST(SlideText_SpellingInTheRunsLanguage) {
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  fw::text::SpellChecker checker;
+  if (!checker.Available() || checker.Resolve(L"en-US").empty()) return;  // no checker on this PC
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>",
+                         "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>A mispeled word </a:t></a:r>"
+                         "<a:r><a:rPr lang=\"en-US\" noProof=\"1\"/><a:t>Xyzzyq</a:t></a:r></a:p>"),
+                 2));
+  SlideSpelling spelling(checker);
+  const std::vector<SpellError>& errors = spelling.Check(f.session->Doc().Resolved());
+  REQUIRE(errors.size() == 1);
+  CHECK_EQ(errors[0].from, 2u);
+  CHECK_EQ(errors[0].to, 10u);
+  // The same text again: from the cache (the same object).
+  CHECK(&spelling.Check(f.session->Doc().Resolved()) == &errors);
 }
