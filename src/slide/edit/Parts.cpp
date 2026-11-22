@@ -1,6 +1,9 @@
 #include "slide/edit/Parts.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 #include "slide/Presentation.h"
 
@@ -15,7 +18,73 @@ std::shared_ptr<pkg::XmlDom> CloneDom(const pkg::XmlDom& dom) {
 std::shared_ptr<pkg::XmlDom> ParseDom(std::string_view xml, const pkg::Limits& limits, std::string_view label) {
   auto dom = std::make_shared<pkg::XmlDom>();
   if (!dom->Parse(xml, limits, label).Ok()) return nullptr;
+  CleanXmlTree(dom->Doc());
   return dom;
+}
+
+std::string XmlTextUtf8(std::string_view s) {
+  static constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
+  std::string out;
+  out.reserve(s.size());
+  size_t i = 0;
+  while (i < s.size()) {
+    const auto c = static_cast<unsigned char>(s[i]);
+    uint32_t cp = 0;
+    size_t n = 0;
+    if (c < 0x80) cp = c, n = 1;
+    else if ((c & 0xE0) == 0xC0) cp = c & 0x1F, n = 2;
+    else if ((c & 0xF0) == 0xE0) cp = c & 0x0F, n = 3;
+    else if ((c & 0xF8) == 0xF0) cp = c & 0x07, n = 4;
+    bool ok = n > 0 && i + n <= s.size();
+    for (size_t k = 1; ok && k < n; ++k) {
+      const auto d = static_cast<unsigned char>(s[i + k]);
+      ok = (d & 0xC0) == 0x80;
+      cp = (cp << 6) | (d & 0x3F);
+    }
+    if (ok) ok = !((n == 2 && cp < 0x80) || (n == 3 && cp < 0x800) || (n == 4 && (cp < 0x10000 || cp > 0x10FFFF)));
+    if (!ok) {
+      out += kReplacement;
+      ++i;
+      continue;
+    }
+    if (cp >= 0xD800 && cp <= 0xDFFF) out += kReplacement;
+    else if (cp == 0x9 || cp == 0xA || cp == 0xD || (cp >= 0x20 && cp <= 0xD7FF) || (cp >= 0xE000 && cp <= 0xFFFD) || cp >= 0x10000)
+      out.append(s.substr(i, n));
+    i += n;
+  }
+  return out;
+}
+
+namespace {
+
+// Whether a value may hold what XML can't: a control character or anything not ASCII (checked then).
+bool MayNeedCleaning(const char* v) {
+  for (; *v; ++v) {
+    const auto c = static_cast<unsigned char>(*v);
+    if ((c < 0x20 && c != 0x9 && c != 0xA && c != 0xD) || c >= 0x80) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+void CleanXmlTree(pugi::xml_node n) {
+  std::vector<pugi::xml_node> stack{n};
+  while (!stack.empty()) {
+    pugi::xml_node c = stack.back();
+    stack.pop_back();
+    const pugi::xml_node_type t = c.type();
+    if ((t == pugi::node_pcdata || t == pugi::node_cdata || t == pugi::node_comment) && MayNeedCleaning(c.value())) {
+      std::string clean = XmlTextUtf8(c.value());
+      if (clean != c.value()) c.set_value(clean.c_str());
+    }
+    for (pugi::xml_attribute a = c.first_attribute(); a; a = a.next_attribute()) {
+      if (!MayNeedCleaning(a.value())) continue;
+      std::string clean = XmlTextUtf8(a.value());
+      if (clean != a.value()) a.set_value(clean.c_str());
+    }
+    for (pugi::xml_node k = c.first_child(); k; k = k.next_sibling()) stack.push_back(k);
+  }
 }
 
 PartStore::PartStore(const pkg::Package& package) : package_(package) {}
