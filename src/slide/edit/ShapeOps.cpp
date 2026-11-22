@@ -252,6 +252,184 @@ void ScaleTable(pugi::xml_node frame, double sx, double sy) {
   }
 }
 
+// The mc:Choice or mc:Fallback nearest around a shape, below the shape tree; null when none.
+pugi::xml_node BranchOf(pugi::xml_node shape) {
+  for (pugi::xml_node n = shape; n.parent() && n.parent().type() == pugi::node_element; n = n.parent()) {
+    pugi::xml_node p = n.parent();
+    if (Is(p, pkg::mce::kNamespace, "Choice") || Is(p, pkg::mce::kNamespace, "Fallback")) return p;
+    if (LocalNameOf(p) == "spTree") break;
+  }
+  return {};
+}
+
+// The same shape (by cNvPr id) in the other branches of the mc:AlternateContent around it: what other
+// apps show in its place (a math text box's Fallback is usually a picture of it).
+std::vector<pugi::xml_node> TwinsOf(pugi::xml_node shape) {
+  std::vector<pugi::xml_node> out;
+  pugi::xml_node branch = BranchOf(shape), c = CNvPr(shape);
+  if (!branch || !c) return out;
+  uint32_t id = U32(c, "id");
+  for (pugi::xml_node b = branch.parent().first_child(); b; b = b.next_sibling()) {
+    if (b == branch || b.type() != pugi::node_element) continue;
+    std::vector<pugi::xml_node> stack{b};
+    while (!stack.empty()) {
+      pugi::xml_node n = stack.back();
+      stack.pop_back();
+      for (pugi::xml_node k = n.first_child(); k; k = k.next_sibling()) {
+        if (k.type() != pugi::node_element) continue;
+        if (Is(k, pkg::mce::kNamespace, "AlternateContent") || Is(k, pkg::mce::kNamespace, "Choice") ||
+            Is(k, pkg::mce::kNamespace, "Fallback")) {
+          stack.push_back(k);
+        } else if (IsShapeElement(k)) {
+          if (pugi::xml_node kc = CNvPr(k); kc && U32(kc, "id") == id) {
+            out.push_back(k);
+          } else if (LocalNameOf(k) == "grpSp") {
+            stack.push_back(k);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// What SyncTwins copies.
+constexpr unsigned kTwinBox = 1, kTwinGeometry = 2, kTwinFill = 4, kTwinLine = 8, kTwinEffects = 16,
+                   kTwinName = 32, kTwinAltText = 64, kTwinHidden = 128;
+
+// `to`'s spPr children of schema group `group` replaced by copies of `from`'s.
+void CopySpPrGroup(pugi::xml_node from, pugi::xml_node to, int group) {
+  for (pugi::xml_node c = to.first_child(); c;) {
+    pugi::xml_node next = c.next_sibling();
+    if (c.type() == pugi::node_element && SpPrGroupOf(LocalNameOf(c)) == group) to.remove_child(c);
+    c = next;
+  }
+  pugi::xml_node before;
+  for (pugi::xml_node c = to.first_child(); c && !before; c = c.next_sibling()) {
+    if (c.type() != pugi::node_element) continue;
+    int g = SpPrGroupOf(LocalNameOf(c));
+    if (g > group || g < 0) before = c;
+  }
+  for (pugi::xml_node c = from.first_child(); c; c = c.next_sibling()) {
+    if (c.type() == pugi::node_element && SpPrGroupOf(LocalNameOf(c)) == group) InsertCopy(to, c, before);
+  }
+}
+
+bool PlainShape(std::string_view k) { return k == "sp" || k == "pic" || k == "cxnSp"; }
+
+// Copies `what` of a shape to its twins (TwinsOf), so the branches of its mc:AlternateContent stay in
+// step: the transform for any shape; geometry, fill, outline and effects between plain shapes (sp,
+// pic, cxnSp); name, alt text, hidden. The rest of a twin stays as it was.
+void SyncTwins(pugi::xml_node shape, unsigned what) {
+  if (!what) return;
+  std::string_view k = LocalNameOf(shape);
+  for (pugi::xml_node twin : TwinsOf(shape)) {
+    std::string_view tk = LocalNameOf(twin);
+    if (what & kTwinBox) {
+      if (pugi::xml_node from = XfrmOf(shape, false)) {
+        Box s = ReadBox(from);
+        pugi::xml_node to = XfrmOf(twin, true);
+        Box t = ReadBox(to);
+        double oldW = t.w, oldH = t.h;
+        t.x = s.x;
+        t.y = s.y;
+        t.w = s.w;
+        t.h = s.h;
+        t.rot = s.rot;
+        t.flipH = s.flipH;
+        t.flipV = s.flipV;
+        WriteBox(to, t, tk == "grpSp", tk != "graphicFrame");
+        if (tk == "graphicFrame" && oldW > 0 && oldH > 0) ScaleTable(twin, t.w / oldW, t.h / oldH);
+      }
+    }
+    pugi::xml_node from = P(shape, "spPr"), to = P(twin, "spPr");
+    if (PlainShape(k) && PlainShape(tk) && from && to) {
+      for (auto [bit, group] : {std::pair{kTwinGeometry, 1}, {kTwinFill, 2}, {kTwinLine, 3}, {kTwinEffects, 4}}) {
+        if (what & bit) CopySpPrGroup(from, to, group);
+      }
+    }
+    pugi::xml_node sc = CNvPr(shape), tc = CNvPr(twin);
+    if (sc && tc) {
+      for (auto [bit, name] : {std::pair{kTwinName, "name"}, {kTwinAltText, "descr"}, {kTwinHidden, "hidden"}}) {
+        if (!(what & bit)) continue;
+        if (pugi::xml_attribute a = sc.attribute(name)) {
+          (tc.attribute(name) ? tc.attribute(name) : tc.append_attribute(name)).set_value(a.value());
+        } else {
+          tc.remove_attribute(name);
+        }
+      }
+    }
+  }
+}
+
+// What SyncTwins would copy that differs between two versions of a shape.
+unsigned TwinDifferences(pugi::xml_node a, pugi::xml_node b) {
+  auto text = [](pugi::xml_node n) {
+    std::ostringstream out;
+    if (n) n.print(out, "", pugi::format_raw);
+    return out.str();
+  };
+  auto group = [&](pugi::xml_node s, int g) {
+    std::string out;
+    for (pugi::xml_node c = P(s, "spPr").first_child(); c; c = c.next_sibling()) {
+      if (c.type() == pugi::node_element && SpPrGroupOf(LocalNameOf(c)) == g) out += text(c);
+    }
+    return out;
+  };
+  unsigned what = 0;
+  if (text(XfrmOf(a, false)) != text(XfrmOf(b, false))) what |= kTwinBox;
+  for (auto [bit, g] : {std::pair{kTwinGeometry, 1}, {kTwinFill, 2}, {kTwinLine, 3}, {kTwinEffects, 4}}) {
+    if (group(a, g) != group(b, g)) what |= bit;
+  }
+  pugi::xml_node ca = CNvPr(a), cb = CNvPr(b);
+  for (auto [bit, name] : {std::pair{kTwinName, "name"}, {kTwinAltText, "descr"}, {kTwinHidden, "hidden"}}) {
+    pugi::xml_attribute x = ca.attribute(name), y = cb.attribute(name);
+    if (static_cast<bool>(x) != static_cast<bool>(y) || std::string_view(x.value()) != y.value()) what |= bit;
+  }
+  return what;
+}
+
+// The id a shape tree child goes by: its cNvPr id; for mc:AlternateContent, its first branch's shape's.
+uint32_t UnitId(pugi::xml_node unit) {
+  if (Is(unit, pkg::mce::kNamespace, "AlternateContent")) {
+    for (pugi::xml_node b = unit.first_child(); b; b = b.next_sibling()) {
+      for (pugi::xml_node k = b.first_child(); k; k = k.next_sibling()) {
+        if (pugi::xml_node c = IsShapeElement(k) ? CNvPr(k) : pugi::xml_node()) return U32(c, "id");
+      }
+    }
+    return 0;
+  }
+  pugi::xml_node c = CNvPr(unit);
+  return c ? U32(c, "id") : 0;
+}
+
+// A group's twins (TwinsOf) take its z order: the shapes both have, in the places they had.
+void SyncOrder(pugi::xml_node group) {
+  if (LocalNameOf(group) != "grpSp") return;
+  std::vector<uint32_t> order;
+  for (pugi::xml_node c = group.first_child(); c; c = c.next_sibling()) {
+    if (IsShapeElement(c)) order.push_back(UnitId(c));
+  }
+  auto rank = [&](pugi::xml_node n) {
+    auto it = std::find(order.begin(), order.end(), UnitId(n));
+    return it == order.end() ? -1 : static_cast<int>(it - order.begin());
+  };
+  for (pugi::xml_node twin : TwinsOf(group)) {
+    if (LocalNameOf(twin) != "grpSp") continue;
+    std::vector<pugi::xml_node> slots;
+    for (pugi::xml_node c = twin.first_child(); c; c = c.next_sibling()) {
+      if (IsShapeElement(c) && rank(c) >= 0) slots.push_back(c);
+    }
+    std::vector<pugi::xml_node> sorted = slots;
+    std::stable_sort(sorted.begin(), sorted.end(), [&](pugi::xml_node x, pugi::xml_node y) { return rank(x) < rank(y); });
+    if (sorted == slots) continue;
+    std::vector<pugi::xml_node> marks;
+    for (pugi::xml_node s : slots) marks.push_back(twin.insert_child_before(pugi::node_comment, s));
+    for (size_t i = 0; i < sorted.size(); ++i) twin.insert_move_before(sorted[i], marks[i]);
+    for (pugi::xml_node mk : marks) twin.remove_child(mk);
+  }
+}
+
 // Animations, builds and connections that name shapes `ids` removed (the shapes are gone).
 void RemoveShapeRefs(const pkg::ReferenceRegistry& registry, pugi::xml_node root, const std::set<uint32_t>& ids) {
   std::vector<pugi::xml_node> gone;
@@ -485,8 +663,14 @@ Result Editor::MoveShape(size_t slide, uint32_t id, uint32_t parentGroup, int in
   for (pugi::xml_node a = parent; a; a = a.parent()) {
     if (a == unit) return call.End(Result::Fail(u"A group can't go into itself."));
   }
+  // Into or out of a group inside mc:AlternateContent, the other branches would lack the shape or
+  // have it twice.
+  if (BranchOf(unit) != (LocalNameOf(parent) == "grpSp" ? BranchOf(parent) : pugi::xml_node())) {
+    return call.End(Result::Fail(u"Shapes can't be moved into or out of that group."));
+  }
   pugi::xml_node before = InsertPoint(parent, index);
   if (before != unit) before ? parent.insert_move_before(unit, before) : parent.append_move(unit);
+  SyncOrder(parent);
   m.Touched(part, id);
   return call.End({});
 }
@@ -654,6 +838,9 @@ Result Editor::DeleteShapes(size_t slide, const std::vector<uint32_t>& ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
     if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
     IdsIn(UnitOf(shape), gone);
+    if (UnitOf(shape) == shape) {
+      for (pugi::xml_node t : TwinsOf(shape)) IdsIn(t, gone);
+    }
   }
   {
     pkg::EditImpact impact;
@@ -670,8 +857,16 @@ Result Editor::DeleteShapes(size_t slide, const std::vector<uint32_t>& ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
     if (!shape) continue;  // inside one already deleted
     pugi::xml_node unit = UnitOf(shape);
+    // In a group inside mc:AlternateContent: its twins in the other branches go too (a shape directly
+    // in a branch goes with the whole block).
+    std::vector<pugi::xml_node> twins;
+    if (unit == shape) twins = TwinsOf(shape);
     RelsIn(m.registry, unit, rels);
     unit.parent().remove_child(unit);
+    for (pugi::xml_node t : twins) {
+      RelsIn(m.registry, t, rels);
+      t.parent().remove_child(t);
+    }
     m.Touched(part, id);
   }
   RemoveShapeRefs(m.registry, root, gone);
@@ -711,6 +906,7 @@ Result Editor::SetTransforms(size_t slide, const std::vector<std::pair<uint32_t,
     }
     WriteBox(xfrm, b, group, k != "graphicFrame");
     if (k == "graphicFrame" && oldW > 0 && oldH > 0) ScaleTable(shape, b.w / oldW, b.h / oldH);
+    SyncTwins(shape, kTwinBox);
     m.Touched(part, id);
   }
   return call.End({});
@@ -770,6 +966,7 @@ Result Editor::Arrange(size_t slide, const std::vector<uint32_t>& ids, ZOrder or
     if (c.type() == pugi::node_element && LocalNameOf(c) == "extLst") anchor = c;
   }
   for (pugi::xml_node n : result) anchor ? parent.insert_move_before(n, anchor) : parent.append_move(n);
+  SyncOrder(parent);
   return call.End({});
 }
 
@@ -780,7 +977,9 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
   if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
   if (ids.size() < 2) return call.End(Result::Fail(u"Select two or more shapes to group them."));
   pugi::xml_node root = m.Edit(part);
-  std::vector<pugi::xml_node> members;
+  // What moves into the group: the shapes, or the mc:AlternateContent blocks holding them (every
+  // branch goes along).
+  std::vector<pugi::xml_node> members, shapes;
   pugi::xml_node parent;
   for (uint32_t id : ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
@@ -788,9 +987,11 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
     if (PlaceholderOf(shape)) return call.End(Result::Fail(u"Placeholders can't be grouped."));
     shape = Impl::Unwrap(shape);
     if (!XfrmOf(shape, false)) return call.End(Result::Fail(u"That shape can't be grouped."));
-    if (parent && shape.parent() != parent) return call.End(Result::Fail(u"Shapes in different groups can't be grouped together."));
-    parent = shape.parent();
-    if (std::find(members.begin(), members.end(), shape) == members.end()) members.push_back(shape);
+    pugi::xml_node unit = UnitOf(shape);
+    if (parent && unit.parent() != parent) return call.End(Result::Fail(u"Shapes in different groups can't be grouped together."));
+    parent = unit.parent();
+    if (std::find(members.begin(), members.end(), unit) == members.end()) members.push_back(unit);
+    if (std::find(shapes.begin(), shapes.end(), shape) == shapes.end()) shapes.push_back(shape);
   }
   // Bottom to top as they are now.
   std::vector<pugi::xml_node> ordered;
@@ -799,7 +1000,7 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
   }
   // The box around them (rotated boxes by their corners).
   double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
-  for (pugi::xml_node s : ordered) {
+  for (pugi::xml_node s : shapes) {
     Box b = ReadBox(XfrmOf(s, false));
     double cx = b.x + b.w / 2, cy = b.y + b.h / 2, a = b.rot * 3.14159265358979323846 / 180;
     for (auto [dx, dy] : {std::pair{-1.0, -1.0}, {1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}}) {
@@ -856,7 +1057,7 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
   for (pugi::xml_node c : children) {
     pugi::xml_node shape = c;
     if (Is(c, pkg::mce::kNamespace, "AlternateContent")) {
-      // Its chosen branch's shape stands for it from now on.
+      // Its chosen branch's shape is placed (and its twins with it); the block moves out whole.
       pugi::xml_node chosen;
       ForEachChild(group, [&](pugi::xml_node k) {
         for (pugi::xml_node a = k; a; a = a.parent()) {
@@ -900,6 +1101,7 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
       nb.flipV = flipV;
       WriteBox(xfrm, nb, childGroup, LocalNameOf(shape) != "graphicFrame");
       if (LocalNameOf(shape) == "graphicFrame" && b.w > 0 && b.h > 0) ScaleTable(shape, sx, sy);
+      SyncTwins(shape, kTwinBox);
     }
     pugi::xml_node moved = parent.insert_move_before(shape.parent() == group ? shape : c, group);
     uint32_t id = U32(CNvPr(moved), "id");
@@ -950,6 +1152,8 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
           return !xml || ReplaceGroup(props, *xml, SpPrGroupOf, group);
         };
         if (!apply(patch.geometry, 1) || !apply(patch.fill, 2) || !apply(patch.line, 3) || !apply(patch.effects, 4)) ok = false;
+        SyncTwins(s, (patch.geometry ? kTwinGeometry : 0) | (patch.fill ? kTwinFill : 0) | (patch.line ? kTwinLine : 0) |
+                         (patch.effects ? kTwinEffects : 0));
       };
       format(shape);
       if (!ok) return call.End(Result::Fail(u"That formatting isn't DrawingML Featherweight can write."));
@@ -964,6 +1168,7 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
       if (*patch.hidden) (c.attribute("hidden") ? c.attribute("hidden") : c.append_attribute("hidden")).set_value("1");
       else c.remove_attribute("hidden");
     }
+    SyncTwins(shape, (patch.name ? kTwinName : 0) | (patch.altText ? kTwinAltText : 0) | (patch.hidden ? kTwinHidden : 0));
     m.Touched(part, id);
   }
   return call.End({});
@@ -1016,11 +1221,15 @@ Result Editor::SetShapeXml(size_t slide, uint32_t id, std::string_view xml, std:
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node shape = Impl::FindShape(root, id);
   if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
-  pugi::xml_node unit = UnitOf(shape);
+  // In mc:AlternateContent the Choice's shape is replaced where it is: the block, its other Choices and
+  // its Fallback stay, and what changed that applies to the Fallback's shape goes there too.
+  shape = Impl::Unwrap(shape);
   std::set<std::string> before;
-  RelsIn(m.registry, unit, before);
-  InsertCopy(unit.parent(), doc.document_element(), unit);
-  unit.parent().remove_child(unit);
+  RelsIn(m.registry, shape, before);
+  pugi::xml_node added = InsertCopy(shape.parent(), doc.document_element(), shape);
+  unsigned changed = TwinDifferences(shape, added);
+  shape.parent().remove_child(shape);
+  SyncTwins(added, changed);
   DropUnusedRels(m, part, root, before);
   m.Touched(part, id);
   return call.End({});
