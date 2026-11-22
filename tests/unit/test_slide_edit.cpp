@@ -724,3 +724,63 @@ TEST(SlideEditTables) {
   CHECK(SaveToBytes(ed, bytes).Ok());
   CHECK(OpenBytes(bytes) != nullptr);
 }
+
+// Slides copied keeping the source's design: its master (with its theme) and the layouts used come
+// along once, with new unique ids; copying again uses them again; the deck saves and reads again.
+TEST(SlideEditInsertSlidesKeepingDesign) {
+  auto source = Open("layouts.pptx");
+  auto deck = Open("simple.pptx");
+  CHECK(source != nullptr && deck != nullptr);
+  if (!source || !deck) return;
+  // The source's own design (both test decks start from the same master, which would be used again).
+  Editor sourceEd(*source);
+  CHECK(sourceEd.SetMasterBackground(0, "<p:bg xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" "
+                                        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:bgPr>"
+                                        "<a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>"));
+  Editor ed(*deck);
+  const size_t masters = deck->Masters().size(), slides = deck->SlideCount();
+  const std::string layoutName = source->GetSlide(1)->layout->name;
+  std::vector<uint32_t> ids;
+  CHECK(ed.InsertSlides(*source, {0, 1}, 0, true, &ids));
+  CHECK_EQ(ids.size(), size_t{2});
+  CHECK_EQ(deck->SlideCount(), slides + 2);
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+  CHECK(deck->GetSlide(1)->layout && deck->GetSlide(1)->layout->name == layoutName);
+  CHECK(deck->GetSlide(1)->layout->master != deck->GetSlide(2)->layout->master);
+  const size_t layouts = deck->Layouts().size();
+  // Again: the same master and layouts.
+  CHECK(ed.InsertSlides(*source, {1}, 0, true));
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+  CHECK_EQ(deck->Layouts().size(), layouts);
+  // Ids of masters and layouts stay unique.
+  std::set<std::string> seen;
+  bool unique = true;
+  size_t count = 0;
+  // Every id=".." between <p:...IdLst> and its end tag.
+  auto scan = [&](const std::string& part, const std::string& list) {
+    const std::string x = PartText(ed, part);
+    const size_t from = x.find(list + ">"), to = x.find("</p:" + list + ">");
+    if (from == std::string::npos || to == std::string::npos) return;
+    const std::string inside = x.substr(from, to - from);
+    for (size_t i = inside.find(" id=\""); i != std::string::npos; i = inside.find(" id=\"", i + 1)) {
+      const size_t q = i + 5, e = inside.find('"', q);
+      unique = seen.insert(inside.substr(q, e - q)).second && unique;
+      ++count;
+    }
+  };
+  scan(deck->PresentationPart(), "sldMasterIdLst");
+  for (const auto& mst : deck->Masters()) scan(mst->part, "sldLayoutIdLst");
+  CHECK(unique);
+  CHECK(count >= deck->Masters().size() + deck->Layouts().size());
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+  if (again) {
+    CHECK_EQ(again->SlideCount(), slides + 3);
+    CHECK_EQ(again->Masters().size(), masters + 1);
+  }
+  // Within one deck the design is its own: no new master.
+  CHECK(ed.InsertSlides(*deck, {0}, 0, true));
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+}

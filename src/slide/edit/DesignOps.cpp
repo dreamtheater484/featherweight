@@ -2,6 +2,9 @@
 // footer, copying slides between decks.
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
+#include <sstream>
 
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/SlideCopy.h"
@@ -147,9 +150,120 @@ Result Editor::SetTheme(size_t master, std::string_view themeXml) {
   return call.End({});
 }
 
+namespace {
+
+// A part's XML as text for comparing designs; a master without its list of layouts (which names
+// parts by relationship ids that differ between decks).
+std::string DesignText(pugi::xml_node root) {
+  if (!root) return {};
+  pugi::xml_document copy;
+  pugi::xml_node c = copy.append_copy(root);
+  if (pugi::xml_node list = DirectChild(c, kP, "sldLayoutIdLst")) c.remove_child(list);
+  std::ostringstream out;
+  c.print(out, "", pugi::format_raw);
+  return out.str();
+}
+
+std::string ThemeOf(const pkg::RelationshipSet* rels) {
+  if (rels)
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type.ends_with("/theme")) return r.targetPart;
+  return {};
+}
+
+// Keeping the source's design: masters and layouts copied (or found the same here) in one call.
+struct DesignCopy {
+  std::map<std::string, std::string> masters, layouts;  // source PartKey -> part here
+  std::set<std::string> reused;                         // masters here used again (PartKey)
+  uint32_t nextId = 0;                                  // sldMasterId and sldLayoutId ids, >= 2^31
+
+  uint32_t NewId(Editor::Impl& m) {
+    if (nextId == 0) {
+      uint32_t max = 2147483647u;
+      auto scan = [&](pugi::xml_node list) {
+        for (pugi::xml_node n = list.first_child(); n; n = n.next_sibling())
+          if (n.type() == pugi::node_element) max = std::max(max, static_cast<uint32_t>(Number(n, "id", 0)));
+      };
+      scan(DirectChild(m.Root(m.PresentationPart()), kP, "sldMasterIdLst"));
+      if (const pkg::RelationshipSet* rels = m.Rels(m.PresentationPart()))
+        for (const pkg::Relationship& r : rels->items)
+          if (r.type.ends_with("/slideMaster")) scan(DirectChild(m.Root(r.targetPart), kP, "sldLayoutIdLst"));
+      nextId = max + 1;
+    }
+    return nextId++;
+  }
+
+  // The layout here for source layout `src` (with its master and theme), copied once.
+  std::string Layout(Editor::Impl& m, SlideCopier& copier, const fw::slide::Layout& src) {
+    const std::string lkey = pkg::PartKey(src.part);
+    if (auto it = layouts.find(lkey); it != layouts.end()) return it->second;
+    if (!src.master) return {};
+    const std::string mkey = pkg::PartKey(src.master->part);
+    std::string master;
+    if (auto it = masters.find(mkey); it != masters.end()) {
+      master = it->second;
+    } else {
+      // The same master here (its XML, layouts aside, and its theme's): used again.
+      DomPtr sdom = copier.SrcDom(src.master->part), stheme = copier.SrcDom(ThemeOf(copier.SrcRels(src.master->part)));
+      if (!sdom) return {};
+      const std::string want = DesignText(sdom->Root()) + DesignText(stheme ? stheme->Root() : pugi::xml_node());
+      if (const pkg::RelationshipSet* rels = m.Rels(m.PresentationPart()))
+        for (const pkg::Relationship& r : rels->items) {
+          if (!r.type.ends_with("/slideMaster") || !master.empty()) continue;
+          if (DesignText(m.Root(r.targetPart)) + DesignText(m.Root(ThemeOf(m.Rels(r.targetPart)))) == want) {
+            master = r.targetPart;
+            reused.insert(pkg::PartKey(master));
+          }
+        }
+      if (master.empty()) {
+        copier.skipLayouts = true;
+        master = copier.CopyPart(src.master->part, {}, {});
+        copier.skipLayouts = false;
+        if (master.empty()) return {};
+        // Its list of layouts is made again from the layouts copied.
+        if (pugi::xml_node list = DirectChild(m.Edit(master), kP, "sldLayoutIdLst"))
+          while (list.first_child()) list.remove_child(list.first_child());
+        const std::string pres = m.PresentationPart();
+        const std::string rel = m.AddRel(pres, kRelMaster, master);
+        pugi::xml_node lst = DirectChild(m.Edit(pres), kP, "sldMasterIdLst");
+        if (!lst) return {};
+        pugi::xml_node id = lst.append_child((PrefixFor(lst, kP, "p") + ":sldMasterId").c_str());
+        id.append_attribute("id") = NewId(m);
+        id.append_attribute((PrefixFor(lst, kRelNs, "r") + ":id").c_str()) = rel.c_str();
+      }
+      masters[mkey] = master;
+    }
+    // A master used again may have the same layout already.
+    std::string layout;
+    if (reused.count(pkg::PartKey(master))) {
+      DomPtr sl = copier.SrcDom(src.part);
+      const std::string want = sl ? DesignText(sl->Root()) : std::string();
+      if (const pkg::RelationshipSet* rels = m.Rels(master))
+        for (const pkg::Relationship& r : rels->items)
+          if (layout.empty() && r.type.ends_with("/slideLayout") && DesignText(m.Root(r.targetPart)) == want) layout = r.targetPart;
+    }
+    if (layout.empty()) {
+      copier.masterPart = master;
+      layout = copier.CopyPart(src.part, {}, {});
+      if (layout.empty()) return {};
+      const std::string rel = m.AddRel(master, kRelLayout, layout);
+      pugi::xml_node root = m.Edit(master);
+      pugi::xml_node list = DirectChild(root, kP, "sldLayoutIdLst");
+      if (!list)
+        list = AddChildOrdered(root, PrefixFor(root, kP, "p") + ":sldLayoutIdLst", {"transition", "timing", "hf", "txStyles", "extLst"});
+      pugi::xml_node id = list.append_child((PrefixFor(list, kP, "p") + ":sldLayoutId").c_str());
+      id.append_attribute("id") = NewId(m);
+      id.append_attribute((PrefixFor(list, kRelNs, "r") + ":id").c_str()) = rel.c_str();
+    }
+    layouts[lkey] = layout;
+    return layout;
+  }
+};
+
+}  // namespace
+
 Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& slides, size_t at, bool keepSourceDesign,
                             std::vector<uint32_t>* ids) {
-  if (keepSourceDesign) return Result::Fail(u"Keeping the source formatting isn't available yet.");
   Call call(*this, u"Reuse Slides");
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
@@ -158,27 +272,41 @@ Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& sli
   if (ids) ids->clear();
   std::string pres = m.PresentationPart();
   size_t pos = at;
+  DesignCopy design;
   for (size_t index : slides) {
     const Slide* s = source.GetSlide(index);
     if (!s || index >= source.SlideCount()) return call.End(Result::Fail(u"That slide isn't in the other presentation."));
-    // The layout here with the same type and name, else the same type, else the first.
-    const Layout* target = nullptr;
-    std::string type = s->layout ? s->layout->type : std::string("obj");
-    std::string name = s->layout ? s->layout->name : std::string();
-    for (const auto& l : deck_.Layouts()) {
-      if (!target && l->type == type && l->name == name) target = l.get();
-    }
-    for (const auto& l : deck_.Layouts()) {
-      if (!target && l->type == type) target = l.get();
-    }
-    if (!target) target = deck_.Layouts().front().get();
     SlideCopier copier(m, &source);
-    copier.layoutPart = target->part;
-    std::string part = copier.CopySlide(s->part);
+    std::string part;
+    if (keepSourceDesign) {
+      // The source's layout, master and theme come along (once; the same master here is used again).
+      copier.keepDesign = true;
+      copier.layoutPart = s->layout ? design.Layout(m, copier, *s->layout) : std::string();
+      if (copier.layoutPart.empty()) return call.End(Result::Fail(u"The slide's design can't be copied, because a part of it can't be read."));
+      copier.masterPart.clear();
+      part = copier.CopySlide(s->part);
+      m.Full();
+    } else {
+      // The layout here with the same type and name, else the same type, else the first.
+      const Layout* target = nullptr;
+      std::string type = s->layout ? s->layout->type : std::string("obj");
+      std::string name = s->layout ? s->layout->name : std::string();
+      for (const auto& l : deck_.Layouts()) {
+        if (!target && l->type == type && l->name == name) target = l.get();
+      }
+      for (const auto& l : deck_.Layouts()) {
+        if (!target && l->type == type) target = l.get();
+      }
+      if (!target) target = deck_.Layouts().front().get();
+      copier.layoutPart = target->part;
+      part = copier.CopySlide(s->part);
+      if (!part.empty()) {
+        std::map<uint32_t, draw::Rect> bounds;
+        for (const Shape& sh : s->shapes) bounds[sh.id] = sh.bounds;
+        MapPlaceholders(m.Edit(part), m.Root(target->part), part, m, bounds);
+      }
+    }
     if (part.empty()) return call.End(Result::Fail(u"The slide can't be copied, because a part of it can't be read."));
-    std::map<uint32_t, draw::Rect> bounds;
-    for (const Shape& sh : s->shapes) bounds[sh.id] = sh.bounds;
-    MapPlaceholders(m.Edit(part), m.Root(target->part), part, m, bounds);
     std::string rel = m.AddRel(pres, kRelSlide, part);
     pugi::xml_node root = m.Edit(pres);
     uint32_t newId = 0;

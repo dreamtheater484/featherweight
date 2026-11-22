@@ -92,6 +92,7 @@ void SlideCopier::CopyRels(std::string_view src, std::string_view dst, std::stri
       items.push_back(n);
       continue;
     }
+    if (skipLayouts && r.type.ends_with("/slideLayout")) continue;
     Policy policy = PolicyOf(r.type);
     std::string target;
     if (pkg::PartKey(r.targetPart) == pkg::PartKey(srcSlide) && !srcSlide.empty()) {
@@ -104,6 +105,10 @@ void SlideCopier::CopyRels(std::string_view src, std::string_view dst, std::stri
         target = r.targetPart;
       } else if (r.type.ends_with("/slideLayout")) {
         target = layoutPart;
+      } else if (keepDesign && r.type.ends_with("/slideMaster") && !masterPart.empty()) {
+        target = masterPart;
+      } else if (keepDesign && r.type.ends_with("/theme")) {
+        target = CopyPart(r.targetPart, newSlide, srcSlide);
       } else if (r.type.ends_with("/image") || r.type.ends_with("/media") || r.type.ends_with("/audio") ||
                  r.type.ends_with("/video") || r.type.ends_with("/font")) {
         target = CopyPart(r.targetPart, newSlide, srcSlide);
