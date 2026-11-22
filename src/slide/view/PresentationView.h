@@ -193,6 +193,8 @@ class PresentationView : public TabContent {
   // pane, Esc, another slide or another tab ends it, and the text goes to the slide's notes.
   bool NotesMouseDown();
   void EndNotesEdit();
+  // The notes being typed go to the slide now, the box staying open (before a save or autosave).
+  void CommitNotes();
   void PlaceNotesEdit(const D2D1_RECT_F& box);
   std::unique_ptr<NotesEdit> notesEdit_;
   size_t notesSlide_ = 0;
