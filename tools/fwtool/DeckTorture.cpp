@@ -865,6 +865,54 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
                                    [&](const auto& p) { return p.name == part.name; });
     if (!known && !Listed(r.written, part.name)) return Failure{"untouched", part.name + " is new, but the save didn't write it"};
   }
+  // A shape in mc:AlternateContent keeps its mc:Fallback when edited: Office versions (and the
+  // validator) that take the Fallback would lose the shape, and what names it (animations) dangles.
+  // fwtool check can't see it: the Fallback's ids count for it too.
+  for (const std::string& name : r.written) {
+    if (!orig.pkg->ReadPart(name, a).Ok() || !again->ReadPart(name, b).Ok()) continue;
+    // Shape ids in each mc:Choice, and whether its mc:AlternateContent has a Fallback.
+    auto blocks = [](const std::vector<uint8_t>& bytes) {
+      std::vector<std::pair<std::vector<std::string>, bool>> out;
+      pugi::xml_document doc;
+      if (!doc.load_buffer(bytes.data(), bytes.size())) return out;
+      auto local = [](pugi::xml_node n) {
+        std::string_view s = n.name();
+        return s.substr(s.find(':') == std::string_view::npos ? 0 : s.find(':') + 1);
+      };
+      // Every element under `root` (itself included), depth first.
+      auto each = [](pugi::xml_node root, auto&& fn) {
+        std::vector<pugi::xml_node> stack{root};
+        while (!stack.empty()) {
+          pugi::xml_node n = stack.back();
+          stack.pop_back();
+          if (n.type() != pugi::node_element) continue;
+          fn(n);
+          for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling()) stack.push_back(c);
+        }
+      };
+      each(doc.document_element(), [&](pugi::xml_node n) {
+        if (local(n) != "AlternateContent") return;
+        std::vector<std::string> ids;
+        bool fallback = false;
+        for (pugi::xml_node c : n.children()) {
+          if (local(c) == "Fallback") fallback = true;
+          if (local(c) == "Choice")
+            each(c, [&](pugi::xml_node d) {
+              if (local(d) == "cNvPr") ids.emplace_back(d.attribute("id").value());
+            });
+        }
+        out.emplace_back(std::move(ids), fallback);
+      });
+      return out;
+    };
+    std::set<std::string> hadFallback;
+    for (const auto& [ids, fallback] : blocks(a))
+      if (fallback) hadFallback.insert(ids.begin(), ids.end());
+    for (const auto& [ids, fallback] : blocks(b))
+      for (const std::string& id : ids)
+        if (!fallback && hadFallback.contains(id))
+          return Failure{"fallback", name + ": shape " + id + " in mc:AlternateContent lost its mc:Fallback"};
+  }
   // Saved without edits: nothing written, the same parts in the same order, the same zip records.
   if (r.done == 0) {
     if (!r.written.empty()) return Failure{"unchanged", "saving without edits wrote " + r.written.front()};

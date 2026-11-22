@@ -1,5 +1,6 @@
 #include "slide/view/ModelDeck.h"
 #include "slide/view/NewDeck.h"
+#include "slide/view/SlideOrder.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,6 +12,13 @@
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
 #include "text/Fonts.h"
+
+#if __has_include("slide/edit/Edit.h")
+#include "slide/edit/Edit.h"
+#define FW_SLIDE_EDIT 1
+#else
+#define FW_SLIDE_EDIT 0
+#endif
 
 namespace fw::slide::view {
 
@@ -56,6 +64,7 @@ class ModelDeck : public Deck {
   bool StartsAsShow() const override { return deck_->StartsInShow(); }
   bool HasMacros() const override { return deck_->HasMacros(); }
   Presentation* Model() override { return deck_.get(); }
+  edit::Editor* Editor() override;
   void Paint(size_t i, draw::Painter& p) override {
     if (render::SlideRender* r = Render(i)) {
       const draw::Size s = deck_->SlideSize();
@@ -98,6 +107,14 @@ class ModelDeck : public Deck {
   std::vector<LayoutChoice> LayoutsFor(size_t slide) const override;
   int LayoutOf(size_t slide) const override;
   void PaintLayout(size_t layout, draw::Painter& p) override;
+  void Reorder(const std::vector<int>& oldIndexes) override {
+    FollowSlides(renders_, oldIndexes);
+    FollowSlides(blocks_, oldIndexes);
+    std::vector<bool> read(oldIndexes.size(), false);
+    for (size_t i = 0; i < oldIndexes.size(); ++i)
+      if (oldIndexes[i] >= 0 && static_cast<size_t>(oldIndexes[i]) < blocksRead_.size()) read[i] = blocksRead_[static_cast<size_t>(oldIndexes[i])];
+    blocksRead_ = std::move(read);
+  }
 
  private:
   const Slide* Get(size_t i) const { return i < deck_->SlideCount() ? deck_->GetSlide(i) : nullptr; }
@@ -108,12 +125,24 @@ class ModelDeck : public Deck {
   SlideLink LinkOf(const Hyperlink& h, const draw::Rect& box, size_t slide) const;
 
   std::unique_ptr<Presentation> deck_;
+#if FW_SLIDE_EDIT
+  std::unique_ptr<edit::Editor> editor_;  // made on first use; goes before the deck it edits
+#endif
   size_t bytes_ = 0;
   mutable std::unique_ptr<text::Fonts> fonts_;
   mutable std::vector<std::unique_ptr<render::SlideRender>> renders_;
   mutable std::vector<std::vector<Block>> blocks_;
   mutable std::vector<bool> blocksRead_;
 };
+
+edit::Editor* ModelDeck::Editor() {
+#if FW_SLIDE_EDIT
+  if (!editor_) editor_ = std::make_unique<edit::Editor>(*deck_);
+  return editor_.get();
+#else
+  return nullptr;
+#endif
+}
 
 text::Fonts& ModelDeck::Fonts() const {
   if (!fonts_) {

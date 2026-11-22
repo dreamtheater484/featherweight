@@ -135,8 +135,9 @@ struct Editor::Impl {
   static pugi::xml_node FindShape(pugi::xml_node root, uint32_t id);
   // The next unused shape id in a part (one past the highest).
   static uint32_t NextShapeId(pugi::xml_node root);
-  // A shape about to be edited: when it sits in an mc:AlternateContent branch, the block is replaced
-  // by the branch's content (plan §4.3 rule 1: a stale branch is never kept next to an edited one).
+  // A shape about to be edited. In an mc:Choice it stays where it is (the block keeps all its branches;
+  // the Fallback is never dropped). In the mc:Fallback (no Choice understood) the block is replaced by
+  // the Fallback's content, and the shape's copy there is returned.
   static pugi::xml_node Unwrap(pugi::xml_node shape);
 };
 

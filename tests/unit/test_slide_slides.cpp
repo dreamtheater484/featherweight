@@ -17,6 +17,9 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
+#include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
+#include "slide/edit/SlideDesignOps.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/SlideDesign.h"
 #include "slide/view/SlideHeaderFooter.h"
@@ -442,4 +445,156 @@ TEST(SlideDesign_ReadBackground) {
     CHECK_EQ(ColorSchemeOf(*blank->GetSlide(0)), 0);
     CHECK(ReadBackground(*blank->GetSlide(0)).kind == Background::Kind::Theme);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Header & footer through the edit layer (src/slide/edit/HeaderFooter.cpp)
+
+TEST(SlideHeaderFooter_EditAndUndo) {
+  fw::pkg::Status status;
+  auto deck = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  fw::slide::edit::Editor ed(*deck);
+  CHECK(ed.NewSlide(1, 1));  // a Title and Content slide after the title slide
+  CHECK_EQ(deck->SlideCount(), 2u);
+  fw::slide::edit::HeaderFooter hf;
+  hf.slideNumber = hf.footer = hf.date = true;
+  hf.footerText = L"Quarterly review";
+  hf.dateFormat = "datetime4";
+  hf.notOnTitle = true;
+  CHECK(ed.SetHeaderFooter({}, hf));
+  // The title slide shows none; the other all three, as its layout places them.
+  const HeaderFooterSettings title = ReadHeaderFooter(*deck->GetSlide(0));
+  CHECK(!title.date && !title.footer && !title.slideNumber);
+  const HeaderFooterSettings two = ReadHeaderFooter(*deck->GetSlide(1));
+  CHECK(two.date && two.dateAuto && two.dateFormat == 4);
+  CHECK(two.footer && two.footerText == L"Quarterly review");
+  CHECK(two.slideNumber);
+  // Shown: the number is the slide's.
+  const fw::slide::Slide* s = deck->GetSlide(1);
+  const fw::slide::Shape* num = s->FindPlaceholder(fw::slide::PlaceholderType::SlideNumber);
+  CHECK(num != nullptr);
+  if (num) {
+    const fw::slide::TextBody* body = deck->Text(*num, *s);
+    CHECK(body && !body->paragraphs.empty() && !body->paragraphs[0].runs.empty() && body->paragraphs[0].runs[0].text == L"2");
+  }
+  // Fixed date, no footer, on slide 2 only; then the title slide too.
+  hf.dateFixed = true;
+  hf.dateText = L"1 April";
+  hf.footer = false;
+  CHECK(ed.SetHeaderFooter({1}, hf));
+  const HeaderFooterSettings fixed = ReadHeaderFooter(*deck->GetSlide(1));
+  CHECK(fixed.date && !fixed.dateAuto && fixed.dateFixed == L"1 April" && !fixed.footer && fixed.slideNumber);
+  hf.notOnTitle = false;
+  CHECK(ed.SetHeaderFooter({0}, hf));
+  CHECK(ReadHeaderFooter(*deck->GetSlide(0)).slideNumber);
+  // Undo, step by step, back to none.
+  CHECK(ed.Undo(3));
+  CHECK(!ReadHeaderFooter(*deck->GetSlide(1)).footer && !ReadHeaderFooter(*deck->GetSlide(1)).slideNumber);
+  CHECK(ed.Redo(1));
+  CHECK(ReadHeaderFooter(*deck->GetSlide(1)).footerText == L"Quarterly review");
+  CHECK(!ed.SetHeaderFooter({7}, hf));  // no such slide: refused, nothing changed
+}
+
+TEST(SlideDesign_ApplyThemeAndUndo) {
+  fw::pkg::Status status;
+  auto deck = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  fw::slide::edit::Editor ed(*deck);
+  CHECK(ed.NewSlide(1, 1));
+  const BuiltInTheme* dark = nullptr;
+  for (const BuiltInTheme& t : BuiltInThemes())
+    if (t.dark) {
+      dark = &t;
+      break;
+    }
+  CHECK(dark != nullptr);
+  if (!dark) return;
+  const int schemeBefore = ColorSchemeOf(*deck->GetSlide(1));
+  const std::string eaBefore = deck->GetSlide(1)->theme->MajorFont().eastAsian;
+  const size_t scriptsBefore = deck->GetSlide(1)->theme->MajorFont().scripts.size();
+  fw::slide::edit::ThemeDesign d;
+  d.name = "Dark test";
+  d.colorScheme = ColorSchemeXml(ColorSchemes()[dark->colors]);
+  d.major = dark->major;
+  d.minor = dark->minor;
+  d.dark = 1;
+  d.background = BackgroundXml(dark->background);
+  CHECK(ApplyThemeDesign(ed, 0, d));
+  // Colors, fonts (East Asian and script fonts kept), light text on dark, the master's background.
+  const fw::slide::Slide* s = deck->GetSlide(1);
+  CHECK_EQ(ColorSchemeOf(*s), dark->colors);
+  CHECK_EQ(s->theme->Name(), std::string("Dark test"));
+  CHECK_EQ(s->theme->MajorFont().latin, std::string(dark->major));
+  CHECK_EQ(s->theme->MinorFont().latin, std::string(dark->minor));
+  CHECK_EQ(s->theme->MajorFont().eastAsian, eaBefore);
+  CHECK_EQ(s->theme->MajorFont().scripts.size(), scriptsBefore);
+  CHECK(s->colorMap.map[0] == draw::ThemeColor::Dark1);
+  const Background bg = ReadBackground(*s);
+  CHECK(bg.kind == dark->background.kind);
+  if (bg.kind == Background::Kind::Solid) CHECK_EQ(bg.color, dark->background.color);
+  // Hide background graphics on slide 2; a slide background as the panel writes it.
+  CHECK(SetShowMasterShapes(ed, {1}, false));
+  CHECK(!deck->GetSlide(1)->showMasterShapes);
+  CHECK(deck->GetSlide(0)->showMasterShapes);
+  Background solid;
+  solid.color = 0x336699;
+  CHECK(ed.SetBackground({0}, BackgroundXml(solid)));
+  CHECK_EQ(ReadBackground(*deck->GetSlide(0)).color, 0x336699u);
+  // Slide numbers, footer and an updating date everywhere (a fourth step).
+  fw::slide::edit::HeaderFooter hf;
+  hf.slideNumber = hf.footer = hf.date = true;
+  hf.footerText = L"Footer & <text>";
+  hf.dateFormat = "datetime2";
+  CHECK(ed.SetHeaderFooter({}, hf));
+  // FW_DESIGN_PPTX=<path>: the deck as these edits leave it, for fwtool check, the Open XML
+  // validator and PowerPoint.
+  char path[MAX_PATH] = {};
+  if (GetEnvironmentVariableA("FW_DESIGN_PPTX", path, MAX_PATH) > 0) {
+    std::vector<uint8_t> bytes;
+    CHECK(fw::slide::edit::SaveToBytes(ed, bytes).Ok());
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  }
+  // Four steps back: as it was.
+  CHECK(ed.Undo(4));
+  s = deck->GetSlide(1);
+  CHECK(s->showMasterShapes);
+  CHECK(s->colorMap.map[0] == draw::ThemeColor::Light1);
+  CHECK_EQ(ColorSchemeOf(*s), schemeBefore);
+  CHECK(s->theme->MajorFont().latin != std::string(dark->major));
+  CHECK(!SetShowMasterShapes(ed, {9}, false));
+  CHECK(!ApplyThemeDesign(ed, 3, d));
+}
+
+TEST(SlideCopy_BetweenDecks) {
+  // As the tab copies slides: the source saved to memory, read back, its slides inserted into
+  // another deck in that deck's design.
+  fw::pkg::Status status;
+  auto a = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  auto b = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(a != nullptr && b != nullptr);
+  if (!a || !b) return;
+  fw::slide::edit::Editor ea(*a), eb(*b);
+  CHECK(ea.NewSlide(1, 1));
+  fw::slide::edit::HeaderFooter hf;
+  hf.footer = hf.slideNumber = true;
+  hf.footerText = L"From deck one";
+  CHECK(ea.SetHeaderFooter({1}, hf));
+  CHECK(ea.SetNotesText(1, L"copied notes"));
+  std::vector<uint8_t> clip;
+  CHECK(fw::slide::edit::SaveToBytes(ea, clip).Ok());
+  auto source = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(clip), fw::pkg::Limits::Default(), status), status);
+  CHECK(source != nullptr);
+  if (!source) return;
+  std::vector<uint32_t> ids;
+  CHECK(eb.InsertSlides(*source, {0, 1}, 1, false, &ids));
+  CHECK_EQ(b->SlideCount(), 3u);
+  CHECK_EQ(ids.size(), 2u);
+  const HeaderFooterSettings pasted = ReadHeaderFooter(*b->GetSlide(2));
+  CHECK(pasted.footer && pasted.footerText == L"From deck one" && pasted.slideNumber);
+  CHECK(b->GetSlide(2)->NotesText() == L"copied notes");
+  CHECK(eb.Undo());
+  CHECK_EQ(b->SlideCount(), 1u);
 }

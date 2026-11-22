@@ -258,6 +258,22 @@ TEST(SlideEditShapes) {
   s = deck->GetSlide(0);
   CHECK(s->FindShape(group) && s->FindShape(group)->kind == Shape::Kind::Group);
   CHECK_EQ(s->FindShape(group)->children.size(), size_t{2});
+  // Into and out of the group as it is.
+  CHECK(ed.MoveShape(0, table, group, -1));
+  CHECK_EQ(deck->GetSlide(0)->FindShape(group)->children.size(), size_t{3});
+  CHECK(ed.MoveShape(0, table, 0, -1));
+  CHECK_EQ(deck->GetSlide(0)->FindShape(group)->children.size(), size_t{2});
+  // A line on a group goes to its shapes: p:grpSpPr can't hold a:ln (torture finding).
+  ShapePatch line;
+  line.line = "<a:ln xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln>";
+  CHECK(ed.SetShapeProps(0, {group}, line));
+  {
+    std::string xml = ed.ShapeXml(0, group);
+    size_t end = xml.find("grpSpPr>");
+    end = xml.find("grpSpPr>", end + 1);
+    CHECK(end != std::string::npos && xml.substr(0, end).find(":ln") == std::string::npos);
+    CHECK(xml.find(":ln", end) != std::string::npos);
+  }
   std::vector<uint32_t> back;
   CHECK(ed.Ungroup(0, group, &back));
   CHECK_EQ(back.size(), size_t{2});
@@ -265,6 +281,27 @@ TEST(SlideEditShapes) {
   CHECK(s->FindShape(group) == nullptr);
   CHECK_NEAR(s->FindShape(rect)->bounds.left, 310, 0.5);
   CHECK_NEAR(s->FindShape(rect)->bounds.Width(), 120, 0.5);
+  // Copy and paste with the picture: on the same deck it shares the picture's part.
+  ShapeClip clip = ed.CopyShapes(0, {pic, rect});
+  CHECK_EQ(clip.shapes.size(), size_t{2});
+  std::vector<uint32_t> pasted;
+  CHECK(ed.PasteShapes(0, clip, &pasted));
+  CHECK_EQ(pasted.size(), size_t{2});
+  s = deck->GetSlide(0);
+  CHECK(s->FindShape(pasted[0]) && s->FindShape(pasted[0]) != s->FindShape(pic));
+  std::vector<uint32_t> pastedHere = pasted;
+  // Into another deck: the picture comes along.
+  auto other = Open("layouts.pptx");
+  Editor ed2(*other);
+  CHECK(ed2.PasteShapes(0, clip, &pasted));
+  bool kind = false;
+  for (uint32_t id : pasted) kind = kind || other->GetSlide(0)->FindShape(id)->kind == Shape::Kind::Picture;
+  CHECK(kind);
+  std::vector<uint8_t> otherBytes;
+  CHECK(SaveToBytes(ed2, otherBytes).Ok());
+  auto otherAgain = OpenBytes(otherBytes);
+  CHECK(otherAgain && otherAgain->GetSlide(0)->shapes.size() == other->GetSlide(0)->shapes.size());
+  CHECK(ed.DeleteShapes(0, pastedHere));
   // Fill, crop, delete.
   ShapePatch fill;
   fill.fill = "<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:srgbClr val=\"FF0000\"/></a:solidFill>";
@@ -334,4 +371,166 @@ TEST(SlideEditJournalReplays) {
   CHECK(Replay(ed2, all + more, &applied));
   CHECK(applied > 0);
   CHECK(Digest(*fresh) == edited);
+}
+
+// A text box holding math sits in mc:AlternateContent (a14 Choice, picture Fallback): formatting its
+// text keeps the block, the Choice and the Fallback (torture findings: unwrapping made the math invalid;
+// dropping the Fallback left apps that take it, and a p:bldP naming the shape, without it). Moving,
+// formatting and replacing the shape keep the Fallback's shape in step.
+TEST(SlideEditKeepsAlternateContentAroundEditedShapes) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  std::string part = ed.SlidePart(0);
+  std::string xml = PartText(ed, part);
+  const std::string box =
+      "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+      "<mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">"
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"90\" name=\"Math\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr>"
+      "<a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"914400\" cy=\"457200\"/></a:xfrm><a:prstGeom prst=\"rect\">"
+      "<a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>x = </a:t>"
+      "</a:r><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath><m:r>"
+      "<m:t>y</m:t></m:r></m:oMath></m:oMathPara></a14:m></a:p></p:txBody></p:sp></mc:Choice><mc:Fallback><p:sp><p:nvSpPr>"
+      "<p:cNvPr id=\"90\" name=\"Math\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"0\" "
+      "y=\"0\"/><a:ext cx=\"914400\" cy=\"457200\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>"
+      "</p:spPr></p:sp></mc:Fallback></mc:AlternateContent>";
+  size_t at = xml.rfind("</p:spTree>");
+  CHECK(at != std::string::npos);
+  xml.insert(at, box);
+  CHECK(ed.Run(u"Test", [&] {
+    return ed.WritePart(part, std::vector<uint8_t>(xml.begin(), xml.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  CHECK(ed.SetRunProps({0, 90}, {{0, 0}, {0, 4}}, RunPatch{.bold = true}));
+  std::string after = PartText(ed, part);
+  CHECK(after.find("AlternateContent") != std::string::npos);
+  CHECK(after.find("Choice") != std::string::npos);
+  CHECK(after.find("Fallback") != std::string::npos);
+  CHECK(after.find("a14:m") != std::string::npos);
+  CHECK(after.find("b=\"1\"") != std::string::npos);
+  auto count = [&](std::string_view s) {
+    size_t n = 0;
+    for (size_t i = after.find(s); i != std::string::npos; i = after.find(s, i + 1)) ++n;
+    return n;
+  };
+  // Moved: both branches' shapes.
+  CHECK(ed.SetTransform(0, 90, {{10, 20, 82, 56}}));
+  after = PartText(ed, part);
+  CHECK(count("x=\"127000\" y=\"254000\"") == 2);
+  CHECK(count("cx=\"914400\" cy=\"457200\"") == 2);
+  CHECK(count("Fallback") == 2);
+  // A fill: both.
+  ShapePatch fill;
+  fill.fill = "<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:srgbClr val=\"FF0000\"/></a:solidFill>";
+  CHECK(ed.SetShapeProps(0, {90}, fill));
+  after = PartText(ed, part);
+  CHECK(count("FF0000") == 2);
+  // Replaced (p2-objects' route): the Choice's shape where it is, its changed fill in the Fallback too.
+  std::string shapeXml = ed.ShapeXml(0, 90);
+  size_t red = shapeXml.find("FF0000");
+  CHECK(red != std::string::npos && shapeXml.find("a14:m") != std::string::npos);
+  shapeXml.replace(red, 6, "00FF00");
+  CHECK(ed.SetShapeXml(0, 90, shapeXml, u"Test"));
+  after = PartText(ed, part);
+  CHECK(count("00FF00") == 2 && count("FF0000") == 0);
+  CHECK(count("Fallback") == 2 && count("a14:m") >= 1 && count("b=\"1\"") >= 1);
+  CHECK(count("x=\"127000\" y=\"254000\"") == 2);
+  // Saved and opened again: still one block with both branches.
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  CHECK(OpenBytes(bytes) != nullptr);
+  // Deleted: the whole block.
+  CHECK(ed.DeleteShapes(0, {90}));
+  after = PartText(ed, part);
+  CHECK(count("id=\"90\"") == 0);
+}
+
+// A group inside mc:AlternateContent (as PowerPoint writes a group holding math): z order, moves and
+// deletes inside it reach the Fallback's group too; moving shapes into or out of it is refused.
+TEST(SlideEditKeepsFallbackGroupsInStep) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  std::string part = ed.SlidePart(0);
+  std::string xml = PartText(ed, part);
+  auto sp = [](int id, int x) {
+    return "<p:sp><p:nvSpPr><p:cNvPr id=\"" + std::to_string(id) + "\" name=\"S" + std::to_string(id) +
+           "\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"" + std::to_string(x) +
+           "\" y=\"0\"/><a:ext cx=\"100\" cy=\"100\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>"
+           "</p:spPr></p:sp>";
+  };
+  std::string group =
+      "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"93\" name=\"G\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>"
+      "<a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"300\" cy=\"100\"/><a:chOff x=\"0\" y=\"0\"/>"
+      "<a:chExt cx=\"300\" cy=\"100\"/></a:xfrm></p:grpSpPr>" +
+      sp(91, 0) + sp(92, 100) + sp(94, 200) + "</p:grpSp>";
+  std::string block =
+      "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+      "<mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">" +
+      group + "</mc:Choice><mc:Fallback>" + group + "</mc:Fallback></mc:AlternateContent>";
+  size_t at = xml.rfind("</p:spTree>");
+  CHECK(at != std::string::npos);
+  xml.insert(at, block);
+  CHECK(ed.Run(u"Test", [&] {
+    return ed.WritePart(part, std::vector<uint8_t>(xml.begin(), xml.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  std::string after;
+  auto order = [&](std::string_view branch, std::string_view first, std::string_view second) {
+    size_t from = after.find(branch);
+    return from != std::string::npos && after.find(first, from) < after.find(second, from);
+  };
+  CHECK(ed.Arrange(0, {91}, ZOrder::BringToFront));
+  after = PartText(ed, part);
+  CHECK(order("<mc:Choice", "id=\"94\"", "id=\"91\"") && order("<mc:Fallback", "id=\"94\"", "id=\"91\""));
+  CHECK(order("<mc:Choice", "id=\"92\"", "id=\"94\"") && order("<mc:Fallback", "id=\"92\"", "id=\"94\""));
+  CHECK(ed.MoveShape(0, 92, 93, 2));
+  after = PartText(ed, part);
+  CHECK(order("<mc:Choice", "id=\"94\"", "id=\"92\"") && order("<mc:Choice", "id=\"92\"", "id=\"91\""));
+  CHECK(order("<mc:Fallback", "id=\"94\"", "id=\"92\"") && order("<mc:Fallback", "id=\"92\"", "id=\"91\""));
+  CHECK(ed.SetTransform(0, 91, {{0, 1, 1, 2}}));
+  after = PartText(ed, part);
+  size_t moved = 0;
+  for (size_t i = after.find("x=\"0\" y=\"12700\""); i != std::string::npos; i = after.find("x=\"0\" y=\"12700\"", i + 1)) ++moved;
+  CHECK(moved == 2);
+  CHECK(!ed.MoveShape(0, 91, 0, -1));
+  CHECK(ed.DeleteShapes(0, {92}));
+  after = PartText(ed, part);
+  CHECK(after.find("id=\"92\"") == std::string::npos);
+  CHECK(after.find("id=\"91\"") != after.rfind("id=\"91\""));
+  CHECK(after.find("<mc:Fallback") != std::string::npos);
+}
+
+// A notes master made for notes copies the slide master's theme with its relationships (a theme's
+// picture fill names one): torture finding, poi-apache-poi-test-deck-themes.pptx.
+TEST(SlideEditNotesMasterThemeKeepsRelationships) {
+  auto deck = Open("layouts.pptx");
+  CHECK(deck != nullptr);
+  CHECK(deck->NotesMaster() == nullptr);
+  Editor ed(*deck);
+  auto themeOf = [&](const std::string& part) {
+    const fw::pkg::RelationshipSet* rels = deck->RelationshipsOf(part);
+    for (const fw::pkg::Relationship& r : rels ? rels->items : std::vector<fw::pkg::Relationship>{}) {
+      if (r.type.ends_with("/theme")) return r.targetPart;
+    }
+    return std::string();
+  };
+  std::string theme = themeOf(deck->Masters()[0]->part);
+  CHECK(!theme.empty());
+  std::string rel;
+  CHECK(ed.Run(u"Test", [&] {
+    rel = ed.AddPart(theme, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                     "/ppt/media/themepicture.png", "image/png", kPng);
+    return rel.empty() ? Result::Fail(u"part") : Result{};
+  }));
+  CHECK(ed.SetNotesText(0, L"notes"));
+  deck->GetSlide(0);  // reads its notes page, and with it the notes master
+  CHECK(deck->NotesMaster() != nullptr);
+  if (!deck->NotesMaster()) return;
+  std::string notesTheme = themeOf(deck->NotesMaster()->part);
+  CHECK(!notesTheme.empty() && notesTheme != theme);
+  const fw::pkg::RelationshipSet* rels = deck->RelationshipsOf(notesTheme);
+  CHECK(rels && rels->Find(rel) && rels->Find(rel)->targetPart == "/ppt/media/themepicture.png");
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again && again->GetPackage().FindPart("/ppt/media/themepicture.png") != nullptr);
 }

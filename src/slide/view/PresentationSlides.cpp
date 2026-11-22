@@ -10,8 +10,15 @@
 #include <cstdio>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
+#include "pkg/Package.h"
+#include "pkg/Snapshot.h"
+#include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
+#include "slide/view/NotesEdit.h"
+#include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlideGallery.h"
 #include "ui/Anim.h"
@@ -51,6 +58,21 @@ constexpr SlideCommandName kSlideNames[] = {
     {CmdSlideMoveFirst, L"Move slide to the beginning", L"Ctrl+Shift+Up"},
     {CmdSlideMoveLast, L"Move slide to the end", L"Ctrl+Shift+Down"},
 };
+
+// Slides copied in this process, for pasting into a presentation tab: the source deck as it was
+// then (saved to memory, so changing or closing the source afterwards doesn't matter) and which
+// of its slides.
+struct SlideClip {
+  std::vector<uint8_t> package;
+  std::vector<size_t> slides;
+  unsigned long sequence = 0;  // the clipboard's after copying: anything copied later replaces the slides
+  bool Current() const { return !package.empty() && sequence == util::ClipboardSequence(); }
+};
+
+SlideClip& Clip() {
+  static SlideClip clip;
+  return clip;
+}
 
 }  // namespace
 
@@ -203,6 +225,24 @@ bool PresentationView::SlideCommandState(int cmd, CommandState& s) {
       s.checked = any && deck_->Hidden(current_);
       break;
     case CmdSlideLayoutMenu: s.enabled = any && !deck_->LayoutsFor(current_).empty(); break;
+    case CmdCut:
+    case CmdCopy:
+      if (!keysInThumbs_) return false;  // the slide's own (P1's picture and text; p2-objects' shapes)
+      s.enabled = any;
+      s.label = cmd == CmdCut ? L"Cut slides" : L"Copy slides";
+      s.shortcut = cmd == CmdCut ? L"Ctrl+X" : L"Ctrl+C";
+      return true;
+    case CmdPaste:
+      if (!Clip().Current()) return false;
+      s.enabled = ready;
+      s.label = L"Paste slides";
+      s.shortcut = L"Ctrl+V";
+      return true;
+    case CmdPasteSlidesDestination:
+    case CmdPasteSlidesSource:
+      s.enabled = ready && Clip().Current();
+      s.label = cmd == CmdPasteSlidesDestination ? L"Paste slides: use destination theme" : L"Paste slides: keep source formatting";
+      return true;
     case CmdSlideMoveUp:
     case CmdSlideMoveFirst: s.enabled = any && !sel.empty() && MoveChanges(n, sel, cmd == CmdSlideMoveFirst ? 0 : sel.front() - (sel.front() > 0)); break;
     case CmdSlideMoveDown:
@@ -237,21 +277,25 @@ bool PresentationView::SlideCommand(int cmd) {
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdSlideNew: {
-      // After the current slide, on the layout PowerPoint picks: the current slide's, except after
-      // a title slide, where it's the master's next layout ("Title and Content").
-      int layout = -1;
-      if (n) {
-        layout = deck_->LayoutOf(current_);
-        const std::vector<Deck::LayoutChoice> all = deck_->LayoutsFor(current_);
-        if (all.size() > 1 && static_cast<int>(all[0].index) == layout) layout = static_cast<int>(all[1].index);
-      }
-      InsertSlide(n ? current_ + 1 : 0, layout);
+      // After the current slide, on the layout PowerPoint picks (NewSlideLayout).
+      InsertSlide(n ? current_ + 1 : 0, -1);
       return true;
     }
     case CmdSlideNewMenu:
       if (newSlideGallery_) newSlideGallery_->SetOpen(true);
       return true;
     case CmdSlideDuplicate: DuplicateSlides(SelectedSlides()); return true;
+    case CmdCut:
+    case CmdCopy:
+      if (!keysInThumbs_ || !n) return false;
+      CopySlides(cmd == CmdCut);
+      return true;
+    case CmdPaste:
+      if (!Clip().Current()) return false;
+      PasteSlides(false);
+      return true;
+    case CmdPasteSlidesDestination:
+    case CmdPasteSlidesSource: PasteSlides(cmd == CmdPasteSlidesSource); return true;
     case CmdSlideDelete: DeleteSlides(SelectedSlides()); return true;
     case CmdSlideHide:
       if (n) HideSlides(SelectedSlides(), !deck_->Hidden(current_));
@@ -293,6 +337,12 @@ void PresentationView::SlideContextMenu(HMENU m, int thumb) {
   }
   const size_t count = SelectedSlides().size();
   const bool many = count > 1;
+  const bool clip = Clip().Current();
+  AppendItem(m, CmdCut, many ? L"Cut slides\tCtrl+X" : L"Cut slide\tCtrl+X", any);
+  AppendItem(m, CmdCopy, many ? L"Copy slides\tCtrl+C" : L"Copy slide\tCtrl+C", any);
+  AppendItem(m, CmdPasteSlidesDestination, L"Paste: use destination theme\tCtrl+V", clip);
+  AppendItem(m, CmdPasteSlidesSource, L"Paste: keep source formatting", clip);
+  AppendSeparator(m);
   AppendItem(m, CmdSlideNew, L"New slide\tCtrl+M");
   AppendItem(m, CmdSlideDuplicate, many ? L"Duplicate slides\tCtrl+D" : L"Duplicate slide\tCtrl+D", any);
   AppendItem(m, CmdSlideDelete, many ? L"Delete slides\tDelete" : L"Delete slide\tDelete", any);
@@ -406,8 +456,17 @@ void PresentationView::AddSlideTools(ToolbarModel& m) {
   design.checked = QueryCommand(CmdDesignPanel).checked;
   design.enabled = ready;
   design.priority = 5;
-  m.left.insert(m.left.begin(), {add, layout, design});
-  m.left[3].sepBefore = true;  // P1's print items after a separator
+  ToolItem hf;
+  hf.cmd = CmdHeaderFooter;
+  hf.glyph = icon::Page;
+  hf.tooltip = L"Header & footer: slide numbers, footer and date";
+  hf.menuLabel = L"Header & footer";
+  hf.toggle = true;
+  hf.checked = QueryCommand(CmdHeaderFooter).checked;
+  hf.enabled = ready && SlideCount() > 0;
+  hf.priority = 4;
+  m.left.insert(m.left.begin(), {add, layout, design, hf});
+  m.left[4].sepBefore = true;  // P1's print items after a separator
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +531,16 @@ bool PresentationView::SlideScriptOp(const std::wstring& op, const std::wstring&
     if (!SlideCount() || !SetNotes(current_, text)) refuse(L"refused");
     return true;
   }
+  if (op == L"notesedit") {
+    // notesedit:<text>: through the notes pane's text box (opened as a click opens it, the text
+    // typed, then left), '|' between lines.
+    std::wstring text = arg;
+    std::replace(text.begin(), text.end(), L'|', L'\n');
+    if (!notesShown_ || !NotesMouseDown()) return refuse(L"the notes pane can't be typed in");
+    notesEdit_->SetText(text);
+    EndNotesEdit();
+    return true;
+  }
   if (op == L"headerfooter") {
     // headerfooter:slidenumber=1|footer=<text>|date=1|datefixed=<text>|dateformat=N|title=0,
     // applied to every slide (title=0: not on title slides).
@@ -512,34 +581,256 @@ std::vector<uint32_t> PresentationView::SlideIds() const {
 
 void PresentationView::SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all) {
   const std::vector<int> old = OldIndexes(idsBefore, SlideIds());
+  // The current slide and the selection follow their slides; a slide gone leaves the one now in
+  // its place current.
+  const size_t n = SlideCount();
+  std::vector<size_t> selected;
+  size_t current = SIZE_MAX;
+  for (size_t i = 0; i < old.size(); ++i) {
+    if (old[i] < 0) continue;
+    const size_t o = static_cast<size_t>(old[i]);
+    if (selection_.Selected(o)) selected.push_back(i);
+    if (o == current_) current = i;
+  }
+  if (current == SIZE_MAX) current = n ? std::min(current_, n - 1) : 0;
+  if (current != current_) {
+    current_ = current;
+    sx_ = sy_ = 0;
+    notesScroll_ = 0;
+  }
+  if (std::find(selected.begin(), selected.end(), current_) == selected.end()) selected.assign(n ? 1 : 0, current_);
+  selection_.Reset(n, current_);
+  if (n) selection_.Set(selected, current_);
   FollowSlides(thumbCache_, old);
+  thumbCache_.resize(n);
   for (size_t i : touched)
     if (i < thumbCache_.size()) thumbCache_[i].bitmap.Reset();
-  if (all)
+  if (all) {
     for (Thumb& th : thumbCache_) th.bitmap.Reset();
-  slideBitmap_.Reset();
-  slideBitmapOf_ = SIZE_MAX;
+    layoutPictures_.clear();
+  }
+  // p2-text: typing draws its text live over the slide's bitmap, which leaves that text out: the bitmap
+  // stays for the session's own edits (TextEditing redraws it when the shape around the text changes).
+  if (all || !text_->Session() || !text_->Session()->Committing()) {
+    slideBitmap_.Reset();
+    slideBitmapOf_ = SIZE_MAX;
+  }
+  links_.clear();
   linksOf_ = SIZE_MAX;
-  layoutPictures_.clear();
   matches_.clear();
   match_ = -1;
-  if (current_ >= SlideCount()) current_ = SlideCount() ? SlideCount() - 1 : 0;
   ClampScroll();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
 }
 
+edit::Editor* PresentationView::SlideEditor() const {
+  edit::Editor* ed = deck_ ? deck_->Editor() : nullptr;
+  if (ed && !editListening_) {
+    editListening_ = true;
+    editIds_ = SlideIds();
+    PresentationView* self = const_cast<PresentationView*>(this);
+    // Every edit, undo and redo, whoever made it (the tab's slide edits, p2-objects, p2-text).
+    ed->OnChange([self](const edit::Changes& c) { self->OnSlideEdits(c); });
+    self->OnEditorMade(*ed);
+  }
+  return ed;
+}
+
+void PresentationView::OnEditorMade(edit::Editor& ed) {
+  AttachFile(ed);  // p2-model (PresentationSave.cpp): the recovery journal, and the file told of each change
+}
+
+void PresentationView::OnSlideEdits(const edit::Changes& c) {
+  if (!deck_) return;
+  const std::vector<uint32_t> before = editIds_;
+  editIds_ = SlideIds();
+  const bool all = c.allSlides || c.slideSize;
+  // What the deck prepared follows the slides, then goes for the ones that changed (their model
+  // objects were read again: what was built from them is stale).
+  if (c.slideList) deck_->Reorder(OldIndexes(before, editIds_));
+  std::vector<size_t> touched;
+  for (const edit::SlideChange& sc : c.slides)
+    if (sc.index >= 0 && static_cast<size_t>(sc.index) < SlideCount()) {
+      touched.push_back(static_cast<size_t>(sc.index));
+      if (!all) deck_->Invalidate(static_cast<size_t>(sc.index));
+    }
+  if (all)
+    for (size_t i = 0; i < SlideCount(); ++i) deck_->Invalidate(i);
+  SlidesChanged(before, touched, all);
+  DesignChanged();
+}
+
+bool PresentationView::CopySlides(bool cut) {
+  const std::vector<size_t> slides = SelectedSlides();
+  edit::Editor* ed = SlideEditor();
+  if (slides.empty() || !ed) return false;
+  // Other programs get the current slide as a picture and its text (P1); a presentation tab the
+  // slides themselves.
+  CopySlide(true, true);
+  SlideClip& clip = Clip();
+  clip.package.clear();
+  if (!edit::SaveToBytes(*ed, clip.package).Ok()) {
+    clip.package.clear();
+    host_.ViewMessage(BannerKind::Warning, L"These slides couldn't be copied.");
+    return false;
+  }
+  clip.slides = slides;
+  clip.sequence = util::ClipboardSequence();
+  if (slides.size() > 1)
+    host_.ViewMessage(BannerKind::Success, (cut ? L"Cut " : L"Copied ") + std::to_wstring(slides.size()) + L" slides");
+  return !cut || DeleteSlides(slides);
+}
+
+bool PresentationView::PasteSlides(bool keepSource) {
+  SlideClip& clip = Clip();
+  if (!clip.Current() || !CanEditSlides()) return false;
+  pkg::Status status;
+  std::unique_ptr<Presentation> source =
+      fw::slide::Read(pkg::Package::Open(pkg::Snapshot::FromBytes(clip.package), pkg::Limits::Default(), status), status);
+  if (!source) {
+    host_.ViewMessage(BannerKind::Warning, L"The copied slides couldn't be read.");
+    return false;
+  }
+  const size_t at = SlideCount() ? current_ + 1 : 0;
+  std::vector<uint32_t> ids;
+  if (!Done(SlideEditor()->InsertSlides(*source, clip.slides, at, keepSource, &ids))) return false;
+  const std::vector<uint32_t> now = SlideIds();
+  std::vector<size_t> pasted;
+  for (uint32_t id : ids)
+    if (auto it = std::find(now.begin(), now.end(), id); it != now.end()) pasted.push_back(static_cast<size_t>(it - now.begin()));
+  if (!pasted.empty()) SelectSlides(pasted, pasted.front());
+  return true;
+}
+
+bool PresentationView::NotesMouseDown() {
+  if (!SlideCount()) return false;
+  if (notesEdit_ && notesEdit_->IsOpen()) return true;
+  edit::Editor* ed = SlideEditor();
+  if (!ed || !ed->CanEdit()) return false;  // a read-only deck: the notes are only read
+  if (!notesEdit_) {
+    notesEdit_ = std::make_unique<NotesEdit>();
+    notesEdit_->onCommit = [this](const std::wstring& text) { SetNotes(notesSlide_, text); };
+    notesEdit_->onLeave = [this] { EndNotesEdit(); };
+  }
+  notesSlide_ = current_;
+  const float pad = 12 * ui_;
+  const D2D1_RECT_F box{notes_.left + pad, notes_.top + pad * 0.75f, notes_.right - pad, notes_.bottom - pad * 0.5f};
+  if (!notesEdit_->Open(host_.ViewHwnd(), Inflate(box, 4 * ui_, 4 * ui_), deck_->Notes(current_), ui_)) return false;
+  host_.ViewInvalidate();
+  return true;
+}
+
+void PresentationView::EndNotesEdit() {
+  if (!notesEdit_ || !notesEdit_->IsOpen()) return;
+  notesEdit_->Commit();
+  notesEdit_->Close();
+  host_.ViewInvalidate();
+}
+
+void PresentationView::PlaceNotesEdit(const D2D1_RECT_F& box) {
+  if (notesEdit_) notesEdit_->Place(Inflate(box, 4 * ui_, 4 * ui_), ui_);
+}
+
 bool PresentationView::CanEditSlides() const {
-  // The edit layer (p2-model) isn't in this build yet: the tab stays read-only.
-  host_.ViewMessage(BannerKind::Info, L"Editing slides comes with the edit layer; this build shows and presents decks.");
+  edit::Editor* ed = SlideEditor();
+  std::u16string why;
+  if (ed && ed->CanEdit(&why)) return true;
+  host_.ViewMessage(BannerKind::Warning, why.empty() ? std::wstring(L"This presentation can't be edited.") : std::wstring(why.begin(), why.end()));
   return false;
 }
 
-bool PresentationView::InsertSlide(size_t /*at*/, int /*layout*/) { return CanEditSlides(); }
-bool PresentationView::DuplicateSlides(const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::DeleteSlides(const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::MoveSlides(const std::vector<size_t>& /*slides*/, size_t /*gap*/) { return CanEditSlides(); }
-bool PresentationView::HideSlides(const std::vector<size_t>& /*slides*/, bool /*hide*/) { return CanEditSlides(); }
-bool PresentationView::SetSlidesLayout(const std::vector<size_t>& /*slides*/, int /*layout*/) { return CanEditSlides(); }
+bool PresentationView::Done(const edit::Result& r) const {
+  if (!r.ok)
+    host_.ViewMessage(BannerKind::Warning,
+                      r.message.empty() ? std::wstring(L"That change couldn't be made.") : std::wstring(r.message.begin(), r.message.end()));
+  return r.ok;
+}
+
+void PresentationView::SelectSlides(const std::vector<size_t>& slides, size_t current) {
+  const size_t n = SlideCount();
+  if (!n) return;
+  current = std::min(current, n - 1);
+  if (current != current_) {
+    current_ = current;
+    sx_ = sy_ = 0;
+    notesScroll_ = 0;
+    slideBitmap_.Reset();
+  }
+  selection_.Reset(n, current_);
+  std::vector<size_t> valid;
+  for (size_t i : slides)
+    if (i < n) valid.push_back(i);
+  if (!valid.empty()) selection_.Set(valid, current_);
+  ScrollThumbIntoView(current_);
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+int PresentationView::NewSlideLayout() const {
+  if (!deck_ || SlideCount() == 0) return 0;
+  const int l = deck_->LayoutOf(current_);
+  if (l < 0) return 0;
+  // After a title slide PowerPoint goes on with the master's next layout (Title and Content).
+  const Presentation* model = deck_->Model();
+  if (model && static_cast<size_t>(l) < model->Layouts().size() && IsTitleLayout(model->Layouts()[static_cast<size_t>(l)].get())) {
+    const std::vector<Deck::LayoutChoice> choices = deck_->LayoutsFor(current_);
+    for (size_t k = 0; k + 1 < choices.size(); ++k)
+      if (choices[k].index == static_cast<size_t>(l)) return static_cast<int>(choices[k + 1].index);
+  }
+  return l;
+}
+
+bool PresentationView::InsertSlide(size_t at, int layout) {
+  if (!CanEditSlides()) return false;
+  at = std::min(at, SlideCount());
+  if (layout < 0) layout = NewSlideLayout();
+  if (!Done(SlideEditor()->NewSlide(at, static_cast<size_t>(layout)))) return false;
+  SelectSlides({at}, at);
+  return true;
+}
+
+bool PresentationView::DuplicateSlides(const std::vector<size_t>& slides) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  std::vector<uint32_t> ids;
+  if (!Done(SlideEditor()->DuplicateSlides(slides, &ids))) return false;
+  // The copies selected, as PowerPoint leaves them.
+  const std::vector<uint32_t> now = SlideIds();
+  std::vector<size_t> copies;
+  for (uint32_t id : ids)
+    if (auto it = std::find(now.begin(), now.end(), id); it != now.end()) copies.push_back(static_cast<size_t>(it - now.begin()));
+  if (!copies.empty()) SelectSlides(copies, copies.front());
+  return true;
+}
+
+bool PresentationView::DeleteSlides(const std::vector<size_t>& slides) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->DeleteSlides(slides));
+}
+
+bool PresentationView::MoveSlides(const std::vector<size_t>& slides, size_t gap) {
+  if (slides.empty() || !MoveChanges(SlideCount(), slides, gap) || !CanEditSlides()) return false;
+  const size_t to = MovedTo(SlideCount(), slides, gap);
+  // The current slide stays current where it went.
+  std::vector<size_t> sorted = slides;
+  std::sort(sorted.begin(), sorted.end());
+  const auto at = std::find(sorted.begin(), sorted.end(), current_);
+  const size_t offset = at == sorted.end() ? 0 : static_cast<size_t>(at - sorted.begin());
+  if (!Done(SlideEditor()->MoveSlides(sorted, to))) return false;
+  std::vector<size_t> moved;
+  for (size_t k = 0; k < sorted.size(); ++k) moved.push_back(to + k);
+  SelectSlides(moved, to + offset);
+  return true;
+}
+
+bool PresentationView::HideSlides(const std::vector<size_t>& slides, bool hide) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->HideSlides(slides, hide));
+}
+
+bool PresentationView::SetSlidesLayout(const std::vector<size_t>& slides, int layout) {
+  if (slides.empty() || layout < 0 || !CanEditSlides()) return false;
+  return Done(SlideEditor()->SetLayout(slides, static_cast<size_t>(layout)));
+}
 
 }  // namespace fw::slide::view
