@@ -57,6 +57,9 @@ class TextEditing {
   // Editing the text of shape `shape` on `slide`, the caret at its end; a table: its first cell
   // (after inserting a text box or a table, p2-objects' Host::beginText).
   bool BeginTextEdit(size_t slide, uint32_t shape);
+  // Typing with shape `shape` selected (no text being edited): its text, all of it selected so the
+  // typing replaces it, as PowerPoint does. False when it has no text body to edit.
+  bool TypeInto(size_t slide, uint32_t shape);
   // The shape whose text Esc left, once (the tab keeps it selected), else 0.
   uint32_t TakeLeft();
   // Script ops (scripts/build-deck.ps1): edit:title|subtitle|body|body2 (the caret at the end of that

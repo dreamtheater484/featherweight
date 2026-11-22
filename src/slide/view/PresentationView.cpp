@@ -1,6 +1,7 @@
 // The presentation tab: its parts, drawing, thumbnails at idle, and the mouse and keys.
 
 #include "slide/view/PresentationView.h"
+#include "slide/view/ObjectTool.h"
 
 #include <dwrite.h>
 
@@ -287,6 +288,9 @@ void PresentationView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   }
   DrawThumbnails(c, dc);
   DrawSlide(c, dc);
+  c.PushClip(view_);
+  Objects().Draw(c, dc);  // p2-objects: frames, handles, guides, a drag's layers
+  c.PopClip();
   DrawNotes(c);
   if (showPending_) {
     // After the first frame, so the tab is there to come back to.
@@ -478,6 +482,7 @@ bool PresentationView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
 void PresentationView::ReleaseDeviceResources() {
   for (Thumb& th : thumbCache_) th.bitmap.Reset();
   slideBitmap_.Reset();
+  if (objects_) objects_->ReleaseDeviceResources();
 }
 
 void PresentationView::OnDeactivated() {
@@ -519,10 +524,21 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
       FollowLink(*link);
       return;
     }
-    if (text_->MouseDown(current_, SlidePoint(x, y), doubleClick, mods)) {
+    // A handle of the selection, a selected shape's frame edge or an object without text is the
+    // objects'; then text (a click in a text body edits it); then the objects' selection.
+    if (Objects().WantsPress(fx, fy) && Objects().MouseDown(fx, fy, mods, doubleClick)) {  // p2-objects
+      text_->End();
+      Objects().SetTextEditing(false);
+      return;
+    }
+    if (text_->MouseDown(current_, SlidePoint(x, y), doubleClick, mods)) {  // p2-text
+      Objects().SelectForText(text_->Session()->Target().shape);
+      Objects().SetTextEditing(true);
       drag_ = Drag::Text;
       return;
     }
+    Objects().SetTextEditing(false);
+    if (Objects().MouseDown(fx, fy, mods, doubleClick)) return;  // p2-objects
     const D2D1_RECT_F rc = SlideRect();
     if (Width(rc) > Width(view_) || Height(rc) > Height(view_)) {
       drag_ = Drag::Pan;
@@ -532,8 +548,12 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   }
 }
 
-void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
+void PresentationView::OnMouseMove(int x, int y, UINT mods) {
   if (!deck_) return;
+  if (objects_ && objects_->Dragging()) {  // p2-objects
+    objects_->MouseMove(static_cast<float>(x), static_cast<float>(y), mods);
+    return;
+  }
   switch (drag_) {
     case Drag::Splitter:
       notesHeight_ = std::max(kMinNotes, downValue_ - static_cast<float>(y - downY_) / ui_);
@@ -565,7 +585,11 @@ void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
   }
 }
 
-void PresentationView::OnMouseUp(int /*x*/, int /*y*/, int /*button*/, UINT /*mods*/) {
+void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
+  if (objects_ && objects_->Dragging()) {  // p2-objects
+    objects_->MouseUp(static_cast<float>(x), static_cast<float>(y), mods);
+    return;
+  }
   if (drag_ == Drag::Splitter) {
     // Dragged nearly shut: the notes close, as PowerPoint's do.
     const float maxNotes = std::max(kMinNotes, (vp_.bottom - vp_.top) / ui_ * 0.6f);
@@ -620,7 +644,14 @@ void PresentationView::OnWheel(int delta, bool horizontal, UINT mods, int x, int
 bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
   if (!deck_) return false;
   if (keysInThumbs_ && ThumbsKeyDown(vk, mods)) return true;  // P2: the thumbnails' keys
-  if (!keysInThumbs_ && text_->KeyDown(vk, mods)) return true;  // p2-text: the text being edited
+  if (!keysInThumbs_ && text_->KeyDown(vk, mods)) {  // p2-text: the text being edited
+    if (!text_->Editing()) {
+      Objects().SetTextEditing(false);
+      if (const uint32_t left = text_->TakeLeft()) Objects().Select({left});  // Esc: the shape stays selected
+    }
+    return true;
+  }
+  if (!keysInThumbs_ && Objects().KeyDown(vk, mods)) return true;  // p2-objects
   if (mods & (kModCtrl | kModAlt)) return false;
   switch (vk) {
     case VK_UP:
@@ -635,7 +666,16 @@ bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
   }
 }
 
-bool PresentationView::OnChar(wchar_t ch, UINT mods) { return deck_ && text_->Char(ch, mods); }
+bool PresentationView::OnChar(wchar_t ch, UINT mods) {
+  if (!deck_) return false;
+  // Typing with one shape selected types into it, replacing its text, as PowerPoint (p2-objects, p2-text).
+  if (!text_->Editing() && !keysInThumbs_ && ch >= 0x20 && !(mods & (kModCtrl | kModAlt)) && Ready())
+    if (const uint32_t id = Objects().SelectedShape(); id && text_->TypeInto(current_, id)) {
+      Objects().SelectForText(id);
+      Objects().SetTextEditing(true);
+    }
+  return text_->Char(ch, mods);
+}
 
 bool PresentationView::HasKeyFocus() const { return text_ && text_->Editing(); }
 
@@ -654,7 +694,11 @@ HCURSOR PresentationView::CursorAt(int x, int y) {
   if (drag_ == Drag::Pan) return all;
   static HCURSOR beam = LoadCursor(nullptr, IDC_IBEAM);
   if (drag_ == Drag::Text) return beam;
-  if (Contains(view_, static_cast<float>(x), static_cast<float>(y)) && text_->OverText(current_, SlidePoint(x, y))) return beam;
+  if (deck_ && (Contains(view_, (float)x, (float)y) || Objects().Dragging())) {  // p2-objects, p2-text
+    const bool objectsFirst = Objects().Dragging() || Objects().WantsPress(static_cast<float>(x), static_cast<float>(y));
+    if (!objectsFirst && text_->OverText(current_, SlidePoint(x, y))) return beam;
+    if (HCURSOR h = Objects().Cursor(static_cast<float>(x), static_cast<float>(y))) return h;
+  }
   if (LinkAt(x, y)) return hand;
   return arrow;
 }
