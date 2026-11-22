@@ -14,6 +14,7 @@
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
+#include "slide/view/PresentationText.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -51,11 +52,13 @@ ID2D1DeviceContext* OffscreenContext(ID2D1DeviceContext* dc) {
 
 }  // namespace
 
-PresentationView::PresentationView(ViewHost& host, std::wstring path) : host_(host), path_(std::move(path)) {}
+PresentationView::PresentationView(ViewHost& host, std::wstring path)
+    : host_(host), path_(std::move(path)), text_(std::make_unique<TextEditing>(host)) {}
 
 PresentationView::PresentationView(ViewHost& host, std::wstring path, std::unique_ptr<Deck> deck)
-    : host_(host), path_(std::move(path)), deck_(std::move(deck)) {
+    : host_(host), path_(std::move(path)), deck_(std::move(deck)), text_(std::make_unique<TextEditing>(host)) {
   if (deck_) thumbCache_.resize(deck_->SlideCount());
+  text_->SetModel(deck_.get(), nullptr);
 }
 
 PresentationView::~PresentationView() {
@@ -72,6 +75,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     return OpenResult::Failed;
   }
   thumbCache_.assign(deck_->SlideCount(), {});
+  text_->SetModel(deck_.get(), nullptr);  // read-only until the edit layer is attached
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
@@ -201,6 +205,7 @@ void PresentationView::GoToSlide(size_t slide) {
   if (!deck_ || SlideCount() == 0) return;
   slide = std::min(slide, SlideCount() - 1);
   if (slide != current_) {
+    text_->End();
     current_ = slide;
     sx_ = sy_ = 0;
     notesScroll_ = 0;
@@ -214,7 +219,7 @@ void PresentationView::GoToSlide(size_t slide) {
 // ---------------------------------------------------------------------------
 // Drawing
 
-ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h) {
+ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h, bool editing) {
   ID2D1DeviceContext* ctx = OffscreenContext(dc);
   if (!ctx || !deck_ || w == 0 || h == 0) return nullptr;
   ComPtr<ID2D1Bitmap1> bmp;
@@ -228,7 +233,12 @@ ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size
     const draw::Size s = deck_->SlideSize();
     ctx->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
     draw::D2DPainter painter(ctx);
-    deck_->Paint(slide, painter);
+    if (editing) {
+      deck_->PaintFiltered(slide, painter, text_->Filter(slide));
+      deck_->PaintPrompts(slide, painter, text_->EditingShape(slide));
+    } else {
+      deck_->Paint(slide, painter);
+    }
   }
   ctx->SetTransform(D2D1::Matrix3x2F::Identity());
   const HRESULT hr = ctx->EndDraw();
@@ -312,9 +322,10 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
   c.PushClip(view_);
   c.SoftShadow(rc, 1.0f * ui_, 5.0f * ui_, Alpha(p.pageShadow, 0.35f), 1.0f * ui_);
   const UINT w = static_cast<UINT>(std::lround(Width(rc))), h = static_cast<UINT>(std::lround(Height(rc)));
+  if (text_->TakeSlideChanged()) slideBitmap_.Reset();
   if (w <= kMaxBitmap && h <= kMaxBitmap) {
     if (!slideBitmap_ || slideBitmapOf_ != current_ || slideBitmapW_ != w || slideBitmapH_ != h) {
-      slideBitmap_ = RenderBitmap(dc, current_, w, h);
+      slideBitmap_ = RenderBitmap(dc, current_, w, h, true);
       slideBitmapOf_ = current_;
       slideBitmapW_ = w;
       slideBitmapH_ = h;
@@ -329,10 +340,14 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
     dc->SetTransform(D2D1::Matrix3x2F::Scale(k, k) * D2D1::Matrix3x2F::Translation(rc.left, rc.top) * old);
     {
       draw::D2DPainter painter(dc);
-      deck_->Paint(current_, painter);
+      deck_->PaintFiltered(current_, painter, text_->Filter(current_));
+      deck_->PaintPrompts(current_, painter, text_->EditingShape(current_));
     }
     dc->SetTransform(old);
   }
+  // The text being edited, live over the slide.
+  text_->Draw(c, dc, current_, rc);
+  text_->DrawSpelling(c, current_, rc, host_.ViewSpelling());
   // Find: the matches on this slide, the current one stronger.
   const float k = Width(rc) / std::max(1.0f, deck_->SlideSize().width);
   for (size_t i = 0; i < matches_.size(); ++i) {
@@ -474,6 +489,10 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
       FollowLink(*link);
       return;
     }
+    if (text_->MouseDown(current_, SlidePoint(x, y), doubleClick, mods)) {
+      drag_ = Drag::Text;
+      return;
+    }
     const D2D1_RECT_F rc = SlideRect();
     if (Width(rc) > Width(view_) || Height(rc) > Height(view_)) {
       drag_ = Drag::Pan;
@@ -491,6 +510,9 @@ void PresentationView::OnMouseMove(int x, int y, UINT /*mods*/) {
       LayoutParts();
       slideBitmap_.Reset();
       host_.ViewInvalidate();
+      return;
+    case Drag::Text:
+      text_->MouseMove(SlidePoint(x, y));
       return;
     case Drag::Pan:
       sx_ = downValue_ - static_cast<float>(x - downX_);
@@ -559,6 +581,7 @@ void PresentationView::OnWheel(int delta, bool horizontal, UINT mods, int x, int
 }
 
 bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
+  if (deck_ && text_->KeyDown(vk, mods)) return true;
   if (!deck_ || (mods & (kModCtrl | kModAlt))) return false;
   switch (vk) {
     case VK_UP:
@@ -573,13 +596,26 @@ bool PresentationView::OnKeyDown(UINT vk, UINT mods) {
   }
 }
 
-bool PresentationView::OnChar(wchar_t /*ch*/, UINT /*mods*/) { return false; }
+bool PresentationView::OnChar(wchar_t ch, UINT mods) { return deck_ && text_->Char(ch, mods); }
+
+bool PresentationView::HasKeyFocus() const { return text_ && text_->Editing(); }
+
+std::optional<RECT> PresentationView::CaretRect() { return text_->CaretRect(SlideRect()); }
+
+draw::Point PresentationView::SlidePoint(int x, int y) const {
+  const D2D1_RECT_F rc = SlideRect();
+  const float k = deck_ && deck_->SlideSize().width > 0 ? Width(rc) / deck_->SlideSize().width : 1;
+  return {(static_cast<float>(x) - rc.left) / k, (static_cast<float>(y) - rc.top) / k};
+}
 
 HCURSOR PresentationView::CursorAt(int x, int y) {
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ns = LoadCursor(nullptr, IDC_SIZENS),
                  hand = LoadCursor(nullptr, IDC_HAND), all = LoadCursor(nullptr, IDC_SIZEALL);
   if (drag_ == Drag::Splitter || (notesShown_ && Contains(Inflate(splitter_, 0, 2 * ui_), (float)x, (float)y))) return ns;
   if (drag_ == Drag::Pan) return all;
+  static HCURSOR beam = LoadCursor(nullptr, IDC_IBEAM);
+  if (drag_ == Drag::Text) return beam;
+  if (Contains(view_, static_cast<float>(x), static_cast<float>(y)) && text_->OverText(current_, SlidePoint(x, y))) return beam;
   if (LinkAt(x, y)) return hand;
   return arrow;
 }

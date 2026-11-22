@@ -14,6 +14,7 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -105,6 +106,7 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
   if (ctrl && !alt) {
@@ -130,6 +132,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
@@ -189,6 +192,7 @@ std::vector<int> PresentationView::Commands() {
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (text_->Owns(cmd)) return text_->Execute(cmd);
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdPresentation:
@@ -284,6 +288,7 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
     if (v.index >= 0 && v.index < static_cast<int>(std::size(kLayouts))) Execute(kLayouts[v.index].cmd);
   };
   m.left = {print, layout};
+  text_->AddToolbar(m);  // the text being edited: font, size, emphasis, color, alignment, lists
 
   // ▶ Present ▾: from the beginning, or the list's choice.
   ToolItem present;
@@ -331,6 +336,10 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   if (!Ready()) return;
   downX_ = x;
   downY_ = y;
+  if (text_->Editing()) {
+    text_->FillContextMenu(m, current_, SlidePoint(x, y));
+    return;
+  }
   // A right-click on a thumbnail is about that slide.
   if (const int t = ThumbAt(x, y); t >= 0) GoToSlide(static_cast<size_t>(t));
   const bool any = SlideCount() > 0;

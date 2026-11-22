@@ -22,6 +22,8 @@ class SlideRenderer;
 
 namespace fw::slide::view {
 
+class TextEditing;
+
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
 // slide fitted to the window (or zoomed) in the middle, the speaker notes below it, and "Slide n
 // of m" in the status bar. Read-only until P2. Page Up/Down, Home and End go through the slides;
@@ -62,7 +64,8 @@ class PresentationView : public TabContent {
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
   bool Dragging() const override { return drag_ != Drag::None; }
-  bool HasKeyFocus() const override { return false; }
+  bool HasKeyFocus() const override;
+  std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
@@ -110,6 +113,10 @@ class PresentationView : public TabContent {
   D2D1_RECT_F SlideRectForTesting() const { return SlideRect(); }
 
  private:
+  // Text being edited (p2-text): TextEditing takes clicks, keys and commands first while it edits.
+  TextEditing* Text() { return text_.get(); }
+  draw::Point SlidePoint(int x, int y) const;  // client pixels -> slide points
+
   // ---- Layout (device pixels in the client area)
   void LayoutParts();
   D2D1_RECT_F SlideRect() const;          // the slide on screen at the zoom and scroll
@@ -127,7 +134,8 @@ class PresentationView : public TabContent {
   void DrawNotes(gfx::Canvas& c);
   ID2D1Bitmap* ThumbBitmap(ID2D1DeviceContext* dc, size_t slide, bool make);
   // The slide drawn into a bitmap `w` x `h` pixels (null when it couldn't be).
-  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h);
+  // `editing`: as the editor shows it (the text being typed left out, empty placeholders' prompts).
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h, bool editing = false);
 
   // ---- Commands (PresentationCommands.cpp)
   void StartShow(bool fromCurrent);
@@ -183,7 +191,7 @@ class PresentationView : public TabContent {
   UINT slideBitmapW_ = 0, slideBitmapH_ = 0;
 
   // Mouse.
-  enum class Drag { None, Splitter, ThumbBar, Pan };
+  enum class Drag { None, Splitter, ThumbBar, Pan, Text };
   Drag drag_ = Drag::None;
   int downX_ = 0, downY_ = 0;
   float downValue_ = 0, downValue2_ = 0;
@@ -205,6 +213,7 @@ class PresentationView : public TabContent {
   mutable size_t linksOf_ = SIZE_MAX;
 
   PrintSettings print_;
+  std::unique_ptr<TextEditing> text_;  // p2-text
 };
 
 }  // namespace fw::slide::view

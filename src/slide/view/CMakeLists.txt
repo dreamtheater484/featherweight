@@ -12,7 +12,7 @@ target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
-add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp)
+add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp PresentationText.cpp)
 target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwslideview PUBLIC fwslideviewcore)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
