@@ -6,6 +6,9 @@
 add_library(fwslideviewcore STATIC SlideLayout.cpp SlidePages.cpp ModelDeck.cpp
   # P2, p2-slides: the thumbnails' selection and moves, design data, slide numbers, footer and date.
   SlideOrder.cpp SlideDesign.cpp SlideHeaderFooter.cpp NewDeck.cpp)
+# They run once per click (a new deck, a design change, a drop): compiled for size.
+set_source_files_properties(SlideOrder.cpp SlideDesign.cpp SlideHeaderFooter.cpp NewDeck.cpp PROPERTIES
+  COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 # p2-text: text editing on slides, headless (the working copy, caret and selection, formatting,
 # clipboard, find, spelling, links).
 target_sources(fwslideviewcore PRIVATE TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp)
@@ -34,7 +37,8 @@ set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp Prese
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_view.cpp")
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_text.cpp")
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_slides.cpp")  # p2-slides
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_slides.cpp"  # p2-slides
+                 "${CMAKE_CURRENT_SOURCE_DIR}/NewDeckSource.cpp")  # the blank deck's generator, tests only
   # p2-model: the tab's file (an app source, tested with temporary folders; FileSession.cpp comes with src/doc's).
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_file.cpp" PresentationFile.cpp)
   target_link_libraries(fw_tests PRIVATE fwslideviewcore)
