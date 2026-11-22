@@ -33,7 +33,7 @@ Roy (2026-11-20): P1 starts now, while S4's PR finishes CI and before his manual
   - Before automating, check whether POWERPNT.EXE is running.
   - If Roy has PowerPoint open, don't automate it. Wait, and never close his window or his decks.
   - Only quit a PowerPoint that your own automation started, and set alerts off.
-- **Render references only while Roy is signed in at the console.** On Remote Desktop, or while his session is disconnected, Office lays out on the redirected printer and the renders come out wrong (S4: 56 renders failed). If the session is remote or disconnected (`qwinsta`), queue the renders and say so.
+- **Render PowerPoint references only from an active session: the console or Remote Desktop** (decision of 2026-11-22 below), never a disconnected one. If the session is disconnected (`qwinsta`), queue the renders and say so. Excel keeps its own check: it lays out on the redirected printer over Remote Desktop (S4: 56 renders failed).
 - Corpus downloads need Roy's yes. Ask in the session before the first download, listing the sources, the number of files and the total size, as in S1. Each download goes into its own quarantine folder and is screened before anything opens it.
 
 ## Pieces
@@ -89,3 +89,20 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
 - **Commits:** small, on your branch, no Co-Authored-By trailer. Push and say what's ready to merge.
 
 ## Decisions during P1
+
+- **2026-11-22: PowerPoint references may be rendered over Remote Desktop.** Probed: the 18 public decks rendered in Roy's active Remote Desktop session match the console references (97 slides, SSIM ≥ 0.99992; only a date field differs). An active `rdp-tcp` session now counts like the console; a disconnected one doesn't. `reference-renders.ps1` checks before every deck.
+- **2026-11-22: first corpus measurement, 59.22 %.**
+  - 1,490 of 2,516 slides pass (SSIM ≥ 0.95 at 100 dpi), fwtool on p1-int `ee37031f`.
+  - PowerPoint rendered 149 of the 152 decks; 3 fail PowerPoint's own export.
+  - Per kind: briefings 75.0 %, charts 52.6 %, features 57.0 %, lectures 60.2 %, photos 59.0 %, school 74.4 %, shows 80.0 %, statistics 58.2 %, templates 79.5 %, training 34.2 %.
+  - Mostly near misses: 21.5 % of the slides score 0.90–0.95, 12.9 % 0.80–0.90, 6.4 % below 0.80.
+  - Causes, with a deck and slide for each: `FeatherweightNotes\p1\p1-corpus-findings.md`.
+- **2026-11-22: re-render the references at full picture quality? Probed: PowerPoint can't, so they stay** (coordinator).
+  - PowerPoint's Save As PDF resamples some pictures (a 1920×1080 full-slide picture came out 1536×864) and recompresses some as JPEG. On a noisy full-slide picture that costs about 0.05–0.1 SSIM.
+  - Probe on two decks: ExportAsFixedFormat with the print intent (called early-bound through Office's interop assembly) writes exactly the same pictures as Save As; the screen intent writes smaller ones.
+  - The resampled pictures are the ones with transparency (`alphaModFix`) or flattened transparent groups, which PowerPoint rasterizes at its own resolution in any PDF. Pictures without effects keep their size.
+  - So the references stay as made, and this resampling is a known measurement artifact (p1-render reached the same conclusion for `alphaModFix` pictures).
+- **2026-11-22: no criterion change yet** (coordinator).
+  - p1-render and p1-model work through the cause list, biggest first: font fallback (sans faces drawn in Times New Roman), text 1–2 px off, texture backgrounds, `defaultTextStyle` bold/italic applied to placeholders, layout `clrMapOvr`, then charts, SmartArt and WordArt.
+  - p1-corpus re-measures on the newest p1-int after each round of fixes.
+  - The criterion is revisited, as S4 did, only if real fixes plateau well below 90 %.
