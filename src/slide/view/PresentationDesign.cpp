@@ -6,9 +6,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 
 #include "Commands.h"
+#include "core/Strings.h"
 #include "slide/Presentation.h"
+#include "slide/edit/Edit.h"
+#include "slide/edit/SlideDesignOps.h"
 #include "slide/view/PresentationPanels.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -572,16 +577,156 @@ bool PresentationView::DesignCommand(int cmd) {
 // ---------------------------------------------------------------------------
 // Design edits (through the edit layer)
 
-bool PresentationView::ApplyTheme(int /*theme*/, const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::ApplyColors(int /*scheme*/, const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::SetBackground(const std::vector<size_t>& /*slides*/, const Background& /*bg*/, const std::wstring& /*picture*/) {
-  return CanEditSlides();
+namespace {
+
+constexpr std::string_view kRelImage = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+constexpr uintmax_t kMaxPicture = 64ull << 20;  // bytes: a background picture bigger than this is refused
+
+// The masters `slides` use (every master when empty), as indexes into the presentation's.
+std::vector<size_t> MastersOf(Presentation& deck, const std::vector<size_t>& slides) {
+  std::vector<size_t> out;
+  const auto& masters = deck.Masters();
+  if (slides.empty()) {
+    for (size_t i = 0; i < masters.size(); ++i) out.push_back(i);
+    return out;
+  }
+  for (size_t s : slides) {
+    const Slide* slide = s < deck.SlideCount() ? deck.GetSlide(s) : nullptr;
+    if (!slide || !slide->master) continue;
+    for (size_t i = 0; i < masters.size(); ++i)
+      if (masters[i].get() == slide->master && std::find(out.begin(), out.end(), i) == out.end()) out.push_back(i);
+  }
+  return out;
 }
-bool PresentationView::ResetBackground(const std::vector<size_t>& /*slides*/) { return CanEditSlides(); }
-bool PresentationView::ApplyHeaderFooter(const HeaderFooterSettings& /*s*/, const std::vector<size_t>& /*slides*/) {
-  return CanEditSlides();
+
+// A picture's content type by its extension; empty for one a slide can't show.
+std::string PictureType(const std::wstring& path) {
+  std::wstring ext = std::filesystem::path(path).extension().wstring();
+  for (wchar_t& c : ext) c = static_cast<wchar_t>(towlower(c));
+  if (ext == L".png") return "image/png";
+  if (ext == L".jpg" || ext == L".jpeg" || ext == L".jfif") return "image/jpeg";
+  if (ext == L".gif") return "image/gif";
+  if (ext == L".bmp") return "image/bmp";
+  if (ext == L".tif" || ext == L".tiff") return "image/tiff";
+  if (ext == L".emf") return "image/x-emf";
+  if (ext == L".wmf") return "image/x-wmf";
+  return {};
 }
-bool PresentationView::SetSlideSize(int /*choice*/, int /*scale*/) { return CanEditSlides(); }
-bool PresentationView::SetNotes(size_t /*slide*/, const std::wstring& /*text*/) { return CanEditSlides(); }
+
+}  // namespace
+
+bool PresentationView::ApplyTheme(int theme, const std::vector<size_t>& slides) {
+  const auto& themes = BuiltInThemes();
+  if (theme < 0 || static_cast<size_t>(theme) >= themes.size() || !CanEditSlides()) return false;
+  const BuiltInTheme& t = themes[static_cast<size_t>(theme)];
+  edit::ThemeDesign d;
+  d.name = WideToUtf8(t.name);
+  d.colorScheme = ColorSchemeXml(ColorSchemes()[static_cast<size_t>(t.colors)]);
+  d.major = t.major;
+  d.minor = t.minor;
+  d.dark = t.dark ? 1 : 0;
+  d.background = BackgroundXml(t.background);
+  edit::Editor* ed = SlideEditor();
+  const std::vector<size_t> masters = MastersOf(*deck_->Model(), slides);
+  return Done(ed->Run(u"Theme", [&] {
+    for (size_t m : masters)
+      if (edit::Result r = edit::ApplyThemeDesign(*ed, m, d); !r) return r;
+    return edit::Result{};
+  }));
+}
+
+bool PresentationView::ApplyColors(int scheme, const std::vector<size_t>& slides) {
+  const auto& schemes = ColorSchemes();
+  if (scheme < 0 || static_cast<size_t>(scheme) >= schemes.size() || !CanEditSlides()) return false;
+  edit::ThemeDesign d;
+  d.step = u"Theme Colors";
+  d.colorScheme = ColorSchemeXml(schemes[static_cast<size_t>(scheme)]);
+  edit::Editor* ed = SlideEditor();
+  const std::vector<size_t> masters = MastersOf(*deck_->Model(), slides);
+  return Done(ed->Run(u"Theme Colors", [&] {
+    for (size_t m : masters)
+      if (edit::Result r = edit::ApplyThemeDesign(*ed, m, d); !r) return r;
+    return edit::Result{};
+  }));
+}
+
+bool PresentationView::SetBackground(const std::vector<size_t>& slides, const Background& bg, const std::wstring& picture) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  edit::Editor* ed = SlideEditor();
+  std::vector<uint8_t> bytes;
+  std::string type;
+  if (bg.kind == Background::Kind::Picture) {
+    type = PictureType(picture);
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(picture, ec);
+    if (type.empty() || ec || size == 0 || size > kMaxPicture) {
+      host_.ViewMessage(BannerKind::Warning, L"That picture can't be used as a background.");
+      return false;
+    }
+    std::ifstream in(std::filesystem::path(picture), std::ios::binary);
+    bytes.resize(static_cast<size_t>(size));
+    if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+      host_.ViewMessage(BannerKind::Warning, L"That picture couldn't be read.");
+      return false;
+    }
+  }
+  return Done(ed->Run(u"Format Background", [&] {
+    std::string media;  // the picture's part, stored once for all the slides
+    for (size_t s : slides) {
+      std::string rel;
+      if (!bytes.empty()) {
+        const std::string part = ed->SlidePart(s);
+        if (media.empty()) {
+          std::string ext = WideToUtf8(std::filesystem::path(picture).extension().wstring());
+          for (char& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+          media = ed->NewPartName("/ppt/media/image", ext);
+          rel = ed->AddPart(part, kRelImage, media, type, bytes);
+        } else {
+          rel = ed->AddRelationship(part, kRelImage, media);
+        }
+        if (rel.empty()) return edit::Result::Fail(u"The picture couldn't be added.");
+      }
+      const std::string xml = BackgroundXml(bg, rel);
+      if (xml.empty()) return edit::Result::Fail(u"Choose a picture first.");
+      if (edit::Result r = ed->SetBackground({s}, xml); !r) return r;
+    }
+    return edit::SetShowMasterShapes(*ed, slides, !bg.hideGraphics);
+  }));
+}
+
+bool PresentationView::ResetBackground(const std::vector<size_t>& slides) {
+  if (slides.empty() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->SetBackground(slides, {}));
+}
+
+bool PresentationView::ApplyHeaderFooter(const HeaderFooterSettings& s, const std::vector<size_t>& slides) {
+  if (!CanEditSlides()) return false;
+  edit::HeaderFooter hf;
+  hf.slideNumber = s.slideNumber;
+  hf.footer = s.footer;
+  hf.footerText = s.footerText;
+  hf.date = s.date;
+  hf.dateFixed = !s.dateAuto;
+  hf.dateText = s.dateFixed;
+  hf.dateFormat = "datetime" + std::to_string(std::clamp(s.dateFormat, 1, 13));
+  hf.notOnTitle = s.notOnTitle;
+  return Done(SlideEditor()->SetHeaderFooter(slides, hf));
+}
+
+bool PresentationView::SetSlideSize(int choice, int scale) {
+  const auto& sizes = SlideSizes();
+  if (choice < 0 || static_cast<size_t>(choice) >= sizes.size() || !CanEditSlides()) return false;
+  const draw::Size to = sizes[static_cast<size_t>(choice)].size, from = deck_->SlideSize();
+  if (std::abs(to.width - from.width) < 0.5f && std::abs(to.height - from.height) < 0.5f) return true;
+  // Larger: the content keeps its size, centered (PowerPoint doesn't ask then).
+  const edit::Scale how = AsksHowToScale(from, to) && scale == static_cast<int>(ContentScale::Maximize) ? edit::Scale::Maximize
+                                                                                                       : edit::Scale::EnsureFit;
+  return Done(SlideEditor()->SetSlideSize(to, how));
+}
+
+bool PresentationView::SetNotes(size_t slide, const std::wstring& text) {
+  if (slide >= SlideCount() || !CanEditSlides()) return false;
+  return Done(SlideEditor()->SetNotesText(slide, text));
+}
 
 }  // namespace fw::slide::view

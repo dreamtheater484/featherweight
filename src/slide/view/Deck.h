@@ -105,6 +105,9 @@ class Deck {
   // Draws layout `layout` as the layout gallery shows it, in slide points: its background, its own
   // and its master's shapes and its placeholders' prompts, without the date, footer and number.
   virtual void PaintLayout(size_t /*layout*/, draw::Painter& /*p*/) {}
+  // Slides were added, removed or moved (P2, p2-slides): what was prepared for each slide follows
+  // it. Slide i now was slide oldIndexes[i] (-1: new).
+  virtual void Reorder(const std::vector<int>& /*oldIndexes*/) {}
 };
 
 }  // namespace fw::slide::view

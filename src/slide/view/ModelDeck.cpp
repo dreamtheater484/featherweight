@@ -1,5 +1,6 @@
 #include "slide/view/ModelDeck.h"
 #include "slide/view/NewDeck.h"
+#include "slide/view/SlideOrder.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -100,6 +101,14 @@ class ModelDeck : public Deck {
   std::vector<LayoutChoice> LayoutsFor(size_t slide) const override;
   int LayoutOf(size_t slide) const override;
   void PaintLayout(size_t layout, draw::Painter& p) override;
+  void Reorder(const std::vector<int>& oldIndexes) override {
+    FollowSlides(renders_, oldIndexes);
+    FollowSlides(blocks_, oldIndexes);
+    std::vector<bool> read(oldIndexes.size(), false);
+    for (size_t i = 0; i < oldIndexes.size(); ++i)
+      if (oldIndexes[i] >= 0 && static_cast<size_t>(oldIndexes[i]) < blocksRead_.size()) read[i] = blocksRead_[static_cast<size_t>(oldIndexes[i])];
+    blocksRead_ = std::move(read);
+  }
 
  private:
   const Slide* Get(size_t i) const { return i < deck_->SlideCount() ? deck_->GetSlide(i) : nullptr; }
