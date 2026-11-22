@@ -19,6 +19,7 @@
 #include "draw/Geometry.h"
 #include "draw/Images.h"
 #include "draw/Theme.h"
+#include "draw/Xml.h"
 #include "pkg/XmlDom.h"
 
 using Microsoft::WRL::ComPtr;
@@ -229,6 +230,28 @@ bool Near(uint32_t c, uint32_t want, int tolerance = 12) {
 }  // namespace
 
 // ---- Pictures ----
+
+TEST(Drawing_MathChoiceGivesWayToFallback) {
+  // Office math in a text box (a14:m) isn't laid out: the fallback, Office's picture of it, is drawn.
+  const std::string a14 = R"( xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main")";
+  fw::pkg::XmlDom math = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                  R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
+                                  "</mc:AlternateContent></p:spTree>");
+  std::vector<std::string> seen;
+  draw::xml::ForEachChild(math.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"p:pic"});
+  fw::pkg::XmlDom plain = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp/></mc:Choice><mc:Fallback><p:pic/></mc:Fallback></mc:AlternateContent></p:spTree>)");
+  seen.clear();
+  draw::xml::ForEachChild(plain.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"p:sp"});
+}
 
 TEST(Images_SniffFormats) {
   auto sniff = [](const std::vector<uint8_t>& b) { return SniffImageFormat(b.data(), b.size()); };

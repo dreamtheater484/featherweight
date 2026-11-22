@@ -43,15 +43,28 @@ inline const fw::pkg::mce::Understood& Understood() {
   return u;
 }
 
+// The branch of mc:AlternateContent fwdraw draws: the one MCE chooses, except that a choice holding
+// Office math (a14:m, which fwdraw doesn't lay out) gives way to the fallback, Office's picture of it.
+inline pugi::xml_node DrawnBranch(pugi::xml_node alternateContent) {
+  pugi::xml_node branch = fw::pkg::mce::SelectBranch(alternateContent, Understood());
+  if (!branch || !IsElement(branch, fw::pkg::mce::kNamespace, "Choice") ||
+      !branch.find_node([](pugi::xml_node n) { return IsElement(n, kA14, "m"); }))
+    return branch;
+  for (pugi::xml_node b = alternateContent.first_child(); b; b = b.next_sibling()) {
+    if (IsElement(b, fw::pkg::mce::kNamespace, "Fallback")) return b;
+  }
+  return branch;
+}
+
 // Child elements in order, with mc:AlternateContent replaced by the children of its chosen
-// branch. `f` returns false to stop.
+// branch (DrawnBranch). `f` returns false to stop.
 template <class F>
 bool ForEachChild(pugi::xml_node parent, F&& f, int depth = 0) {
   for (pugi::xml_node c = parent.first_child(); c; c = c.next_sibling()) {
     if (c.type() != pugi::node_element) continue;
     if (IsElement(c, fw::pkg::mce::kNamespace, "AlternateContent")) {
       if (depth < 8) {
-        pugi::xml_node branch = fw::pkg::mce::SelectBranch(c, Understood());
+        pugi::xml_node branch = DrawnBranch(c);
         if (branch && !ForEachChild(branch, f, depth + 1)) return false;
       }
       continue;
