@@ -74,7 +74,7 @@ $bytes = New-Object byte[] 4096
 $json = Join-Path $dir "result.json"
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "excel-open-check.ps1") $dir -Json $json
 $got = @{}
-foreach ($e in (Get-Content $json -Raw | ConvertFrom-Json).files) { $got[[IO.Path]::GetFileNameWithoutExtension($e.file)] = $e }
+foreach ($e in (Get-Content $json -Raw -Encoding UTF8 | ConvertFrom-Json).files) { $got[[IO.Path]::GetFileNameWithoutExtension($e.file)] = $e }
 $wrong = 0
 ""
 foreach ($k in $expected.Keys) {

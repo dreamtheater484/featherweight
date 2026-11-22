@@ -280,7 +280,7 @@ foreach ($f in @($files)) {
     $r = $null
     while (-not $p.WaitForExit(250)) {
       if ((Get-Date) -gt $deadline) { break }
-      try { $r = Get-Content $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { continue }
+      try { $r = Get-Content $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } catch { continue }
       if (-not $r.opening) { continue }
       foreach ($h in [FwPpWindows]::TopLevel([int[]]@($r.pid))) {
         $class = [FwPpWindows]::ClassOf($h)
@@ -297,7 +297,7 @@ foreach ($f in @($files)) {
     }
     $finished = $p.HasExited
     if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    try { $r = Get-Content $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+    try { $r = Get-Content $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } catch {}
     if ($r) { Stop-Started @($r.pid) $(if ($finished) { 15000 } else { 0 }) }
     if ($r) {
       $entry.load = $r.load; $entry.error = $r.error; $entry.slides = $r.slides; $entry.name = $r.name; $entry.app = $r.app

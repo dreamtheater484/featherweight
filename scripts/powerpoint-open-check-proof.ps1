@@ -105,7 +105,7 @@ if ($code -eq 3 -or $code -eq 4) {
   "The check couldn't run PowerPoint now (exit $code): run the proof again then."
   exit $code
 }
-$results = (Get-Content $json -Raw | ConvertFrom-Json).files
+$results = (Get-Content $json -Raw -Encoding UTF8 | ConvertFrom-Json).files
 $wrong = 0
 ""
 "{0,-20} {1,-10} {2,-18} {3}" -f "deck", "result", "expected", "how"

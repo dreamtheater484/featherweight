@@ -119,13 +119,13 @@ if ($LASTEXITCODE) { throw "building tools\validate failed" }
 $pairsFile = Join-Path $Out "convert-pairs.tsv"
 [IO.File]::WriteAllLines($pairsFile, $pairs)
 & $validator --compare --pairs $pairsFile --json (Join-Path $Out "convert-validate.json") | Where-Object { $_ -match '^\[FAIL\]|files,' }
-$added = @((Get-Content (Join-Path $Out "convert-validate.json") -Raw | ConvertFrom-Json).files | Where-Object { @($_.newErrors).Count })
+$added = @((Get-Content (Join-Path $Out "convert-validate.json") -Raw -Encoding UTF8 | ConvertFrom-Json).files | Where-Object { @($_.newErrors).Count })
 
 $wordBad = @()
 if (-not $NoWord) {
   "== Word: does each converted .docx open without a repair prompt?"
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "word-open-check.ps1") (Join-Path $Out "open") -Json (Join-Path $Out "convert-word.json")
-  $wordBad = @((Get-Content (Join-Path $Out "convert-word.json") -Raw | ConvertFrom-Json).files | Where-Object { $_.status -notin "ok", "notice", "unchecked" })
+  $wordBad = @((Get-Content (Join-Path $Out "convert-word.json") -Raw -Encoding UTF8 | ConvertFrom-Json).files | Where-Object { $_.status -notin "ok", "notice", "unchecked" })
 }
 
 "== Torture over the converted files and the extra documents"

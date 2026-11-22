@@ -153,7 +153,7 @@ if ($Only) { $files = @($files | Where-Object { $Only -contains $_.Name }) }
 if (-not $files.Count) { throw "No workbooks in $from. Run tests\office\make_sheet_tests.py first." }
 if (-not $ExcelPrinter) {
   $refManifest = Join-Path $root "tests\office\reference\manifest.json"
-  if (Test-Path $refManifest) { $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer }
+  if (Test-Path $refManifest) { $ExcelPrinter = [string](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.printer }
 }
 if ($ExcelPrinter) {
   $device = @(([string](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').Device) -split ',')
@@ -174,7 +174,7 @@ try {
   # Excel also lays out (and saves row heights) by the display: a disconnected Remote Desktop session
   # differs from a connected one. A blank sheet's standard width must be the references' (8.43).
   $refManifest = Join-Path $root "tests\office\reference\manifest.json"
-  $expected = if (Test-Path $refManifest) { [double](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.standardWidth } else { 0 }
+  $expected = if (Test-Path $refManifest) { [double](Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel.standardWidth } else { 0 }
   $blank = $excel.App.Workbooks.Add()
   $width = [Math]::Round([double]$blank.Worksheets.Item(1).StandardWidth, 4)
   $blank.Close($false)
