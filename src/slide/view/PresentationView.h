@@ -91,6 +91,10 @@ class PresentationView : public TabContent {
   int SearchCurrent() const override { return match_; }
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
+  // Replace (p2-text): in the text of slides and notes, through the edit layer.
+  bool CanReplace() const override;
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
 
   // Read-only in P1: Save As writes a copy of the file as it was opened.
   bool Save(const std::wstring& path, std::wstring& error) override;
@@ -291,6 +295,10 @@ class PresentationView : public TabContent {
 
   PrintSettings print_;
   std::unique_ptr<TextEditing> text_;  // p2-text
+  struct {
+    std::wstring query;
+    bool matchCase = false, wholeWords = false;
+  } search_;  // what StartSearch looked for, for Replace
 };
 
 }  // namespace fw::slide::view

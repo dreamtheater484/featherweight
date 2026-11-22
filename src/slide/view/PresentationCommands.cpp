@@ -15,6 +15,7 @@
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/PresentationText.h"
+#include "slide/view/TextFind.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -389,6 +390,9 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
 void PresentationView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   matches_.clear();
   match_ = -1;
+  search_.query = query;  // p2-text: for Replace
+  search_.matchCase = matchCase;
+  search_.wholeWords = wholeWords;
   if (!Ready() || query.empty()) {
     host_.ViewInvalidate();
     return;
@@ -446,6 +450,53 @@ std::wstring PresentationView::SelectedText() {
     return text.substr(m.at, m.length);
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Replace (p2-text): the matches found again in the text as the edit layer has it, the current one
+// by its place among its slide's (or its notes') matches.
+
+bool PresentationView::CanReplace() const { return text_->Model() != nullptr; }
+
+bool PresentationView::ReplaceCurrent(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || match_ < 0 || match_ >= static_cast<int>(matches_.size())) return false;
+  const Match cur = matches_[static_cast<size_t>(match_)];
+  size_t rank = 0;
+  for (int i = 0; i < match_; ++i)
+    if (matches_[static_cast<size_t>(i)].slide == cur.slide && matches_[static_cast<size_t>(i)].notes == cur.notes) ++rank;
+  std::vector<TextMatch> here;
+  for (const TextMatch& m : fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords))
+    if (m.target.slide == cur.slide && m.target.notes == cur.notes) here.push_back(m);
+  if (rank >= here.size() || !ReplaceMatch(*model, here[rank], search_.query, search_.matchCase, with)) {
+    host_.ViewMessage(BannerKind::Warning, L"That text can't be replaced here.");
+    return false;
+  }
+  // Found again; the current match is the one after the replaced text.
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  size_t seen = 0;
+  for (size_t i = 0; i < matches_.size(); ++i) {
+    const Match& m = matches_[i];
+    const bool same = m.slide == cur.slide && m.notes == cur.notes;
+    if ((same && seen++ == rank) || m.slide > cur.slide || (m.slide == cur.slide && m.notes && !cur.notes)) {
+      match_ = static_cast<int>(i);
+      ShowMatch();
+      return true;
+    }
+  }
+  match_ = matches_.empty() ? -1 : 0;
+  ShowMatch();
+  return true;
+}
+
+int PresentationView::ReplaceAll(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || search_.query.empty()) return 0;
+  const int n = fw::slide::view::ReplaceAll(*model, fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords), with);
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  return n;
 }
 
 // ---------------------------------------------------------------------------

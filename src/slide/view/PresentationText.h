@@ -46,6 +46,8 @@ class TextEditing {
   // (undo, redo, other edits). Call again when the tab loads another deck.
   void Attach(Deck* deck, edit::Editor* editor);
   bool Editing() const { return session_ != nullptr; }
+  // The edit layer text goes through (null: read-only): find and replace use it too.
+  TextModel* Model() const { return model_; }
   TextSession* Session() { return session_.get(); }
   // The shape whose text is edited on `slide`, else 0 (the slide's prompts leave it out).
   uint32_t EditingShape(size_t slide) const;
