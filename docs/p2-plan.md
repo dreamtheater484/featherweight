@@ -34,9 +34,9 @@ Integration branch: `claude/p2-int`, made from `claude/p1-int` 4aacca6. Each ses
 
 | Piece | Session | Weight | Size budget | Command ids |
 |---|---|---|---|---|
-| Edit layer for `fwslide`: operations, transactions, undo, the reference registry for slides; the `.pptx` writer (round-trip store, nothing untouched rewritten); crash recovery; the slide-operation and copy-slides API | p2-model | 25 % | 300 KB | 3400–3419 |
+| Edit layer for `fwslide`: operations, transactions, undo, the reference registry for slides; the `.pptx` writer (round-trip store, nothing untouched rewritten); crash recovery; the slide-operation and copy-slides API | p2-model | 25 % | 350 KB (50 KB from p2-text, see decisions) | 3400–3419 |
 | Slides in the UI: new slide with a layout (Ctrl+M), duplicate (Ctrl+D), delete, move by dragging thumbnails, hide, change layout, slide size; design (built-in themes, theme colors, backgrounds); slide numbers, footer and date; notes editing; copying slides between decks (source design or destination's) | p2-slides | 15 % | 250 KB | 3420–3459 |
-| Text: editing in placeholders, text boxes, shapes and table cells with what `fwtext` offers (formatting, bullets, numbering), autofit computed after an edit, find and replace, spelling as you type, hyperlinks (insert, edit; they work in the show) | p2-text | 20 % | 300 KB | 3460–3499 |
+| Text: editing in placeholders, text boxes, shapes and table cells with what `fwtext` offers (formatting, bullets, numbering), autofit computed after an edit, find and replace, spelling as you type, hyperlinks (insert, edit; they work in the show) | p2-text | 20 % | 250 KB (50 KB to p2-model) | 3460–3499 |
 | Objects: insert pictures, shapes, text boxes, tables and charts; move, resize and rotate with smart guides and snapping; align, distribute, group (Ctrl+G, Ctrl+Shift+G), bring forward and send back; fill, outline and shadow; crop pictures | p2-objects | 22 % | 450 KB | 3500–3549 |
 | Torture gate (scripted random edits, validator, `fwtool check`, PowerPoint open check), save-without-edits check, build-from-scratch script, `fuzz_pptx` edits, editing budgets, the P2 checklist part | p2-corpus | 13 % | 0 (tools only) | — |
 | Final gate | coordinator | 5 % | 0 | — |
