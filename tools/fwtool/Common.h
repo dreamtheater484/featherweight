@@ -121,6 +121,7 @@ int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);
 int RunSheetEditBench(const Options& options);
+int RunDeckEditBench(const Options& options);  // bench --decks (DeckBench.cpp)
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 
