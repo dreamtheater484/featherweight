@@ -61,6 +61,16 @@ std::unique_ptr<TextBody> EditTextModel::Resolve(const TextTarget& t, pugi::xml_
 
 bool EditTextModel::SetText(const TextTarget& t, pugi::xml_node txBody, std::u16string_view step, bool coalesce,
                             std::wstring& error) {
+  // Text holding an equation (a14:m in an mc:Choice) isn't edited: the app draws the Fallback while
+  // an edit would land on the Choice, so p2-model refuses its own text operations there too.
+  const pugi::xml_node now = Body(t);
+  if (now && now.find_node([](pugi::xml_node n) {
+        const std::string_view name = n.name();
+        return name == "a14:m" || name.ends_with(":oMath") || name.ends_with(":oMathPara");
+      })) {
+    error = L"This text holds an equation, which Featherweight can't edit yet.";
+    return false;
+  }
   std::ostringstream os;
   txBody.print(os, "", pugi::format_raw);
   // Typing is marked as typing from its first keystroke, so the ones after join its step; a

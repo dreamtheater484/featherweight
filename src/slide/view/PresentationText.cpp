@@ -336,7 +336,13 @@ void TextEditing::End() {
 void TextEditing::Changed() {
   if (session_) {
     const std::wstring error = session_->TakeError();
-    if (!error.empty()) host_.ViewMessage(BannerKind::Warning, error);
+    if (!error.empty()) {
+      // The edit layer won't change this text (an equation in it, a part it can't edit): said once,
+      // and editing ends, so the next keys don't try again. The text is as it was (nothing committed).
+      host_.ViewMessage(BannerKind::Warning, error);
+      End();
+      return;
+    }
     if (session_->TakeGeometryChanged()) {
       // The slide around the text changed: it's prepared again and the text laid out in its new place.
       const TextTarget t = session_->Target();
