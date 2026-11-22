@@ -24,9 +24,11 @@ namespace fw::slide::show {
 class SlideRenderer;
 }
 namespace fw::slide::edit {
+class Editor;
 struct Changes;
 struct Result;
 }
+class PresentationFile;
 
 namespace fw::slide::view {
 
@@ -50,6 +52,10 @@ class PresentationView : public TabContent {
   ~PresentationView() override;
   // A new, untitled presentation ("Presentation1"): PowerPoint's blank 16:9 deck (P2).
   static std::unique_ptr<PresentationView> NewPresentation(ViewHost& host, int number);
+  // A presentation from memory: a recovered one (`unsaved`), titled `title`, Save As starting at
+  // `suggested` (P2, p2-model).
+  static std::unique_ptr<PresentationView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                                     std::wstring suggested, bool unsaved);
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Presentation; }
@@ -57,7 +63,7 @@ class PresentationView : public TabContent {
   bool Ready() const override { return deck_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override;
 
   void SetViewport(const RECT& rc, float ui) override;
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
@@ -96,9 +102,17 @@ class PresentationView : public TabContent {
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
 
-  // Read-only in P1: Save As writes a copy of the file as it was opened.
+  // Saving (P2, p2-model: PresentationSave.cpp, through PresentationFile): Ctrl+S and Save As write
+  // on a worker thread; closing saves at once.
   bool Save(const std::wstring& path, std::wstring& error) override;
+  SaveStart StartSave(const std::wstring& path, std::wstring& error) override;
+  void SaveDone() override;
   SaveFormat SaveAsFormat() const override;
+  std::vector<SaveFormat> OtherSaveFormats() const override;
+  std::wstring SuggestedSavePath() const override;
+  void Autosave() override;
+  bool ReplayEdits(std::string_view records, std::wstring& error) override;
+  FileChange CheckFileOnDisk() override;
   bool CanPrint() const override { return Ready() && deck_->SlideCount() > 0; }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   bool CanExportPdf() const override { return CanPrint(); }
@@ -320,6 +334,21 @@ class PresentationView : public TabContent {
   PrintSettings print_;
 
   mutable std::unique_ptr<ObjectTool> objects_;  // made on first use
+
+  // ---- The file (P2, p2-model: PresentationSave.cpp)
+  PresentationFile& File();
+  // After the deck opened: what the tab is to its file (opened, new, recovered), the in-use banner.
+  void FileOpened();
+  // The deck's Editor records into the file's recovery journal and tells it each change (before
+  // any edit; once).
+  void AttachFile(edit::Editor& ed);
+  bool ReadyToSave(std::wstring& error);
+  void SavedTo();
+  std::vector<uint8_t> bytes_;  // FromBytes: the deck, until it's loaded
+  bool fromBytes_ = false;
+  bool fileAttached_ = false;
+  // Last, so it goes first: a save still writing finishes before the deck and its Editor go.
+  std::unique_ptr<PresentationFile> file_;
 };
 
 }  // namespace fw::slide::view

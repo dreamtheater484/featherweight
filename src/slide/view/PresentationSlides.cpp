@@ -632,8 +632,8 @@ edit::Editor* PresentationView::SlideEditor() const {
   return ed;
 }
 
-void PresentationView::OnEditorMade(edit::Editor& /*ed*/) {
-  // p2-model: ed.SetJournal(file.Journal()) and the rest of PresentationFile's hookup.
+void PresentationView::OnEditorMade(edit::Editor& ed) {
+  AttachFile(ed);  // p2-model (PresentationSave.cpp): the recovery journal, and the file told of each change
 }
 
 void PresentationView::OnSlideEdits(const edit::Changes& c) {

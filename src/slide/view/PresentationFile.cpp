@@ -114,7 +114,8 @@ void PresentationFile::Changed(const fw::slide::edit::Editor& editor) {
 }
 
 void PresentationFile::Autosave(fw::slide::edit::Editor& editor) {
-  if (run_ || !editor.Modified() || !AutosaveDue()) return;
+  // A recovered deck is unsaved before any edit too.
+  if (run_ || (!editor.Modified() && !Dirty()) || !AutosaveDue()) return;
   const auto bytes = editor.Deck().GetPackage().GetSnapshot().Bytes();
   if (WriteJournal(std::span<const uint8_t>(bytes.data(), bytes.size()), "pptx", journal_.All(editor),
                    journal_.Unwritten(editor)))
