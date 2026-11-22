@@ -43,3 +43,5 @@ if(TARGET fw_tests)
            "-DDECKS=${PROJECT_SOURCE_DIR}/tests/office/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/presentation"
            -P "${PROJECT_SOURCE_DIR}/tests/screens/presentation.cmake")
 endif()
+# p2-objects: the objects' UI runs once per click or edit (a drag frame only draws two bitmaps): for size.
+set_source_files_properties(ObjectTool.cpp PresentationObjects.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
