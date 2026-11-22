@@ -1,0 +1,363 @@
+// Slides in the presentation tab as an editor (P2, p2-slides): the thumbnails' selection, where a
+// drag drops and the order a move gives, caches following an edit, slide sizes and how content
+// scales, theme colors and themes, backgrounds, and slide numbers, footer and date.
+
+#include <pugixml.hpp>
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "TestHarness.h"
+#include "draw/Theme.h"
+#include "pkg/Package.h"
+#include "pkg/Snapshot.h"
+#include "slide/Presentation.h"
+#include "slide/view/SlideDesign.h"
+#include "slide/view/SlideHeaderFooter.h"
+#include "slide/view/SlideOrder.h"
+
+using namespace fw::slide::view;
+
+namespace {
+
+std::vector<ThumbRow> Rows(size_t n) {
+  std::vector<ThumbRow> rows;
+  for (size_t i = 0; i < n; ++i) {
+    ThumbRow r;
+    const float top = 10 + 100.0f * static_cast<float>(i);
+    r.row = {0, top, 200, top + 90};
+    r.slide = {30, top + 5, 190, top + 85};
+    r.number = {0, top + 5, 25, top + 25};
+    rows.push_back(r);
+  }
+  return rows;
+}
+
+// The fragment parsed with the three prefixes declared, as it would sit in a part.
+pugi::xml_node Parse(pugi::xml_document& doc, const std::string& xml) {
+  const std::string wrapped =
+      "<w xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+      "xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" "
+      "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+      xml + "</w>";
+  if (!doc.load_string(wrapped.c_str())) return {};
+  return doc.first_child().first_child();
+}
+
+std::unique_ptr<fw::slide::Presentation> OpenDeck(const char* name) {
+  const std::wstring path =
+      (std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "presentations" / name).wstring();
+  fw::pkg::Status status;
+  auto snap = fw::pkg::Snapshot::Open(path, {}, status);
+  if (!snap) return nullptr;
+  auto package = fw::pkg::Package::Open(std::move(snap), fw::pkg::Limits::Default(), status);
+  return package ? fw::slide::Read(std::move(package), status) : nullptr;
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Selection
+
+TEST(SlideSelection_ClickCtrlShift) {
+  SlideSelection s;
+  s.Reset(10, 2);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{2}));
+  // A plain click: that slide alone.
+  CHECK_EQ(s.Click(5, false, false), 5u);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{5}));
+  // Ctrl+click adds, and shows the slide added.
+  CHECK_EQ(s.Click(7, true, false), 7u);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{5, 7}));
+  CHECK(s.Many());
+  // Ctrl+click on the shown one removes it and shows the nearest selected.
+  CHECK_EQ(s.Click(7, true, false), 5u);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{5}));
+  // The last selected slide stays.
+  CHECK_EQ(s.Click(5, true, false), 5u);
+  CHECK_EQ(s.SelectedCount(), 1u);
+  // Shift+click: the run from the anchor, either way; the anchor stays.
+  s.Click(3, false, false);
+  CHECK_EQ(s.Click(6, false, true), 6u);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{3, 4, 5, 6}));
+  s.Click(1, false, true);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{1, 2, 3}));
+  // Ctrl+Shift adds a run to what's selected.
+  s.Click(8, true, false);   // anchor 8
+  s.Click(9, true, true);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{1, 2, 3, 8, 9}));
+  s.SelectAll();
+  CHECK_EQ(s.SelectedCount(), 10u);
+  // Out of range clicks change nothing.
+  CHECK_EQ(s.Click(42, false, false), 9u);
+  CHECK_EQ(s.SelectedCount(), 10u);
+}
+
+TEST(SlideSelection_SetAndEmpty) {
+  SlideSelection s;
+  s.Reset(0, 0);
+  CHECK_EQ(s.SelectedCount(), 0u);
+  CHECK_EQ(s.Click(0, false, false), 0u);
+  s.Reset(4, 9);  // clamped
+  CHECK_EQ(s.Current(), 3u);
+  s.Set({0, 2, 7}, 2);
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{0, 2}));
+  CHECK_EQ(s.Current(), 2u);
+  s.Set({}, 1);  // the current slide is always selected
+  CHECK_EQ(s.Indices(), (std::vector<size_t>{1}));
+}
+
+// ---------------------------------------------------------------------------
+// Dragging thumbnails
+
+TEST(SlideDrag_GapAndMarker) {
+  const std::vector<ThumbRow> rows = Rows(4);  // rows at 10-100, 110-200, 210-300, 310-400
+  CHECK_EQ(DropGap(rows, -50), 0u);
+  CHECK_EQ(DropGap(rows, 54), 0u);    // the top half of the first row
+  CHECK_EQ(DropGap(rows, 56), 1u);
+  CHECK_EQ(DropGap(rows, 205), 2u);   // between rows: the next gap
+  CHECK_EQ(DropGap(rows, 399), 4u);
+  CHECK_EQ(DropGap(rows, 5000), 4u);
+  CHECK_EQ(DropGap({}, 10), 0u);
+  const draw::Rect m0 = DropMarker(rows, 0, 2), m2 = DropMarker(rows, 2, 2), m4 = DropMarker(rows, 4, 2);
+  CHECK_NEAR(m0.top, 9.0f, 0.01f);
+  CHECK_NEAR(m2.top + 1, 205.0f, 0.01f);  // halfway between 200 and 210
+  CHECK_NEAR(m4.bottom - 1, 400.0f, 0.01f);
+  CHECK_NEAR(m2.Width(), 200.0f, 0.01f);
+}
+
+TEST(SlideDrag_MovedOrder) {
+  // One slide down: slide 1 into the gap before slide 4.
+  CHECK_EQ(MovedOrder(5, {1}, 4), (std::vector<size_t>{0, 2, 3, 1, 4}));
+  CHECK_EQ(MovedTo(5, {1}, 4), 3u);
+  // Up to the front.
+  CHECK_EQ(MovedOrder(5, {3}, 0), (std::vector<size_t>{3, 0, 1, 2, 4}));
+  CHECK_EQ(MovedTo(5, {3}, 0), 0u);
+  // To the end.
+  CHECK_EQ(MovedOrder(5, {0, 2}, 5), (std::vector<size_t>{1, 3, 4, 0, 2}));
+  CHECK_EQ(MovedTo(5, {0, 2}, 5), 3u);
+  // Several slides that weren't together end up together, in their order.
+  CHECK_EQ(MovedOrder(6, {0, 3, 5}, 2), (std::vector<size_t>{1, 0, 3, 5, 2, 4}));
+  CHECK_EQ(MovedTo(6, {0, 3, 5}, 2), 1u);
+  // Dropped next to itself: nothing changes.
+  CHECK(!MoveChanges(5, {2}, 2));
+  CHECK(!MoveChanges(5, {2}, 3));
+  CHECK(!MoveChanges(5, {1, 2}, 1));
+  CHECK(!MoveChanges(5, {1, 2}, 3));
+  CHECK(MoveChanges(5, {1, 2}, 4));
+  CHECK(MoveChanges(5, {1, 3}, 2));  // gathers them
+  // The order and the new indexes are inverse.
+  const std::vector<size_t> order = MovedOrder(6, {0, 3, 5}, 2);
+  const std::vector<size_t> where = NewIndexes(order);
+  for (size_t i = 0; i < order.size(); ++i) CHECK_EQ(where[order[i]], i);
+}
+
+TEST(SlideDrag_CachesFollow) {
+  // Ids before: 256..260. Slide 258 deleted, 259 moved first, one new slide (300) at the end.
+  const std::vector<uint32_t> before = {256, 257, 258, 259, 260};
+  const std::vector<uint32_t> after = {259, 256, 257, 260, 300};
+  const std::vector<int> old = OldIndexes(before, after);
+  CHECK_EQ(old, (std::vector<int>{3, 0, 1, 4, -1}));
+  std::vector<std::string> cache = {"a", "b", "c", "d", "e"};
+  FollowSlides(cache, old);
+  CHECK_EQ(cache, (std::vector<std::string>{"d", "a", "b", "e", ""}));
+  // A duplicated id (a damaged deck) counts once.
+  CHECK_EQ(OldIndexes({5, 6}, {5, 5, 6}), (std::vector<int>{0, -1, 1}));
+  // Caches of move-only types follow too.
+  std::vector<std::unique_ptr<int>> owned;
+  owned.push_back(std::make_unique<int>(1));
+  owned.push_back(std::make_unique<int>(2));
+  FollowSlides(owned, {1, -1, 0});
+  CHECK(owned.size() == 3 && *owned[0] == 2 && !owned[1] && *owned[2] == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Slide size
+
+TEST(SlideSize_ChoicesAndScale) {
+  CHECK_EQ(SlideSizes().size(), 2u);
+  CHECK_EQ(SlideSizeChoiceOf({960, 540}), 0);
+  CHECK_EQ(SlideSizeChoiceOf({720, 540}), 1);
+  CHECK_EQ(SlideSizeChoiceOf({720, 405}), -1);
+  // 16:9 to 4:3: narrower, so PowerPoint asks.
+  CHECK(AsksHowToScale({960, 540}, {720, 540}));
+  CHECK(!AsksHowToScale({720, 540}, {960, 540}));
+  // Maximize keeps the height (cut at the sides), centered.
+  SizeTransform t = ScaleContent({960, 540}, {720, 540}, ContentScale::Maximize);
+  CHECK_NEAR(t.scale, 1.0f, 1e-4f);
+  CHECK_NEAR(t.dx, -120.0f, 1e-3f);
+  CHECK_NEAR(t.dy, 0.0f, 1e-3f);
+  // Ensure fit shrinks to the width, centered vertically.
+  t = ScaleContent({960, 540}, {720, 540}, ContentScale::EnsureFit);
+  CHECK_NEAR(t.scale, 0.75f, 1e-4f);
+  CHECK_NEAR(t.dx, 0.0f, 1e-3f);
+  CHECK_NEAR(t.dy, 67.5f, 1e-3f);
+  // 4:3 to 16:9: the content keeps its size, centered.
+  t = ScaleContent({720, 540}, {960, 540}, ContentScale::Maximize);
+  CHECK_NEAR(t.scale, 1.0f, 1e-4f);
+  CHECK_NEAR(t.dx, 120.0f, 1e-3f);
+  CHECK(ScaleContent({960, 540}, {960, 540}, ContentScale::EnsureFit).Identity());
+  CHECK(ScaleContent({0, 540}, {960, 540}, ContentScale::EnsureFit).Identity());
+}
+
+// ---------------------------------------------------------------------------
+// Theme colors, themes, backgrounds
+
+TEST(SlideDesign_ColorSchemeXml) {
+  CHECK(ColorSchemes().size() >= 8);
+  for (const ColorScheme& scheme : ColorSchemes()) {
+    // The scheme put into the default theme reads back as its colors.
+    std::string theme =
+        "<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"T\"><a:themeElements>" +
+        ColorSchemeXml(scheme) + FontSchemeXml("F", "Georgia", "Segoe UI") + "</a:themeElements></a:theme>";
+    auto t = draw::Theme::Parse(theme);
+    CHECK(t != nullptr);
+    if (!t) continue;
+    for (int i = 0; i < 12; ++i) {
+      const draw::Color want = ColorOf(scheme.colors[i]), got = t->GetColor(static_cast<draw::ThemeColor>(i));
+      CHECK_NEAR(got.r, want.r, 0.002f);
+      CHECK_NEAR(got.g, want.g, 0.002f);
+      CHECK_NEAR(got.b, want.b, 0.002f);
+    }
+    CHECK_EQ(t->MajorFont().latin, std::string("Georgia"));
+    CHECK_EQ(t->MinorFont().latin, std::string("Segoe UI"));
+  }
+  // Names are escaped; other prefixes are used as given.
+  Prefixes ns;
+  ns.a = "dml";
+  const std::string x = FontSchemeXml("A & B", "x\"y", "z", ns);
+  CHECK(x.find("A &amp; B") != std::string::npos);
+  CHECK(x.find("<dml:fontScheme") == 0);
+  CHECK_EQ(HexColor(0x4472C4), std::string("4472C4"));
+}
+
+TEST(SlideDesign_BackgroundXml) {
+  Background bg;
+  bg.color = 0x112233;
+  pugi::xml_document d1;
+  pugi::xml_node n = Parse(d1, BackgroundXml(bg));
+  CHECK(n && std::string(n.name()) == "p:bg");
+  CHECK_EQ(std::string(n.child("p:bgPr").child("a:solidFill").child("a:srgbClr").attribute("val").value()), std::string("112233"));
+  CHECK(n.child("p:bgPr").child("a:effectLst"));
+  bg.kind = Background::Kind::Gradient;
+  bg.color2 = 0xFFFFFF;
+  bg.angle = 45;
+  pugi::xml_document d2;
+  n = Parse(d2, BackgroundXml(bg));
+  pugi::xml_node grad = n.child("p:bgPr").child("a:gradFill");
+  CHECK(grad);
+  CHECK_EQ(std::string(grad.child("a:lin").attribute("ang").value()), std::string("2700000"));
+  CHECK_EQ(std::string(grad.child("a:gsLst").last_child().attribute("pos").value()), std::string("100000"));
+  bg.kind = Background::Kind::Picture;
+  CHECK(BackgroundXml(bg).empty());  // no picture part yet
+  pugi::xml_document d3;
+  n = Parse(d3, BackgroundXml(bg, "rId7"));
+  CHECK_EQ(std::string(n.child("p:bgPr").child("a:blipFill").child("a:blip").attribute("r:embed").value()), std::string("rId7"));
+  bg.kind = Background::Kind::Theme;
+  bg.themeIndex = 1002;
+  pugi::xml_document d4;
+  n = Parse(d4, BackgroundXml(bg));
+  CHECK_EQ(std::string(n.child("p:bgRef").attribute("idx").value()), std::string("1002"));
+  CHECK(!GradientPresets().empty());
+}
+
+TEST(SlideDesign_BuiltInThemes) {
+  CHECK(BuiltInThemes().size() >= 5);
+  for (const BuiltInTheme& t : BuiltInThemes()) {
+    CHECK(t.colors >= 0 && static_cast<size_t>(t.colors) < ColorSchemes().size());
+    CHECK(t.major && *t.major && t.minor && *t.minor);
+    pugi::xml_document d;
+    CHECK(Parse(d, BackgroundXml(t.background)));
+  }
+  const auto light = ColorMapOf(false), dark = ColorMapOf(true);
+  CHECK_EQ(light.size(), 12u);
+  CHECK_EQ(std::string(light[0].second), std::string("lt1"));
+  CHECK_EQ(std::string(dark[0].second), std::string("dk1"));
+  CHECK_EQ(std::string(dark[1].second), std::string("lt1"));
+}
+
+// ---------------------------------------------------------------------------
+// Slide numbers, footer and date
+
+TEST(SlideHeaderFooter_ShapeXml) {
+  HeaderFooterSettings s;
+  s.slideNumber = s.footer = s.date = true;
+  s.footerText = L"Q3 <review> & plan";
+  s.dateFormat = 4;
+  const std::string id = NewFieldId();
+  CHECK_EQ(id.size(), 38u);
+  CHECK(id.front() == '{' && id.back() == '}' && id[15] == '4');
+  CHECK(id != NewFieldId());
+  pugi::xml_document d1;
+  pugi::xml_node sp = Parse(d1, HfShapeXml(HfKind::SlideNumber, 7, 12, "quarter", s, id, "en-US"));
+  CHECK(sp && std::string(sp.name()) == "p:sp");
+  pugi::xml_node ph = sp.child("p:nvSpPr").child("p:nvPr").child("p:ph");
+  CHECK_EQ(std::string(ph.attribute("type").value()), std::string("sldNum"));
+  CHECK_EQ(std::string(ph.attribute("idx").value()), std::string("12"));
+  CHECK_EQ(std::string(ph.attribute("sz").value()), std::string("quarter"));
+  CHECK_EQ(std::string(sp.child("p:nvSpPr").child("p:cNvPr").attribute("id").value()), std::string("7"));
+  CHECK(sp.child("p:spPr"));
+  pugi::xml_node fld = sp.child("p:txBody").child("a:p").child("a:fld");
+  CHECK_EQ(std::string(fld.attribute("type").value()), std::string("slidenum"));
+  CHECK_EQ(std::string(fld.attribute("id").value()), id);
+  pugi::xml_document d2;
+  sp = Parse(d2, HfShapeXml(HfKind::Footer, 8, 11, "", s, id, "nl-NL"));
+  CHECK(!sp.child("p:nvSpPr").child("p:nvPr").child("p:ph").attribute("sz"));
+  pugi::xml_node r = sp.child("p:txBody").child("a:p").child("a:r");
+  CHECK_EQ(std::string(r.child("a:t").text().get()), std::string("Q3 <review> & plan"));
+  CHECK_EQ(std::string(r.child("a:rPr").attribute("lang").value()), std::string("nl-NL"));
+  pugi::xml_document d3;
+  sp = Parse(d3, HfShapeXml(HfKind::Date, 9, 10, "half", s, id, "en-US"));
+  fld = sp.child("p:txBody").child("a:p").child("a:fld");
+  CHECK_EQ(std::string(fld.attribute("type").value()), std::string("datetime4"));
+  CHECK(*fld.child("a:t").text().get());  // today's date
+  s.dateAuto = false;
+  s.dateFixed = L"1 April";
+  pugi::xml_document d4;
+  sp = Parse(d4, HfShapeXml(HfKind::Date, 9, 10, "half", s, id, "en-US"));
+  CHECK(!sp.child("p:txBody").child("a:p").child("a:fld"));
+  CHECK_EQ(std::string(sp.child("p:txBody").child("a:p").child("a:r").child("a:t").text().get()), std::string("1 April"));
+  // An empty footer is an empty paragraph.
+  s.footerText.clear();
+  pugi::xml_document d5;
+  sp = Parse(d5, HfShapeXml(HfKind::Footer, 8, 11, "", s, id, "en-US"));
+  CHECK(!sp.child("p:txBody").child("a:p").child("a:r"));
+  CHECK(sp.child("p:txBody").child("a:p").child("a:endParaRPr"));
+}
+
+TEST(SlideHeaderFooter_Rules) {
+  HeaderFooterSettings s;
+  s.slideNumber = true;
+  s.notOnTitle = true;
+  CHECK(HfWanted(s, HfKind::SlideNumber, false));
+  CHECK(!HfWanted(s, HfKind::SlideNumber, true));
+  CHECK(!HfWanted(s, HfKind::Footer, false));
+  CHECK(!HfWanted(s, HfKind::Date, false));
+  CHECK_EQ(std::string(HfTypeName(HfKind::Date)), std::string("dt"));
+  const std::vector<std::wstring> samples = DateFormatSamples("en-US");
+  CHECK_EQ(samples.size(), 13u);
+  for (const std::wstring& x : samples) CHECK(!x.empty());
+  CHECK(samples[1].size() > samples[0].size());  // the long date
+}
+
+TEST(SlideHeaderFooter_ReadFromDeck) {
+  auto deck = OpenDeck("layouts-placeholders.pptx");
+  CHECK(deck != nullptr);
+  if (!deck || deck->SlideCount() < 13) return;
+  // Slide 13 shows the date (datetime1), a footer and the slide number.
+  const fw::slide::Slide* slide = deck->GetSlide(12);
+  const HeaderFooterSettings s = ReadHeaderFooter(*slide);
+  CHECK(s.date && s.dateAuto && s.dateFormat == 1);
+  CHECK(s.footer);
+  CHECK(s.footerText == L"Featherweight public set");
+  CHECK(s.slideNumber);
+  // Slide 1 shows none of them.
+  const HeaderFooterSettings none = ReadHeaderFooter(*deck->GetSlide(0));
+  CHECK(!none.date && !none.footer && !none.slideNumber);
+  // Its layout: a title slide layout when slide 1 uses one.
+  const fw::slide::Slide* first = deck->GetSlide(0);
+  if (first->layout && first->layout->type == "title") CHECK(IsTitleLayout(first->layout));
+  CHECK(!IsTitleLayout(nullptr));
+}
