@@ -193,7 +193,7 @@ $through = Select-String -Path (Join-Path $Out "torture.log") -Pattern 'edits th
 $through = if ($through) { $through.Matches[0].Groups[1].Value } else { "?" }
 $noPp = if ($NoPowerPoint) { "not run" } else { $null }
 $slidesAll = ($ssim.Values | ForEach-Object { [Math]::Max($_.pages, $_.copyPages) } | Measure-Object -Sum).Sum
-$slidesOk = ($ssim.Values | Measure-Object passing -Sum).Sum
+$slidesOk = ($ssim.Values | ForEach-Object { [int]$_.passing } | Measure-Object -Sum).Sum
 $md = @("# Deck torture test", "",
   "Seed $Seed, $Rounds rounds of $Edits edits per deck. $(Get-Date -Format 'yyyy-MM-dd HH:mm'). Edits through: $through.", "",
   "| | Decks |", "|---|---|",

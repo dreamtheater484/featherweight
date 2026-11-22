@@ -37,6 +37,16 @@
 #else
 #define FW_SLIDE_EDIT 0
 #endif
+// p2-objects' object XML (fwslideobjects): the Insert tab's objects and the Format panel's edits.
+#if FW_SLIDE_EDIT && __has_include("slide/objects/ObjectXml.h") && __has_include("slide/objects/ChartPart.h")
+#include <functional>
+
+#include "slide/objects/ChartPart.h"
+#include "slide/objects/ObjectXml.h"
+#define FW_SLIDE_OBJECTS 1
+#else
+#define FW_SLIDE_OBJECTS 0
+#endif
 
 namespace fwtool {
 namespace decktorture {
@@ -56,7 +66,8 @@ constexpr struct {
     {Op::Group, "group"},        {Op::Ungroup, "ungroup"},      {Op::Order, "order"},
     {Op::Format, "format"},      {Op::Undo, "undo"},            {Op::Redo, "redo"},
     {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
-    {Op::HeaderFooter, "header-footer"},
+    {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
+    {Op::Table, "table"},
 };
 
 const char* OpName(Op op) {
@@ -146,7 +157,7 @@ bool ParseShapeRef(std::string_view s, int& slide, std::vector<uint32_t>& ids) {
 
 bool IsShapeOp(Op op) {
   return op == Op::Type || op == Op::Move || op == Op::Resize || op == Op::Rotate || op == Op::DeleteShape ||
-         op == Op::Ungroup || op == Op::Order || op == Op::Format;
+         op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table;
 }
 
 }  // namespace
@@ -181,6 +192,14 @@ std::string FormatEdit(const Edit& e) {
     case Op::Theme:
     case Op::MasterShapes: s += " " + std::to_string(e.slide) + " " + e.arg; break;
     case Op::HeaderFooter: s += " " + std::to_string(e.slide) + " " + e.arg + " " + Quote(e.text); break;
+    case Op::Insert:
+      s += " " + std::to_string(e.slide) + " " + e.arg + " " + Num(e.dx) + " " + Num(e.dy) + " " + Num(e.w) + " " + Num(e.h);
+      break;
+    case Op::Crop: s += " " + at + " " + Num(e.dx) + " " + Num(e.dy) + " " + Num(e.w) + " " + Num(e.h); break;
+    case Op::Table:
+      s += " " + at + " " + e.arg;
+      for (int n : e.nums) s += " " + std::to_string(n);
+      break;
   }
   if (!e.target.empty()) s += " # " + e.target;
   return s;
@@ -248,6 +267,12 @@ bool ParseEdit(std::string_view line, Edit& e) {
       if (e.arg.empty() || e.arg.find_first_not_of(e.arg == "-" ? "-" : "nfdt") != std::string::npos) return false;
       return Unquote(s, e.text) && s.empty();
     }
+    case Op::Insert: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty() && ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
+             ToDouble(NextWord(s), e.h) && s.empty();
+    }
     default: break;
   }
   if (!IsShapeOp(e.op) || !ParseShapeRef(NextWord(s), e.slide, ids) || ids.size() != 1) return false;
@@ -270,6 +295,22 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Format: {
       e.arg = std::string(NextWord(s));
       return !e.arg.empty() && s.empty();
+    }
+    case Op::Crop:
+      return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
+             ToDouble(NextWord(s), e.h) && s.empty();
+    case Op::Table: {
+      e.arg = std::string(NextWord(s));
+      const size_t want = e.arg == "merge" ? 4 : 2;
+      if (e.arg != "insert-row" && e.arg != "delete-row" && e.arg != "insert-col" && e.arg != "delete-col" &&
+          e.arg != "merge" && e.arg != "split")
+        return false;
+      for (size_t i = 0; i < want; ++i) {
+        int n = 0;
+        if (!ToInt(NextWord(s), n)) return false;
+        e.nums.push_back(n);
+      }
+      return s.empty();
     }
     default: return false;
   }
@@ -309,6 +350,9 @@ class ReadOnlyTarget : public DeckTarget {
 
 #if FW_SLIDE_EDIT
 namespace ed = fw::slide::edit;
+#if FW_SLIDE_OBJECTS
+namespace ob = fw::slide::objects;
+#endif
 
 std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
 
@@ -404,6 +448,25 @@ class EditTarget : public DeckTarget {
       case Op::Format: {
         constexpr const char* kA = "http://schemas.openxmlformats.org/drawingml/2006/main";
         auto value = [&](size_t prefix) { return e.arg.substr(prefix); };
+#if FW_SLIDE_OBJECTS
+        // The Format panel's route: the shape's XML changed by fwslideobjects, put back as one step.
+        if (e.arg.starts_with("fill=") || e.arg.starts_with("line=") || e.arg.starts_with("width=") ||
+            e.arg.starts_with("dash=") || e.arg.starts_with("shadow=")) {
+          const size_t eq = e.arg.find('=');
+          const std::string what = e.arg.substr(0, eq), v = e.arg.substr(eq + 1);
+          ob::Paint paint;
+          if (v == "none") paint.kind = ob::Paint::Kind::None;
+          else if (v == "gradient") paint.kind = ob::Paint::Kind::Gradient, paint.rgb = 0x2E75B6, paint.rgb2 = 0xFFFFFF;
+          else paint.kind = ob::Paint::Kind::Solid, paint.rgb = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 16));
+          return ObjectEdit(slide, e.shape, u"Format Shape", why, [&](pugi::xml_node el) {
+            if (what == "fill") return ob::SetFill(el, paint);
+            if (what == "line") return ob::SetLine(el, paint);
+            if (what == "width") return ob::SetLineWidth(el, static_cast<float>(std::atof(v.c_str())));
+            if (what == "dash") return ob::SetLineDash(el, v);
+            return ob::SetShadow(el, v == "on");
+          });
+        }
+#endif
         if (e.arg.starts_with("fill=") || e.arg.starts_with("line=")) {
           const std::string fill = "<a:solidFill xmlns:a=\"" + std::string(kA) + "\"><a:srgbClr val=\"" + value(5) + "\"/></a:solidFill>";
           ed::ShapePatch p;
@@ -456,6 +519,26 @@ class EditTarget : public DeckTarget {
         return ed::ApplyThemeDesign(editor_, slide, d);
       }
       case Op::MasterShapes: return ed::SetShowMasterShapes(editor_, {slide}, e.arg == "on");
+#if FW_SLIDE_OBJECTS
+      case Op::Insert: return Insert(e, slide, why);
+      case Op::Crop: {
+        const ob::Crop c{static_cast<float>(e.dx), static_cast<float>(e.dy), static_cast<float>(e.w), static_cast<float>(e.h)};
+        return ObjectEdit(slide, e.shape, u"Crop", why, [&](pugi::xml_node el) { return ob::SetCrop(el, c); });
+      }
+      case Op::Table: {
+        const auto n = [&](size_t i) { return i < e.nums.size() ? e.nums[i] : 0; };
+        if (e.arg == "insert-row") return editor_.InsertTableRows(slide, e.shape, n(0), n(1));
+        if (e.arg == "delete-row") return editor_.DeleteTableRows(slide, e.shape, n(0), n(1));
+        if (e.arg == "insert-col") return editor_.InsertTableColumns(slide, e.shape, n(0), n(1));
+        if (e.arg == "delete-col") return editor_.DeleteTableColumns(slide, e.shape, n(0), n(1));
+        if (e.arg == "merge") return editor_.MergeTableCells(slide, e.shape, n(0), n(1), n(2), n(3));
+        return editor_.SplitTableCell(slide, e.shape, n(0), n(1));
+      }
+#else
+      case Op::Insert:
+      case Op::Crop:
+      case Op::Table: why = "fwtool was built without fwslideobjects"; return {};
+#endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
         hf.slideNumber = e.arg.find('n') != std::string::npos;
@@ -468,6 +551,95 @@ class EditTarget : public DeckTarget {
     }
     return {};
   }
+
+#if FW_SLIDE_OBJECTS
+  // The object's XML from the editor, changed by fwslideobjects, put back as one step; refused when
+  // the object has no such property (`change` returns false) or isn't there.
+  ed::Result ObjectEdit(size_t slide, uint32_t id, std::u16string step, std::string& why,
+                        const std::function<bool(pugi::xml_node)>& change) {
+    const std::string xml = editor_.ShapeXml(slide, id);
+    pugi::xml_document doc;
+    if (xml.empty() || !doc.load_buffer(xml.data(), xml.size())) {
+      why = "no object " + std::to_string(id) + " on slide " + std::to_string(slide);
+      return {};
+    }
+    pugi::xml_node el = doc.document_element();
+    if (!change(el)) {
+      why = "the object has no such property";
+      return {};
+    }
+    return editor_.SetShapeXml(slide, id, ob::Standalone(el), std::move(step));
+  }
+
+  // As the Insert tab inserts: shapes, text boxes and lines made by fwslideobjects; pictures and
+  // tables by the editor; a chart with its part and its workbook as ObjectTool::InsertChart does.
+  ed::Result Insert(const Edit& e, size_t slide, std::string& why) {
+    const draw::Rect r{static_cast<float>(e.dx), static_cast<float>(e.dy), static_cast<float>(e.dx + e.w),
+                       static_cast<float>(e.dy + e.h)};
+    ob::Xfrm x;
+    x.x = ob::ToEmu(r.left), x.y = ob::ToEmu(r.top), x.cx = ob::ToEmu(r.Width()), x.cy = ob::ToEmu(r.Height());
+    uint32_t id = 0;
+    const std::string& what = e.arg;
+    if (what.starts_with("shape:") || what == "textbox" || what == "line" || what == "arrow") {
+      const std::string preset = what.starts_with("shape:") ? what.substr(6) : std::string();
+      const std::string xml = ob::NewObjectXml([&](pugi::xml_node tree) {
+        if (what == "textbox") return ob::AppendTextBox(tree, 2, x);
+        if (what == "line" || what == "arrow") return ob::AppendLine(tree, 2, x, what == "arrow");
+        return ob::AppendShape(tree, 2, preset, x, ob::NewName(preset, 2));
+      });
+      if (xml.empty()) {
+        why = "fwslideobjects made nothing for " + what;
+        return {};
+      }
+      return editor_.InsertShape(slide, xml, &id);
+    }
+    if (what == "picture") {
+      static const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+                                     0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+                                     0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+                                     0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+                                     0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 1x1 PNG
+      return editor_.InsertPicture(slide, std::vector<uint8_t>(std::begin(kPng), std::end(kPng)), r, L"A picture", &id);
+    }
+    if (what.starts_with("table:")) {
+      const size_t xAt = what.find('x', 6);
+      const int rows = xAt == std::string::npos ? 0 : std::atoi(what.substr(6, xAt - 6).c_str());
+      const int columns = xAt == std::string::npos ? 0 : std::atoi(what.c_str() + xAt + 1);
+      if (rows <= 0 || columns <= 0) {
+        why = "not a table size: " + what;
+        return {};
+      }
+      return editor_.InsertTable(slide, rows, columns, r, &id);
+    }
+    if (what.starts_with("chart:")) {
+      if (slide >= deck_->SlideCount()) {
+        why = "no slide " + std::to_string(slide);
+        return {};
+      }
+      const ob::ChartType kind = static_cast<ob::ChartType>(std::clamp(std::atoi(what.c_str() + 6), 0, 3));
+      const ob::ChartData data = ob::DefaultChartData();
+      ed::EditGroup group(editor_, u"Insert Chart");
+      const std::string chartPart = editor_.NewPartName("/ppt/charts/chart", ".xml");
+      std::string chartXml = ob::ChartXml(kind, data, "rId1");
+      const std::string relId = editor_.AddPart(editor_.SlidePart(slide), ob::kChartRelType, chartPart, ob::kChartContentType,
+                                                std::vector<uint8_t>(chartXml.begin(), chartXml.end()));
+      if (relId.empty()) return ed::Result::Fail(u"The chart couldn't be added to this slide.");
+      const std::string wbPart = editor_.NewPartName("/ppt/embeddings/Microsoft_Excel_Worksheet", ".xlsx");
+      const std::string wbId = editor_.AddPart(chartPart, ob::kPackageRelType, wbPart, ob::kXlsxContentType, ob::ChartWorkbook(data));
+      if (wbId.empty()) return ed::Result::Fail(u"The chart's data couldn't be added.");
+      if (wbId != "rId1") {
+        chartXml = ob::ChartXml(kind, data, wbId);
+        editor_.WritePart(chartPart, std::vector<uint8_t>(chartXml.begin(), chartXml.end()));
+      }
+      const std::string frame = ob::NewObjectXml([&](pugi::xml_node tree) { return ob::AppendChart(tree, 2, relId, x); });
+      ed::Result res = editor_.InsertShape(slide, frame, &id, -1);
+      group.done = res.ok;
+      return res;
+    }
+    why = "unknown insert " + what;
+    return {};
+  }
+#endif
 
   std::unique_ptr<sl::Presentation> deck_;
   ed::Editor editor_;  // after deck_: it goes first
@@ -580,6 +752,7 @@ class Generator {
         {Op::Group, 4}, {Op::Ungroup, 2}, {Op::Order, 3}, {Op::NewSlide, 5}, {Op::Duplicate, 6},
         {Op::DeleteSlide, 5}, {Op::MoveSlide, 6}, {Op::Hide, 2}, {Op::Layout, 4}, {Op::Notes, 3},
         {Op::Undo, 4}, {Op::Redo, 2}, {Op::Save, 1}, {Op::Theme, 1}, {Op::MasterShapes, 1}, {Op::HeaderFooter, 2},
+        {Op::Insert, 5}, {Op::Crop, 2}, {Op::Table, 3},
     };
     uint32_t total = 0;
     for (const auto& w : kWeights) total += w.weight;
@@ -602,6 +775,22 @@ class Generator {
         e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(deck.Masters().size())));
         e.arg = rng_.Chance(30) ? "dark" : "light";
         e.target = "a master with " + std::to_string(deck.Masters()[static_cast<size_t>(e.slide)]->layouts.size()) + " layouts";
+        return true;
+      }
+      case Op::Insert: {
+        if (!slides) return false;
+        static constexpr const char* kWhat[] = {"shape:rect",   "shape:ellipse", "shape:rightArrow", "shape:star5",
+                                                "shape:roundRect", "textbox",    "line",             "arrow",
+                                                "picture",      "table:3x4",     "table:2x2",        "chart:0",
+                                                "chart:1",      "chart:2",       "chart:3"};
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        e.arg = rng_.Pick(kWhat);
+        const draw::Size size = deck.SlideSize();
+        e.w = std::round(rng_.Between(20, size.width * 0.6));
+        e.h = std::round(rng_.Between(e.arg == "line" || e.arg == "arrow" ? 0 : 20, size.height * 0.6));
+        e.dx = std::round(rng_.Between(0, std::max(0.0, size.width - e.w)));
+        e.dy = std::round(rng_.Between(0, std::max(0.0, size.height - e.h)));
+        e.target = e.arg;
         return true;
       }
       case Op::MasterShapes: {
@@ -699,6 +888,12 @@ class Generator {
         case Op::Order:
           if (i.topLevel) candidates.push_back(&s);
           break;
+        case Op::Crop:
+          if (s.kind == sl::Shape::Kind::Picture) candidates.push_back(&s);
+          break;
+        case Op::Table:
+          if (s.kind == sl::Shape::Kind::Table) candidates.push_back(&s);
+          break;
         default:
           // Moving shapes inside groups now and then; mostly the slide's own.
           if (i.topLevel || rng_.Chance(25)) candidates.push_back(&s);
@@ -736,13 +931,41 @@ class Generator {
       }
       case Op::Format: {
         const std::string color = rng_.Pick(kColors);
-        switch (rng_.Below(6)) {
-          case 0: e.arg = "fill=" + color; break;
-          case 1: e.arg = "line=" + color; break;
+        static constexpr const char* kDashes[] = {"dash", "sysDot", "lgDashDot", "solid"};
+        switch (rng_.Below(10)) {
+          case 0: e.arg = "fill=" + std::string(rng_.Chance(15) ? "none" : rng_.Chance(20) ? "gradient" : color); break;
+          case 1: e.arg = "line=" + std::string(rng_.Chance(15) ? "none" : color); break;
           case 2: e.arg = "bold"; break;
           case 3: e.arg = "italic"; break;
           case 4: e.arg = "size=" + std::to_string(10 + 2 * rng_.Below(20)); break;
+          case 5: e.arg = "width=" + Num(std::round(rng_.Between(0.25, 12) * 4) / 4); break;
+          case 6: e.arg = "dash=" + std::string(rng_.Pick(kDashes)); break;
+          case 7: e.arg = std::string("shadow=") + (rng_.Chance(70) ? "on" : "off"); break;
           default: e.arg = "color=" + color; break;
+        }
+        return true;
+      }
+      case Op::Crop: {
+        // Fractions cut from each side, now and then negative (padding), as dragging the crop handles makes.
+        auto side = [&] { return std::round(rng_.Between(-0.1, 0.35) * 100) / 100; };
+        e.dx = side(), e.dy = side(), e.w = side(), e.h = side();
+        return true;
+      }
+      case Op::Table: {
+        const sl::Table* t = deck.GetTable(s, *deck.GetSlide(static_cast<size_t>(e.slide)));
+        const int rows = t ? static_cast<int>(t->rows.size()) : 2, cols = t ? static_cast<int>(t->columns.size()) : 2;
+        static constexpr const char* kTableOps[] = {"insert-row", "delete-row", "insert-col", "delete-col", "merge", "split"};
+        e.arg = rng_.Pick(kTableOps);
+        const int r0 = static_cast<int>(rng_.Below(static_cast<uint32_t>(rows))), c0 = static_cast<int>(rng_.Below(static_cast<uint32_t>(cols)));
+        if (e.arg == "merge") {
+          e.nums = {r0, c0, std::min(rows - 1, r0 + static_cast<int>(rng_.Below(2))), std::min(cols - 1, c0 + 1 + static_cast<int>(rng_.Below(2)))};
+        } else if (e.arg == "split") {
+          e.nums = {r0, c0};
+        } else {
+          const bool row = e.arg.ends_with("row");
+          const bool insert = e.arg.starts_with("insert");
+          const int at = row ? r0 : c0;
+          e.nums = {insert ? at + static_cast<int>(rng_.Below(2)) : at, 1 + static_cast<int>(rng_.Below(insert ? 3 : 1))};
         }
         return true;
       }

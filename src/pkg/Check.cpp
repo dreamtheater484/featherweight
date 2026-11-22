@@ -912,9 +912,10 @@ void Checker::CheckPresentation() {
   if (masters.empty() && !slides.empty()) Error(main, "the deck has slides but lists no slide master (sldMasterIdLst)");
 
   // Sections (p14:sectionLst in presentation.xml's extension list, P2: slide operations keep them).
-  // A section naming a slide id that isn't there is the registry's (an error). Warnings until
-  // PowerPoint's verdict is probed (scripts\powerpoint-open-check-proof.ps1, the section variants):
-  // a slide in two sections, a slide in none while the deck has sections, two sections with one id.
+  // A section naming a slide id that isn't there is the registry's (an error, though PowerPoint opens
+  // it without a repair). PowerPoint 2021's verdicts (scripts\powerpoint-open-check-proof.ps1, the
+  // section variants, 2026-11-22): it repairs a slide in two sections and two sections with one id
+  // (errors); it opens a slide in no section while the deck has sections as it is (a warning).
   {
     std::vector<std::string> slideIds;
     pugi::xml_node sectionLst;
@@ -935,13 +936,13 @@ void Checker::CheckPresentation() {
         if (section.type() != pugi::node_element || LocalNameOf(section) != "section") continue;
         const std::string name = section.attribute("name").value();
         if (!sectionIds.insert(section.attribute("id").value()).second)
-          Warn(main, "section " + Quote(name) + " has the id of another section");
+          Error(main, "section " + Quote(name) + " has the id of another section");
         for (pugi::xml_node list : section.children()) {
           if (list.type() != pugi::node_element || LocalNameOf(list) != "sldIdLst") continue;
           for (pugi::xml_node s : list.children()) {
             if (s.type() != pugi::node_element || LocalNameOf(s) != "sldId") continue;
             auto [it, fresh] = sectionOf.emplace(s.attribute("id").value(), name);
-            if (!fresh) Warn(main, "slide id " + it->first + " is in two sections, " + Quote(it->second) + " and " + Quote(name));
+            if (!fresh) Error(main, "slide id " + it->first + " is in two sections, " + Quote(it->second) + " and " + Quote(name));
           }
         }
       }

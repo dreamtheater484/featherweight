@@ -142,7 +142,7 @@ foreach ($f in $Formats) { if (-not $fileFormats.ContainsKey($f)) { throw "Unkno
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 
 $refManifest = Join-Path $root "tests\office\reference\manifest.json"
-$ref = if (Test-Path $refManifest) { (Get-Content $refManifest -Raw | ConvertFrom-Json).excel } else { $null }
+$ref = if (Test-Path $refManifest) { (Get-Content $refManifest -Raw -Encoding UTF8 | ConvertFrom-Json).excel } else { $null }
 if (-not $ExcelPrinter -and $ref) { $ExcelPrinter = [string]$ref.printer }
 $expectedWidth = if ($ref) { [double]$ref.standardWidth } else { 0 }
 if ($ExcelPrinter) {

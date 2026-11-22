@@ -31,8 +31,9 @@ enum class Op : uint8_t {
   Group,       // the shapes in `shapes` (ids, on `slide`, top level) become one group
   Ungroup,     // group `shape` becomes its shapes
   Order,       // arg: front, back, forward, backward
-  Format,      // shape `shape`; arg: fill=RRGGBB, line=RRGGBB, bold, italic, size=<points>, color=RRGGBB
-               // (the text ones over all its text)
+  Format,      // shape `shape`; arg: fill=RRGGBB|none|gradient, line=RRGGBB|none, width=<points>,
+               // dash=<preset>, shadow=on|off (through fwslideobjects, as the Format panel), bold, italic,
+               // size=<points>, color=RRGGBB (the text ones over all its text)
   Undo,        // count steps
   Redo,
   Save,        // a save in the middle: checked as the last one is, then the edits go on
@@ -41,6 +42,12 @@ enum class Op : uint8_t {
   MasterShapes, // arg on, off: the master's and layout's graphics shown on `slide`
   HeaderFooter, // `slide` (-1: every slide) gets slide numbers, a footer and a date as arg says: letters of
                 // "n" (number), "f" (footer, `text`), "d" (date), "t" (not on the title slide), or "-"
+  // Objects (p2-objects, through fwslideobjects and the editor as the Insert tab and the panels do):
+  Insert,       // on `slide`, arg: shape:<preset>, textbox, line, arrow, picture, table:<rows>x<columns>,
+                // chart:<0-3> (column, bar, line, pie), at (dx, dy) points, `w` x `h` points
+  Crop,         // picture `shape`: dx, dy, w, h are the fractions cut from the left, top, right, bottom
+  Table,        // table `shape`; arg: insert-row, delete-row, insert-col, delete-col (nums: at, count),
+                // merge (nums: row0 col0 row1 col1), split (nums: row col)
 };
 
 // One edit, as reproducers keep it. Slides are indexes at the moment the edit is applied; shapes are
@@ -51,7 +58,9 @@ struct Edit {
   int to = 0;              // MoveSlide
   uint32_t shape = 0;
   std::vector<uint32_t> shapes;  // Group
-  double dx = 0, dy = 0;   // Move (points), Resize (factors), Rotate (dx: degrees)
+  double dx = 0, dy = 0;   // Move (points), Resize (factors), Rotate (dx: degrees), Insert, Crop
+  double w = 0, h = 0;     // Insert (points), Crop
+  std::vector<int> nums;   // Table
   std::string text;        // UTF-8
   std::string arg;
   uint32_t count = 1;      // Undo, Redo; NewSlide, Layout: the layout's number in the deck
@@ -62,7 +71,8 @@ struct Edit {
 //   new-slide 3 L2 / duplicate 2 / delete-slide 4 / move-slide 2 5 / hide 1 on / layout 1 L4 /
 //   type 2#5 end "text" / notes 2 "text" / move 2#5 12.5 -30 / resize 2#5 1.2 0.8 / rotate 2#5 45 /
 //   delete 2#5 / group 2#5,7,9 / ungroup 2#11 / order 2#5 front / format 2#5 fill=C00000 /
-//   undo 2 / redo 1 / save / theme 0 dark / master-shapes 2 off / header-footer -1 nf "footer text",
+//   undo 2 / redo 1 / save / theme 0 dark / master-shapes 2 off / header-footer -1 nf "footer text" /
+//   insert 2 shape:rightArrow 100 80 200 120 / crop 2#5 0.1 0 0.2 0 / table 2#5 merge 0 0 1 1,
 //   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);

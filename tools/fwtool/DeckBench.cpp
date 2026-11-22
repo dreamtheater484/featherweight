@@ -140,8 +140,10 @@ int RunDeckEditBench(const Options& options) {
     std::vector<double> letters, keys;
     size_t typeSlide = at;
     const sl::Shape* shape = TypingTarget(*d.GetSlide(at));
-    for (size_t i = 0; !shape && i < slides; ++i)
-      if ((shape = TypingTarget(*d.GetSlide(i)))) typeSlide = i;
+    for (size_t i = 0; !shape && i < slides; ++i) {
+      shape = TypingTarget(*d.GetSlide(i));
+      if (shape) typeSlide = i;
+    }
     if (!shape) {
       failures.push_back("no shape with text to type into");
     } else {

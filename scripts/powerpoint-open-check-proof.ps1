@@ -14,9 +14,12 @@
   - duplicate-shape-id: two shapes on a slide with the same id (recorded only: PowerPoint may fix it silently)
   - not-a-zip: random bytes (refused)
   - section-missing-slide, section-slide-twice, section-slide-in-none, section-duplicate-id: copies of
-    sections-custom-shows.pptx whose section list names a missing slide (expected repaired or refused),
-    lists a slide twice, leaves one out, or gives two sections one id (the last three recorded only:
-    PowerPoint's verdict sets fwtool check's severity for them)
+    sections-custom-shows.pptx whose section list names a missing slide, lists a slide twice, leaves
+    one out, or gives two sections one id. PowerPoint 2021 (2026-11-22) repairs the second and the
+    fourth (expected repaired or refused: fwtool check calls them errors) and opens the first and the
+    third as they are (recorded only; fwtool check: an error and a warning)
+  - slide-jump-no-rid, slide-jump-empty-rid: hyperlinks.pptx with a link to slide 2 whose relationship
+    is gone, without r:id and with r:id="" (recorded only)
   Every broken copy is expected to be "repaired" or "refused" (which of the two is recorded, not
   required: it's PowerPoint's choice); clean must be "ok".
 
@@ -84,13 +87,20 @@ $expected["duplicate-shape-id"] = @("ok", "repaired", "refused")  # recorded onl
 $sections = Join-Path $root "tests\office\presentations\sections-custom-shows.pptx"
 $anyway = @("ok", "repaired", "refused")
 New-Variant "section-missing-slide" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldId id="261"/>', '<p14:sldId id="261"/><p14:sldId id="999"/>') } $sections
-$expected["section-missing-slide"] = $broken
+$expected["section-missing-slide"] = $anyway
 New-Variant "section-slide-twice" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldIdLst><p14:sldId id="261"/>', '<p14:sldIdLst><p14:sldId id="256"/><p14:sldId id="261"/>') } $sections
-$expected["section-slide-twice"] = $anyway
+$expected["section-slide-twice"] = $broken
 New-Variant "section-slide-in-none" "ppt/presentation.xml" { param($t) $t.Replace('<p14:sldId id="261"/>', '') } $sections
 $expected["section-slide-in-none"] = $anyway
 New-Variant "section-duplicate-id" "ppt/presentation.xml" { param($t) $t.Replace('id="{7C6D5E4F-3A2B-4C1D-8E9F-0A7B6C5D4E43}"', 'id="{4F3A2B1C-0D9E-4F8A-9B7C-6D5E4F3A2B10}"') } $sections
-$expected["section-duplicate-id"] = $anyway
+$expected["section-duplicate-id"] = $broken
+# A link to another slide whose relationship is gone (as the edit layer left a link to a deleted slide,
+# 2026-11-22: PowerPoint repaired those decks): without r:id, and with r:id="". Recorded only.
+$hyperlinks = Join-Path $root "tests\office\presentations\hyperlinks.pptx"
+New-Variant "slide-jump-no-rid" "ppt/slides/slide1.xml" { param($t) $t.Replace('<a:hlinkClick r:id="rId4" action="ppaction://hlinksldjump"', '<a:hlinkClick action="ppaction://hlinksldjump"') } $hyperlinks
+$expected["slide-jump-no-rid"] = $anyway
+New-Variant "slide-jump-empty-rid" "ppt/slides/slide1.xml" { param($t) $t.Replace('<a:hlinkClick r:id="rId4" action="ppaction://hlinksldjump"', '<a:hlinkClick r:id="" action="ppaction://hlinksldjump"') } $hyperlinks
+$expected["slide-jump-empty-rid"] = $anyway
 $garbage = Join-Path $dir "not-a-zip.pptx"
 $bytes = New-Object byte[] 4096
 (New-Object Random 7).NextBytes($bytes)
@@ -105,7 +115,7 @@ if ($code -eq 3 -or $code -eq 4) {
   "The check couldn't run PowerPoint now (exit $code): run the proof again then."
   exit $code
 }
-$results = (Get-Content $json -Raw | ConvertFrom-Json).files
+$results = (Get-Content $json -Raw -Encoding UTF8 | ConvertFrom-Json).files
 $wrong = 0
 ""
 "{0,-20} {1,-10} {2,-18} {3}" -f "deck", "result", "expected", "how"

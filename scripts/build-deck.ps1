@@ -213,7 +213,7 @@ if (Test-Path $target) {
   $vlist = Join-Path $Out "validate-files.txt"
   [IO.File]::WriteAllLines($vlist, [string[]]@($target), [Text.UTF8Encoding]::new($false))
   & $validator --json $vjson --files $vlist | Select-Object -Last 3
-  $verr = @((Get-Content $vjson -Raw | ConvertFrom-Json).files | ForEach-Object { $_.errors } | Where-Object { $_ })
+  $verr = @((Get-Content $vjson -Raw -Encoding UTF8 | ConvertFrom-Json).files | ForEach-Object { $_.errors } | Where-Object { $_ })
   if ($verr.Count) { $failures.Add("the validator finds $($verr.Count) errors: $($verr[0].Part) $($verr[0].Description)") }
 
   # 3. PowerPoint opens it without a repair and saves it as PDF.
@@ -222,7 +222,7 @@ if (Test-Path $target) {
   $ppJson = Join-Path $Out "powerpoint.json"
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "powerpoint-open-check.ps1") $target -Json $ppJson -Pdf $pdfDir | Out-Host
   if ($LASTEXITCODE -eq 3 -or $LASTEXITCODE -eq 4) { $ppStopped = $true }
-  $pp = if (Test-Path $ppJson) { (Get-Content $ppJson -Raw | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
+  $pp = if (Test-Path $ppJson) { (Get-Content $ppJson -Raw -Encoding UTF8 | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
   if (-not $ppStopped) {
     if (-not $pp -or $pp.status -ne "ok") { $failures.Add("PowerPoint: $(if ($pp) { $pp.status } else { 'no result' })") }
     elseif ($pp.slides -ne $want) { $failures.Add("PowerPoint shows $($pp.slides) slides; the steps make $want") }
