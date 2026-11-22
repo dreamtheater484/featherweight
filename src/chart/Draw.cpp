@@ -494,6 +494,7 @@ struct Entry {
   std::wstring name;
   Color color;          // the key's fill, or its line's color
   bool line = false;    // a line or scatter series: a stroke for its key
+  bool stroke = true;   // with `line`: the stroke drawn (a markers-only scatter series has just its marker)
   float width = 2.25f;  // the line's
   std::string symbol = "none";  // its markers'
   float markerSize = 5;
@@ -522,7 +523,8 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
   for (const Group& g : ch.groups)
     for (const Series& s : g.series) {
       const bool scatter = g.type == Type::Scatter;
-      const bool line = g.type == Type::Line || (g.type == Type::Radar && !g.filled) || (scatter && !s.look.noLine && g.lines);
+      // A scatter series' key is a line's length, its marker alone when it has no line (PowerPoint's PDFs).
+      const bool line = g.type == Type::Line || (g.type == Type::Radar && !g.filled) || scatter;
       Entry e;
       e.name = s.name.empty() ? L"Series " + std::to_wstring(k + 1) : s.name;
       e.color = SeriesColor(k, colors);
@@ -530,6 +532,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       if (line && s.look.line) e.color = *s.look.line;
       else if (!line && s.look.fill) e.color = *s.look.fill;
       e.line = line;
+      e.stroke = !scatter || (!s.look.noLine && g.lines);
       e.circle = g.type == Type::Bubble;
       if (line) {
         e.width = s.look.lineWidth >= 0 ? s.look.lineWidth : scatter && !ch.presentation ? 1.5f : 2.25f;
@@ -607,10 +610,12 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
               lead = keyW + (lines ? std::min(0.212f * ts, 2.0f) : 0.245f * ts);
   const auto key = [&](const Entry& e, float x, float cy) {
     if (e.line) {
-      Path p;
-      p.MoveTo({x, cy});
-      p.LineTo({x + keyW, cy});
-      b.Stroke(std::move(p), e.color, e.width);
+      if (e.stroke) {
+        Path p;
+        p.MoveTo({x, cy});
+        p.LineTo({x + keyW, cy});
+        b.Stroke(std::move(p), e.color, e.width);
+      }
       DrawMarker(b, e.symbol, {x + keyW / 2, cy}, e.markerSize, e.markerFill, e.color);
     } else if (e.circle) {
       b.Add(Path::Ellipse({x, cy - box / 2, x + keyW, cy + box / 2}), e.color, std::nullopt, 0);
