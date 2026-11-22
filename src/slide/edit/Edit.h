@@ -352,9 +352,12 @@ class Editor {
   Result SetBodyProps(const TextTarget& t, const BodyPatch& patch);
   // A link on text (Ctrl+K); nullopt removes the links in `r`.
   Result SetTextLink(const TextTarget& t, TextRange r, const std::optional<LinkTarget>& link);
-  // The text body (p:txBody or a:txBody's content) replaced by `xml`: a txBody element declaring its
-  // prefixes (rich paste). Hyperlinks in it must name relationships of the slide.
-  Result SetTextBodyXml(const TextTarget& t, std::string_view xml);
+  // The text body's content (p:txBody's or a cell's a:txBody's children) replaced by `xml`'s: a txBody
+  // element declaring its prefixes, made when the shape has none (p2-text's working copy, a rich
+  // paste). Hyperlinks in it must name relationships of the slide (AddRelationship in the same group).
+  // `typing`: coalesced with the typing into the same target before it, as InsertText is.
+  Result SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u16string stepName = u"Paste",
+                        bool typing = false);
   // Typing ends: the next text edit starts a new undo step (the caret moved, the shape lost focus).
   void EndTyping();
 

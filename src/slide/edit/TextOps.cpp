@@ -795,8 +795,8 @@ Result Editor::SetTextLink(const TextTarget& t, TextRange r, const std::optional
   return call.End({});
 }
 
-Result Editor::SetTextBodyXml(const TextTarget& t, std::string_view xml) {
-  Call call(*this, u"Paste");
+Result Editor::SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u16string stepName, bool typing) {
+  Call call(*this, std::move(stepName), typing ? &t : nullptr);
   Impl& m = *impl_;
   pugi::xml_document doc;
   if (!ParseFragment(xml, doc) || LocalNameOf(doc.document_element()) != "txBody") {
