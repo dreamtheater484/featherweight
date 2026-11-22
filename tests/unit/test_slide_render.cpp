@@ -307,6 +307,32 @@ TEST(SlideRender_TightSpacingComesOffTheTop) {
   CHECK(std::abs(single - tight - 19) <= 2);  // 4.8 pt at 4 px per point
 }
 
+TEST(SlideRender_BottomAnchorIgnoresWideSpacingBelow) {
+  // Bottom-anchored text at 150 %: its last line ends where it would at single spacing (cpb's
+  // title), the wider spacing's share below the line not counted.
+  auto inkBottom = [](const char* spacing) {
+    std::string shape = PhShape(3, "<p:ph idx=\"1\"/>",
+                                std::string("<a:p><a:pPr><a:lnSpc><a:spcPct val=\"") + spacing +
+                                    "\"/></a:lnSpc><a:buNone/></a:pPr><a:r><a:rPr sz=\"4000\"/><a:t>HHHH</a:t></a:r></a:p>");
+    const std::string plain = "<a:bodyPr/>";
+    shape.replace(shape.find(plain), plain.size(), "<a:bodyPr anchor=\"b\"><a:noAutofit/></a:bodyPr>");
+    auto deck = Modified(Slide1(shape, 2));
+    if (!deck) return -1;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const float scale = 4;
+    auto b = Render(*slide, static_cast<int>(slide->Size().width * scale), static_cast<int>(slide->Size().height * scale));
+    if (!b) return -1;
+    for (int y = b->Height() - 1; y >= 0; --y)
+      for (int x = 0; x < b->Width(); ++x)
+        if ((Pixel(*b, x, y) & 0xFF) < 100) return y;
+    return -1;
+  };
+  const int single = inkBottom("100000"), wide = inkBottom("150000");
+  CHECK(single > 0 && wide > 0);
+  CHECK(std::abs(single - wide) <= 2);
+}
+
 TEST(SlideRender_OutlinedTextIsStroked) {
   // A run with no fill and a red a:ln: its glyphs' outlines in red.
   auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
