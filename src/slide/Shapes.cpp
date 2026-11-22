@@ -398,9 +398,17 @@ void ResolveBackground(SlideBase& part, draw::Size size) {
     bg = P(P(p->root, "cSld"), "bg");
     if (bg) owner = p;
   }
-  if (!bg) return;
+  // No background anywhere in the chain: PowerPoint fills the slide with bg1, through the color
+  // map of the slide shown (a layout's override can make it dark).
   pugi::xml_node bgPr = P(bg, "bgPr"), bgRef = P(bg, "bgRef");
-  if (!bgPr && !bgRef) return;
+  pugi::xml_document defaultFill;
+  if (!bgPr && !bgRef) {
+    std::string xml = std::string("<p:bgPr xmlns:p=\"") + std::string(kP) + "\" xmlns:a=\"" + std::string(kA) +
+                      "\"><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill></p:bgPr>";
+    defaultFill.load_buffer(xml.data(), xml.size());
+    bgPr = defaultFill.document_element();
+    owner = &part;
+  }
   pugi::xml_document& doc = part.scratch;
   pugi::xml_node sp = doc.append_child("p:sp");
   sp.append_attribute("xmlns:p") = std::string(kP).c_str();
