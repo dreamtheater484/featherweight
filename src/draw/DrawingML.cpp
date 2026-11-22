@@ -564,16 +564,19 @@ class Reader {
     pugi::xml_node data = ctx_.resources.GetPartXml(RelId(relIds, "dm"));
     if (!data) return false;
     std::string_view drawingRel;
-    ForEachChild(A(data, "extLst"), [&](pugi::xml_node ext) {
+    // The data model's own dgm:extLst (PowerPoint writes it so; a:extLst read too).
+    pugi::xml_node extLst;
+    ForEachChild(data, [&](pugi::xml_node n) {
+      if (LocalNameOf(n) == "extLst") extLst = n;
+      return !extLst;
+    });
+    ForEachChild(extLst, [&](pugi::xml_node ext) {
       if (pugi::xml_node m = Child(ext, kDsp, "dataModelExt")) drawingRel = m.attribute("relId").value();
       return drawingRel.empty();
     });
     pugi::xml_node drawing = drawingRel.empty() ? pugi::xml_node() : ctx_.resources.GetPartXml(drawingRel);
     pugi::xml_node tree = Child(drawing, kDsp, "spTree");
     if (!tree) return false;
-    s.kind = Shape::Kind::Group;
-    s.name = "SmartArt";
-    s.childBounds = {0, 0, extent.width, extent.height};
     ForEachChild(tree, [&](pugi::xml_node c) {
       Shape child;
       std::string_view k = LocalNameOf(c);
@@ -584,6 +587,11 @@ class Reader {
       }
       return ctx_.shapes <= ReadContext::kMaxShapes;
     });
+    // An empty drawing (a file whose writer left it out) shows as the placeholder a missing one does.
+    if (s.children.empty()) return false;
+    s.kind = Shape::Kind::Group;
+    s.name = "SmartArt";
+    s.childBounds = {0, 0, extent.width, extent.height};
     return true;
   }
 
