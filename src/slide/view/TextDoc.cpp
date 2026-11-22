@@ -334,11 +334,21 @@ void TextDoc::SplitAt(uint32_t para, uint32_t offset) {
 
 namespace {
 
-// Typed text without what XML can't hold or DrawingML writes otherwise.
+// Typed text without what XML can't hold or DrawingML writes otherwise: control characters (but
+// tab), U+FFFE and U+FFFF, and halves of surrogate pairs on their own.
 std::wstring Clean(std::wstring_view s) {
   std::wstring out;
   out.reserve(s.size());
-  for (wchar_t c : s) {
+  for (size_t i = 0; i < s.size(); ++i) {
+    const wchar_t c = s[i];
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      if (i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
+        out += c;
+        out += s[++i];
+      }
+      continue;
+    }
+    if (c >= 0xDC00 && c <= 0xDFFF) continue;
     if (c == L'\t' || (c >= 0x20 && c != 0xFFFE && c != 0xFFFF)) out += c;
   }
   return out;

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <functional>
 #include <vector>
 
 #include "slide/view/TextDoc.h"
@@ -17,6 +18,11 @@ struct TextMatch {
   TextTarget target;
   TextPos from, to;
 };
+
+// Each text body of the deck in find's order (below), with what names it; the visitor returns false
+// to stop. `notes`: the speaker notes too.
+using TextVisitor = std::function<bool(const TextTarget&, const TextBody&)>;
+void ForEachText(TextModel& model, bool notes, const TextVisitor& visit);
 
 // Every match, in order: slide by slide, each slide's shapes in z-order (cells row by row), then
 // its notes. `wholeWords`: no letter or digit just before or after.

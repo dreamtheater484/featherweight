@@ -32,6 +32,8 @@ class Fonts;
 // presentation, which must outlive it. Drawing is safe from any one thread at a time.
 namespace fw::slide::render {
 
+class TextBlock;
+
 // For drawing a slide piece by piece: the slide show animates shapes and paragraphs as sprites
 // over the rest. Shapes are named by their id (cNvPr id); groups count, and skipping a group skips
 // its children. The master's and layout's own shapes all have id 0 here.
@@ -122,6 +124,15 @@ class SlideRender {
   void DrawPrompts(draw::Painter& painter, const draw::Rect& frame, text::Fonts& fonts, uint32_t skip = 0);
   // Whether the slide has an empty placeholder with this id (typing goes into it).
   bool IsEmptyPlaceholder(uint32_t shape) const;
+  // The slide's own texts (not its layout's or master's, nor tables'), each with the body it was laid
+  // out from and its text coordinates -> slide points: what spelling as you type underlines.
+  struct TextOnSlide {
+    uint32_t shape = 0;
+    const TextBlock* block = nullptr;
+    const fw::slide::TextBody* body = nullptr;
+    draw::Matrix toSlide;
+  };
+  std::vector<TextOnSlide> Texts() const;
 
  private:
   SlideRender();

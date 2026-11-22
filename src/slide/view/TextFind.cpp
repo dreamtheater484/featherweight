@@ -42,11 +42,10 @@ void Search(const TextBody* body, const TextTarget& target, const std::wstring& 
   }
 }
 
-void SearchShapes(Presentation& deck, const SlideBase& part, const std::vector<Shape>& shapes, TextTarget base,
-                  const std::wstring& query, bool matchCase, bool wholeWords, std::vector<TextMatch>& out) {
+bool Walk(Presentation& deck, const SlideBase& part, const std::vector<Shape>& shapes, TextTarget base, const TextVisitor& visit) {
   for (const Shape& sh : shapes) {
     if (sh.kind == Shape::Kind::Group) {
-      SearchShapes(deck, part, sh.children, base, query, matchCase, wholeWords, out);
+      if (!Walk(deck, part, sh.children, base, visit)) return false;
       continue;
     }
     TextTarget t = base;
@@ -58,35 +57,45 @@ void SearchShapes(Presentation& deck, const SlideBase& part, const std::vector<S
         if (c.covered || !c.text) continue;
         t.row = c.row;
         t.column = c.column;
-        Search(c.text, t, query, matchCase, wholeWords, out);
+        if (!visit(t, *c.text)) return false;
       }
       continue;
     }
     if (sh.kind != Shape::Kind::Shape || !sh.textNode) continue;
     // On a notes page, only the notes themselves (not the slide number or header placeholders).
     if (base.notes && sh.placeholder.type != PlaceholderType::Body) continue;
-    Search(deck.Text(sh, part), t, query, matchCase, wholeWords, out);
+    if (const TextBody* body = deck.Text(sh, part))
+      if (!visit(t, *body)) return false;
   }
+  return true;
 }
 
 }  // namespace
 
-std::vector<TextMatch> FindAll(TextModel& model, std::wstring_view query, bool matchCase, bool wholeWords) {
-  std::vector<TextMatch> out;
+void ForEachText(TextModel& model, bool notes, const TextVisitor& visit) {
   Presentation* deck = model.Deck();
-  if (!deck || query.empty()) return out;
-  const std::wstring q(query);
+  if (!deck) return;
   for (size_t i = 0; i < deck->SlideCount(); ++i) {
     const Slide* s = deck->GetSlide(i);
     if (!s) continue;
     TextTarget base;
     base.slide = i;
-    SearchShapes(*deck, *s, s->shapes, base, q, matchCase, wholeWords, out);
-    if (s->notes) {
+    if (!Walk(*deck, *s, s->shapes, base, visit)) return;
+    if (notes && s->notes) {
       base.notes = true;
-      SearchShapes(*deck, *s->notes, s->notes->shapes, base, q, matchCase, wholeWords, out);
+      if (!Walk(*deck, *s->notes, s->notes->shapes, base, visit)) return;
     }
   }
+}
+
+std::vector<TextMatch> FindAll(TextModel& model, std::wstring_view query, bool matchCase, bool wholeWords) {
+  std::vector<TextMatch> out;
+  if (query.empty()) return out;
+  const std::wstring q(query);
+  ForEachText(model, true, [&](const TextTarget& t, const TextBody& body) {
+    Search(&body, t, q, matchCase, wholeWords, out);
+    return true;
+  });
   return out;
 }
 

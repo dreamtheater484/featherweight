@@ -33,6 +33,7 @@ ObjectTool& PresentationView::Objects() const {
 }
 
 bool PresentationView::ObjectsTake(int cmd) const {
+  if (cmd == CmdPaste && SlidesOnClipboard()) return false;  // p2-slides: copied slides paste as slides, as in PowerPoint
   if (!keysInThumbs_) return true;
   return cmd != CmdCut && cmd != CmdCopy && cmd != CmdPaste && cmd != CmdSelectAll && cmd != CmdDeleteObject &&
          cmd != CmdDuplicateObjects;
