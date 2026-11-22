@@ -152,6 +152,7 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
         ok = GetS(in, name) && name.starts_with("/");
         if (ok) {
           std::string key = pkg::PartKey(name);
+          m.work.originalParts.erase(key);
           m.work.doms.erase(key);
           m.work.parts[key] = PartState{std::string(name), nullptr, nullptr};
           m.work.names[key] = std::string(name);
@@ -160,22 +161,10 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
       case JournalOp::PartOriginal: {
         ok = GetS(in, name) && name.starts_with("/");
         if (!ok) break;
-        // Back to the file's own: the package's bytes, as a part of the store.
-        std::vector<uint8_t> original;
-        std::string key = pkg::PartKey(name);
+        // Back to the file's own (as it was opened, or absent): kept as the original, so a save
+        // copies it byte for byte.
         const pkg::Part* p = store.Package().FindPart(name);
-        if (p && !p->deleted && store.Package().ReadPart(name, original).Ok()) {
-          std::string_view text(reinterpret_cast<const char*>(original.data()), original.size());
-          if (store.Package().IsXmlPart(name)) {
-            if (auto dom = ParseDom(text, store.Package().GetLimits(), name)) m.PutXml(p->name, std::move(dom), {});
-          } else {
-            m.PutBytes(p->name, std::move(original), {});
-          }
-        } else {
-          m.work.doms.erase(key);
-          m.work.parts[key] = PartState{std::string(name), nullptr, nullptr};
-          m.work.names[key] = std::string(name);
-        }
+        m.Original(p ? std::string_view(p->name) : name);
         break;
       }
       case JournalOp::Rels: {
@@ -192,9 +181,8 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
       case JournalOp::RelsOriginal: {
         ok = GetS(in, name);
         if (!ok) break;
-        pkg::RelationshipSet& rels = m.EditRels(name);
-        const pkg::RelationshipSet* original = store.Package().RelationshipsOf(name);
-        rels.items = original ? original->items : std::vector<pkg::Relationship>{};
+        const pkg::Part* p = store.Package().FindPart(name);
+        m.OriginalRels(p ? std::string_view(p->name) : name);
         break;
       }
       case JournalOp::Types: {
@@ -206,7 +194,7 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
         break;
       }
       case JournalOp::TypesOriginal:
-        m.EditTypes() = store.Package().Types();
+        m.OriginalTypes();
         break;
       case JournalOp::Saved:
         break;

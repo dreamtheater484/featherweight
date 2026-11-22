@@ -25,7 +25,26 @@ uint32_t U32(pugi::xml_node n, const char* attr) {
 
 // ---- Helpers
 
-std::string Utf8(std::wstring_view s) { return fw::WideToUtf8(s); }
+std::wstring XmlText(std::wstring_view s, bool breaks) {
+  std::wstring out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    const wchar_t c = s[i];
+    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
+      out += c;
+      out += s[++i];
+    } else if (c >= 0xD800 && c <= 0xDFFF) {
+      out += L'\xFFFD';
+    } else if (c == 0x9 || c == 0xA || c == 0xD || (breaks && c == 0xB) || (c >= 0x20 && c <= 0xFFFD)) {
+      out += c;
+    }
+  }
+  return out;
+}
+
+std::string XmlTextUtf8(std::string_view utf8) { return fw::WideToUtf8(XmlText(fw::Utf8ToWide(utf8))); }
+
+std::string Utf8(std::wstring_view s) { return fw::WideToUtf8(XmlText(s)); }
 std::wstring Wide(std::string_view s) { return fw::Utf8ToWide(s); }
 
 bool ParseFragment(std::string_view xml, pugi::xml_document& doc) {
@@ -191,7 +210,11 @@ pkg::RelationshipSet& Editor::Impl::EditRels(std::string_view source) {
   auto it = work.rels.find(key);
   if (it == work.rels.end()) {
     auto set = std::make_shared<pkg::RelationshipSet>();
-    if (const pkg::RelationshipSet* cur = Rels(source)) *set = *cur;
+    if (work.originalRels.erase(key)) {
+      if (const pkg::RelationshipSet* cur = store.Package().RelationshipsOf(source)) *set = *cur;
+    } else if (const pkg::RelationshipSet* cur = Rels(source)) {
+      *set = *cur;
+    }
     set->source.assign(source);
     set->relsPart = pkg::RelsPartFor(source);
     it = work.rels.emplace(key, std::move(set)).first;
@@ -200,7 +223,10 @@ pkg::RelationshipSet& Editor::Impl::EditRels(std::string_view source) {
 }
 
 pkg::ContentTypes& Editor::Impl::EditTypes() {
-  if (!work.types) work.types = std::make_shared<pkg::ContentTypes>(store.Types());
+  if (!work.types) {
+    work.types = std::make_shared<pkg::ContentTypes>(work.typesOriginal ? store.Package().Types() : store.Types());
+    work.typesOriginal = false;
+  }
   return *work.types;
 }
 
@@ -244,6 +270,7 @@ void Editor::Impl::PutXml(std::string_view part, std::shared_ptr<pkg::XmlDom> do
   work.doms[key] = std::move(dom);
   work.names[key] = std::string(part);
   work.parts.erase(key);
+  work.originalParts.erase(key);
   if (!contentType.empty() && ContentType(part) != contentType) SetType(EditTypes(), part, contentType, false);
 }
 
@@ -252,11 +279,32 @@ void Editor::Impl::PutBytes(std::string_view part, std::vector<uint8_t> bytes, s
   work.doms.erase(key);
   work.parts[key] = PartState{std::string(part), nullptr, std::make_shared<const std::vector<uint8_t>>(std::move(bytes))};
   work.names[key] = std::string(part);
+  work.originalParts.erase(key);
   if (!contentType.empty() && ContentType(part) != contentType) SetType(EditTypes(), part, contentType, true);
+}
+
+void Editor::Impl::Original(std::string_view part) {
+  std::string key = pkg::PartKey(part);
+  work.doms.erase(key);
+  work.parts.erase(key);
+  work.names[key] = std::string(part);
+  work.originalParts[key] = std::string(part);
+}
+
+void Editor::Impl::OriginalRels(std::string_view source) {
+  std::string key = pkg::PartKey(source);
+  work.rels.erase(key);
+  work.originalRels[key] = std::string(source);
+}
+
+void Editor::Impl::OriginalTypes() {
+  work.types.reset();
+  work.typesOriginal = true;
 }
 
 void Editor::Impl::Remove(std::string_view part) {
   std::string key = pkg::PartKey(part);
+  work.originalParts.erase(key);
   work.doms.erase(key);
   work.parts[key] = PartState{std::string(part), nullptr, nullptr};
   work.names[key] = std::string(part);
@@ -302,7 +350,9 @@ void Editor::Impl::Record(Step& step, const std::string& name, bool rels) {
 void Editor::Impl::Publish() {
   Work w = std::move(work);
   work = Work{};
-  if (w.doms.empty() && w.parts.empty() && w.rels.empty() && !w.types) return;
+  if (w.doms.empty() && w.parts.empty() && w.rels.empty() && !w.types && w.originalParts.empty() &&
+      w.originalRels.empty() && !w.typesOriginal)
+    return;
   store.Bury();
   Step& step = open.back();
   std::set<std::string> keys;
@@ -316,6 +366,24 @@ void Editor::Impl::Publish() {
     Record(step, state.name, false);
     store.Set(state.name, state);
     keys.insert(key);
+  }
+  // Back to the file's own: no edit of them in the store (a save copies them as they are).
+  for (const auto& [key, name] : w.originalParts) {
+    Record(step, name, false);
+    store.Set(name, std::nullopt);
+    keys.insert(key);
+  }
+  for (const auto& [key, name] : w.originalRels) {
+    Record(step, name, true);
+    store.SetRels(name, std::nullopt);
+    keys.insert(key);
+  }
+  if (w.typesOriginal) {
+    if (!step.typesSaved) {
+      step.typesSaved = true;
+      step.types = store.GetTypes();
+    }
+    store.SetTypes(nullptr);
   }
   for (auto& [key, set] : w.rels) {
     Record(step, set->source, true);
@@ -426,6 +494,14 @@ void Editor::Impl::Cancel() {
     changes = Changes{};
     if (!c.Empty()) Notify(std::move(c));
   }
+}
+
+void Editor::Impl::Reshelve() {
+  Step s = std::move(open.back());
+  open.pop_back();
+  undo.push_back(std::move(s));
+  typingOpen = true;
+  changes = Changes{};
 }
 
 void Editor::Impl::Swap(Step& s, Changes& out) {
