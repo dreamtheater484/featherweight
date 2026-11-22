@@ -18,6 +18,7 @@
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
 #include "slide/edit/SlideDesignOps.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/SlideDesign.h"
@@ -542,8 +543,22 @@ TEST(SlideDesign_ApplyThemeAndUndo) {
   solid.color = 0x336699;
   CHECK(ed.SetBackground({0}, BackgroundXml(solid)));
   CHECK_EQ(ReadBackground(*deck->GetSlide(0)).color, 0x336699u);
-  // Three steps back: as it was.
-  CHECK(ed.Undo(3));
+  // Slide numbers, footer and an updating date everywhere (a fourth step).
+  fw::slide::edit::HeaderFooter hf;
+  hf.slideNumber = hf.footer = hf.date = true;
+  hf.footerText = L"Footer & <text>";
+  hf.dateFormat = "datetime2";
+  CHECK(ed.SetHeaderFooter({}, hf));
+  // FW_DESIGN_PPTX=<path>: the deck as these edits leave it, for fwtool check, the Open XML
+  // validator and PowerPoint.
+  char path[MAX_PATH] = {};
+  if (GetEnvironmentVariableA("FW_DESIGN_PPTX", path, MAX_PATH) > 0) {
+    std::vector<uint8_t> bytes;
+    CHECK(fw::slide::edit::SaveToBytes(ed, bytes).Ok());
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  }
+  // Four steps back: as it was.
+  CHECK(ed.Undo(4));
   s = deck->GetSlide(1);
   CHECK(s->showMasterShapes);
   CHECK(s->colorMap.map[0] == draw::ThemeColor::Light1);
@@ -551,4 +566,35 @@ TEST(SlideDesign_ApplyThemeAndUndo) {
   CHECK(s->theme->MajorFont().latin != std::string(dark->major));
   CHECK(!SetShowMasterShapes(ed, {9}, false));
   CHECK(!ApplyThemeDesign(ed, 3, d));
+}
+
+TEST(SlideCopy_BetweenDecks) {
+  // As the tab copies slides: the source saved to memory, read back, its slides inserted into
+  // another deck in that deck's design.
+  fw::pkg::Status status;
+  auto a = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  auto b = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(a != nullptr && b != nullptr);
+  if (!a || !b) return;
+  fw::slide::edit::Editor ea(*a), eb(*b);
+  CHECK(ea.NewSlide(1, 1));
+  fw::slide::edit::HeaderFooter hf;
+  hf.footer = hf.slideNumber = true;
+  hf.footerText = L"From deck one";
+  CHECK(ea.SetHeaderFooter({1}, hf));
+  CHECK(ea.SetNotesText(1, L"copied notes"));
+  std::vector<uint8_t> clip;
+  CHECK(fw::slide::edit::SaveToBytes(ea, clip).Ok());
+  auto source = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(clip), fw::pkg::Limits::Default(), status), status);
+  CHECK(source != nullptr);
+  if (!source) return;
+  std::vector<uint32_t> ids;
+  CHECK(eb.InsertSlides(*source, {0, 1}, 1, false, &ids));
+  CHECK_EQ(b->SlideCount(), 3u);
+  CHECK_EQ(ids.size(), 2u);
+  const HeaderFooterSettings pasted = ReadHeaderFooter(*b->GetSlide(2));
+  CHECK(pasted.footer && pasted.footerText == L"From deck one" && pasted.slideNumber);
+  CHECK(b->GetSlide(2)->NotesText() == L"copied notes");
+  CHECK(eb.Undo());
+  CHECK_EQ(b->SlideCount(), 1u);
 }

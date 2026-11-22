@@ -10,9 +10,14 @@
 #include <cstdio>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
+#include "pkg/Package.h"
+#include "pkg/Snapshot.h"
 #include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
+#include "slide/view/NotesEdit.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlideGallery.h"
 #include "ui/Anim.h"
@@ -52,6 +57,21 @@ constexpr SlideCommandName kSlideNames[] = {
     {CmdSlideMoveFirst, L"Move slide to the beginning", L"Ctrl+Shift+Up"},
     {CmdSlideMoveLast, L"Move slide to the end", L"Ctrl+Shift+Down"},
 };
+
+// Slides copied in this process, for pasting into a presentation tab: the source deck as it was
+// then (saved to memory, so changing or closing the source afterwards doesn't matter) and which
+// of its slides.
+struct SlideClip {
+  std::vector<uint8_t> package;
+  std::vector<size_t> slides;
+  unsigned long sequence = 0;  // the clipboard's after copying: anything copied later replaces the slides
+  bool Current() const { return !package.empty() && sequence == util::ClipboardSequence(); }
+};
+
+SlideClip& Clip() {
+  static SlideClip clip;
+  return clip;
+}
 
 }  // namespace
 
@@ -204,6 +224,24 @@ bool PresentationView::SlideCommandState(int cmd, CommandState& s) {
       s.checked = any && deck_->Hidden(current_);
       break;
     case CmdSlideLayoutMenu: s.enabled = any && !deck_->LayoutsFor(current_).empty(); break;
+    case CmdCut:
+    case CmdCopy:
+      if (!keysInThumbs_) return false;  // the slide's own (P1's picture and text; p2-objects' shapes)
+      s.enabled = any;
+      s.label = cmd == CmdCut ? L"Cut slides" : L"Copy slides";
+      s.shortcut = cmd == CmdCut ? L"Ctrl+X" : L"Ctrl+C";
+      return true;
+    case CmdPaste:
+      if (!Clip().Current()) return false;
+      s.enabled = ready;
+      s.label = L"Paste slides";
+      s.shortcut = L"Ctrl+V";
+      return true;
+    case CmdPasteSlidesDestination:
+    case CmdPasteSlidesSource:
+      s.enabled = ready && Clip().Current();
+      s.label = cmd == CmdPasteSlidesDestination ? L"Paste slides: use destination theme" : L"Paste slides: keep source formatting";
+      return true;
     case CmdSlideMoveUp:
     case CmdSlideMoveFirst: s.enabled = any && !sel.empty() && MoveChanges(n, sel, cmd == CmdSlideMoveFirst ? 0 : sel.front() - (sel.front() > 0)); break;
     case CmdSlideMoveDown:
@@ -246,6 +284,17 @@ bool PresentationView::SlideCommand(int cmd) {
       if (newSlideGallery_) newSlideGallery_->SetOpen(true);
       return true;
     case CmdSlideDuplicate: DuplicateSlides(SelectedSlides()); return true;
+    case CmdCut:
+    case CmdCopy:
+      if (!keysInThumbs_ || !n) return false;
+      CopySlides(cmd == CmdCut);
+      return true;
+    case CmdPaste:
+      if (!Clip().Current()) return false;
+      PasteSlides(false);
+      return true;
+    case CmdPasteSlidesDestination:
+    case CmdPasteSlidesSource: PasteSlides(cmd == CmdPasteSlidesSource); return true;
     case CmdSlideDelete: DeleteSlides(SelectedSlides()); return true;
     case CmdSlideHide:
       if (n) HideSlides(SelectedSlides(), !deck_->Hidden(current_));
@@ -287,6 +336,12 @@ void PresentationView::SlideContextMenu(HMENU m, int thumb) {
   }
   const size_t count = SelectedSlides().size();
   const bool many = count > 1;
+  const bool clip = Clip().Current();
+  AppendItem(m, CmdCut, many ? L"Cut slides\tCtrl+X" : L"Cut slide\tCtrl+X", any);
+  AppendItem(m, CmdCopy, many ? L"Copy slides\tCtrl+C" : L"Copy slide\tCtrl+C", any);
+  AppendItem(m, CmdPasteSlidesDestination, L"Paste: use destination theme\tCtrl+V", clip);
+  AppendItem(m, CmdPasteSlidesSource, L"Paste: keep source formatting", clip);
+  AppendSeparator(m);
   AppendItem(m, CmdSlideNew, L"New slide\tCtrl+M");
   AppendItem(m, CmdSlideDuplicate, many ? L"Duplicate slides\tCtrl+D" : L"Duplicate slide\tCtrl+D", any);
   AppendItem(m, CmdSlideDelete, many ? L"Delete slides\tDelete" : L"Delete slide\tDelete", any);
@@ -466,6 +521,16 @@ bool PresentationView::SlideScriptOp(const std::wstring& op, const std::wstring&
     if (!SlideCount() || !SetNotes(current_, text)) refuse(L"refused");
     return true;
   }
+  if (op == L"notesedit") {
+    // notesedit:<text>: through the notes pane's text box (opened as a click opens it, the text
+    // typed, then left), '|' between lines.
+    std::wstring text = arg;
+    std::replace(text.begin(), text.end(), L'|', L'\n');
+    if (!notesShown_ || !NotesMouseDown()) return refuse(L"the notes pane can't be typed in");
+    notesEdit_->SetText(text);
+    EndNotesEdit();
+    return true;
+  }
   if (op == L"headerfooter") {
     // headerfooter:slidenumber=1|footer=<text>|date=1|datefixed=<text>|dateformat=N|title=0,
     // applied to every slide (title=0: not on title slides).
@@ -575,6 +640,77 @@ void PresentationView::OnSlideEdits(const edit::Changes& c) {
     for (size_t i = 0; i < SlideCount(); ++i) deck_->Invalidate(i);
   SlidesChanged(before, touched, all);
   DesignChanged();
+}
+
+bool PresentationView::CopySlides(bool cut) {
+  const std::vector<size_t> slides = SelectedSlides();
+  edit::Editor* ed = SlideEditor();
+  if (slides.empty() || !ed) return false;
+  // Other programs get the current slide as a picture and its text (P1); a presentation tab the
+  // slides themselves.
+  CopySlide(true, true);
+  SlideClip& clip = Clip();
+  clip.package.clear();
+  if (!edit::SaveToBytes(*ed, clip.package).Ok()) {
+    clip.package.clear();
+    host_.ViewMessage(BannerKind::Warning, L"These slides couldn't be copied.");
+    return false;
+  }
+  clip.slides = slides;
+  clip.sequence = util::ClipboardSequence();
+  if (slides.size() > 1)
+    host_.ViewMessage(BannerKind::Success, (cut ? L"Cut " : L"Copied ") + std::to_wstring(slides.size()) + L" slides");
+  return !cut || DeleteSlides(slides);
+}
+
+bool PresentationView::PasteSlides(bool keepSource) {
+  SlideClip& clip = Clip();
+  if (!clip.Current() || !CanEditSlides()) return false;
+  pkg::Status status;
+  std::unique_ptr<Presentation> source =
+      fw::slide::Read(pkg::Package::Open(pkg::Snapshot::FromBytes(clip.package), pkg::Limits::Default(), status), status);
+  if (!source) {
+    host_.ViewMessage(BannerKind::Warning, L"The copied slides couldn't be read.");
+    return false;
+  }
+  const size_t at = SlideCount() ? current_ + 1 : 0;
+  std::vector<uint32_t> ids;
+  if (!Done(SlideEditor()->InsertSlides(*source, clip.slides, at, keepSource, &ids))) return false;
+  const std::vector<uint32_t> now = SlideIds();
+  std::vector<size_t> pasted;
+  for (uint32_t id : ids)
+    if (auto it = std::find(now.begin(), now.end(), id); it != now.end()) pasted.push_back(static_cast<size_t>(it - now.begin()));
+  if (!pasted.empty()) SelectSlides(pasted, pasted.front());
+  return true;
+}
+
+bool PresentationView::NotesMouseDown() {
+  if (!SlideCount()) return false;
+  if (notesEdit_ && notesEdit_->IsOpen()) return true;
+  edit::Editor* ed = SlideEditor();
+  if (!ed || !ed->CanEdit()) return false;  // a read-only deck: the notes are only read
+  if (!notesEdit_) {
+    notesEdit_ = std::make_unique<NotesEdit>();
+    notesEdit_->onCommit = [this](const std::wstring& text) { SetNotes(notesSlide_, text); };
+    notesEdit_->onLeave = [this] { EndNotesEdit(); };
+  }
+  notesSlide_ = current_;
+  const float pad = 12 * ui_;
+  const D2D1_RECT_F box{notes_.left + pad, notes_.top + pad * 0.75f, notes_.right - pad, notes_.bottom - pad * 0.5f};
+  if (!notesEdit_->Open(host_.ViewHwnd(), Inflate(box, 4 * ui_, 4 * ui_), deck_->Notes(current_), ui_)) return false;
+  host_.ViewInvalidate();
+  return true;
+}
+
+void PresentationView::EndNotesEdit() {
+  if (!notesEdit_ || !notesEdit_->IsOpen()) return;
+  notesEdit_->Commit();
+  notesEdit_->Close();
+  host_.ViewInvalidate();
+}
+
+void PresentationView::PlaceNotesEdit(const D2D1_RECT_F& box) {
+  if (notesEdit_) notesEdit_->Place(Inflate(box, 4 * ui_, 4 * ui_), ui_);
 }
 
 bool PresentationView::CanEditSlides() const {
