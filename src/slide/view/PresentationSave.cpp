@@ -79,7 +79,7 @@ bool PresentationView::ReadyToSave(std::wstring& error) {
   }
   // What is being typed is part of what's saved: notes still in the notes pane go to the slide (the
   // pane stays open), and typing on a slide ends its step.
-  if (notesEdit_ && notesEdit_->IsOpen()) notesEdit_->Commit();
+  CommitNotes();  // the notes being typed (p2-slides), the box left open
   ed->EndTyping();
   return true;
 }

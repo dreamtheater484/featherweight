@@ -598,3 +598,34 @@ TEST(SlideCopy_BetweenDecks) {
   CHECK(eb.Undo());
   CHECK_EQ(b->SlideCount(), 1u);
 }
+
+TEST(SlideHeaderFooter_LineBreaksAndControlCharacters) {
+  // fuzz_pptx finding 4: a footer with a line break ('\v') or a character XML can't hold must leave a
+  // slide that parses; the break is an a:br, the rest dropped.
+  fw::pkg::Status status;
+  auto deck = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  fw::slide::edit::Editor ed(*deck);
+  CHECK(ed.NewSlide(1, 1));
+  fw::slide::edit::HeaderFooter hf;
+  hf.footer = hf.date = true;
+  hf.footerText = std::wstring(L"line\vbreak\x01") + L"\xFFFE end";
+  hf.dateFixed = true;
+  hf.dateText = L"one\ntwo";
+  CHECK(ed.SetHeaderFooter({1}, hf));
+  std::vector<uint8_t> bytes;
+  CHECK(fw::slide::edit::SaveToBytes(ed, bytes).Ok());
+  auto again = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(bytes), fw::pkg::Limits::Default(), status), status);
+  CHECK(again != nullptr);
+  if (!again) return;
+  const fw::slide::Slide* s = again->GetSlide(1);
+  CHECK(s != nullptr);
+  if (!s) return;
+  const HeaderFooterSettings read = ReadHeaderFooter(*s);
+  CHECK(read.footer && read.date);
+  CHECK(read.footerText.find(L"line") != std::wstring::npos && read.footerText.find(L"break") != std::wstring::npos);
+  CHECK(read.footerText.find(L'\x01') == std::wstring::npos && read.footerText.find(L'\xFFFE') == std::wstring::npos);
+  const fw::slide::Shape* footer = s->FindPlaceholder(fw::slide::PlaceholderType::Footer);
+  CHECK(footer != nullptr);
+}

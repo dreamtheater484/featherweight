@@ -85,11 +85,25 @@ void FillBody(pugi::xml_node shape, Kind kind, const HeaderFooter& hf, const std
     rPr(f);
     f.append_child((a + ":t").c_str()).text() = Utf8(shown).c_str();
   };
+  // The text as runs: only what XML can hold (XmlText); a line break ('\v' as typing makes it, or a
+  // line feed) is an a:br between runs, as InsertText writes it (fuzz_pptx finding 4).
   auto run = [&](const std::wstring& text) {
-    if (text.empty()) return;
-    pugi::xml_node r = para.append_child((a + ":r").c_str());
-    rPr(r);
-    r.append_child((a + ":t").c_str()).text() = Utf8(text).c_str();
+    const std::wstring clean = XmlText(text, true);
+    size_t from = 0;
+    for (size_t i = 0; i <= clean.size(); ++i) {
+      const bool brk = i < clean.size() && (clean[i] == L'\v' || clean[i] == L'\n' || clean[i] == L'\r');
+      if (i < clean.size() && !brk) continue;
+      if (i > from) {
+        pugi::xml_node r = para.append_child((a + ":r").c_str());
+        rPr(r);
+        r.append_child((a + ":t").c_str()).text() = Utf8(clean.substr(from, i - from)).c_str();
+      }
+      if (brk) {
+        if (clean[i] == L'\r' && i + 1 < clean.size() && clean[i + 1] == L'\n') ++i;
+        rPr(para.append_child((a + ":br").c_str()));
+      }
+      from = i + 1;
+    }
   };
   switch (kind) {
     case Kind::Number: field("slidenum", L"‹#›"); break;  // ‹#›: numbered when shown
