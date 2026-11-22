@@ -25,6 +25,7 @@
 #include "slide/view/TextFind.h"
 #include "slide/view/TextFormat.h"
 #include "slide/edit/Edit.h"
+#include "slide/edit/Save.h"
 #include "slide/view/TextModel.h"
 #include "slide/view/TextModelEdit.h"
 #include "slide/view/TextSession.h"
@@ -725,4 +726,114 @@ TEST(SlideText_TheSlidesTextsForSpelling) {
   const draw::Point at = texts[1].toSlide.Apply({rects[0].left, rects[0].top});
   CHECK(at.x > 100 && at.x < 300);
   CHECK(at.y >= 299 && at.y < 340);
+}
+
+// Seeded random editing the way the tab edits (TextSession over EditTextModel over p2-model's editor)
+// in the generated decks' texts: keys, selections, formatting, levels, clipboard. After each edit the
+// model holds what the working copy holds; undoing everything gives the decks' texts as opened, redoing
+// gives them as edited, and the saved file reads back with them.
+TEST(SlideText_RandomEditsHoldUndoAndSave) {
+  // FW_SLIDE_TEXT_SEED=<n> runs another seed (a torture run tries many).
+  uint32_t seed = 20261122;
+  char env[32] = {};
+  if (GetEnvironmentVariableA("FW_SLIDE_TEXT_SEED", env, sizeof env) > 0) seed = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  auto rnd = [&seed](uint32_t n) {
+    seed = seed * 1103515245u + 12345u;
+    return n ? (seed >> 8) % n : 0u;
+  };
+  auto children = [](pugi::xml_node body) {
+    std::string out;
+    for (pugi::xml_node c = body.first_child(); c; c = c.next_sibling()) out += Xml(c);
+    return out;
+  };
+  for (const char* name : {"simple.pptx", "layouts.pptx", "shapes-table-chart.pptx"}) {
+    auto deck = OpenBytes(FileBytes(Generated() / name));
+    REQUIRE(deck != nullptr);
+    fw::slide::edit::Editor editor(*deck);
+    EditTextModel model(*deck, editor);
+    fw::text::Fonts fonts;
+    std::vector<TextTarget> texts;
+    ForEachText(model, false, [&](const TextTarget& t, const TextBody&) {
+      texts.push_back(t);
+      return true;
+    });
+    REQUIRE(!texts.empty());
+    auto modelText = [&](const TextTarget& t) {
+      std::unique_ptr<TextDoc> d = OpenText(model, t);
+      std::wstring out;
+      for (uint32_t i = 0; d && i < d->ParagraphCount(); ++i) out += d->Text(i) + L"\n";
+      return out;
+    };
+    std::vector<std::wstring> opened;
+    for (const TextTarget& t : texts) opened.push_back(modelText(t));
+    int edits = 0;
+    for (int round = 0; round < 8; ++round) {
+      const TextTarget t = texts[rnd(static_cast<uint32_t>(texts.size()))];
+      auto slide = render::SlideRender::Make(*deck, *deck->GetSlide(t.slide), fonts);
+      render::SlideRender::TextFrame frame;
+      if (!slide->FindText(t.shape, t.row, t.column, frame)) continue;
+      TextSession s(model, t, fonts);
+      if (!s.Start(frame, {})) continue;
+      for (int k = 0; k < 40; ++k) {
+        // Within the editor's undo history (100 steps), so undo can reach the start.
+        if (editor.UndoNames().size() >= 90) break;
+        const TextPos end = s.Doc().End();
+        auto anyPos = [&] {
+          const uint32_t para = rnd(end.para + 1);
+          return TextPos{para, rnd(s.Doc().Length(para) + 1)};
+        };
+        const uint32_t op = rnd(18);
+        bool changed = false;
+        if (op < 6) changed = s.Type(std::wstring(1, static_cast<wchar_t>(L"abc d\u00e9"[rnd(6)])));
+        else if (op == 6) changed = s.Backspace(rnd(4) == 0);
+        else if (op == 7) changed = s.DeleteForward(rnd(4) == 0);
+        else if (op == 8) changed = s.Enter();
+        else if (op == 9) changed = s.LineBreak();
+        else if (op == 10) changed = s.Tab(rnd(2) == 0);
+        else if (op == 11) s.Select(anyPos(), anyPos());
+        else if (op == 12) changed = format::Bold(s, rnd(2) == 0);
+        else if (op == 13) changed = format::Size(s, static_cast<float>(10 + rnd(40)));
+        else if (op == 14) changed = format::Color(s, draw::Color{rnd(2) * 1.f, 0.2f, 0.4f, 1});
+        else if (op == 15) changed = format::Bullets(s, rnd(2) == 0);
+        else if (op == 16) {
+          s.Select(anyPos(), anyPos());
+          if (s.HasSelection()) {
+            const TextClipboard clip = CopySelection(s, model);
+            s.Select(anyPos(), anyPos());
+            changed = Paste(s, model, clip.html, clip.rtf, clip.text, rnd(3) == 0);
+          }
+        } else {
+          s.MoveCaret(static_cast<TextSession::Move>(rnd(12)), rnd(3) == 0);
+        }
+        const std::wstring refused = s.TakeError();
+        if (!refused.empty()) std::printf("%s, seed op %u on slide %zu shape %u: %ls\n", name, op, t.slide, t.shape, refused.c_str());
+        CHECK(refused.empty());
+        if (changed) ++edits;
+        // The model holds the working copy, element for element.
+        CHECK(children(model.Body(t)) == children(s.Doc().Body()));
+      }
+    }
+    CHECK(edits > 50);
+    std::vector<std::wstring> edited;
+    for (const TextTarget& t : texts) edited.push_back(modelText(t));
+    const size_t steps = editor.UndoNames().size();
+    CHECK(steps > 0);
+    CHECK(editor.Undo(steps));
+    for (size_t i = 0; i < texts.size(); ++i) CHECK(modelText(texts[i]) == opened[i]);
+    CHECK(editor.Redo(steps));
+    for (size_t i = 0; i < texts.size(); ++i) CHECK(modelText(texts[i]) == edited[i]);
+    // Saved and read back: the edited text.
+    std::vector<uint8_t> bytes;
+    REQUIRE(fw::slide::edit::SaveToBytes(editor, bytes).Ok());
+    auto back = OpenBytes(std::move(bytes));
+    REQUIRE(back != nullptr);
+    fw::slide::edit::Editor backEditor(*back);
+    EditTextModel backModel(*back, backEditor);
+    for (size_t i = 0; i < texts.size(); ++i) {
+      std::unique_ptr<TextDoc> d = OpenText(backModel, texts[i]);
+      std::wstring out;
+      for (uint32_t j = 0; d && j < d->ParagraphCount(); ++j) out += d->Text(j) + L"\n";
+      CHECK(out == edited[i]);
+    }
+  }
 }

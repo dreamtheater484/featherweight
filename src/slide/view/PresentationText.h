@@ -5,6 +5,7 @@
 #include <d2d1_1.h>
 
 #include <memory>
+#include <array>
 #include <optional>
 #include <string>
 
@@ -60,6 +61,10 @@ class TextEditing {
   // Typing with shape `shape` selected (no text being edited): its text, all of it selected so the
   // typing replaces it, as PowerPoint does. False when it has no text body to edit.
   bool TypeInto(size_t slide, uint32_t shape);
+  // The block of table cells selected while a cell is edited (a drag across cells, Shift+click in
+  // another cell of the table), as {first row, first column, last row, last column}; just the
+  // edited cell when no block is selected; nothing when the text edited isn't a table cell.
+  std::optional<std::array<int, 4>> CellRange() const;
   // The shape whose text Esc left, once (the tab keeps it selected), else 0.
   uint32_t TakeLeft();
   // Script ops (scripts/build-deck.ps1): edit:title|subtitle|body|body2 (the caret at the end of that
@@ -122,6 +127,9 @@ class TextEditing {
   std::unique_ptr<Hide> hide_;
   bool slideChanged_ = false;
   uint32_t left_ = 0;  // TakeLeft's
+  // A block of cells: from the edited cell (the anchor) to this one; none: the text selection.
+  std::optional<std::pair<int, int>> cellTo_;
+  bool CellUnder(draw::Point at, int& row, int& column) const;  // the edited table's cell there
   // The edited text's colors: the slide's theme and color map when editing began (StartAt).
   std::shared_ptr<const draw::Theme> theme_;
   draw::ColorMap colorMap_;
