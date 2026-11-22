@@ -183,12 +183,14 @@ std::string FormatEdit(const Edit& e) {
 
 bool ParseEdit(std::string_view line, Edit& e) {
   e = Edit{};
-  if (size_t hash = line.find(" # "); hash != std::string_view::npos) {
-    // A '#' inside quoted text isn't a comment: only one after the last quote.
-    size_t lastQuote = line.rfind('"');
-    if (lastQuote == std::string_view::npos || hash > lastQuote) {
-      e.target = std::string(line.substr(hash + 3));
-      line = line.substr(0, hash);
+  // The target comment: the first " # " outside quoted text (it may hold quotes of its own).
+  for (size_t i = 0, quoted = 0; i < line.size(); ++i) {
+    if (quoted && line[i] == '\\') ++i;
+    else if (line[i] == '"') quoted = !quoted;
+    else if (!quoted && line.substr(i).starts_with(" # ")) {
+      e.target = std::string(line.substr(i + 3));
+      line = line.substr(0, i);
+      break;
     }
   }
   std::string_view s = line;
@@ -836,8 +838,8 @@ bool Listed(const std::vector<std::string>& list, const std::string& part) {
          (part.starts_with('/') && std::find(list.begin(), list.end(), part.substr(1)) != list.end());
 }
 
-// After a save that passes, the saved file is what the next save is measured against (its parts
-// the next save doesn't write must be the saved file's); errors and problems stay the original's.
+// A save, measured against the original: the parts it didn't write or leave out are the original's,
+// byte for byte; no new check errors or model problems; it reads back as the deck as edited.
 std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
   std::vector<uint8_t> bytes;
   if (fw::pkg::Status st = target.Save(bytes); !st.Ok()) return Failure{"save", st.message};
@@ -886,8 +888,8 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
     r.edited = Joined(edited), r.readBack = Joined(readBack);
     return Failure{"readback", diff};
   }
-  if (auto saved = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(r.saved), orig.pkg->GetLimits(), st))
-    orig.pkg = std::move(saved);
+  // Every save is measured against the file as opened: the writer copies untouched parts from it and
+  // lists what it wrote or left out since then (Save.h), not since the last save.
   return std::nullopt;
 }
 
