@@ -693,3 +693,15 @@ TEST(SlideText_TypesThroughTheEditLayer) {
   CHECK(session.Doc().Text(0) == L"Hello");
   CHECK(session.Caret().para == 0);
 }
+
+// What XML can't hold never reaches the text: control characters, U+FFFE and U+FFFF, and halves of
+// surrogate pairs on their own (a pair stays).
+TEST(SlideText_TypedTextIsWhatXmlCanHold) {
+  auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"ctrTitle\"/>", "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>x</a:t></a:r></a:p>")));
+  REQUIRE(deck != nullptr);
+  TextDoc doc(ModelBody(*deck, 2), ResolverFor(*deck, 2));
+  const std::wstring typed = {L'a', wchar_t(1), L'b', wchar_t(0xD800), L'c', wchar_t(0xDC00), L'd', wchar_t(0xFFFE),
+                              L'e', wchar_t(0xD83D), wchar_t(0xDE00)};
+  doc.Insert(doc.End(), typed);
+  CHECK(doc.Text(0) == std::wstring(L"xabcde") + wchar_t(0xD83D) + wchar_t(0xDE00));
+}
