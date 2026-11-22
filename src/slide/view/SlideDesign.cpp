@@ -20,6 +20,15 @@ std::string Attr(std::string_view v) {
   return out;
 }
 
+// The namespace declarations a fragment's root element carries (none unless ns.declare).
+std::string Declare(const Prefixes& ns, bool p, bool r) {
+  if (!ns.declare) return {};
+  std::string x = " xmlns:" + ns.a + "=\"" + std::string(draw::xml::kA) + "\"";
+  if (p) x += " xmlns:" + ns.p + "=\"" + std::string(draw::xml::kP) + "\"";
+  if (r) x += " xmlns:" + ns.r + "=\"" + std::string(draw::xml::kR) + "\"";
+  return x;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -100,7 +109,7 @@ std::string ColorSchemeXml(const ColorScheme& scheme, const Prefixes& ns) {
   static const char* const kNames[12] = {"dk1",     "lt1",     "dk2",     "lt2",     "accent1", "accent2",
                                          "accent3", "accent4", "accent5", "accent6", "hlink",   "folHlink"};
   const std::string& a = ns.a;
-  std::string x = "<" + a + ":clrScheme name=\"" + Attr(WideToUtf8(scheme.name)) + "\">";
+  std::string x = "<" + a + ":clrScheme" + Declare(ns, false, false) + " name=\"" + Attr(WideToUtf8(scheme.name)) + "\">";
   for (int i = 0; i < 12; ++i) {
     const uint32_t c = scheme.colors[i] & 0xFFFFFF;
     x += "<" + a + ":" + kNames[i] + ">";
@@ -120,14 +129,14 @@ std::string FontSchemeXml(std::string_view name, std::string_view major, std::st
     return "<" + a + ":" + which + "><" + a + ":latin typeface=\"" + Attr(face) + "\"/><" + a + ":ea typeface=\"\"/><" + a +
            ":cs typeface=\"\"/></" + a + ":" + which + ">";
   };
-  return "<" + a + ":fontScheme name=\"" + Attr(name) + "\">" + font("majorFont", major) + font("minorFont", minor) + "</" + a +
+  return "<" + a + ":fontScheme" + Declare(ns, false, false) + " name=\"" + Attr(name) + "\">" + font("majorFont", major) + font("minorFont", minor) + "</" + a +
          ":fontScheme>";
 }
 
 std::string BackgroundXml(const Background& bg, std::string_view pictureRel, const Prefixes& ns) {
   const std::string& a = ns.a;
   const std::string& p = ns.p;
-  const std::string open = "<" + p + ":bg>", close = "</" + p + ":bg>";
+  const std::string open = "<" + p + ":bg" + Declare(ns, true, bg.kind == Background::Kind::Picture) + ">", close = "</" + p + ":bg>";
   if (bg.kind == Background::Kind::Theme) {
     const int idx = std::clamp(bg.themeIndex, 1001, 1003);
     return open + "<" + p + ":bgRef idx=\"" + std::to_string(idx) + "\"><" + a + ":schemeClr val=\"bg1\"/></" + p + ":bgRef>" + close;

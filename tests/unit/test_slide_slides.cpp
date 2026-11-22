@@ -18,6 +18,7 @@
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
+#include "slide/edit/SlideDesignOps.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/SlideDesign.h"
 #include "slide/view/SlideHeaderFooter.h"
@@ -493,4 +494,61 @@ TEST(SlideHeaderFooter_EditAndUndo) {
   CHECK(ed.Redo(1));
   CHECK(ReadHeaderFooter(*deck->GetSlide(1)).footerText == L"Quarterly review");
   CHECK(!ed.SetHeaderFooter({7}, hf));  // no such slide: refused, nothing changed
+}
+
+TEST(SlideDesign_ApplyThemeAndUndo) {
+  fw::pkg::Status status;
+  auto deck = fw::slide::Read(fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(BlankPresentation()), fw::pkg::Limits::Default(), status), status);
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  fw::slide::edit::Editor ed(*deck);
+  CHECK(ed.NewSlide(1, 1));
+  const BuiltInTheme* dark = nullptr;
+  for (const BuiltInTheme& t : BuiltInThemes())
+    if (t.dark) {
+      dark = &t;
+      break;
+    }
+  CHECK(dark != nullptr);
+  if (!dark) return;
+  const int schemeBefore = ColorSchemeOf(*deck->GetSlide(1));
+  const std::string eaBefore = deck->GetSlide(1)->theme->MajorFont().eastAsian;
+  const size_t scriptsBefore = deck->GetSlide(1)->theme->MajorFont().scripts.size();
+  fw::slide::edit::ThemeDesign d;
+  d.name = "Dark test";
+  d.colorScheme = ColorSchemeXml(ColorSchemes()[dark->colors]);
+  d.major = dark->major;
+  d.minor = dark->minor;
+  d.dark = 1;
+  d.background = BackgroundXml(dark->background);
+  CHECK(ApplyThemeDesign(ed, 0, d));
+  // Colors, fonts (East Asian and script fonts kept), light text on dark, the master's background.
+  const fw::slide::Slide* s = deck->GetSlide(1);
+  CHECK_EQ(ColorSchemeOf(*s), dark->colors);
+  CHECK_EQ(s->theme->Name(), std::string("Dark test"));
+  CHECK_EQ(s->theme->MajorFont().latin, std::string(dark->major));
+  CHECK_EQ(s->theme->MinorFont().latin, std::string(dark->minor));
+  CHECK_EQ(s->theme->MajorFont().eastAsian, eaBefore);
+  CHECK_EQ(s->theme->MajorFont().scripts.size(), scriptsBefore);
+  CHECK(s->colorMap.map[0] == draw::ThemeColor::Dark1);
+  const Background bg = ReadBackground(*s);
+  CHECK(bg.kind == dark->background.kind);
+  if (bg.kind == Background::Kind::Solid) CHECK_EQ(bg.color, dark->background.color);
+  // Hide background graphics on slide 2; a slide background as the panel writes it.
+  CHECK(SetShowMasterShapes(ed, {1}, false));
+  CHECK(!deck->GetSlide(1)->showMasterShapes);
+  CHECK(deck->GetSlide(0)->showMasterShapes);
+  Background solid;
+  solid.color = 0x336699;
+  CHECK(ed.SetBackground({0}, BackgroundXml(solid)));
+  CHECK_EQ(ReadBackground(*deck->GetSlide(0)).color, 0x336699u);
+  // Three steps back: as it was.
+  CHECK(ed.Undo(3));
+  s = deck->GetSlide(1);
+  CHECK(s->showMasterShapes);
+  CHECK(s->colorMap.map[0] == draw::ThemeColor::Light1);
+  CHECK_EQ(ColorSchemeOf(*s), schemeBefore);
+  CHECK(s->theme->MajorFont().latin != std::string(dark->major));
+  CHECK(!SetShowMasterShapes(ed, {9}, false));
+  CHECK(!ApplyThemeDesign(ed, 3, d));
 }
