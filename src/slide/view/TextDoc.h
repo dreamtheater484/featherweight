@@ -81,6 +81,10 @@ class TextDoc {
   // ends) and the a:endParaRPr of the paragraphs whose mark the range covers. False when the range
   // is empty.
   bool EditRuns(TextPos from, TextPos to, const std::function<void(pugi::xml_node rPr)>& edit);
+  // The same, with what each run looks like before the edit.
+  bool EditRuns(TextPos from, TextPos to, const std::function<void(pugi::xml_node rPr, const RunProps& now)>& edit);
+  // Replaces characters one for one in one paragraph (change case), keeping every run's look.
+  bool ReplaceChars(TextPos from, TextPos to, std::wstring_view with);
   // Calls `edit` with a paragraph's mark (a:endParaRPr, made when missing): an empty paragraph's look.
   void EditMark(uint32_t para, const std::function<void(pugi::xml_node rPr)>& edit);
   // Calls `edit` with the a:pPr of paragraphs first..last (made where missing).
@@ -95,6 +99,8 @@ class TextDoc {
 
   // The DrawingML prefix this body uses ("a:" or ""), for making elements.
   const std::string& Prefix() const { return a_; }
+  // The relationships namespace's prefix ("r:"), declared on the body when it isn't yet.
+  std::string RelPrefix();
   // Element helpers in schema order: the child named `local` of an a:rPr / a:endParaRPr, or of an
   // a:pPr, made (in its place) when `make`.
   pugi::xml_node RunChild(pugi::xml_node rPr, std::string_view local, bool make) const;

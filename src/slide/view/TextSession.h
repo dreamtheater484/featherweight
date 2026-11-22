@@ -94,8 +94,11 @@ class TextSession {
   // Replaces the selection with paragraphs (pasting Featherweight's own copy).
   bool ReplaceWithParagraphs(const std::vector<pugi::xml_node>& paragraphs, std::u16string_view step);
   // Character formatting over the selection, or with none, the word at the caret (as PowerPoint
-  // does) or what's typed next. `edit` gets each a:rPr.
-  bool FormatRuns(std::u16string_view step, const std::function<void(TextDoc&, pugi::xml_node rPr)>& edit);
+  // does) or what's typed next. `edit` gets each a:rPr and what that text looks like now.
+  bool FormatRuns(std::u16string_view step,
+                  const std::function<void(TextDoc&, pugi::xml_node rPr, const RunProps& now)>& edit);
+  // What the text at a position looks like (the run typing there joins, else the mark).
+  RunProps LookAt(TextPos p) const;
   // Paragraph formatting over the paragraphs the selection touches.
   bool FormatParagraphs(std::u16string_view step, const std::function<void(TextDoc&, pugi::xml_node pPr)>& edit);
   // Any other edit on the working copy, then committed as one step; `edit` returns whether it changed.

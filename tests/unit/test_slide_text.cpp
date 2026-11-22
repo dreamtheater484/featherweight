@@ -20,6 +20,7 @@
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
 #include "slide/view/TextDoc.h"
+#include "slide/view/TextFormat.h"
 #include "slide/view/TextModel.h"
 #include "slide/view/TextSession.h"
 #include "text/Fonts.h"
@@ -468,4 +469,88 @@ TEST(SlideText_TargetUnderAPoint) {
   REQUIRE(t.has_value());
   CHECK_EQ(t->shape, 4u);
   CHECK(!TextTargetAt(*f.slide, 0, false, {20, 500}).has_value());
+}
+
+TEST(SlideText_FormattingTheSelectionAndTheWordAtTheCaret) {
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>", "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>alpha beta</a:t></a:r></a:p>"), 2));
+  TextSession& s = *f.session;
+  s.Select({0, 0}, {0, 2});
+  CHECK(format::Bold(s, true));
+  CHECK(LookOf(s).bold == std::optional<bool>(true));
+  s.Select({0, 0}, {0, 5});
+  CHECK(!LookOf(s).bold.has_value());  // mixed
+  // The caret inside "beta": the word.
+  s.Select({0, 8}, {0, 8});
+  CHECK(format::Italic(s, true));
+  const std::vector<TextRun>& runs = s.Doc().Resolved().paragraphs[0].runs;
+  REQUIRE(runs.size() == 3);
+  CHECK(runs[2].text == L"beta");
+  CHECK(runs[2].props.italic);
+  CHECK(!runs[1].props.italic);
+  // At the end of the text: what's typed next, without an undo step of its own.
+  const size_t steps = f.model->steps.size();
+  s.MoveCaret(TextSession::Move::End, false);
+  CHECK(format::Underline(s, true));
+  CHECK_EQ(f.model->steps.size(), steps);
+  CHECK(LookOf(s).underline == std::optional<bool>(true));
+  CHECK(s.Type(L"!"));
+  CHECK(s.Doc().Resolved().paragraphs[0].runs.back().text == L"!");
+  CHECK(s.Doc().Resolved().paragraphs[0].runs.back().props.underline != fw::slide::Underline::None);
+  // Sizes, colors, fonts.
+  s.SelectAll();
+  CHECK(format::Size(s, 40));
+  CHECK(LookOf(s).size == std::optional<float>(40.f));
+  CHECK(format::Grow(s, true, false));
+  CHECK(LookOf(s).size == std::optional<float>(44.f));
+  CHECK(format::Grow(s, false, true));
+  CHECK(LookOf(s).size == std::optional<float>(43.f));
+  CHECK(format::Color(s, draw::Color{1, 0, 0, 1}));
+  CHECK(f.model->Committed().find("<a:srgbClr val=\"FF0000\"") != std::string::npos);
+  CHECK(format::Font(s, L"Georgia"));
+  CHECK(LookOf(s).font == std::optional<std::wstring>(L"Georgia"));
+  CHECK(format::ClearCharacter(s));
+  CHECK(LookOf(s).font != std::optional<std::wstring>(L"Georgia"));
+  CHECK(f.model->Committed().find("lang=\"en-US\"") != std::string::npos);
+}
+
+TEST(SlideText_BulletsNumberingAndLevels) {
+  Fixture f;
+  REQUIRE(f.Open(TextBox(4, 50, 50, 300, 200,
+                         "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>One</a:t></a:r></a:p><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Two</a:t></a:r></a:p>",
+                         "<a:bodyPr/>"),
+                 4));
+  TextSession& s = *f.session;
+  s.SelectAll();
+  CHECK(!LookOf(s).bullets);
+  CHECK(format::Bullets(s, true));
+  CHECK(LookOf(s).bullets);
+  std::string xml = f.model->Committed();
+  CHECK(xml.find("<a:pPr marL=\"285750\" indent=\"-285750\"><a:buFont typeface=\"Arial\"") != std::string::npos);
+  CHECK(format::Numbering(s, true));
+  CHECK(LookOf(s).numbering);
+  CHECK_EQ(s.Doc().Resolved().paragraphs[1].number, 2);
+  CHECK(format::Bullets(s, false));
+  CHECK(!LookOf(s).bullets && !LookOf(s).numbering);
+  CHECK(f.model->Committed().find("<a:buNone") != std::string::npos);
+  CHECK(format::Align(s, TextAlign::Center));
+  CHECK(LookOf(s).align == std::optional<TextAlign>(TextAlign::Center));
+  CHECK(format::LineSpacing(s, 1.5f));
+  CHECK_NEAR(LookOf(s).lineSpacing, 1.5f, 0.001f);
+  CHECK(format::Level(s, true));
+  CHECK_EQ(LookOf(s).level, 1);
+}
+
+TEST(SlideText_ChangeCaseKeepsTheRuns) {
+  Fixture f;
+  REQUIRE(f.Open(PhShape(2, "<p:ph type=\"ctrTitle\"/>",
+                         "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>hello </a:t></a:r><a:r><a:rPr lang=\"en-US\" b=\"1\"/><a:t>world</a:t></a:r></a:p>"),
+                 2));
+  TextSession& s = *f.session;
+  s.SelectAll();
+  CHECK(format::ChangeCase(s));
+  CHECK(s.Doc().Text(0) == L"Hello World");
+  CHECK_EQ(s.Doc().Resolved().paragraphs[0].runs.size(), size_t{2});
+  CHECK(format::ChangeCase(s));
+  CHECK(s.Doc().Text(0) == L"HELLO WORLD");
 }

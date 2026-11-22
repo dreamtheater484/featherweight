@@ -522,7 +522,8 @@ bool TextSession::ReplaceWithParagraphs(const std::vector<pugi::xml_node>& parag
   return Commit(step, false);
 }
 
-bool TextSession::FormatRuns(std::u16string_view step, const std::function<void(TextDoc&, pugi::xml_node rPr)>& edit) {
+bool TextSession::FormatRuns(std::u16string_view step,
+                             const std::function<void(TextDoc&, pugi::xml_node rPr, const RunProps& now)>& edit) {
   TextPos from = SelFrom(), to = SelTo();
   if (!HasSelection()) {
     // Inside a word, the word (PowerPoint); in an empty paragraph, its mark; else what's typed next.
@@ -534,7 +535,8 @@ bool TextSession::FormatRuns(std::u16string_view step, const std::function<void(
       from = a;
       to = b;
     } else if (doc_->Length(caret_.para) == 0) {
-      doc_->EditMark(caret_.para, [&](pugi::xml_node rPr) { edit(*doc_, rPr); });
+      const RunProps now = LookAt(caret_);
+      doc_->EditMark(caret_.para, [&](pugi::xml_node rPr) { edit(*doc_, rPr, now); });
       return Commit(step, false);
     } else {
       if (!pending_ || pendingAt_ != caret_) {
@@ -546,13 +548,31 @@ bool TextSession::FormatRuns(std::u16string_view step, const std::function<void(
         }
         pendingAt_ = caret_;
       }
-      edit(*doc_, pending_.first_child());
+      edit(*doc_, pending_.first_child(), LookAt(caret_));
       typing_ = false;
       return true;
     }
   }
-  if (!doc_->EditRuns(from, to, [&](pugi::xml_node rPr) { edit(*doc_, rPr); })) return false;
+  if (!doc_->EditRuns(from, to, [&](pugi::xml_node rPr, const RunProps& now) { edit(*doc_, rPr, now); })) return false;
   return Commit(step, false);
+}
+
+RunProps TextSession::LookAt(TextPos p) const {
+  p = doc_->Clamp(p);
+  const std::vector<Paragraph>& paras = doc_->Resolved().paragraphs;
+  if (p.para >= paras.size()) return {};
+  const Paragraph& para = paras[p.para];
+  // The run before the position (the one typing there joins), else the first, else the mark.
+  uint32_t at = 0;
+  const TextRun* before = nullptr;
+  for (const TextRun& r : para.runs) {
+    const uint32_t len = r.kind == TextRun::Kind::Break ? 1 : static_cast<uint32_t>(r.text.size());
+    if (at < p.offset && p.offset <= at + len) before = &r;
+    at += len;
+  }
+  if (before) return before->props;
+  if (!para.runs.empty()) return para.runs.front().props;
+  return para.endProps;
 }
 
 bool TextSession::FormatParagraphs(std::u16string_view step, const std::function<void(TextDoc&, pugi::xml_node pPr)>& edit) {

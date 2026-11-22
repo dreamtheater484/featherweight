@@ -182,6 +182,15 @@ void TextDoc::Widen(TextPos& from, TextPos& to) const {
   if (InField(to, s, e)) to.offset = e;
 }
 
+std::string TextDoc::RelPrefix() {
+  for (pugi::xml_attribute at : body_.attributes()) {
+    const std::string_view n = at.name();
+    if (n.starts_with("xmlns:") && std::string_view(at.value()) == kR) return std::string(n.substr(6)) + ":";
+  }
+  if (!body_.attribute("xmlns:r")) body_.append_attribute("xmlns:r") = std::string(kR).c_str();
+  return "r:";
+}
+
 // ---------------------------------------------------------------------------
 // Elements
 
@@ -602,6 +611,10 @@ void TextDoc::Tidy(pugi::xml_node p) {
 // Formatting
 
 bool TextDoc::EditRuns(TextPos from, TextPos to, const std::function<void(pugi::xml_node rPr)>& edit) {
+  return EditRuns(from, to, [&](pugi::xml_node rPr, const RunProps&) { edit(rPr); });
+}
+
+bool TextDoc::EditRuns(TextPos from, TextPos to, const std::function<void(pugi::xml_node rPr, const RunProps& now)>& edit) {
   from = Clamp(from);
   to = Clamp(to);
   if (to < from) std::swap(from, to);
@@ -611,13 +624,17 @@ bool TextDoc::EditRuns(TextPos from, TextPos to, const std::function<void(pugi::
     const uint32_t a = p == from.para ? from.offset : 0, b = p == to.para ? to.offset : Length(p);
     SplitAt(p, b);
     SplitAt(p, a);
-    std::vector<pugi::xml_node> runs;
+    // Each run with what it looks like now (copied: the edits don't re-resolve until the end).
+    std::vector<std::pair<pugi::xml_node, RunProps>> runs;
+    const Paragraph& rp = resolved_->paragraphs[p];
     for (const Seg& s : segs_[p])
       if (s.start >= a && s.start + s.length <= b && (s.length > 0 || (s.start > a && s.start < b)) && Editable(s.node, paras_[p]))
-        runs.push_back(s.node);
-    for (pugi::xml_node r : runs) edit(MakeRunProps(r));
+        for (const TextRun& r : rp.runs)
+          if (r.node == s.node) runs.emplace_back(s.node, r.props);
+    const RunProps mark = rp.endProps;
+    for (auto& [r, props] : runs) edit(MakeRunProps(r), props);
     // The mark, when the range goes past it, or the paragraph has no text.
-    if (p < to.para || Length(p) == 0) edit(EndProps(paras_[p], true));
+    if (p < to.para || Length(p) == 0) edit(EndProps(paras_[p], true), mark);
   }
   Index();
   for (uint32_t p = from.para; p <= to.para && p < paras_.size(); ++p) Tidy(paras_[p]);
@@ -628,6 +645,29 @@ void TextDoc::EditMark(uint32_t para, const std::function<void(pugi::xml_node rP
   if (para >= paras_.size()) return;
   edit(EndProps(paras_[para], true));
   Index();
+}
+
+bool TextDoc::ReplaceChars(TextPos from, TextPos to, std::wstring_view with) {
+  from = Clamp(from);
+  to = Clamp(to);
+  if (to < from) std::swap(from, to);
+  if (from.para != to.para || to.offset - from.offset != with.size()) return false;
+  const uint32_t p = from.para;
+  SplitAt(p, to.offset);
+  SplitAt(p, from.offset);
+  bool changed = false;
+  for (const Seg& s : segs_[p]) {
+    if (s.kind != TextRun::Kind::Text || s.locked || s.start < from.offset || s.start + s.length > to.offset) continue;
+    pugi::xml_node t = A(s.node, "t");
+    const std::wstring now = Utf8ToWide(t.text().get());
+    const std::wstring next(with.substr(s.start - from.offset, s.length));
+    if (now == next) continue;
+    t.text().set(WideToUtf8(next).c_str());
+    changed = true;
+  }
+  Index();
+  Tidy(paras_[p]);
+  return changed;
 }
 
 void TextDoc::EditParagraphs(uint32_t first, uint32_t last, const std::function<void(pugi::xml_node pPr)>& edit) {
