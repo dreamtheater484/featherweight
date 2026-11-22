@@ -22,6 +22,9 @@
     checked are "unchecked": run it again later.
   - Only in an active session, at the console or over Remote Desktop (they render alike, p1-corpus
     2026-11-22); never in a disconnected one (exit 3, the rest "unchecked").
+  - Not while another session holds D:\Documents\Codex\FeatherweightNotes\quiet-pc.lock (its renders
+    or timings): exit 4, the rest "unchecked". A job that holds the lock itself sets
+    FW_HOLDS_QUIET_PC_LOCK=1 for the checks it runs.
   - Each deck gets its own new PowerPoint process, which ends before the next deck starts. A deck
     someone opens in it meanwhile (a double-click) makes it theirs: it's left running.
   - Macros forced off (AutomationSecurity 3) before anything opens, alerts off, read-only, no window,
@@ -240,6 +243,8 @@ $files = foreach ($p in $Paths) {
 }
 if (-not $files) { throw "Give the decks or folders to check." }
 if ($Pdf) { $Pdf = [IO.Path]::GetFullPath($Pdf); New-Item -ItemType Directory -Force $Pdf | Out-Null }
+# Shared with the other sessions' renders and timings: while someone else holds it, PowerPoint is theirs.
+$quietLock = "D:\Documents\Codex\FeatherweightNotes\quiet-pc.lock"
 $mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-powerpoint-open-check-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
@@ -260,6 +265,9 @@ foreach ($f in @($files)) {
   # Checked with the mutex held: another automation may have just finished with its PowerPoint.
   if (-not (Test-ActiveSession)) { $stopped = @{ why = "no active session (disconnected or locked out): PowerPoint isn't automated then"; code = 3 } }
   elseif (Get-Process POWERPNT -ErrorAction SilentlyContinue) { $stopped = @{ why = "a PowerPoint is running (someone's): never used or closed"; code = 4 } }
+  elseif ((Test-Path $quietLock) -and -not $env:FW_HOLDS_QUIET_PC_LOCK) {
+    $stopped = @{ why = "another session holds FeatherweightNotes\quiet-pc.lock: " + ((Get-Content $quietLock -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ').Trim(); code = 4 }
+  }
   if ($stopped) {
     $mutex.ReleaseMutex()
     $entry.status = "unchecked"; $entry.error = $stopped.why; $entries += [pscustomobject]$entry
