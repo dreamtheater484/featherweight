@@ -12,6 +12,13 @@
 #include "slide/render/SlideRender.h"
 #include "text/Fonts.h"
 
+#if __has_include("slide/edit/Edit.h")
+#include "slide/edit/Edit.h"
+#define FW_SLIDE_EDIT 1
+#else
+#define FW_SLIDE_EDIT 0
+#endif
+
 namespace fw::slide::view {
 
 namespace {
@@ -56,6 +63,7 @@ class ModelDeck : public Deck {
   bool StartsAsShow() const override { return deck_->StartsInShow(); }
   bool HasMacros() const override { return deck_->HasMacros(); }
   Presentation* Model() override { return deck_.get(); }
+  edit::Editor* Editor() override;
   void Paint(size_t i, draw::Painter& p) override {
     if (render::SlideRender* r = Render(i)) {
       const draw::Size s = deck_->SlideSize();
@@ -65,6 +73,30 @@ class ModelDeck : public Deck {
   bool PaintNotesPage(size_t i, draw::Painter& p, draw::Rect& slideBox) override;
   std::vector<draw::Rect> TextRects(size_t slide, size_t block, size_t from, size_t length) override;
   size_t MemoryUse() const override { return bytes_; }
+  render::SlideRender* Rendered(size_t i) override { return Render(i); }
+  text::Fonts* LayoutFonts() override { return &Fonts(); }
+  void Invalidate(size_t i) override {
+    // Slides added or removed: everything prepared goes.
+    if (deck_->SlideCount() != renders_.size()) {
+      renders_.clear();
+      blocks_.clear();
+      blocksRead_.clear();
+      renders_.resize(deck_->SlideCount());
+      blocks_.resize(deck_->SlideCount());
+      blocksRead_.assign(deck_->SlideCount(), false);
+      return;
+    }
+    if (i >= renders_.size()) return;
+    renders_[i].reset();
+    blocks_[i].clear();
+    blocksRead_[i] = false;
+  }
+  void PaintFiltered(size_t i, draw::Painter& p, render::DrawFilter* filter) override {
+    if (render::SlideRender* r = Render(i)) {
+      const draw::Size s = deck_->SlideSize();
+      r->Draw(p, {0, 0, s.width, s.height}, filter);
+    }
+  }
   std::vector<LayoutChoice> LayoutsFor(size_t slide) const override;
   int LayoutOf(size_t slide) const override;
   void PaintLayout(size_t layout, draw::Painter& p) override;
@@ -78,12 +110,24 @@ class ModelDeck : public Deck {
   SlideLink LinkOf(const Hyperlink& h, const draw::Rect& box, size_t slide) const;
 
   std::unique_ptr<Presentation> deck_;
+#if FW_SLIDE_EDIT
+  std::unique_ptr<edit::Editor> editor_;  // made on first use; goes before the deck it edits
+#endif
   size_t bytes_ = 0;
   mutable std::unique_ptr<text::Fonts> fonts_;
   mutable std::vector<std::unique_ptr<render::SlideRender>> renders_;
   mutable std::vector<std::vector<Block>> blocks_;
   mutable std::vector<bool> blocksRead_;
 };
+
+edit::Editor* ModelDeck::Editor() {
+#if FW_SLIDE_EDIT
+  if (!editor_) editor_ = std::make_unique<edit::Editor>(*deck_);
+  return editor_.get();
+#else
+  return nullptr;
+#endif
+}
 
 text::Fonts& ModelDeck::Fonts() const {
   if (!fonts_) {

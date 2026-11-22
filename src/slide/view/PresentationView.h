@@ -26,6 +26,7 @@ class SlideRenderer;
 
 namespace fw::slide::view {
 
+class ObjectTool;
 class SlideGallery;
 
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
@@ -69,7 +70,7 @@ class PresentationView : public TabContent {
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
-  bool Dragging() const override { return drag_ != Drag::None; }
+  bool Dragging() const override;
   bool HasKeyFocus() const override { return false; }
 
   int ShortcutFor(UINT vk, UINT mods) const override;
@@ -100,6 +101,8 @@ class PresentationView : public TabContent {
   FileState State() const override;
   void ApplyState(const FileState& s) override;
   bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
+  bool TakesPictures(const std::vector<std::wstring>& files) const override;
+  void DropPictures(const std::vector<std::wstring>& files, int x, int y) override;
 
   // ---- The deck ----
   size_t SlideCount() const { return deck_ ? deck_->SlideCount() : 0; }
@@ -150,6 +153,10 @@ class PresentationView : public TabContent {
   void ShowMatch();
   void ReadOnlyBanner();
 
+  // ---- Objects on the slide (P2, p2-objects: ObjectTool)
+  ObjectTool& Objects() const;
+  // Whether the objects get a command: not the clipboard or select all while the keys are in the thumbnails.
+  bool ObjectsTake(int cmd) const;
   // ---- Slides (P2, p2-slides: PresentationSlides.cpp): the thumbnails as an editor
   // A click on thumbnail `t` with the modifier keys; true when it was handled.
   void ThumbsMouseDown(int t, UINT mods, int x, int y);
@@ -283,6 +290,8 @@ class PresentationView : public TabContent {
   mutable size_t linksOf_ = SIZE_MAX;
 
   PrintSettings print_;
+
+  mutable std::unique_ptr<ObjectTool> objects_;  // made on first use
 };
 
 }  // namespace fw::slide::view
