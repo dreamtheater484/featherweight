@@ -431,7 +431,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     // Bold and in the chart's text color unless its own text (or else its c:txPr) says otherwise.
     // Unstated, Office 2007's look (Excel's PDFs) makes it the chart's text size, or 1.2 times
     // what the chart's c:txPr states; Office 2010's, 18 points; Office 2013 and later state theirs.
-    if (out.legacy) out.titleSize = spaceSize > 0 ? spaceSize * 1.2f : 10;
+    // On a slide, 1.2 times the chart's stated text size whatever its look (poi line chart: 21.6 at 18).
+    if (out.legacy || (presentation && spaceSize > 0)) out.titleSize = spaceSize > 0 ? spaceSize * 1.2f : 10;
     else out.titleSize = size > 0 ? size * 14 / 9 : 18;
     out.titleColor = spaceColor;
     out.titleOverlay = On(t, "overlay", false);
@@ -454,7 +455,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     // No title, but the automatic one not deleted: a single series' name, bold, at the size of a
     // title without text (PowerPoint's PDFs).
     out.title = out.groups.front().series.front().name;
-    out.titleSize = out.legacy ? (spaceSize > 0 ? spaceSize * 1.2f : 10) : size > 0 ? size * 14 / 9 : 18;
+    out.titleSize = out.legacy || (presentation && spaceSize > 0) ? (spaceSize > 0 ? spaceSize * 1.2f : 10) : size > 0 ? size * 14 / 9 : 18;
     out.titleColor = spaceColor;
   }
   if (pugi::xml_node legend = C(chart, "legend")) {
