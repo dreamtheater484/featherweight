@@ -2,7 +2,6 @@
 // theme colors, the background, the slide size) and the Header & footer panel, their commands, and
 // the design edits, which go through the edit layer.
 
-#include <shobjidl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +13,7 @@
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
 #include "slide/edit/SlideDesignOps.h"
+#include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationPanels.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -100,21 +100,10 @@ PresentationView::DesignPanel::DesignPanel(PresentationView& view) : v_(view) {
   picture_.text = L"Choose picture…";
   picture_.textSize = 12;
   picture_.onInvoke = [this] {
-    // Windows' open dialog for a picture file; the edit layer reads and adds it.
-    ComPtr<IFileOpenDialog> dlg;
-    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
-    COMDLG_FILTERSPEC filters[] = {{L"Pictures", L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.tif;*.tiff"}};
-    dlg->SetFileTypes(1, filters);
-    dlg->SetTitle(L"Background picture");
-    DWORD opts = 0;
-    dlg->GetOptions(&opts);
-    dlg->SetOptions(opts | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-    ComPtr<IShellItem> item;
-    PWSTR path = nullptr;
-    if (FAILED(dlg->Show(v_.host_.ViewHwnd())) || FAILED(dlg->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
-      return;
-    picturePath_ = path;
-    CoTaskMemFree(path);
+    // The pictures dialog Insert > Pictures uses (p2-objects); SetBackground reads and stores the file.
+    const std::vector<std::wstring> files = PickPictureFiles(v_.host_.ViewHwnd(), false);
+    if (files.empty()) return;
+    picturePath_ = files.front();
     bg_.kind = Background::Kind::Picture;
     ApplyBackground();
   };
