@@ -51,6 +51,9 @@ class ObjectTool {
     // Text editing starts in a shape (p2-text's BeginTextEdit): after inserting a text box, so
     // typing goes into it. Unset: the text box is only selected.
     std::function<void(uint32_t shape)> beginText;
+    // The cells chosen in table `table` (text editing's: the cell with the caret, or a range), rows
+    // and columns inclusive. False when none is: row and column commands then work at the ends.
+    std::function<bool(uint32_t table, int& row0, int& col0, int& row1, int& col1)> tableCells;
   };
   explicit ObjectTool(Host host);
   ~ObjectTool();
@@ -81,10 +84,14 @@ class ObjectTool {
   std::vector<int> Commands() const;
   void AddTools(ToolbarModel& m);
   void ContextMenu(HMENU menu, float x, float y);
+  // A table's items (insert and delete rows and columns, merge, split) when the selected object is
+  // a table: the view adds them after text editing's own menu in a cell.
+  void TableContextMenu(HMENU menu);
 
   // Scripts (--script, the build-from-scratch deck): insert:table|<rows>x<cols>,
   // insert:chart|column|bar|line|pie, insert:shape|<preset>|x,y,w,h, insert:textbox|x,y,w,h (points),
-  // shapefill:<RRGGBB>. False for other ops; what an op of these can't do goes to stderr.
+  // shapefill:<RRGGBB>, tablemerge:<row0>,<col0>,<row1>,<col1> and tablesplit:<row>,<col> (the selected
+  // table, 0-based). False for other ops; what an op of these can't do goes to stderr.
   bool ScriptOp(const std::wstring& op, const std::wstring& arg);
 
   // Pictures dropped on the slide (files), at client pixels (-1: centred).
@@ -169,7 +176,8 @@ class ObjectTool {
   bool InsertTextBox(const draw::Rect& r);
   bool InsertTable(int rows, int columns);
   bool InsertChart(int type);
-  bool TableEdit(int cmd);
+  bool TableEdit(int cmd, const int* cells = nullptr);  // cells: row0, col0, row1, col1 (a script's)
+  uint32_t SelectedTable() const;                         // the one selected object when it's a table
   bool SetFillColor(std::optional<uint32_t> rgb, bool none);
   bool SetLineColor(std::optional<uint32_t> rgb, bool none);
   bool SetLineWidth(float points);

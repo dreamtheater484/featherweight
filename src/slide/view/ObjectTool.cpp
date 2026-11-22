@@ -305,11 +305,17 @@ constexpr NamedCommand kOther[] = {
     {CmdTableColumnRight, L"Insert column right", L""},
     {CmdTableDeleteRow, L"Delete row", L""},
     {CmdTableDeleteColumn, L"Delete column", L""},
+    {CmdTableMergeCells, L"Merge cells", L""},
+    {CmdTableSplitCell, L"Split cells", L""},
     {CmdDuplicateObjects, L"Duplicate", L"Ctrl+D"},
     {CmdArrangeMenu, L"Arrange", L""},
 };
 
-constexpr float kWeights[] = {0.25f, 0.5f, 0.75f, 1, 1.5f, 2.25f, 3, 4.5f, 6};
+constexpr int kTableCmds[] = {CmdTableRowAbove,    CmdTableRowBelow,     CmdTableColumnLeft,
+                               CmdTableColumnRight, CmdTableDeleteRow,    CmdTableDeleteColumn,
+                               CmdTableMergeCells,  CmdTableSplitCell};
+
+constexpr float kWeights[] ={0.25f, 0.5f, 0.75f, 1, 1.5f, 2.25f, 3, 4.5f, 6};
 constexpr const wchar_t* kWeightNames[] = {L"¼ pt", L"½ pt", L"¾ pt", L"1 pt", L"1½ pt", L"2¼ pt", L"3 pt", L"4½ pt", L"6 pt"};
 struct Dash {
   const char* preset;
@@ -1652,36 +1658,58 @@ bool ObjectTool::InsertChart(int type) {
 #endif
 }
 
-bool ObjectTool::TableEdit(int cmd) {
+uint32_t ObjectTool::SelectedTable() const {
+  const ob::ObjectInfo* o = SelectedShape() ? map_.Find(SelectedShape()) : nullptr;
+  return o && o->shape && o->shape->kind == fw::slide::Shape::Kind::Table ? o->id : 0;
+}
+
+bool ObjectTool::TableEdit(int cmd, const int* cells) {
 #if FW_SLIDE_EDIT
-  const uint32_t id = SelectedShape();
-  const ob::ObjectInfo* o = id ? Map().Find(id) : nullptr;
-  if (!o || !o->shape || o->shape->kind != fw::slide::Shape::Kind::Table || !Editable()) return false;
+  Map();
+  const uint32_t id = SelectedTable();
+  if (!id || !Editable()) return false;
   fw::slide::edit::Editor* ed = host_.deck()->Editor();
   const size_t slide = host_.current();
-  pugi::xml_document doc;
-  const std::string xml = ed->ShapeXml(slide, id);
-  if (!doc.load_string(xml.c_str())) return false;
-  pugi::xml_node frame = doc.document_element();
-  const int rows = ob::TableRows(frame), cols = ob::TableColumns(frame);
-  // Without a cell chosen (text editing tells), rows and columns go at the end and come off it.
-  // The table's XML is changed here (merges kept) and written back as one step.
-  bool done = false;
-  const char16_t* step = u"Insert Rows";
+  // The cells chosen (text editing's caret cell or range, or a script's); without any, rows and
+  // columns go at the table's ends and come off them, as before a cell is chosen in PowerPoint.
+  int r0 = -1, c0 = -1, r1 = -1, c1 = -1;
+  if (cells) r0 = cells[0], c0 = cells[1], r1 = cells[2], c1 = cells[3];
+  else if (!host_.tableCells || !host_.tableCells(id, r0, c0, r1, c1)) r0 = -1;
+  if (r0 >= 0) {
+    if (r0 > r1) std::swap(r0, r1);
+    if (c0 > c1) std::swap(c0, c1);
+  } else if (cmd != CmdTableMergeCells && cmd != CmdTableSplitCell) {
+    pugi::xml_document doc;
+    if (!doc.load_string(ed->ShapeXml(slide, id).c_str())) return false;
+    const int rows = ob::TableRows(doc.document_element()), cols = ob::TableColumns(doc.document_element());
+    const bool start = cmd == CmdTableRowAbove || cmd == CmdTableColumnLeft;
+    r0 = r1 = start ? 0 : rows - 1;
+    c0 = c1 = start ? 0 : cols - 1;
+  }
+  fw::slide::edit::Result r;
   switch (cmd) {
-    case CmdTableRowAbove: done = ob::InsertTableRow(frame, 0); break;
-    case CmdTableRowBelow: done = ob::InsertTableRow(frame, rows); break;
-    case CmdTableColumnLeft: done = ob::InsertTableColumn(frame, 0), step = u"Insert Columns"; break;
-    case CmdTableColumnRight: done = ob::InsertTableColumn(frame, cols), step = u"Insert Columns"; break;
-    case CmdTableDeleteRow: done = ob::DeleteTableRow(frame, rows - 1), step = u"Delete Rows"; break;
-    case CmdTableDeleteColumn: done = ob::DeleteTableColumn(frame, cols - 1), step = u"Delete Columns"; break;
+    case CmdTableRowAbove: r = ed->InsertTableRows(slide, id, r0, 1); break;
+    case CmdTableRowBelow: r = ed->InsertTableRows(slide, id, r1 + 1, 1); break;
+    case CmdTableColumnLeft: r = ed->InsertTableColumns(slide, id, c0, 1); break;
+    case CmdTableColumnRight: r = ed->InsertTableColumns(slide, id, c1 + 1, 1); break;
+    case CmdTableDeleteRow: r = ed->DeleteTableRows(slide, id, r0, r1 - r0 + 1); break;
+    case CmdTableDeleteColumn: r = ed->DeleteTableColumns(slide, id, c0, c1 - c0 + 1); break;
+    case CmdTableMergeCells:
+      if (r0 < 0 || (r0 == r1 && c0 == c1)) {
+        Refused(L"Choose two or more cells to merge first.");
+        return false;
+      }
+      r = ed->MergeTableCells(slide, id, r0, c0, r1, c1);
+      break;
+    case CmdTableSplitCell:
+      if (r0 < 0) {
+        Refused(L"Click in the merged cell to split first.");
+        return false;
+      }
+      r = ed->SplitTableCell(slide, id, r0, c0);
+      break;
     default: return false;
   }
-  if (!done) {
-    Refused(L"A table keeps at least one row and one column: delete the table instead.");
-    return false;
-  }
-  const fw::slide::edit::Result r = ed->SetShapeXml(slide, id, ob::ToXml(frame), step);
   if (!r) {
     Refused(W(r.message));
     return false;
@@ -1690,6 +1718,7 @@ bool ObjectTool::TableEdit(int cmd) {
   return true;
 #else
   (void)cmd;
+  (void)cells;
   return Editable();
 #endif
 }
@@ -1878,7 +1907,17 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
     case CmdTableColumnLeft:
     case CmdTableColumnRight:
     case CmdTableDeleteRow:
-    case CmdTableDeleteColumn: s.enabled = editable && selection_.size() == 1 && tables == 1; break;
+    case CmdTableDeleteColumn:
+    case CmdTableLayoutMenu: s.enabled = editable && selection_.size() == 1 && tables == 1; break;
+    case CmdTableMergeCells:
+    case CmdTableSplitCell: {
+      // Text editing's chosen cells: split needs one, merge two or more.
+      int r0 = -1, c0 = -1, r1 = -1, c1 = -1;
+      const bool cells = editable && selection_.size() == 1 && tables == 1 && host_.tableCells &&
+                         host_.tableCells(selection_[0], r0, c0, r1, c1);
+      s.enabled = cells && (cmd == CmdTableSplitCell || r0 != r1 || c0 != c1);
+      break;
+    }
     case CmdArrangeMenu:
     case CmdInsertShape:
     case CmdInsertTextBox:
@@ -1965,7 +2004,9 @@ bool ObjectTool::Execute(int cmd) {
     case CmdTableColumnLeft:
     case CmdTableColumnRight:
     case CmdTableDeleteRow:
-    case CmdTableDeleteColumn: return TableEdit(cmd);
+    case CmdTableDeleteColumn:
+    case CmdTableMergeCells:
+    case CmdTableSplitCell: return TableEdit(cmd);
     case CmdInsertTextBox: return InsertTextBox();
     case CmdInsertShape:
     case CmdInsertRectangle: return InsertShape(2);
@@ -2069,6 +2110,29 @@ void ObjectTool::AddTools(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 4) InsertChart(v.index);
   };
   m.left.push_back(chart);
+  // A table selected, or a cell of it being edited: its rows, columns and cells (PowerPoint's
+  // Layout tab), at the cells chosen.
+  if (Map(), SelectedTable()) {
+    ToolItem layout;
+    layout.kind = ToolKind::Dropdown;
+    layout.cmd = CmdTableLayoutMenu;
+    layout.glyph = icon::Table;
+    layout.text = L"Table layout";
+    layout.fitText = true;
+    layout.width = 96;
+    layout.tooltip = L"Insert and delete rows and columns, merge and split cells";
+    layout.priority = 6;
+    layout.sepBefore = true;
+    for (int cmd : kTableCmds) {
+      CommandState s;
+      Query(cmd, s);
+      layout.choices.push_back(s.label);
+    }
+    layout.onChange = [this](const ToolValue& v) {
+      if (v.index >= 0 && v.index < static_cast<int>(std::size(kTableCmds))) Execute(kTableCmds[v.index]);
+    };
+    m.left.push_back(layout);
+  }
   if (selection_.empty() || textEditing_) return;
   // The selection's tools.
   ToolItem arrange;
@@ -2180,12 +2244,20 @@ bool ParseBox(const std::wstring& text, draw::Rect& r) {
 }  // namespace
 
 bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"insert" && op != L"shapefill") return false;
+  if (op != L"insert" && op != L"shapefill" && op != L"tablemerge" && op != L"tablesplit") return false;
   Map();
   auto fail = [&](const wchar_t* why) {
     fwprintf(stderr, L"%ls:%ls: %ls\n", op.c_str(), arg.c_str(), why);
     return true;
   };
+  if (op == L"tablemerge" || op == L"tablesplit") {
+    int c[4] = {-1, -1, -1, -1};
+    const int n = swscanf_s(arg.c_str(), L"%d,%d,%d,%d", &c[0], &c[1], &c[2], &c[3]);
+    if (n != (op == L"tablemerge" ? 4 : 2) || c[0] < 0 || c[1] < 0) return fail(L"not cells row,col[,row,col]");
+    if (n == 2) c[2] = c[0], c[3] = c[1];
+    if (!SelectedTable()) return fail(L"no table selected");
+    return TableEdit(op == L"tablemerge" ? CmdTableMergeCells : CmdTableSplitCell, c) ? true : fail(L"not done");
+  }
   if (op == L"shapefill") {
     if (arg.size() != 6 || !std::all_of(arg.begin(), arg.end(), [](wchar_t c) { return std::iswxdigit(c) != 0; }))
       return fail(L"not a color RRGGBB");
@@ -2274,7 +2346,19 @@ void ObjectTool::ContextMenu(HMENU menu, float x, float y) {
   if (SelectedShape())
     if (const ob::ObjectInfo* o = map_.Find(SelectedShape()); o && o->kind == ob::ObjectKind::Picture) add(CmdPictureCrop);
   add(CmdDeleteObject);
+  TableContextMenu(menu);
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+}
+
+void ObjectTool::TableContextMenu(HMENU menu) {
+  Map();
+  if (!SelectedTable() || !Editable(false)) return;
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  for (int cmd : kTableCmds) {
+    CommandState s;
+    Query(cmd, s);
+    AppendMenuW(menu, MF_STRING | (s.enabled ? 0 : MF_GRAYED), cmd, s.label.c_str());
+  }
 }
 
 }  // namespace fw::slide::view
