@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "draw/Painter.h"
+namespace fw::slide::edit {
+class Editor;
+}
 
 namespace fw::slide {
 class Presentation;
@@ -73,6 +76,8 @@ class Deck {
   }
   // p1-model's presentation behind the deck, for the slide show; null for a deck without one (tests).
   virtual Presentation* Model() { return nullptr; }
+  // The deck's editor (P2, src/slide/edit), made on first use; null for a deck without a model.
+  virtual edit::Editor* Editor() { return nullptr; }
   // Bytes the deck keeps (model, caches), for the memory budget.
   virtual size_t MemoryUse() const { return 0; }
 

@@ -12,7 +12,9 @@
 #include "draw/D2DPainter.h"
 #include "slide/view/Deck.h"
 #include "slide/view/TextClip.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/TextFormat.h"
+#include "slide/view/TextModelEdit.h"
 #include "slide/view/TextSpell.h"
 #include "text/SpellCheck.h"
 #include "ui/Anim.h"
@@ -56,6 +58,44 @@ void TextEditing::SetModel(Deck* deck, TextModel* model) {
   model_ = model;
 }
 
+void TextEditing::Attach(Deck* deck, edit::Editor* editor) {
+  Presentation* p = deck ? deck->Model() : nullptr;
+  if (editor == editor_ && deck == deck_ && (editor || !model_)) return;
+  End();
+  ownModel_.reset();
+  deck_ = deck;
+  model_ = nullptr;
+  editor_ = editor;
+  if (!editor || !p || !editor->CanEdit()) return;  // shown, not edited: read-only
+  ownModel_ = std::make_unique<EditTextModel>(*p, *editor);
+  model_ = ownModel_.get();
+  // The editor lives with the deck, which the tab keeps no longer than this object.
+  editor->OnChange([this, editor](const edit::Changes& c) {
+    if (editor == editor_) Edited(c);
+  });
+}
+
+void TextEditing::Edited(const edit::Changes& c) {
+  if (!deck_) return;
+  // What the slides were prepared from is gone (the editor read the touched slides again): those
+  // are prepared again when next drawn.
+  if (c.slideList || c.allSlides || c.slideSize) {
+    for (size_t i = 0; i < deck_->SlideCount(); ++i) deck_->Invalidate(i);
+  } else {
+    for (const edit::SlideChange& s : c.slides) {
+      if (s.index >= 0) deck_->Invalidate(static_cast<size_t>(s.index));
+    }
+  }
+  if (!session_) return;
+  if (session_->Committing()) return;  // the session's own edit: the text is drawn live
+  if (c.slideList || c.allSlides) {
+    // Slides came, went or moved, or the design changed under the text: editing ends.
+    End();
+    return;
+  }
+  ModelChanged();
+}
+
 uint32_t TextEditing::EditingShape(size_t slide) const {
   return session_ && !session_->Target().notes && session_->Target().slide == slide && !session_->Target().Cell()
              ? session_->Target().shape
@@ -95,6 +135,7 @@ bool TextEditing::Begin(const TextTarget& t, std::optional<draw::Point> at) {
 void TextEditing::End() {
   if (!session_) return;
   session_.reset();
+  if (editor_) editor_->EndTyping();  // typing here again later is a new step
   slideChanged_ = true;
   host_.ViewInvalidate();
   host_.ViewStateChanged();

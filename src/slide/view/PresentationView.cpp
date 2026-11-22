@@ -58,7 +58,7 @@ PresentationView::PresentationView(ViewHost& host, std::wstring path)
 PresentationView::PresentationView(ViewHost& host, std::wstring path, std::unique_ptr<Deck> deck)
     : host_(host), path_(std::move(path)), deck_(std::move(deck)), text_(std::make_unique<TextEditing>(host)) {
   if (deck_) thumbCache_.resize(deck_->SlideCount());
-  text_->SetModel(deck_.get(), nullptr);
+  text_->Attach(deck_.get(), deck_ ? deck_->Editor() : nullptr);  // p2-text
 }
 
 PresentationView::~PresentationView() {
@@ -75,7 +75,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     return OpenResult::Failed;
   }
   thumbCache_.assign(deck_->SlideCount(), {});
-  text_->SetModel(deck_.get(), nullptr);  // read-only until the edit layer is attached
+  text_->Attach(deck_.get(), deck_->Editor());  // p2-text: read-only when the deck has no editor
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();

@@ -24,6 +24,11 @@ class SpellChecker;
 // while text is being edited; it draws the slide without the edited text (Filter) and then calls
 // Draw, which draws the text live with its selection and caret. Without a TextModel (no edit layer
 // yet) nothing here edits.
+namespace fw::slide::edit {
+class Editor;
+struct Changes;
+}  // namespace fw::slide::edit
+
 namespace fw::slide::view {
 
 class Deck;
@@ -36,6 +41,10 @@ class TextEditing {
 
   // The deck and the edit layer (null: read-only).
   void SetModel(Deck* deck, TextModel* model);
+  // The deck's editor (p2-model's edit::Editor; null: read-only): text edits go through it (an
+  // EditTextModel), and its change notification keeps the edited text and the slide current
+  // (undo, redo, other edits). Call again when the tab loads another deck.
+  void Attach(Deck* deck, edit::Editor* editor);
   bool Editing() const { return session_ != nullptr; }
   TextSession* Session() { return session_.get(); }
   // The shape whose text is edited on `slide`, else 0 (the slide's prompts leave it out).
@@ -77,6 +86,7 @@ class TextEditing {
 
  private:
   void Changed();          // repaint, status, errors
+  void Edited(const edit::Changes& c);  // the editor's notification
   bool StartAt(size_t slide, const TextTarget& t);
   void Copy(bool cut);
   void Paste(bool textOnly);
@@ -84,6 +94,8 @@ class TextEditing {
   ViewHost& host_;
   Deck* deck_ = nullptr;
   TextModel* model_ = nullptr;
+  edit::Editor* editor_ = nullptr;      // Attach's
+  std::unique_ptr<TextModel> ownModel_;  // Attach's EditTextModel
   std::unique_ptr<TextSession> session_;
   struct Hide;
   std::unique_ptr<Hide> hide_;

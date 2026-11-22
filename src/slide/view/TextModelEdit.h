@@ -4,7 +4,7 @@
 #include "slide/view/TextModel.h"
 
 // TextModel over p2-model's edit layer (src/slide/edit): text editing's one door into the model.
-// The tab makes one per editor and passes it to TextEditing::SetModel; tools and tests use it to
+// TextEditing::Attach makes one for the deck's editor; tools and tests use it to
 // type through TextSession as the tab does.
 namespace fw::slide::view {
 
