@@ -23,6 +23,8 @@ add_library(fwslide STATIC
 target_include_directories(fwslide PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslide PUBLIC fwpkg fwcore fwdraw)
 target_compile_options(fwslide PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+# p2-slides' design operations run once per command: compiled for size.
+set_source_files_properties(edit/HeaderFooter.cpp edit/SlideDesignOps.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_eot.cpp")

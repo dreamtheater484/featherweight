@@ -629,3 +629,24 @@ TEST(SlideHeaderFooter_LineBreaksAndControlCharacters) {
   const fw::slide::Shape* footer = s->FindPlaceholder(fw::slide::PlaceholderType::Footer);
   CHECK(footer != nullptr);
 }
+
+TEST(SlideNew_BlankMatchesSource) {
+  // The shipped bytes (NewDeckData.inc) are the generator's, byte for byte.
+  const std::vector<uint8_t> generated = GenerateBlankPresentation();
+  CHECK(!generated.empty());
+  CHECK(BlankPresentation() == generated);
+  // FW_BLANK_INC=<path>: the include written again from the generator (after changing it).
+  char path[MAX_PATH] = {};
+  if (GetEnvironmentVariableA("FW_BLANK_INC", path, MAX_PATH) > 0) {
+    std::ofstream f(path, std::ios::binary);
+    f << "// Generated: the bytes of the blank presentation NewDeckSource.cpp makes (see NewDeck.cpp).\n"
+         "// Regenerate: FW_BLANK_INC=<this file> fw_tests (test SlideNew_BlankMatchesSource).\n"
+      << "static const unsigned char kBlankDeck[" << generated.size() << "] = {\n";
+    for (size_t i = 0; i < generated.size(); i += 24) {
+      f << "  ";
+      for (size_t k = i; k < generated.size() && k < i + 24; ++k) f << static_cast<unsigned>(generated[k]) << ',';
+      f << "\n";
+    }
+    f << "};\n";
+  }
+}
