@@ -491,3 +491,59 @@ Decks to open: the public set in `tests\office\presentations` (one per feature, 
 - [ ] On a quiet PC with no Featherweight open: a 50-slide `.pptx` to its first slide in ___ ms (target < 500 ms); memory with a typical deck ___ MB (target < 150 MB); nothing runs when idle (0 % CPU, no timers) with a deck open; the slide show at ___ fps on a ___ Hz display, ___ dropped frames during transitions (target: the display's rate, none dropped).
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target ≤ 11.05 MB: 10.05 MB after S4 plus ≤ 1.0 MB in P1).
 - [ ] Opening a PDF, a document and a workbook is no slower than at S4 (`scripts\budgets.ps1 -Timings` against S4's numbers): PDF ___ ms, document ___ ms, workbook ___ ms.
+
+## Editing presentations (P2)
+
+Check next to PowerPoint, on copies (never on a deck you need). Decks to edit: the public set in `tests\office\presentations`, `tests\office\show\bench50.pptx` (50 slides), and a few of your own and of the real-world corpus (`FeatherweightCorpus\pptx\<kind>\`). After each part, save, open the copy in PowerPoint: no repair prompt, and it looks as Featherweight shows it.
+
+### Slides
+
+- [ ] Ctrl+M adds a slide after the current one with the next layout (Title and Content after a title slide), and the layout list picks another; Ctrl+D duplicates the current slide (or the selected thumbnails); Delete in the thumbnails deletes them; each is one undo step (Ctrl+Z, Ctrl+Y).
+- [ ] Drag thumbnails to move slides (one, or several selected with Ctrl and Shift); the slide numbers follow. Hide a slide: its thumbnail is dimmed and the show skips it; unhide it.
+- [ ] Change a slide's layout: its text stays, moved into the new layout's placeholders; a picture or table moves with its placeholder.
+- [ ] Slide size: 16:9 to 4:3 and back; the slides' contents scale to fit, as PowerPoint's "Ensure fit".
+- [ ] `sections-custom-shows.pptx`: delete, move and duplicate slides inside and across sections; the sections keep their slides; the custom show still plays the right slides (slides that went are left out of it). `hyperlinks.pptx`: move the slides links point to; the links still jump to them in the show.
+- [ ] `bench50.pptx`: new, duplicate, delete and move a slide feel instant (no visible pause); undo too.
+
+### Design, numbers and notes
+
+- [ ] Design: each built-in theme changes the fonts, colors and backgrounds of every slide; theme colors change only the colors; a background (a color, a gradient, a picture) on one slide or Apply to All. Undo puts each back.
+- [ ] Header & Footer: slide numbers, a footer and the date (fixed, or updated) on every slide, Don't show on title slide; the numbers follow when slides are moved or deleted.
+- [ ] Notes: click into the notes pane and type, format, add lines; the notes print on the notes pages and show in the presenter's printouts; PowerPoint shows them.
+- [ ] Copy slides between decks (copy the thumbnails, paste into another deck's thumbnails): with the destination's design (the default) and with the source design (the paste option); pictures, charts, tables and notes come along; links to slides that didn't come along stop being links.
+
+### Text
+
+- [ ] Click into a placeholder (its prompt text goes), a text box, a shape and a table cell, and type: Enter, Backspace, Delete, arrows, Home/End, Shift to select, double-click a word, Ctrl+A; Tab and Shift+Tab move a bullet a level down and up (in a table cell, Tab goes to the next cell).
+- [ ] Format: bold, italic, underline (Ctrl+B, I, U), font, size (Ctrl+] and Ctrl+[), color, highlight, alignment, line spacing, bullets and numbering; each one undo step.
+- [ ] Autofit: type into a body placeholder until it overflows: the text shrinks to fit as you type, as PowerPoint does; delete text and it grows back. Saved, PowerPoint shows it at the same size.
+- [ ] Find and replace (Ctrl+F, Ctrl+H) across the slides and the notes: Replace and Replace all, Match case and Whole words; one undo step for Replace all.
+- [ ] Spelling as you type: misspelled words get the red line in placeholders, text boxes and notes; right-click offers suggestions, Ignore and Add to dictionary.
+- [ ] Hyperlinks (Ctrl+K): to a web address, to another slide, to an email address; edit and remove them; Ctrl+click follows one in the editor; they work in the show.
+- [ ] Typing in a big deck (`bench50.pptx`, a long text box) keeps up with fast typing.
+
+### Objects
+
+- [ ] Insert pictures (a file, a paste, a drag from Explorer), shapes (rectangle, oval, arrow, line and the others in the list), text boxes, tables (rows × columns) and charts (column, bar, line, pie with sample data); each goes where PowerPoint puts it.
+- [ ] Move (drag, arrow keys nudge), resize (handles; Shift keeps the proportions), rotate (the rotation handle; Shift in 15° steps); smart guides show when edges and centres line up with other objects and the slide, and objects snap to them.
+- [ ] Align (left, centre, right, top, middle, bottom) and distribute; group (Ctrl+G) and ungroup (Ctrl+Shift+G); bring forward, bring to front, send backward, send to back.
+- [ ] Fill, outline (color, weight, dashes) and shadow on shapes and pictures; crop a picture (drag the crop handles), and reset it.
+- [ ] Cut, copy, paste and delete objects; paste into another slide and another deck.
+
+### Saving
+
+- [ ] Ctrl+S saves (the dot on the tab goes); the first save of a deck keeps a backup (§13); Save As `.pptx`. A `.potx` opens as a new deck (Save asks where). A `.pptm` keeps its macros (PowerPoint still runs them, Featherweight never does). A `.ppsx` saves as `.ppsx`.
+- [ ] Saving a big deck (`deck-typical.pptx` from `make_budget_files.py`, or a 100 MB deck of yours) doesn't freeze the window: you can keep scrolling while it saves.
+- [ ] Crash recovery: edit a deck, end Featherweight in Task Manager, start it again: it offers the recovered deck with the edits.
+- [ ] Change the file in PowerPoint while it's open in Featherweight: the banner says another program changed it, and Save asks before overwriting.
+- [ ] Open a deck and save it without changing anything: PowerPoint shows the same deck (the file isn't rewritten).
+
+## P2's gate (record the numbers)
+
+- [ ] `scripts\powerpoint-open-check-proof.ps1` (while you're signed in, PowerPoint closed): every broken deck is caught, the clean one opens.
+- [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 27 public decks and the 152 real-world decks (while you're signed in, PowerPoint closed; the PowerPoint part takes about half an hour): ___ failures, ___ new validator errors, ___ PowerPoint repairs (target 0 each); saved without edits: ___ PowerPoint repairs (target 0) and ___ of ___ slides at SSIM ≥ 0.99 against the original's PDF (target all).
+- [ ] `scripts\build-deck.ps1 -Featherweight build\Release\Featherweight.exe`: the 10-slide deck is built from a blank presentation, fwtool check and the validator find nothing, PowerPoint opens it without a repair, and ___ of 10 slides are at SSIM ≥ 0.95 against PowerPoint's PDF (target 10). Open `build\build-deck\deck.pptx` in PowerPoint and look: the title slide, bullets, picture, table, chart, shapes, theme, notes and slide numbers are all there.
+- [ ] `fwtool bench --decks --runs 12 build\budgets\deck-50.pptx` (also in `scripts\budgets.ps1 -Timings`): typing in a text box ___ ms typical, ___ ms worst (target < 16 and < 50); new ___, duplicate ___, delete ___, move ___ ms (target < 50 each); undo ___ ms (target < 50).
+- [ ] `fuzz_pptx` with edits (random operations, save, reread, check), 60 s: no findings.
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target: at most 1.4 MB more than P1's, about 12.4 MB). On a quiet PC: memory with a typical deck ___ MB (target < 150 MB), nothing runs when idle, a 50-slide deck to its first slide in ___ ms (no slower than at P1).
+- [ ] P1's part above still passes (P1 and P2 are checked together before the release).
