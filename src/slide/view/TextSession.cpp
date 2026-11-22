@@ -169,11 +169,24 @@ bool TextSession::Commit(std::u16string_view step, bool coalesce) {
   }
   std::wstring error;
   bool ok;
+  // The shape resized: the text's box follows at once (top kept), so the next key doesn't resize it
+  // again before the tab lays the slide out anew (SetFrame).
+  auto resized = [&] {
+    frame_.box.rect.bottom = frame_.box.rect.top + newHeight - frame_.box.insets.top - frame_.box.insets.bottom;
+    geometryChanged_ = true;
+    Relayout();
+  };
   committing_ = true;
-  if (newHeight > 0) {
+  if (newHeight > 0 && step == u"Typing") {
+    // Typing that grows (or shrinks) the shape: its height first, a step of its own (the edit layer
+    // has no typing group), then the text, which starts the typing step the next keys join - so one
+    // undo takes back what was typed, not just its first letter.
+    if (model_.SetShapeHeight(target_, newHeight)) resized();
+    ok = model_.SetText(target_, doc_->Body(), step, false, error);
+  } else if (newHeight > 0) {
     model_.BeginGroup(step);
     ok = model_.SetText(target_, doc_->Body(), step, false, error);
-    if (ok && model_.SetShapeHeight(target_, newHeight)) geometryChanged_ = true;
+    if (ok && model_.SetShapeHeight(target_, newHeight)) resized();
     model_.EndGroup();
     coalesce = false;
   } else {
