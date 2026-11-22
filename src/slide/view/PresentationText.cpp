@@ -172,6 +172,15 @@ bool TextEditing::BeginTextEdit(size_t slide, uint32_t shape) {
   return Begin(t);
 }
 
+bool TextEditing::TypeInto(size_t slide, uint32_t shape) {
+  TextTarget t;
+  t.slide = slide;
+  t.shape = shape;
+  if (!Begin(t)) return false;
+  session_->SelectAll();
+  return true;
+}
+
 uint32_t TextEditing::TakeLeft() {
   const uint32_t id = left_;
   left_ = 0;
