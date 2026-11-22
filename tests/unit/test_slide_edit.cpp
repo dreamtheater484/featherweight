@@ -12,6 +12,7 @@
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
 #include "slide/edit/Journal.h"
+#include "slide/edit/Parts.h"
 #include "slide/edit/Save.h"
 #include "core/Strings.h"
 
@@ -613,4 +614,54 @@ TEST(SlideEditReplayKeepsOriginals) {
   std::vector<std::string> expected;
   CHECK(SaveToBytes(ed, bytes, &expected).Ok());
   CHECK(written2 == expected);
+}
+
+// XML fragments (pasted from other apps, p2-objects' format changes): references to characters XML
+// doesn't allow (&#1;, &#xFFFE;, a lone surrogate) never reach the writer. The package's XML reader
+// refuses them (the call changes nothing); whatever a parser lets through is cleaned (CleanXmlTree)
+// as typed text is. The deck saves and reads again.
+TEST(SlideEditFragmentsDropCharactersXmlCantHold) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  uint32_t id = 0;
+  CHECK(ed.InsertTextBox(0, {72, 72, 300, 120}, L"box", &id));
+  const TextTarget t{0, id};
+  auto body = [](const std::string& text, const std::string& lang) {
+    return "<p:txBody xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" "
+           "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:bodyPr/><a:lstStyle/>"
+           "<a:p><a:r><a:rPr lang=\"" + lang + "\"/><a:t>" + text + "</a:t></a:r></a:p></p:txBody>";
+  };
+  CHECK(ed.SetTextBodyXml(t, body("&#1;x&#xFFFE;", "en-US")) || ed.ParagraphText(t, 0) == L"box");
+  for (const char* ref : {"&#1;", "&#x1F;", "&#xFFFE;", "&#xFFFF;", "&#xD800;", "&#xDFFF;"}) {
+    const std::wstring before = ed.ParagraphText(t, 0);
+    if (ed.SetTextBodyXml(t, body(std::string("a") + ref + "b", std::string("en") + ref))) {
+      const std::wstring now = ed.ParagraphText(t, 0);
+      CHECK(now == L"ab" || now == L"a\xFFFD" L"b");
+    } else {
+      CHECK(ed.ParagraphText(t, 0) == before);
+    }
+  }
+  // A shape replaced from XML (SetShapeXml), with such a reference in its name.
+  std::string shape = ed.ShapeXml(0, id);
+  const size_t name = shape.find("name=\"");
+  CHECK(name != std::string::npos);
+  shape.insert(name + 6, "N&#x1F;");
+  if (ed.SetShapeXml(0, id, shape, u"Test")) CHECK(ed.ShapeXml(0, id).find('\x1F') == std::string::npos);
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  CHECK(OpenBytes(bytes) != nullptr);
+}
+
+// The cleaner itself, on text a parser decoded: control characters and U+FFFE/U+FFFF dropped, a lone
+// surrogate (as decoded from &#xD800;) and broken UTF-8 become U+FFFD, in text and attributes.
+TEST(SlideEditCleanXmlTree) {
+  pugi::xml_document doc;
+  pugi::xml_node t = doc.append_child("t");
+  t.append_child(pugi::node_pcdata).set_value("\x01x\xEF\xBF\xBE\xEF\xBF\xBFy\tz");
+  t.append_attribute("v") = "a\xED\xA0\x80" "b\x1F\xC3\xA9\xFF";
+  fw::slide::edit::CleanXmlTree(doc);
+  CHECK(std::string(t.text().get()) == "xy\tz");
+  CHECK(std::string(t.attribute("v").value()) == "a\xEF\xBF\xBD" "b\xC3\xA9\xEF\xBF\xBD");
+  CHECK(fw::slide::edit::XmlTextUtf8("ok \xF0\x9F\x98\x80") == "ok \xF0\x9F\x98\x80");
 }

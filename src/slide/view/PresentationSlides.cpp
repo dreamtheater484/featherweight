@@ -18,6 +18,7 @@
 #include "slide/edit/Edit.h"
 #include "slide/edit/Save.h"
 #include "slide/view/NotesEdit.h"
+#include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlideGallery.h"
 #include "ui/Anim.h"
@@ -608,8 +609,12 @@ void PresentationView::SlidesChanged(const std::vector<uint32_t>& idsBefore, con
     for (Thumb& th : thumbCache_) th.bitmap.Reset();
     layoutPictures_.clear();
   }
-  slideBitmap_.Reset();
-  slideBitmapOf_ = SIZE_MAX;
+  // p2-text: typing draws its text live over the slide's bitmap, which leaves that text out: the bitmap
+  // stays for the session's own edits (TextEditing redraws it when the shape around the text changes).
+  if (all || !text_->Session() || !text_->Session()->Committing()) {
+    slideBitmap_.Reset();
+    slideBitmapOf_ = SIZE_MAX;
+  }
   links_.clear();
   linksOf_ = SIZE_MAX;
   matches_.clear();

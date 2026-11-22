@@ -104,6 +104,25 @@ class SlideRender {
   // The slide's own text, shape by shape and paragraph by paragraph, without bullets (find, copy).
   const std::wstring& Text() const { return text_; }
 
+  // ---- Editing (P2, p2-text) ----
+  // Where a shape's text (or a table cell's: row, column >= 0) is laid out on this slide.
+  struct TextFrame {
+    draw::TextBox box;             // the text box, in the shape's (or table frame's) coordinates
+    draw::Matrix toSlide;          // those coordinates -> the slide's (draw the text with it)
+    int firstParagraph = 0;        // its paragraphs as DrawFilter::Paragraph counts them
+    int paragraphs = 0;
+    float contentHeight = 0;       // its text's height as laid out now
+  };
+  bool FindText(uint32_t shape, int row, int column, TextFrame& out) const;
+  // The cell of table `shape` under a point of the slide.
+  bool CellAt(uint32_t shape, draw::Point slide, int& row, int& column) const;
+  // The empty placeholders' prompts ("Click to add title", or the layout's own), with a dashed
+  // outline, as PowerPoint's editor shows them; the slide show, printing and PDF never do. `skip`:
+  // the placeholder being typed in (0: none). `fonts` lays them out on first use.
+  void DrawPrompts(draw::Painter& painter, const draw::Rect& frame, text::Fonts& fonts, uint32_t skip = 0);
+  // Whether the slide has an empty placeholder with this id (typing goes into it).
+  bool IsEmptyPlaceholder(uint32_t shape) const;
+
  private:
   SlideRender();
   struct Impl;

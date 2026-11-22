@@ -216,6 +216,7 @@ struct TableCell {
   BodyProps::Vertical vertical = BodyProps::Vertical::Horizontal;
   CellFill fill;                       // the cell's own, else the table style's
   std::array<CellBorder, 6> borders;   // by Edge
+  std::vector<pugi::xml_node> textStyles;  // the table style's a:tcTxStyle for it, lowest first
 };
 
 struct Table {
@@ -315,6 +316,11 @@ class Presentation {
   const TextBody* TextOf(pugi::xml_node txBody, const SlideBase& owner, const SlideBase& shownOn);
   // A table, with its style applied. Null when the shape isn't a table.
   const Table* GetTable(const Shape& shape, const SlideBase& shownOn);
+  // Text being edited (P2): a working copy of a shape's text body, or of a table cell's, resolved as
+  // the shape's or cell's own would be, for the slide shown. Not cached; changes nothing.
+  std::unique_ptr<TextBody> ResolveTextBody(const Shape& shape, pugi::xml_node txBody, const SlideBase& shownOn) const;
+  std::unique_ptr<TextBody> ResolveCellText(const Shape& table, const TableCell& cell, pugi::xml_node txBody,
+                                            const SlideBase& shownOn) const;
   // The fonts the deck embeds, decoded on first use. Those that can't be decoded are left out.
   const std::vector<EmbeddedFont>& EmbeddedFonts();
 

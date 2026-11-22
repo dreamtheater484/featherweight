@@ -50,7 +50,16 @@ struct PartState {
 // A copy of a DOM to edit (pugi copies the whole tree, declaration included).
 std::shared_ptr<pkg::XmlDom> CloneDom(const pkg::XmlDom& dom);
 // A DOM made from bytes, within the package's limits; null when they aren't well-formed XML.
+// Parsed XML from outside the model (fragments, parts written or pasted, a journal): XmlTextUtf8 run
+// over every text and attribute value (CleanXmlTree), so characters a parser decoded from references
+// like &#1; never reach the writer.
 std::shared_ptr<pkg::XmlDom> ParseDom(std::string_view xml, const pkg::Limits& limits, std::string_view label = {});
+// UTF-8 as XML 1.0 can hold it: the characters it doesn't allow dropped (tab, line feed, carriage
+// return stay); a surrogate on its own (as a parser decodes &#xD800;) or a byte that isn't UTF-8
+// becomes U+FFFD.
+std::string XmlTextUtf8(std::string_view utf8);
+// XmlTextUtf8 over every text, CDATA, comment and attribute value under `n`.
+void CleanXmlTree(pugi::xml_node n);
 
 class PartStore {
  public:

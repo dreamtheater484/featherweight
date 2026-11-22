@@ -3,6 +3,7 @@
 
 #include "Commands.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Banner.h"
 
@@ -19,6 +20,10 @@ ObjectTool& PresentationView::Objects() const {
     h.invalidate = [self] { self->host_.ViewInvalidate(); };
     h.refused = [self](const std::wstring& why) { self->host_.ViewMessage(BannerKind::Warning, why); };
     h.window = [self] { return self->host_.ViewHwnd(); };
+    // p2-text: after inserting a text box (or a table), the caret goes into it.
+    h.beginText = [self](uint32_t id) {
+      if (self->text_->BeginTextEdit(self->current_, id)) self->objects_->SetTextEditing(true);
+    };
     // h.slideEdited stays unset: what was drawn of edited slides (thumbnails, the slide's bitmap, the
     // Deck's caches) is the tab's own Editor listener's job (OnSlideEdits, p2-slides), which follows
     // slides by id and redraws only the touched ones (agreed with p2-objects, 2026-11-22).

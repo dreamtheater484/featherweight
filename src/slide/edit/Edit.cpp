@@ -42,8 +42,6 @@ std::wstring XmlText(std::wstring_view s, bool breaks) {
   return out;
 }
 
-std::string XmlTextUtf8(std::string_view utf8) { return fw::WideToUtf8(XmlText(fw::Utf8ToWide(utf8))); }
-
 std::string Utf8(std::wstring_view s) { return fw::WideToUtf8(XmlText(s)); }
 std::wstring Wide(std::string_view s) { return fw::Utf8ToWide(s); }
 
@@ -51,6 +49,8 @@ bool ParseFragment(std::string_view xml, pugi::xml_document& doc) {
   // Checked like a part first (limits, no DTD, well-formed, namespaces declared).
   pkg::XmlDom dom;
   if (!dom.Parse(xml, pkg::Limits::Default(), "fragment").Ok() || !dom.Root()) return false;
+  // What a parser decoded from references (&#1;, &#xFFFE;, &#xD800;) never reaches the writer.
+  CleanXmlTree(dom.Doc());
   doc.reset(dom.Doc());
   return static_cast<bool>(doc.document_element());
 }

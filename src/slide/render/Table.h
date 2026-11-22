@@ -27,6 +27,11 @@ class TableRender {
   std::vector<draw::Rect> ParagraphBounds() const;
   std::vector<TextBlock::Link> Links() const;
   std::wstring PlainText() const;
+  // Editing (P2): a cell's text box in the frame's coordinates, and its paragraphs' place in the
+  // table's count. False when there's no such cell (or it's covered by a merge).
+  bool CellFrame(int row, int column, draw::TextBox& box, int& firstParagraph, int& paragraphs, float& contentHeight) const;
+  // The cell under a point of the frame's coordinates.
+  bool CellAt(draw::Point at, int& row, int& column) const;
 
  private:
   struct Cell {
