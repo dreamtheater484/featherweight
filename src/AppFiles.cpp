@@ -147,9 +147,12 @@ void App::RecoverDocuments(bool open) {
     // A CSV file's autosave that holds a workbook (a chart, a table...): an unsaved .xlsx named after it.
     WorkbookFile::RecoveredAsWorkbook(bytes, name, suggested);
     const fw::FileKind kind = fw::KindOfPath(name);
-    const bool workbook = kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes));
+    // A presentation's journal says so (PresentationFile: "pptx"); its charts hold workbooks.
+    const bool presentation = kind == fw::FileKind::Presentation || (entry.journal && entry.meta == "pptx");
+    const bool workbook = !presentation && (kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes)));
+    if (presentation && kind != fw::FileKind::Presentation) name += L".pptx";
     if (workbook && kind != fw::FileKind::Workbook) name += L".xlsx";
-    if (!workbook && kind != fw::FileKind::Document) name += L".docx";
+    if (!workbook && !presentation && kind != fw::FileKind::Document) name += L".docx";
     if (suggested.empty()) {  // never saved: the Documents folder, as for a new document
       PWSTR docs = nullptr;
       if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {
@@ -159,7 +162,9 @@ void App::RecoverDocuments(bool open) {
       suggested += name;
     }
     std::unique_ptr<TabContent> view;
-    if (workbook)
+    if (presentation)
+      view = fw::slide::view::PresentationView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
+    else if (workbook)
       view = fw::sheet::view::WorkbookView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
     else
       view = DocView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
@@ -184,7 +189,7 @@ void App::RecoverDocuments(bool open) {
                                                   std::to_wstring(failed) + L" documents couldn’t be recovered.",
                  {}, 8000);
   else if (partial)
-    banner_.Show(BannerKind::Warning, L"The last changes to a recovered workbook couldn’t all be made again. Check it before you save.",
+    banner_.Show(BannerKind::Warning, L"The last changes to a recovered file couldn’t all be made again. Check it before you save.",
                  {}, 8000);
   UpdateAutosaveTimer();
   Layout();

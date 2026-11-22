@@ -13,7 +13,7 @@ target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp
   ObjectTool.cpp PresentationObjects.cpp  # p2-objects
   PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp  # P2, p2-slides
-  PresentationFile.cpp)  # p2-model: saving and recovery
+  PresentationFile.cpp PresentationSave.cpp)  # p2-model: saving and recovery
 target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwslideview PUBLIC fwslideviewcore fwslideobjects)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)

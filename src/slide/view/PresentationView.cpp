@@ -16,6 +16,7 @@
 #include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
 #include "slide/view/NewDeck.h"
+#include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/SlideGallery.h"
 #include "text/Fonts.h"
@@ -72,17 +73,21 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
   auto view = std::make_unique<PresentationView>(host, std::wstring());
   view->untitled_ = L"Presentation" + std::to_wstring(number);
   view->newDeck_ = true;
+  view->File().New(number);
   return view;
 }
 
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = newDeck_ ? OpenDeckFromBytes(BlankPresentation(), why) : OpenDeck(path_, why);
+  deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
+          : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
+                       : OpenDeck(path_, why);
   if (!deck_) {
     error = Title() + L": " + why;
     return OpenResult::Failed;
   }
+  FileOpened();
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
