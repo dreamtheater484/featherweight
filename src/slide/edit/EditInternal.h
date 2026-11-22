@@ -193,7 +193,6 @@ class Call {
 // dropped (tab, line feed and carriage return stay; with `breaks` also '\v', which the text operations
 // turn into a:br), lone surrogates become U+FFFD. Not _xHHHH_: a:t is plain xsd:string.
 std::wstring XmlText(std::wstring_view s, bool breaks = false);
-std::string XmlTextUtf8(std::string_view utf8);
 // UTF-8 for the XML: XmlText first, so nothing written can make a part that doesn't parse.
 std::string Utf8(std::wstring_view s);
 std::wstring Wide(std::string_view s);
