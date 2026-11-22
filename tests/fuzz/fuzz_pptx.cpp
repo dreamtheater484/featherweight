@@ -16,13 +16,10 @@
 //
 // FUZZ_PPTX_OPEN=1 adds the checks of findings reported to their owner and not fixed yet (the
 // replay test in CI runs without them; the edits made are the same). Remove each once it's fixed.
-// p2-model fixed the first three on 2026-11-22 (a refused edit after typing took the typing back;
-// characters XML doesn't allow were saved; the replay's save rewrote the parts the journal's "back
-// to the file's own" records name). Open:
-//   4. (p2-slides, 2026-11-22) SetHeaderFooter writes a footer text's '\v' (a line break everywhere
-//      else) into the footer as is: the slide part doesn't parse any more. Here footers get no '\v'
-//      but then. Corpus: training/usgov-materials-to-support-learning-presentation.pptx,
-//      FUZZ_PPTX_STEPS=2 (SetText, then SetHeaderFooter on slide 0 with footer "line\vbreak").
+// None is open now. Fixed on 2026-11-22: by p2-model, a refused edit after typing took the typing
+// back, characters XML doesn't allow were saved, and the replay's save rewrote the parts the
+// journal's "back to the file's own" records name; by p2-slides (3b63beb), SetHeaderFooter wrote a
+// footer's '\v' into the slide as is.
 //
 // An input is a zip, or parts as text as fuzz_check reads them: each part starts on a line
 // "@<part name>", and the rest of the input up to the next such line is its content.
@@ -616,7 +613,6 @@ void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint
       hf.slideNumber = rng.Chance(50);
       hf.footer = rng.Chance(50);
       hf.footerText = text();
-      if (!state.open) std::replace(hf.footerText.begin(), hf.footerText.end(), L'\v', L' ');  // finding 4
       hf.date = rng.Chance(40);
       hf.dateFixed = rng.Chance(50);
       hf.dateText = L"22-11-2026";

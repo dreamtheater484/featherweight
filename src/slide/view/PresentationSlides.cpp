@@ -728,6 +728,10 @@ void PresentationView::EndNotesEdit() {
   host_.ViewInvalidate();
 }
 
+void PresentationView::CommitNotes() {
+  if (notesEdit_ && notesEdit_->IsOpen()) notesEdit_->Commit();
+}
+
 void PresentationView::PlaceNotesEdit(const D2D1_RECT_F& box) {
   if (notesEdit_) notesEdit_->Place(Inflate(box, 4 * ui_, 4 * ui_), ui_);
 }
