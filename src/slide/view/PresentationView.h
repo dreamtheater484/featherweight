@@ -25,12 +25,15 @@ class SlideRenderer;
 }
 namespace fw::slide::edit {
 class Editor;
+struct Changes;
+struct Result;
 }
 class PresentationFile;
 
 namespace fw::slide::view {
 
 class ObjectTool;
+class NotesEdit;
 class SlideGallery;
 
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
@@ -191,12 +194,35 @@ class PresentationView : public TabContent {
   // Edits through the edit layer (each one undo step). False, with a banner saying why, when the
   // deck can't be edited.
   bool CanEditSlides() const;
+  // The deck's editor, which the tab listens to from the first time it's asked for (null: none).
+  edit::Editor* SlideEditor() const;
+  // Right after the tab first gets the deck's Editor (at load), before any edit: p2-model's
+  // PresentationFile hooks the recovery journal in here (SetJournal).
+  void OnEditorMade(edit::Editor& ed);
+  void OnSlideEdits(const edit::Changes& c);
+  bool Done(const edit::Result& r) const;  // a banner saying why when it was refused
+  void SelectSlides(const std::vector<size_t>& slides, size_t current);
+  int NewSlideLayout() const;  // Ctrl+M's layout: the current slide's (after a title slide, the next one)
+  // Notes typed in the notes pane (plain text, NotesEdit): a click there starts it; leaving the
+  // pane, Esc, another slide or another tab ends it, and the text goes to the slide's notes.
+  bool NotesMouseDown();
+  void EndNotesEdit();
+  void PlaceNotesEdit(const D2D1_RECT_F& box);
+  std::unique_ptr<NotesEdit> notesEdit_;
+  size_t notesSlide_ = 0;
+  mutable bool editListening_ = false;
+  mutable std::vector<uint32_t> editIds_;  // the slides' ids as the last change left them
   bool InsertSlide(size_t at, int layout);
   bool DuplicateSlides(const std::vector<size_t>& slides);
   bool DeleteSlides(const std::vector<size_t>& slides);
   bool MoveSlides(const std::vector<size_t>& slides, size_t gap);
   bool HideSlides(const std::vector<size_t>& slides, bool hide);
   bool SetSlidesLayout(const std::vector<size_t>& slides, int layout);
+  // Copying slides between presentation tabs: the selected slides to the clipboard (cut: then
+  // deleted), and the slides copied pasted after the current slide, in this deck's design or
+  // keeping their own.
+  bool CopySlides(bool cut);
+  bool PasteSlides(bool keepSource);
   // Design (PresentationDesign.cpp): a built-in theme or theme colors on the masters of `slides`
   // (every master when empty), a background on `slides` (every slide with `all`), slide numbers,
   // footer and date, the slide size, the notes.

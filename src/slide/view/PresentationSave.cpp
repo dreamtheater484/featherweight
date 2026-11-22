@@ -8,6 +8,7 @@
 #include "core/Strings.h"
 #include "slide/edit/Edit.h"
 #include "slide/edit/Journal.h"
+#include "slide/view/NotesEdit.h"
 #include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationView.h"
 
@@ -50,8 +51,8 @@ void PresentationView::FileOpened() {
     if (Presentation* deck = deck_->Model()) f.Opened(path_, deck->GetPackage().GetSnapshot().GetStamp());
     if (std::wstring inUse = f.InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
   }
-  // The Editor is made now, so the journal is there before the first edit.
-  if (edit::Editor* ed = deck_->Editor()) AttachFile(*ed);
+  // Load then makes the deck's Editor (SlideEditor), and OnEditorMade attaches the file to it before
+  // anything can edit.
 }
 
 void PresentationView::AttachFile(edit::Editor& ed) {
@@ -76,7 +77,10 @@ bool PresentationView::ReadyToSave(std::wstring& error) {
     error = Title() + L" can't be saved.";
     return false;
   }
-  ed->EndTyping();  // what is being typed is one step, and part of what's saved
+  // What is being typed is part of what's saved: notes still in the notes pane go to the slide (the
+  // pane stays open), and typing on a slide ends its step.
+  if (notesEdit_ && notesEdit_->IsOpen()) notesEdit_->Commit();
+  ed->EndTyping();
   return true;
 }
 

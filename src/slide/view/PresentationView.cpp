@@ -13,6 +13,7 @@
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
+#include "slide/edit/Edit.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
 #include "slide/view/NewDeck.h"
@@ -93,6 +94,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
+  SlideEditor();  // P2: the deck's Editor made and listened to before anything can edit it (OnEditorMade)
   LayoutParts();
   return OpenResult::Ok;
 }
@@ -219,6 +221,7 @@ void PresentationView::GoToSlide(size_t slide) {
   if (!deck_ || SlideCount() == 0) return;
   slide = std::min(slide, SlideCount() - 1);
   if (slide != current_) {
+    EndNotesEdit();  // P2: the notes typed go to the slide they were typed on
     current_ = slide;
     sx_ = sy_ = 0;
     notesScroll_ = 0;
@@ -402,9 +405,16 @@ void PresentationView::DrawNotes(Canvas& c) {
   c.Fill(notes_, p.chrome);
   const float pad = 12 * ui_, size = 13 * ui_;
   const D2D1_RECT_F box{notes_.left + pad, notes_.top + pad * 0.75f, notes_.right - pad, notes_.bottom - pad * 0.5f};
+  if (notesEdit_ && notesEdit_->IsOpen()) {  // P2: being typed in (a window of its own over the pane)
+    PlaceNotesEdit(box);
+    return;
+  }
   const std::wstring notes = SlideCount() ? deck_->Notes(current_) : std::wstring();
   if (notes.empty()) {
-    c.Text(L"This slide has no speaker notes.", {box.left, box.top, box.right, box.top + 20 * ui_}, p.textDisabled, size);
+    // P2: an editable deck invites notes, as PowerPoint does.
+    edit::Editor* ed = SlideCount() ? SlideEditor() : nullptr;
+    c.Text(ed && ed->CanEdit() ? L"Click to add notes" : L"This slide has no speaker notes.",
+           {box.left, box.top, box.right, box.top + 20 * ui_}, p.textDisabled, size);
     return;
   }
   ComPtr<IDWriteTextLayout> layout;
@@ -474,6 +484,7 @@ void PresentationView::ReleaseDeviceResources() {
 }
 
 void PresentationView::OnDeactivated() {
+  EndNotesEdit();  // P2: the notes typed go to the slide
   // Quick to rebuild: the slide's bitmap. The thumbnails stay, so coming back is instant.
   slideBitmap_.Reset();
 }
@@ -505,6 +516,7 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
     return;
   }
   keysInThumbs_ = false;
+  if (notesShown_ && Contains(notes_, fx, fy) && NotesMouseDown()) return;  // P2: typing notes
   if (Contains(view_, fx, fy)) {
     if (const SlideLink* link = LinkAt(x, y); link && (mods & kModCtrl)) {
       FollowLink(*link);
