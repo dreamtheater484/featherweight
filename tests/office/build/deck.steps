@@ -23,7 +23,7 @@
 #                                     but the title slide, Apply to All
 #   save                              Save As .pptx
 
-theme "Facet"
+theme "Ocean"
 
 # 1. The title slide
 slide "Title Slide"
