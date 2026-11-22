@@ -195,6 +195,144 @@ TEST(SlideRender_BigBulletKeepsTheLineHeight) {
   CHECK(std::fabs(big - plain) < 0.5f);
 }
 
+TEST(SlideRender_LineBreakAloneIsItsOwnSize) {
+  // A paragraph starting with an 18-pt a:br in a 40-pt body: the empty first line is 1.2 x 18 high
+  // (PowerPoint's PDFs), so the paragraph is as high as one that breaks after 18-pt text.
+  auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                          "<a:p><a:pPr><a:buNone/></a:pPr><a:br><a:rPr sz=\"1800\"/></a:br><a:r><a:rPr sz=\"1800\"/>"
+                                          "<a:t>Text</a:t></a:r><a:endParaRPr sz=\"4000\"/></a:p>"
+                                          "<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:rPr sz=\"1800\"/><a:t>X</a:t></a:r><a:br>"
+                                          "<a:rPr sz=\"1800\"/></a:br><a:r><a:rPr sz=\"1800\"/><a:t>Text</a:t></a:r>"
+                                          "<a:endParaRPr sz=\"4000\"/></a:p>"),
+                              2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  const float empty = p[0].bounds.bottom - p[0].bounds.top, full = p[1].bounds.bottom - p[1].bounds.top;
+  CHECK(std::fabs(empty - full) < 0.5f);
+}
+
+TEST(SlideRender_FirstLineStaysInTheTextArea) {
+  // marL 0 with a 27-pt hanging indent: PowerPoint starts the first line at the text area's edge.
+  auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                          "<a:p><a:pPr marL=\"0\" indent=\"-342900\"><a:buNone/></a:pPr><a:r><a:t>Hangs</a:t></a:r></a:p>"
+                                          "<a:p><a:pPr marL=\"0\" indent=\"0\"><a:buNone/></a:pPr><a:r><a:t>Hangs</a:t></a:r></a:p>"),
+                              2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  CHECK(std::fabs(p[0].bounds.left - p[1].bounds.left) < 0.5f);
+}
+
+TEST(SlideRender_KernsOnlyByTheKernTable) {
+  // kern="1200": Arial (a 'kern' table) is kerned, Georgia (OpenType pairs only) isn't, as in
+  // PowerPoint's PDFs.
+  auto width = [](const char* font, bool kern) {
+    const std::string rPr = std::string("<a:rPr sz=\"4000\"") + (kern ? " kern=\"1200\"" : " kern=\"0\"") + "><a:latin typeface=\"" + font +
+                            "\"/></a:rPr>";
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            "<a:p><a:pPr><a:buNone/></a:pPr><a:r>" + rPr + "<a:t>AVAVAVAV</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  CHECK(width("Arial", true) < width("Arial", false) - 1);
+  CHECK(std::fabs(width("Georgia", true) - width("Georgia", false)) < 0.01f);
+}
+
+TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
+  // normAutofit at 50 %: 12 pt before a paragraph stays 12 pt (cpb deck: PowerPoint's paragraph
+  // gaps are the stated points, not shrunk with the text).
+  const std::string para = "<a:p><a:pPr><a:spcBef><a:spcPts val=\"1200\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>"
+                           "<a:buNone/></a:pPr><a:r><a:t>Line</a:t></a:r></a:p>";
+  std::string shape = PhShape(3, "<p:ph idx=\"1\"/>", para + para);
+  const std::string plain = "<a:bodyPr/>";
+  shape.replace(shape.find(plain), plain.size(), "<a:bodyPr><a:normAutofit fontScale=\"50000\"/></a:bodyPr>");
+  auto deck = Modified(Slide1(shape, 2));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+  REQUIRE(p.size() == 2);
+  CHECK(std::fabs(p[1].bounds.top - p[0].bounds.bottom - 12.f) < 0.05f);
+}
+
+TEST(SlideRender_SimulatedBoldKeepsAdvances) {
+  // Calibri Light has no bold: PowerPoint emboldens it in place, its advances as the light face's.
+  auto width = [](bool bold) {
+    const std::string rPr = std::string("<a:rPr sz=\"4400\" kern=\"0\"") + (bold ? " b=\"1\"" : " b=\"0\"") +
+                            "><a:latin typeface=\"Calibri Light\"/></a:rPr>";
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            "<a:p><a:pPr><a:buNone/></a:pPr><a:r>" + rPr + "<a:t>Geopolitical</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const float regular = width(false), bold = width(true);
+  CHECK(regular > 0);
+  CHECK(std::fabs(bold - regular) < 0.5f);
+}
+
+TEST(SlideRender_TightSpacingComesOffTheTop) {
+  // 90 % of a 48-pt single line: the text rises the whole 4.8 pt (PowerPoint keeps the part below
+  // the baseline), not the 3.7 pt of the line's ascent share.
+  auto inkTop = [](const char* spacing) {
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            std::string("<a:p><a:pPr><a:lnSpc><a:spcPct val=\"") + spacing +
+                                                "\"/></a:lnSpc><a:buNone/></a:pPr><a:r><a:rPr sz=\"4000\"/><a:t>HHHH</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const float scale = 4;  // pixels per point
+    auto b = Render(*slide, static_cast<int>(slide->Size().width * scale), static_cast<int>(slide->Size().height * scale));
+    if (!b) return -1;
+    for (int y = 0; y < b->Height(); ++y)
+      for (int x = 0; x < b->Width(); ++x)
+        if ((Pixel(*b, x, y) & 0xFF) < 100) return y;
+    return -1;
+  };
+  const int single = inkTop("100000"), tight = inkTop("90000");
+  CHECK(single > 0 && tight > 0);
+  CHECK(std::abs(single - tight - 19) <= 2);  // 4.8 pt at 4 px per point
+}
+
+TEST(SlideRender_BottomAnchorIgnoresWideSpacingBelow) {
+  // Bottom-anchored text at 150 %: its last line ends where it would at single spacing (cpb's
+  // title), the wider spacing's share below the line not counted.
+  auto inkBottom = [](const char* spacing) {
+    std::string shape = PhShape(3, "<p:ph idx=\"1\"/>",
+                                std::string("<a:p><a:pPr><a:lnSpc><a:spcPct val=\"") + spacing +
+                                    "\"/></a:lnSpc><a:buNone/></a:pPr><a:r><a:rPr sz=\"4000\"/><a:t>HHHH</a:t></a:r></a:p>");
+    const std::string plain = "<a:bodyPr/>";
+    shape.replace(shape.find(plain), plain.size(), "<a:bodyPr anchor=\"b\"><a:noAutofit/></a:bodyPr>");
+    auto deck = Modified(Slide1(shape, 2));
+    if (!deck) return -1;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const float scale = 4;
+    auto b = Render(*slide, static_cast<int>(slide->Size().width * scale), static_cast<int>(slide->Size().height * scale));
+    if (!b) return -1;
+    for (int y = b->Height() - 1; y >= 0; --y)
+      for (int x = 0; x < b->Width(); ++x)
+        if ((Pixel(*b, x, y) & 0xFF) < 100) return y;
+    return -1;
+  };
+  const int single = inkBottom("100000"), wide = inkBottom("150000");
+  CHECK(single > 0 && wide > 0);
+  CHECK(std::abs(single - wide) <= 2);
+}
+
 TEST(SlideRender_OutlinedTextIsStroked) {
   // A run with no fill and a red a:ln: its glyphs' outlines in red.
   auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",

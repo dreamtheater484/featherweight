@@ -569,8 +569,12 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     seg.glyphs.resize(actual);
     seg.advances.resize(actual);
     seg.offsets.resize(actual);
+    // Simulated bold placed by the regular face, when the style keeps its advances: same glyphs.
+    IDWriteFontFace* placed = style.simulatedBoldKeepsAdvances && (face->GetSimulations() & DWRITE_FONT_SIMULATIONS_BOLD)
+                                  ? seg.face->Plain()
+                                  : face;
     hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
-                                              glyphProps.data(), actual, face, seg.emSize, FALSE, rtlRun, &script,
+                                              glyphProps.data(), actual, placed, seg.emSize, FALSE, rtlRun, &script,
                                               locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
   }
   if (FAILED(hr)) {

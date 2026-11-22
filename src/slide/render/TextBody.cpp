@@ -120,6 +120,24 @@ TextBlock::~TextBlock() = default;
 TextBlock::TextBlock(TextBlock&&) noexcept = default;
 TextBlock& TextBlock::operator=(TextBlock&&) noexcept = default;
 
+namespace {
+
+// Whether the face drawn for `family` has a legacy 'kern' table.
+bool KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
+  const text::Face* face = fonts.FaceFor(family, bold, italic);
+  if (!face) return false;
+  const void* data = nullptr;
+  UINT32 size = 0;
+  void* context = nullptr;
+  BOOL exists = FALSE;
+  if (FAILED(face->Get()->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
+    return false;
+  face->Get()->ReleaseFontTable(context);
+  return size > 4;
+}
+
+}  // namespace
+
 void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::slide::TextBody& body, const TextExtras& extras) {
   using fw::slide::Bullet;
   using fw::slide::RunProps;
@@ -153,7 +171,10 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.italic = s.complexItalic = r.italic;
     s.caps = r.caps == fw::slide::Caps::All ? text::Caps::All : r.caps == fw::slide::Caps::Small ? text::Caps::Small : text::Caps::None;
     s.letterSpacing = r.spacing;
-    s.kerningMinSize = r.kern;
+    // PowerPoint kerns only by a font's 'kern' table, not by its OpenType (GPOS) pairs: Public Sans
+    // (GPOS only) isn't kerned in its PDFs.
+    if (r.kern > 0 && KernTable(fonts, s.family, s.bold, s.italic)) s.kerningMinSize = r.kern;
+    s.simulatedBoldKeepsAdvances = true;  // PowerPoint's (cbs deck: Calibri Light bold, 6 % narrower than DirectWrite's)
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
     return s;
   };
@@ -287,7 +308,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     f.alignment = box.wrap ? a : (pp.rtl ? Alignment::End : Alignment::Start);
     f.startIndent = pp.marginLeft;
     f.endIndent = pp.marginRight;
-    f.firstLineIndent = pp.indent;
+    // The first line never starts before the text area (marL 0 with a hanging indent: PowerPoint's PDFs).
+    f.firstLineIndent = std::max(pp.indent, -pp.marginLeft);
     for (const fw::slide::TabStop& t : pp.tabs) {
       text::TabStop ts;
       ts.position = t.position;
@@ -307,12 +329,20 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     // the first line's largest font.
     // The bullet (run 0) doesn't count: a bullet at 150 % leaves its line as high (PowerPoint's PDFs).
     const auto counts = [&](uint32_t run) { return !para.bullet || run != 0; };
+    // A line with nothing drawn on it (a line break alone) is as high as the break's own size; one
+    // after the last break, the paragraph mark's.
+    const auto emptySize = [&](const text::Line& line) {
+      if (line.start < para.text.size())
+        for (size_t i = para.runStart.size(); i-- > 0;)
+          if (para.runStart[i] <= line.start) return counts(static_cast<uint32_t>(i)) ? para.styles[i].size : para.mark.size;
+      return para.mark.size;
+    };
     float largest = 0;
     if (!para.lines.empty())
       for (const text::GlyphPiece& g : para.lines.front().pieces)
         if (counts(g.run)) largest = std::max(largest, g.emSize);
-    if (largest <= 0) largest = para.mark.size;
-    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value * fontScale; };
+    if (largest <= 0) largest = para.lines.empty() ? para.mark.size : emptySize(para.lines.front());
+    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value; };
     if (!first) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
@@ -324,10 +354,15 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (counts(g.run)) size = std::max(size, g.emSize);
       for (const text::InlineObject& o : line.objects)
         if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
-      if (size <= 0) size = para.mark.size;
+      if (size <= 0) size = emptySize(line);
       const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
-      const float above = line.ascent + line.descent > 0 ? pitch * line.ascent / (line.ascent + line.descent) : 0;
+      const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
+      // Spacing under single, stated or an autofit's reduction, comes off the line's top: the part
+      // below the baseline stays as at single (cbs at 90 %: 28-pt text 0.72 pt and a 44-pt title
+      // 1.16 pt higher than shared out; govuk census shrunk 20 %: 1.0 pt). Wider spacing is shared
+      // out at the fonts' ascent share.
+      const float above = pitch < natural ? std::max(0.f, pitch - natural * (1 - share)) : pitch * share;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
@@ -337,8 +372,10 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       }
       para.origins.push_back({shift, y + above});
       para.rows.emplace_back(y, y + pitch);
+      // The block ends at its last line's own bottom, without wider spacing's share below it
+      // (cpb's bottom-anchored title at 120 %: 2.5 pt lower than to the line's full pitch).
+      maxBottom = std::max(maxBottom, std::min(y + pitch, y + above + natural * (1 - share)));
       y += pitch;
-      maxBottom = std::max(maxBottom, y);
     }
     y += spacing(pp.spaceAfter);
     first = false;

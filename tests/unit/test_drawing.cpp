@@ -19,6 +19,7 @@
 #include "draw/Geometry.h"
 #include "draw/Images.h"
 #include "draw/Theme.h"
+#include "draw/Xml.h"
 #include "pkg/XmlDom.h"
 
 using Microsoft::WRL::ComPtr;
@@ -229,6 +230,28 @@ bool Near(uint32_t c, uint32_t want, int tolerance = 12) {
 }  // namespace
 
 // ---- Pictures ----
+
+TEST(Drawing_MathChoiceGivesWayToFallback) {
+  // Office math in a text box (a14:m) isn't laid out: the fallback, Office's picture of it, is drawn.
+  const std::string a14 = R"( xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main")";
+  fw::pkg::XmlDom math = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                  R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
+                                  "</mc:AlternateContent></p:spTree>");
+  std::vector<std::string> seen;
+  draw::xml::ForEachChild(math.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"p:pic"});
+  fw::pkg::XmlDom plain = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp/></mc:Choice><mc:Fallback><p:pic/></mc:Fallback></mc:AlternateContent></p:spTree>)");
+  seen.clear();
+  draw::xml::ForEachChild(plain.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"p:sp"});
+}
 
 TEST(Images_SniffFormats) {
   auto sniff = [](const std::vector<uint8_t>& b) { return SniffImageFormat(b.data(), b.size()); };
@@ -1025,6 +1048,67 @@ TEST(DrawingML_ChartIsPlaceholder) {
                        res, dom);
   CHECK(d && d->IsPlaceholder());
   CHECK(d && d->Extent().width == 100);
+}
+
+TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {
+  // PowerPoint keeps the data model's extension list as dgm:extLst: its dsp:dataModelExt names the
+  // drawing Office saved, which is drawn.
+  struct Parts : TestResources {
+    fw::pkg::XmlDom data, drawing;
+    pugi::xml_node GetPartXml(std::string_view relId) override {
+      return relId == "rIdDm" ? data.Root() : relId == "rIdDrawing" ? drawing.Root() : pugi::xml_node();
+    }
+  } res;
+  res.data = ParseXml(R"(<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" )"
+                      R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:extLst>)"
+                      R"(<a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt )"
+                      R"(xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rIdDrawing"/></a:ext>)"
+                      R"(</dgm:extLst></dgm:dataModel>)");
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>)" +
+                         Xfrm(0, 0, 100, 50) +
+                         R"(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>)"
+                         R"(</dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>)");
+  fw::pkg::XmlDom dom = ParseXml(
+      "<p:graphicFrame" + kNs + R"(><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 3"/><p:cNvGraphicFramePr/><p:nvPr/>)"
+      R"(</p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></p:xfrm><a:graphic>)"
+      R"(<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds )"
+      R"(xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>)"
+      R"(</a:graphicData></a:graphic></p:graphicFrame>)");
+  auto d = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(100, 50);
+  {
+    D2DPainter p(s.dc.Get());
+    d->Draw(p, d->Bounds());
+  }
+  CHECK(s.End());
+  CHECK(Near(s.At(50, 25), 0xFF0000));
+  // A quadrant turned 270 degrees whose text turns 90 on top of it reads upright, in the text's
+  // own rectangle (tdf145528 matrix in PowerPoint's PDF).
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm rot="16200000">)"
+                         R"(<a:off x="317500" y="-317500"/><a:ext cx="635000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"/>)"
+                         R"(</dsp:spPr><dsp:txBody><a:bodyPr/><a:p><a:r><a:t>Writer</a:t></a:r></a:p></dsp:txBody>)"
+                         R"(<dsp:txXfrm rot="5400000"><a:off x="0" y="0"/><a:ext cx="1270000" cy="476250"/></dsp:txXfrm>)"
+                         R"(</dsp:sp></dsp:spTree></dsp:drawing>)");
+  auto turned = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(turned != nullptr);
+  if (!turned) return;
+  const std::vector<TextBox> boxes = turned->TextBoxes();
+  CHECK(boxes.size() == 1u);
+  if (boxes.size() != 1u) return;
+  const Matrix total = Matrix::Rotate(boxes[0].rotation) * boxes[0].transform;
+  CHECK(std::fabs(total.m12) < 1e-3f && total.m11 > 0.99f);  // upright
+  // The box turns about its own center, which the shape's transform alone places.
+  const Point center =
+      boxes[0].transform.Apply({(boxes[0].rect.left + boxes[0].rect.right) / 2, (boxes[0].rect.top + boxes[0].rect.bottom) / 2});
+  CHECK(std::fabs(center.x - 50) < 1.f && std::fabs(center.y - 18.75f) < 1.f);  // the top of the frame
 }
 
 TEST(DrawingML_ShapeTree) {
