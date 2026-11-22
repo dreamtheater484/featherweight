@@ -110,5 +110,7 @@ class Image : public PixelHolder, public std::enable_shared_from_this<Image> {
 // Draws a vector picture into a `width` x `height` bitmap with Direct2D's software renderer: what
 // Painter::DrawVectorImage does by default, and how pictures are recolored.
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height);
+// `source` averaged down (or stretched) to `width` x `height`, each pixel the mean of the area it covers.
+std::shared_ptr<const Bitmap> BoxResample(const Bitmap& source, int width, int height);
 
 }  // namespace draw

@@ -731,6 +731,7 @@ class PdfPainter : public Painter {
     Paint(b, false, [&] { Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re f\n"; }, r);
   }
   bool WantsText() const override { return true; }
+  int BakedPictureLimit() const override { return 1536; }
   void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) override;
   void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) override;
   void DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) override {
