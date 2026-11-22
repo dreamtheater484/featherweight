@@ -26,6 +26,10 @@
 //      file's own" records name ([Content_Types].xml, rels) anew instead of copying them: the same
 //      content, other bytes. Without FUZZ_PPTX_OPEN the replay's save is compared canonicalized.
 //      tests/office/presentations/bullets.pptx, FUZZ_PPTX_STEPS=1.
+//   4. (p2-slides, 2026-11-22) SetHeaderFooter writes a footer text's '\v' (a line break everywhere
+//      else) into the footer as is: the slide part doesn't parse any more. Here footers get no '\v'
+//      but then. Corpus: training/usgov-materials-to-support-learning-presentation.pptx,
+//      FUZZ_PPTX_STEPS=2 (SetText, then SetHeaderFooter on slide 0 with footer "line\vbreak").
 //
 // An input is a zip, or parts as text as fuzz_check reads them: each part starts on a line
 // "@<part name>", and the rest of the input up to the next such line is its content.
@@ -620,6 +624,7 @@ void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint
       hf.slideNumber = rng.Chance(50);
       hf.footer = rng.Chance(50);
       hf.footerText = text();
+      if (!state.open) std::replace(hf.footerText.begin(), hf.footerText.end(), L'\v', L' ');  // finding 4
       hf.date = rng.Chance(40);
       hf.dateFixed = rng.Chance(50);
       hf.dateText = L"22-11-2026";
