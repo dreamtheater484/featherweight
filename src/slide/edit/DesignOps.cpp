@@ -212,18 +212,4 @@ Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& sli
   return call.End({});
 }
 
-// ---- Tables (p2-objects): to come.
-
-Result Editor::InsertTableRows(size_t, uint32_t, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::DeleteTableRows(size_t, uint32_t, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::InsertTableColumns(size_t, uint32_t, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::DeleteTableColumns(size_t, uint32_t, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::MergeTableCells(size_t, uint32_t, int, int, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::SplitTableCell(size_t, uint32_t, int, int) { return Result::Fail(u"Not available yet."); }
-Result Editor::SetTableColumnWidth(size_t, uint32_t, int, float) { return Result::Fail(u"Not available yet."); }
-Result Editor::SetTableRowHeight(size_t, uint32_t, int, float) { return Result::Fail(u"Not available yet."); }
-Result Editor::SetCellProps(size_t, uint32_t, int, int, int, int, const CellPatch&) {
-  return Result::Fail(u"Not available yet.");
-}
-
 }  // namespace fw::slide::edit

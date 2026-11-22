@@ -665,3 +665,62 @@ TEST(SlideEditCleanXmlTree) {
   CHECK(std::string(t.attribute("v").value()) == "a\xEF\xBF\xBD" "b\xC3\xA9\xEF\xBF\xBD");
   CHECK(fw::slide::edit::XmlTextUtf8("ok \xF0\x9F\x98\x80") == "ok \xF0\x9F\x98\x80");
 }
+
+// Tables by id: rows and columns, merging (the cells' text joins the merged cell) and splitting,
+// widths and heights (the frame follows), cell properties; each one undo step; refusals change nothing.
+TEST(SlideEditTables) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  uint32_t id = 0;
+  CHECK(ed.InsertTable(0, 3, 3, {72, 72, 372, 222}, &id));
+  auto xml = [&] { return ed.ShapeXml(0, id); };
+  auto count = [&](std::string_view what) {
+    const std::string x = xml();
+    size_t n = 0;
+    for (size_t i = x.find(what); i != std::string::npos; i = x.find(what, i + 1)) ++n;
+    return n;
+  };
+  CHECK(ed.InsertTableRows(0, id, 1, 2));
+  CHECK_EQ(count("<a:tr "), size_t{5});
+  CHECK(ed.DeleteTableColumns(0, id, 0, 1));
+  CHECK_EQ(count("<a:gridCol "), size_t{2});
+  CHECK(!ed.DeleteTableColumns(0, id, 0, 2));  // a table keeps one column
+  CHECK_EQ(count("<a:gridCol "), size_t{2});
+  CHECK(ed.SetText({0, id, 0, 0}, L"top"));
+  CHECK(ed.SetText({0, id, 1, 1}, L"below"));
+  CHECK(ed.MergeTableCells(0, id, 1, 1, 0, 0));
+  CHECK(xml().find("gridSpan=\"2\" rowSpan=\"2\"") != std::string::npos);
+  CHECK_EQ(count("hMerge=\"1\""), size_t{2});
+  CHECK_EQ(count("vMerge=\"1\""), size_t{2});
+  CHECK(ed.ParagraphText({0, id, 0, 0}, 0) == L"top");
+  CHECK(ed.ParagraphText({0, id, 0, 0}, 1) == L"below");
+  CHECK(!ed.MergeTableCells(0, id, 1, 1, 2, 1));  // cuts through the merged cell
+  CHECK(ed.SplitTableCell(0, id, 1, 1));
+  CHECK_EQ(count("Merge=\"1\""), size_t{0});
+  CHECK(!ed.SplitTableCell(0, id, 1, 1));
+  CHECK(ed.SetTableColumnWidth(0, id, 1, 120));
+  CHECK(xml().find("w=\"1524000\"") != std::string::npos);
+  CHECK(ed.SetTableRowHeight(0, id, 0, 50));
+  CHECK(xml().find("h=\"635000\"") != std::string::npos);
+  CHECK(!ed.SetTableRowHeight(0, id, 0, -3));
+  CellPatch cells;
+  cells.fill = "<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:srgbClr val=\"00FF00\"/></a:solidFill>";
+  cells.borders[0] = "<a:ln xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" w=\"12700\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:ln>";
+  cells.anchor = BodyProps::Anchor::Middle;
+  CHECK(ed.SetCellProps(0, id, 0, 0, 1, 1, cells));
+  CHECK_EQ(count("00FF00"), size_t{4});
+  CHECK_EQ(count("<a:lnL "), size_t{4});
+  CHECK_EQ(count("anchor=\"ctr\""), size_t{4});
+  CHECK(!ed.SetCellProps(0, id, 0, 0, 9, 9, cells));
+  // The frame follows the grid: 2 columns (120 pt and 100 pt), 5 rows.
+  const std::string x = xml();
+  CHECK(x.find("cx=\"2794000\"") != std::string::npos);
+  const size_t steps = ed.UndoNames().size();
+  CHECK(ed.Undo(steps - 1));
+  CHECK_EQ(count("<a:tr "), size_t{3});
+  std::vector<uint8_t> bytes;
+  CHECK(ed.Redo(steps - 1));
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  CHECK(OpenBytes(bytes) != nullptr);
+}
