@@ -23,6 +23,11 @@ class SlideCopier {
   std::string CopySlide(std::string_view srcSlide);
   // From another deck: the layout the copy uses here (the caller maps or copies it).
   std::string layoutPart;
+  // Keeping the source's design (InsertSlides): a layout's master is `masterPart` here, a master's
+  // theme is copied, and with `skipLayouts` a master's own list of layouts is left out (the caller
+  // adds the layouts it copies).
+  bool keepDesign = false, skipLayouts = false;
+  std::string masterPart;
 
   // Reading the source deck.
   DomPtr SrcDom(std::string_view part) const;

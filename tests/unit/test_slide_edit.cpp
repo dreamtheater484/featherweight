@@ -665,3 +665,122 @@ TEST(SlideEditCleanXmlTree) {
   CHECK(std::string(t.attribute("v").value()) == "a\xEF\xBF\xBD" "b\xC3\xA9\xEF\xBF\xBD");
   CHECK(fw::slide::edit::XmlTextUtf8("ok \xF0\x9F\x98\x80") == "ok \xF0\x9F\x98\x80");
 }
+
+// Tables by id: rows and columns, merging (the cells' text joins the merged cell) and splitting,
+// widths and heights (the frame follows), cell properties; each one undo step; refusals change nothing.
+TEST(SlideEditTables) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  uint32_t id = 0;
+  CHECK(ed.InsertTable(0, 3, 3, {72, 72, 372, 222}, &id));
+  auto xml = [&] { return ed.ShapeXml(0, id); };
+  auto count = [&](std::string_view what) {
+    const std::string x = xml();
+    size_t n = 0;
+    for (size_t i = x.find(what); i != std::string::npos; i = x.find(what, i + 1)) ++n;
+    return n;
+  };
+  CHECK(ed.InsertTableRows(0, id, 1, 2));
+  CHECK_EQ(count("<a:tr "), size_t{5});
+  CHECK(ed.DeleteTableColumns(0, id, 0, 1));
+  CHECK_EQ(count("<a:gridCol "), size_t{2});
+  CHECK(!ed.DeleteTableColumns(0, id, 0, 2));  // a table keeps one column
+  CHECK_EQ(count("<a:gridCol "), size_t{2});
+  CHECK(ed.SetText({0, id, 0, 0}, L"top"));
+  CHECK(ed.SetText({0, id, 1, 1}, L"below"));
+  CHECK(ed.MergeTableCells(0, id, 1, 1, 0, 0));
+  CHECK(xml().find("gridSpan=\"2\" rowSpan=\"2\"") != std::string::npos);
+  CHECK_EQ(count("hMerge=\"1\""), size_t{2});
+  CHECK_EQ(count("vMerge=\"1\""), size_t{2});
+  CHECK(ed.ParagraphText({0, id, 0, 0}, 0) == L"top");
+  CHECK(ed.ParagraphText({0, id, 0, 0}, 1) == L"below");
+  CHECK(!ed.MergeTableCells(0, id, 1, 1, 2, 1));  // cuts through the merged cell
+  CHECK(ed.SplitTableCell(0, id, 1, 1));
+  CHECK_EQ(count("Merge=\"1\""), size_t{0});
+  CHECK(!ed.SplitTableCell(0, id, 1, 1));
+  CHECK(ed.SetTableColumnWidth(0, id, 1, 120));
+  CHECK(xml().find("w=\"1524000\"") != std::string::npos);
+  CHECK(ed.SetTableRowHeight(0, id, 0, 50));
+  CHECK(xml().find("h=\"635000\"") != std::string::npos);
+  CHECK(!ed.SetTableRowHeight(0, id, 0, -3));
+  CellPatch cells;
+  cells.fill = "<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:srgbClr val=\"00FF00\"/></a:solidFill>";
+  cells.borders[0] = "<a:ln xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" w=\"12700\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:ln>";
+  cells.anchor = BodyProps::Anchor::Middle;
+  CHECK(ed.SetCellProps(0, id, 0, 0, 1, 1, cells));
+  CHECK_EQ(count("00FF00"), size_t{4});
+  CHECK_EQ(count("<a:lnL "), size_t{4});
+  CHECK_EQ(count("anchor=\"ctr\""), size_t{4});
+  CHECK(!ed.SetCellProps(0, id, 0, 0, 9, 9, cells));
+  // The frame follows the grid: 2 columns (120 pt and 100 pt), 5 rows.
+  const std::string x = xml();
+  CHECK(x.find("cx=\"2794000\"") != std::string::npos);
+  const size_t steps = ed.UndoNames().size();
+  CHECK(ed.Undo(steps - 1));
+  CHECK_EQ(count("<a:tr "), size_t{3});
+  std::vector<uint8_t> bytes;
+  CHECK(ed.Redo(steps - 1));
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  CHECK(OpenBytes(bytes) != nullptr);
+}
+
+// Slides copied keeping the source's design: its master (with its theme) and the layouts used come
+// along once, with new unique ids; copying again uses them again; the deck saves and reads again.
+TEST(SlideEditInsertSlidesKeepingDesign) {
+  auto source = Open("layouts.pptx");
+  auto deck = Open("simple.pptx");
+  CHECK(source != nullptr && deck != nullptr);
+  if (!source || !deck) return;
+  // The source's own design (both test decks start from the same master, which would be used again).
+  Editor sourceEd(*source);
+  CHECK(sourceEd.SetMasterBackground(0, "<p:bg xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" "
+                                        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:bgPr>"
+                                        "<a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>"));
+  Editor ed(*deck);
+  const size_t masters = deck->Masters().size(), slides = deck->SlideCount();
+  const std::string layoutName = source->GetSlide(1)->layout->name;
+  std::vector<uint32_t> ids;
+  CHECK(ed.InsertSlides(*source, {0, 1}, 0, true, &ids));
+  CHECK_EQ(ids.size(), size_t{2});
+  CHECK_EQ(deck->SlideCount(), slides + 2);
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+  CHECK(deck->GetSlide(1)->layout && deck->GetSlide(1)->layout->name == layoutName);
+  CHECK(deck->GetSlide(1)->layout->master != deck->GetSlide(2)->layout->master);
+  const size_t layouts = deck->Layouts().size();
+  // Again: the same master and layouts.
+  CHECK(ed.InsertSlides(*source, {1}, 0, true));
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+  CHECK_EQ(deck->Layouts().size(), layouts);
+  // Ids of masters and layouts stay unique.
+  std::set<std::string> seen;
+  bool unique = true;
+  size_t count = 0;
+  // Every id=".." between <p:...IdLst> and its end tag.
+  auto scan = [&](const std::string& part, const std::string& list) {
+    const std::string x = PartText(ed, part);
+    const size_t from = x.find(list + ">"), to = x.find("</p:" + list + ">");
+    if (from == std::string::npos || to == std::string::npos) return;
+    const std::string inside = x.substr(from, to - from);
+    for (size_t i = inside.find(" id=\""); i != std::string::npos; i = inside.find(" id=\"", i + 1)) {
+      const size_t q = i + 5, e = inside.find('"', q);
+      unique = seen.insert(inside.substr(q, e - q)).second && unique;
+      ++count;
+    }
+  };
+  scan(deck->PresentationPart(), "sldMasterIdLst");
+  for (const auto& mst : deck->Masters()) scan(mst->part, "sldLayoutIdLst");
+  CHECK(unique);
+  CHECK(count >= deck->Masters().size() + deck->Layouts().size());
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+  if (again) {
+    CHECK_EQ(again->SlideCount(), slides + 3);
+    CHECK_EQ(again->Masters().size(), masters + 1);
+  }
+  // Within one deck the design is its own: no new master.
+  CHECK(ed.InsertSlides(*deck, {0}, 0, true));
+  CHECK_EQ(deck->Masters().size(), masters + 1);
+}
