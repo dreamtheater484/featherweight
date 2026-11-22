@@ -2510,6 +2510,41 @@ void App::RunScript(const std::wstring& script) {
                        MAKELPARAM(x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8));
         SendMessageW(hwnd_, WM_LBUTTONUP, 0, MAKELPARAM(x2, y2));
       }
+    } else if (op == L"dragbench") {
+      // dragbench:x1,y1,x2,y2[,steps] (p2-objects) times a drag as the window handles it, each step
+      // from the mouse message to the frame painted: the press, every move (the first one that moves
+      // starts the drag and makes its layers), and the release (the edit made). Plan §8.2: moving an
+      // object stays within the display's refresh interval.
+      auto p = fw::Split(arg, L',');
+      if (p.size() >= 4) {
+        const int x1 = _wtoi(p[0].c_str()), y1 = _wtoi(p[1].c_str()), x2 = _wtoi(p[2].c_str()), y2 = _wtoi(p[3].c_str());
+        const int count = p.size() > 4 ? std::max(1, _wtoi(p[4].c_str())) : 60;
+        LARGE_INTEGER freq, t0, t1;
+        QueryPerformanceFrequency(&freq);
+        auto timed = [&](UINT msg, WPARAM wp, int x, int y) {
+          QueryPerformanceCounter(&t0);
+          SendMessageW(hwnd_, msg, wp, MAKELPARAM(x, y));
+          DrawSnapshotFrame();
+          QueryPerformanceCounter(&t1);
+          return 1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart);
+        };
+        const double press = timed(WM_LBUTTONDOWN, MK_LBUTTON, x1, y1);
+        std::vector<double> moves;
+        for (int i = 1; i <= count; ++i)
+          moves.push_back(timed(WM_MOUSEMOVE, MK_LBUTTON, x1 + (x2 - x1) * i / count, y1 + (y2 - y1) * i / count));
+        const double release = timed(WM_LBUTTONUP, 0, x2, y2);
+        const double first = moves.front();
+        std::sort(moves.begin(), moves.end());
+        auto q = [&](double f) { return moves[std::min(moves.size() - 1, static_cast<size_t>(f * static_cast<double>(moves.size() - 1) + 0.5))]; };
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        // The display's rate; a remote or disconnected session reports a low one: then 60 Hz.
+        const double hz = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency >= 50 ? dm.dmDisplayFrequency : 60;
+        wprintf(L"dragbench: press %.2f ms; %zu moves, first %.2f ms, median %.2f ms, 90%% %.2f ms, worst %.2f ms; release %.2f ms; "
+                L"display %.0f Hz = %.2f ms a frame\n",
+                press, moves.size(), first, q(0.5), q(0.9), moves.back(), release, hz, 1000.0 / hz);
+        fflush(stdout);
+      }
     } else if (op == L"move") {
       int x, y;
       xy(x, y);
