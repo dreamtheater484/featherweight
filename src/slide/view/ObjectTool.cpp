@@ -1735,18 +1735,26 @@ bool ObjectTool::TableEdit(int cmd) {
   pugi::xml_document doc;
   const std::string xml = ed->ShapeXml(slide, id);
   if (!doc.load_string(xml.c_str())) return false;
-  const int rows = ob::TableRows(doc.document_element()), cols = ob::TableColumns(doc.document_element());
+  pugi::xml_node frame = doc.document_element();
+  const int rows = ob::TableRows(frame), cols = ob::TableColumns(frame);
   // Without a cell chosen (text editing tells), rows and columns go at the end and come off it.
-  fw::slide::edit::Result r;
+  // The table's XML is changed here (merges kept) and written back as one step.
+  bool done = false;
+  const char16_t* step = u"Insert Rows";
   switch (cmd) {
-    case CmdTableRowAbove: r = ed->InsertTableRows(slide, id, 0, 1); break;
-    case CmdTableRowBelow: r = ed->InsertTableRows(slide, id, rows, 1); break;
-    case CmdTableColumnLeft: r = ed->InsertTableColumns(slide, id, 0, 1); break;
-    case CmdTableColumnRight: r = ed->InsertTableColumns(slide, id, cols, 1); break;
-    case CmdTableDeleteRow: r = ed->DeleteTableRows(slide, id, rows - 1, 1); break;
-    case CmdTableDeleteColumn: r = ed->DeleteTableColumns(slide, id, cols - 1, 1); break;
+    case CmdTableRowAbove: done = ob::InsertTableRow(frame, 0); break;
+    case CmdTableRowBelow: done = ob::InsertTableRow(frame, rows); break;
+    case CmdTableColumnLeft: done = ob::InsertTableColumn(frame, 0), step = u"Insert Columns"; break;
+    case CmdTableColumnRight: done = ob::InsertTableColumn(frame, cols), step = u"Insert Columns"; break;
+    case CmdTableDeleteRow: done = ob::DeleteTableRow(frame, rows - 1), step = u"Delete Rows"; break;
+    case CmdTableDeleteColumn: done = ob::DeleteTableColumn(frame, cols - 1), step = u"Delete Columns"; break;
     default: return false;
   }
+  if (!done) {
+    Refused(L"A table keeps at least one row and one column: delete the table instead.");
+    return false;
+  }
+  const fw::slide::edit::Result r = ed->SetShapeXml(slide, id, ob::ToXml(frame), step);
   if (!r) {
     Refused(W(r.message));
     return false;
