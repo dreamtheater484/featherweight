@@ -309,7 +309,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
           props.noFill = false;
         }
       // Underlined even when it keeps its text's color (govau workshop 3's references).
-      if (link && props.underline == fw::slide::Underline::None && !getenv("FWOLDLINK"))
+      if (link && props.underline == fw::slide::Underline::None)
         props.underline = fw::slide::Underline::Single;
       add(t, props, link);
     }
@@ -379,8 +379,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
       if (size <= 0) size = emptySize(line);
       const float natural = 1.2f * size;
-      const float pitch = pp.lineSpacing.percent ? natural * lineFactor
-                                                 : pp.lineSpacing.value * (getenv("FWOLDEXACT") ? fontScale : 1.f);
+      // Exact spacing stays as stated when autofit shrinks the text (govuk annual-deaths 7: 28 pt).
+      const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value;
       const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
       // Spacing under single, stated or an autofit's reduction, comes off the line's top: the part
       // below the baseline stays as at single (cbs at 90 %: 28-pt text 0.72 pt and a 44-pt title
@@ -388,9 +388,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       // baseline at the fonts' ascent share of the line, but no lower than three quarters of it
       // (Calibri's share; era-systems' Trebuchet at 110 % and govau's Public Sans at 150 % sit there,
       // stat-512's Courier New at its own .735).
-      const float above = pitch < natural                                   ? std::max(0.f, pitch - natural * (1 - share))
-                          : pitch > natural * 1.001f && !getenv("FWOLDWIDE") ? pitch * (getenv("FWWIDE75") ? 0.75f : std::min(share, 0.75f))
-                                                                             : pitch * share;
+      const float above = pitch < natural            ? std::max(0.f, pitch - natural * (1 - share))
+                          : pitch > natural * 1.001f ? pitch * std::min(share, 0.75f)
+                                                     : pitch * share;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
