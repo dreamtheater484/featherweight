@@ -234,6 +234,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
   float y = 0, maxBottom = 0;
   int column = 0;
   bool first = true;
+  // bodyPr spcFirstLastPara: the first paragraph's space before counts too, as PowerPoint draws
+  // it (15-213 virtual memory's Google Slides bodies, 4.8 pt lower).
+  const bool firstLastSpacing = draw::xml::Bool(box.properties, "spcFirstLastPara", false);
   for (const fw::slide::Paragraph& src : body.paragraphs) {
     const fw::slide::ParagraphProps& pp = src.props;
     Impl::Para& para = m.paras.emplace_back();
@@ -386,7 +389,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (counts(g.run)) largest = std::max(largest, g.emSize);
     if (largest <= 0) largest = para.lines.empty() ? para.mark.size : emptySize(para.lines.front());
     auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value; };
-    if (!first) y += spacing(pp.spaceBefore);
+    if (!first || firstLastSpacing) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
       // PowerPoint's single line is 1.2 times the line's largest font size, whatever the font
