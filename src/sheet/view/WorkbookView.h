@@ -652,7 +652,6 @@ class WorkbookView : public PagedView {
   bool RibbonCommandState(int cmd, CommandState& s);
   bool RibbonCommand(int cmd);
   bool FillRibbonMenu(int which, HMENU menu);
-  bool RibbonScriptOp(const std::wstring& arg);  // ribbon:dump
   void AppendTabColorMenu(HMENU m, const wchar_t* label);  // the sheet tab's submenus (WorkbookSheetOps.cpp)
   void AppendUnhideSheetMenu(HMENU m, const wchar_t* label);
   int ScalingNow() const;  // the 4 scalings' index (-1: a scale of its own); WorkbookPageSetup.cpp

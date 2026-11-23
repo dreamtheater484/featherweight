@@ -327,23 +327,6 @@ const char* Turned(int cmd, const CommandState& q) {
   return nullptr;
 }
 
-#if FW_TEST_SCREENS
-// ribbon:dump's lines for a menu and its submenus.
-void DumpMenu(HMENU menu, int depth) {
-  for (int i = 0; i < GetMenuItemCount(menu); ++i) {
-    wchar_t text[128] = {};
-    MENUITEMINFOW mi{sizeof mi, MIIM_ID | MIIM_STRING | MIIM_SUBMENU | MIIM_STATE | MIIM_FTYPE};
-    mi.dwTypeData = text;
-    mi.cch = 127;
-    GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &mi);
-    if (mi.fType & MFT_SEPARATOR) continue;
-    fwprintf(stderr, L"ribbon: %*smenu %u %s%s%s\n", depth * 2, L"", mi.hSubMenu ? 0 : mi.wID, text,
-             mi.fState & MFS_DISABLED ? L" (off)" : L"", mi.fState & MFS_CHECKED ? L" (on)" : L"");
-    if (mi.hSubMenu) DumpMenu(mi.hSubMenu, depth + 1);
-  }
-}
-#endif
-
 std::wstring Hex(const D2D1_COLOR_F& c) {
   auto b = [](float x) { return static_cast<unsigned>(std::lround(std::clamp(x, 0.0f, 1.0f) * 255)); };
   wchar_t buf[8];
@@ -550,38 +533,6 @@ bool WorkbookView::FillRibbonMenu(int which, HMENU menu) {
     menu::AppendItem(menu, static_cast<UINT>(l.cmd), Utf8ToWide(turned ? turned : l.label), enabled, checked, l.radio);
   }
   return true;
-}
-
-// ribbon:dump: the model as built now, each item with its command, state and KeyTip, and the lines
-// of each menu it opens (FillMenu), for checks (stderr, "ribbon: ..."). Test builds only (FW_TEST_SCREENS).
-bool WorkbookView::RibbonScriptOp(const std::wstring& arg) {
-#if !FW_TEST_SCREENS
-  (void)arg;
-  return false;
-#else
-  if (arg != L"dump") return false;
-  RibbonModel m;
-  BuildRibbon(m, ToolbarContext{});
-  for (const RibbonTab& t : m.tabs) {
-    fwprintf(stderr, L"ribbon: tab %s [%s]%s\n", t.name.c_str(), t.keyTip.c_str(), t.contextual ? L" contextual" : L"");
-    for (const RibbonGroup& g : t.groups) {
-      fwprintf(stderr, L"ribbon:  group %s [%s] launcher %d\n", g.name.c_str(), g.keyTip.c_str(), g.launcher);
-      for (const RibbonItem& it : g.items) {
-        fwprintf(stderr, L"ribbon:   item %d %s [%s] size %d%s%s%s\n", it.tool.cmd, it.label.c_str(), it.keyTip.c_str(),
-                 static_cast<int>(it.size), it.tool.enabled ? L"" : L" (off)", it.tool.checked ? L" (on)" : L"",
-                 it.tool.text.empty() ? L"" : (L" \"" + it.tool.text + L"\"").c_str());
-        if (it.tool.dropdown || (it.tool.kind == ToolKind::SplitButton && it.tool.choices.empty())) {
-          HMENU menu = CreatePopupMenu();
-          FillMenu(it.tool.cmd, menu);
-          DumpMenu(menu, 2);
-          DestroyMenu(menu);
-        }
-      }
-    }
-  }
-  if (!m.show.empty()) fwprintf(stderr, L"ribbon: show %s\n", m.show.c_str());
-  return true;
-#endif
 }
 
 // ---------------------------------------------------------------------------
