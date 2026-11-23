@@ -998,6 +998,20 @@ void Checker::CheckPresentation() {
         Error(p->name, std::to_string(found) + (found == 1 ? " link" : " links") +
                            " to another slide without the slide's relationship (r:id): PowerPoint repairs the deck");
     }
+    // The outline view's slide list (viewProps.xml, p:outlineViewPr/p:sldLst) names each slide by a
+    // relationship too: an entry with r:id="" makes PowerPoint 2021 repair the deck (a deleted slide's
+    // entry left behind, the TUM lecture deck, 2026-11-22).
+    if (kind == "viewProps") {
+      size_t found = 0;
+      for (pugi::xml_node view : p->dom.Root().children())
+        for (pugi::xml_node list : view.children())
+          if (IsPresentationElement(list, "sldLst"))
+            for (pugi::xml_node n : list.children())
+              if (IsPresentationElement(n, "sld") && RelIdOf(n).empty()) ++found;
+      if (found)
+        Error(p->name, std::to_string(found) + (found == 1 ? " slide" : " slides") +
+                           " in the outline view's list without the slide's relationship (r:id): PowerPoint repairs the deck");
+    }
     if (kind == "slide") {
       auto layouts = targets("slideLayout");
       if (layouts.empty()) Error(p->name, "a slide with no layout");
