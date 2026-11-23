@@ -119,6 +119,12 @@ pugi::xml_node MergePlaceholder(pugi::xml_document& scratch, pugi::xml_node el, 
   pugi::xml_node style = P(el, "style"), baseStyle = P(base, "style");
   pugi::xml_node txBody = P(el, "txBody"), baseBody = P(base, "txBody");
   bool wroteSpPr = false, wroteStyle = false, wroteBody = false;
+  // The shape's own p:style gives its fill, line and effects ahead of what the placeholder above
+  // it says (PowerPoint: a slide title's fillRef over the master's noFill).
+  bool styled[7] = {};
+  styled[2] = static_cast<bool>(A(style, "fillRef"));
+  styled[3] = static_cast<bool>(A(style, "lnRef"));
+  styled[4] = static_cast<bool>(A(style, "effectRef"));
   auto writeSpPr = [&] {
     wroteSpPr = true;
     pugi::xml_node dst = spPr ? CopyInto(out, spPr) : CopyInto(out, baseSpPr);
@@ -127,7 +133,8 @@ pugi::xml_node MergePlaceholder(pugi::xml_document& scratch, pugi::xml_node el, 
         // Inherited whole; a picture fill would point at the other part's relationships.
         for (pugi::xml_node c = dst.first_child(); c;) {
           pugi::xml_node next = c.next_sibling();
-          if (LocalNameOf(c) == "blipFill") dst.remove_child(c);
+          const int g = SpPrGroup(LocalNameOf(c));
+          if (LocalNameOf(c) == "blipFill" || (g >= 0 && styled[g])) dst.remove_child(c);
           c = next;
         }
       }
@@ -135,6 +142,7 @@ pugi::xml_node MergePlaceholder(pugi::xml_document& scratch, pugi::xml_node el, 
     }
     // Groups the shape lacks come from the base, in schema order.
     bool have[7] = {};
+    for (int g = 0; g < 7; ++g) have[g] = styled[g];
     for (pugi::xml_node c = spPr.first_child(); c; c = c.next_sibling()) {
       int g = SpPrGroup(LocalNameOf(c));
       if (g >= 0) have[g] = true;

@@ -230,9 +230,9 @@ TEST(SlideRender_FirstLineStaysInTheTextArea) {
 
 TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   // marL 0, indent 0: PowerPoint draws "•text", no tab between; a hanging indent keeps the tab.
-  const auto width = [](const char* pPr) {
+  const auto width = [](const char* pPr, const char* bullet = "&#8226;") {
     auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
-                                            std::string("<a:p><a:pPr ") + pPr + "><a:buFont typeface=\"Arial\"/><a:buChar char=\"&#8226;\"/></a:pPr>"
+                                            std::string("<a:p><a:pPr ") + pPr + "><a:buFont typeface=\"Arial\"/><a:buChar char=\"" + bullet + "\"/></a:pPr>"
                                             "<a:r><a:rPr sz=\"1800\"/><a:t>x</a:t></a:r></a:p>"),
                                 2));
     if (!deck) return -1.f;
@@ -244,6 +244,8 @@ TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   const float glued = width("marL=\"0\" indent=\"0\""), hanging = width("marL=\"685800\" indent=\"-685800\"");
   CHECK(glued > 5 && glued < 25);
   CHECK(hanging > 54);
+  // Only a bullet's first character is drawn ("••" in a SmartArt list draws one).
+  CHECK_NEAR(width("marL=\"0\" indent=\"0\"", "&#8226;&#8226;"), glued, 0.01f);
 }
 
 TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
@@ -264,6 +266,31 @@ TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
   };
   CHECK_NEAR(width("Adobe Garamond Pro"), width("Garamond"), 0.01f);
   CHECK(std::fabs(width("Adobe Garamond Pro") - width("Calibri")) > 1);
+}
+
+TEST(SlideRender_ShapesOwnStyleBeatsTheLayoutsNoFill) {
+  // The layout's title says noFill; the slide's title has an empty spPr and a p:style whose
+  // fillRef is red: PowerPoint fills it red (poi customgeo deck).
+  std::map<std::string, std::string> parts = Slide1(
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"T\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr/>"
+      "<p:style><a:lnRef idx=\"0\"><a:srgbClr val=\"000000\"/></a:lnRef><a:fillRef idx=\"1\"><a:srgbClr val=\"FF0000\"/></a:fillRef>"
+      "<a:effectRef idx=\"0\"><a:srgbClr val=\"000000\"/></a:effectRef><a:fontRef idx=\"minor\"/></p:style>"
+      "<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody></p:sp>",
+      2);
+  parts["ppt/slideLayouts/slideLayout2.xml"] =
+      std::string("<p:sldLayout") + kNs +
+      "><p:cSld name=\"T\"><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title 1\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr>"
+      "<a:xfrm><a:off x=\"1270000\" y=\"1270000\"/><a:ext cx=\"3810000\" cy=\"1270000\"/></a:xfrm><a:noFill/><a:ln><a:noFill/></a:ln>"
+      "</p:spPr></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>";
+  auto deck = Modified(parts);
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  auto bmp = Render(*slide, 720, 540);
+  REQUIRE(bmp != nullptr);
+  CHECK_EQ(Pixel(*bmp, 250, 150), 0xFF0000u);  // inside the title's 100..400 x 100..200 points
+  CHECK_EQ(Pixel(*bmp, 250, 250), 0xFFFFFFu);  // below it
 }
 
 TEST(SlideRender_KernsOnlyByTheKernTable) {
