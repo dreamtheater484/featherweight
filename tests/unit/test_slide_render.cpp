@@ -228,6 +228,44 @@ TEST(SlideRender_FirstLineStaysInTheTextArea) {
   CHECK(std::fabs(p[0].bounds.left - p[1].bounds.left) < 0.5f);
 }
 
+TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
+  // marL 0, indent 0: PowerPoint draws "•text", no tab between; a hanging indent keeps the tab.
+  const auto width = [](const char* pPr) {
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            std::string("<a:p><a:pPr ") + pPr + "><a:buFont typeface=\"Arial\"/><a:buChar char=\"&#8226;\"/></a:pPr>"
+                                            "<a:r><a:rPr sz=\"1800\"/><a:t>x</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const float glued = width("marL=\"0\" indent=\"0\""), hanging = width("marL=\"685800\" indent=\"-685800\"");
+  CHECK(glued > 5 && glued < 25);
+  CHECK(hanging > 54);
+}
+
+TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
+  // "Adobe Garamond Pro", not installed, is drawn in Garamond (PowerPoint's PDF), not Calibri.
+  fw::text::Fonts probe;
+  if (!probe.Installed(L"Garamond") || probe.Installed(L"Adobe Garamond Pro")) return;
+  const auto width = [](const char* font) {
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            std::string("<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:rPr sz=\"2400\"><a:latin typeface=\"") + font +
+                                                "\"/></a:rPr><a:t>Petroleum Sites</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    fw::slide::render::UseDeckFonts(fonts, *deck);  // PowerPoint's substitutes
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  CHECK_NEAR(width("Adobe Garamond Pro"), width("Garamond"), 0.01f);
+  CHECK(std::fabs(width("Adobe Garamond Pro") - width("Calibri")) > 1);
+}
+
 TEST(SlideRender_KernsOnlyByTheKernTable) {
   // kern="1200": Arial (a 'kern' table) is kerned, Georgia (OpenType pairs only) isn't, as in
   // PowerPoint's PDFs.

@@ -262,14 +262,18 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
           for (wchar_t& c : t)
             if (c >= 0x20 && c < 0x100) c = static_cast<wchar_t>(0xF000 + c);
       } else if (b.kind == Bullet::Kind::AutoNumber) {
-        if (!b.font.empty()) bp.latin = b.font;
+        // A number font the PC doesn't have gives way to the text's (PowerPoint's PDF: buFont +mj-lt,
+        // a theme font not installed, numbers in the run's Calibri).
+        if (!b.font.empty() && fonts.Installed(b.font)) bp.latin = b.font;
         t = AutoNumber(b.scheme, std::max(src.number, 1));
       } else if (b.kind == Bullet::Kind::Picture && extras.picture) {
         para.picture = extras.picture(b.picturePart, b.pictureRel);
         if (para.picture) t = L"￼";
       }
       if (!t.empty()) {
-        add(t + L'\t', bp, nullptr);
+        // No hanging indent (the bullet at or past where the text starts): the text follows the
+        // bullet straight on, no tab between (PowerPoint's PDFs: marL 0, indent 0 draws "•text").
+        add(pp.indent >= 0 ? t : t + L'\t', bp, nullptr);
         para.bullet = true;
         para.first = static_cast<uint32_t>(para.text.size());
       }

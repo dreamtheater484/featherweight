@@ -24,10 +24,11 @@ draw::Rect Bounds(const draw::Matrix& m, draw::Size size) {
 }
 
 // A family the PC doesn't have, as PowerPoint replaces it: fwtext's table (Aptos, Helvetica...),
-// Windows' FontSubstitutes, a typewriter or code face in Courier New, everything else in Calibri
+// Windows' FontSubstitutes, a typewriter or code face in Courier New, an installed family named
+// among its words ("Adobe Garamond Pro" in Garamond, PowerPoint's PDF), everything else in Calibri
 // (p1-render's corpus survey: Whitney, Circular Std, Futura PT, Source Sans Pro, Monaco,
 // Liberation Serif, Open Sans SemiBold all drawn in Calibri, whatever the theme's fonts).
-std::wstring PresentationSubstitute(std::wstring_view family) {
+std::wstring PresentationSubstitute(std::wstring_view family, text::Fonts& fonts) {
   if (family.empty() || family.size() > 64) return {};
   if (std::wstring_view known = text::Fonts::BuiltInSubstitute(family); !known.empty()) return std::wstring(known);
   const std::wstring name(family);
@@ -43,7 +44,20 @@ std::wstring PresentationSubstitute(std::wstring_view family) {
   for (wchar_t& c : lower) c = static_cast<wchar_t>(std::towlower(c));
   for (std::wstring_view word : {L"mono", L"courier", L"consol", L"typewriter", L"code"})
     if (lower.find(word) != std::wstring::npos) return L"Courier New";
-  return L"Calibri";
+  // The longest run of whole words that is an installed family.
+  std::vector<std::wstring_view> words;
+  for (size_t at = 0; at < family.size();) {
+    const size_t end = std::min(family.find(L' ', at), family.size());
+    if (end > at) words.push_back(family.substr(at, end - at));
+    at = end + 1;
+  }
+  std::wstring best;
+  for (size_t i = 0; i < words.size(); ++i)
+    for (size_t j = i + 1; j <= words.size() && j - i < words.size(); ++j) {
+      const std::wstring run(words[i].data(), words[j - 1].data() + words[j - 1].size() - words[i].data());
+      if (run.size() > best.size() && fonts.Installed(run)) best = run;
+    }
+  return best.empty() ? L"Calibri" : best;
 }
 
 draw::Rect Transformed(const draw::Matrix& m, const draw::Rect& r) {
@@ -432,7 +446,7 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck) {
     names.push_back(f.typeface);
   }
   if (!files.empty()) fonts.UseDocumentFonts(files, names);
-  fonts.SetSubstitute(PresentationSubstitute);
+  fonts.SetSubstitute([&fonts](std::wstring_view family) { return PresentationSubstitute(family, fonts); });
 }
 
 }  // namespace fw::slide::render
