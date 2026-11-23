@@ -650,12 +650,6 @@ int DocPage::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
-const std::vector<int>& DocPage::InsertCommands() {
-  static const std::vector<int> ids = {CmdPageBreak,         CmdColumnBreak,    CmdSectionNextPage,
-                                       CmdSectionContinuous, CmdSectionEvenPage, CmdSectionOddPage};
-  return ids;
-}
-
 std::pair<uint32_t, uint32_t> DocPage::Sections() const {
   const auto n = static_cast<uint32_t>(Doc().Sections().size());
   if (n == 0) return {kNone, kNone};
@@ -838,48 +832,6 @@ void DocPage::SectionBreak(SectionStart start) {
   host_.apply(r);
 }
 
-void DocPage::AddToolbar(ToolbarModel& m) {
-  // Orientation, margins, then the paper sizes (as Word's Size menu: one click fewer than the
-  // Page setup panel, the friction review), columns, hyphenation and Page setup.
-  static constexpr int kMenu[] = {CmdPortrait,   CmdLandscape,  CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate,
-                                  CmdMarginsWide, CmdColumnsOne, CmdColumnsTwo,    CmdColumnsThree,  CmdHyphenation,
-                                  CmdPageSetup};
-  constexpr int kSizesAt = 6, kSizes = static_cast<int>(std::size(kPapers));
-  ToolItem t;
-  t.kind = ToolKind::Dropdown;
-  t.cmd = CmdLayoutBox;
-  t.width = 52;
-  t.priority = 2;
-  t.glyph = icon::Page;
-  t.tooltip = L"Layout: orientation, margins, paper size, columns and page setup";
-  t.enabled = editor_.CanEdit();
-  t.sepBefore = true;
-  t.maxRows = static_cast<int>(std::size(kMenu)) + kSizes;
-  const auto [first, last] = Sections();
-  const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
-  for (int i = 0; i < static_cast<int>(std::size(kMenu)); ++i) {
-    if (i == kSizesAt)
-      for (const Paper& paper : kPapers) {
-        const int32_t w = p ? std::min(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
-        const int32_t h = p ? std::max(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
-        const bool on = p && Near(w, paper.width) && Near(h, paper.height);
-        t.choices.push_back(std::wstring(on ? L"✓ " : L"") + L"Size: " + PaperLabel(paper));
-      }
-    const CommandState q = Query(kMenu[i]);
-    t.choices.push_back(q.checked ? L"✓ " + q.label : q.label);
-  }
-  t.onChange = [this](const ToolValue& v) {
-    const int i = v.index;
-    if (i >= kSizesAt && i < kSizesAt + kSizes) {
-      PaperSize(static_cast<size_t>(i - kSizesAt));
-      return;
-    }
-    const int cmd = i < kSizesAt ? i : i - kSizes;
-    if (cmd >= 0 && cmd < static_cast<int>(std::size(kMenu))) Execute(kMenu[cmd]);
-  };
-  m.left.push_back(t);
-}
-
 ToolItem DocPage::SizeMenu() {
   ToolItem t;
   t.cmd = CmdLayoutBox;
@@ -904,7 +856,7 @@ ToolItem DocPage::ParaSpin(int cmd) {
   ToolItem t;
   t.kind = ToolKind::SpinBox;
   t.cmd = cmd;
-  t.width = 84;
+  t.width = 100;  // "15,24 cm" beside the spin arrows
   const CommandState q = Query(cmd);
   t.tooltip = q.label;
   const bool indent = cmd == CmdIndentLeftBox || cmd == CmdIndentRightBox;

@@ -400,66 +400,6 @@ bool DocView::ExecuteD3(int cmd) {
   return false;
 }
 
-void DocView::AddD3Toolbar(ToolbarModel& m) {
-  // Insert: links, bookmarks, headers, footers and page numbers before the date and time.
-  static constexpr int kInsert[] = {CmdInsertLink, CmdBookmark, CmdEditHeader, CmdEditFooter, CmdPageNumber};
-  for (ToolItem& t : m.left) {
-    if (t.cmd != CmdInsertBox) continue;
-    std::vector<std::wstring> mine = {L"Link… (Ctrl+K)", L"Bookmark…", L"Header", L"Footer", L"Page numbers…"};
-    const auto n = static_cast<int>(mine.size());
-    t.choices.insert(t.choices.begin(), mine.begin(), mine.end());
-    t.tooltip = L"Insert a link, bookmark, header, footer, page numbers, the date or the time";
-    auto dates = t.onChange;
-    t.onChange = [this, dates, n](const ToolValue& v) {
-      if (v.index >= 0 && v.index < n) {
-        Execute(kInsert[v.index]);
-      } else if (dates) {
-        ToolValue d = v;
-        d.index -= n;
-        dates(d);
-      }
-    };
-  }
-  if (hf_) {
-    // Header & Footer, while one is edited: its options and Close.
-    ToolItem hf;
-    hf.kind = ToolKind::Dropdown;
-    hf.cmd = CmdCloseHeaderFooter;
-    hf.width = 132;
-    hf.priority = 8;
-    hf.text = L"Header & footer";
-    hf.tooltip = L"Header and footer options";
-    hf.sepBefore = true;
-    static constexpr int kItems[] = {CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
-                                     CmdCloseHeaderFooter};
-    for (int cmd : kItems) {
-      const CommandState s = *QueryD3(cmd);
-      const bool toggle = cmd == CmdDifferentFirstPage || cmd == CmdDifferentOddEven || cmd == CmdLinkToPrevious;
-      hf.choices.push_back((toggle ? (s.checked ? L"☑ " : L"☐ ") : L"") + s.label + (s.shortcut.empty() ? L"" : L" (" + s.shortcut + L")"));
-    }
-    hf.onChange = [this](const ToolValue& v) {
-      if (v.index >= 0 && v.index < static_cast<int>(std::size(kItems))) Execute(kItems[v.index]);
-    };
-    m.left.push_back(hf);
-  }
-  ToolItem marks;
-  marks.cmd = CmdShowMarks;
-  marks.glyph = 0x00B6;  // ¶
-  marks.toggle = true;
-  marks.checked = marks_;
-  marks.priority = 2;
-  marks.tooltip = L"Show formatting marks (Ctrl+Shift+8)";
-  m.left.push_back(marks);
-  ToolItem nav;
-  nav.cmd = CmdNavigationPane;
-  nav.glyph = 0xE700;  // the navigation button's lines
-  nav.toggle = true;
-  nav.checked = navPanel_ && host_.ViewShownPanel() == navPanel_.get();
-  nav.priority = 2;
-  nav.tooltip = L"Navigation pane: headings and search results";
-  m.left.push_back(nav);
-}
-
 void DocView::FillD3Menu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;

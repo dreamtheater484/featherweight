@@ -43,11 +43,9 @@ class DocFormat {
 
   CommandState Query(int cmd);
   void Execute(int cmd);
-  // The toolbar's editing groups, after Save and Print.
-  void AddToolbar(ToolbarModel& m);
-  // The boxes and color buttons the toolbar and the ribbon show, filled from the selection: the
-  // styles (with the style box's last items), the font, the size, the font or highlight color,
-  // and Insert date and time (today in the region's formats).
+  // The boxes and color buttons the ribbon shows, filled from the selection: the styles, the
+  // font, the size, the font or highlight color, and Insert date and time (today in the region's
+  // formats).
   ToolItem StyleBox();
   ToolItem FontBox();
   ToolItem SizeBox();
@@ -56,13 +54,6 @@ class DocFormat {
   // The ribbon's Styles gallery: StyleBox's choice `index` as Word previews it, "AaBbCcDd" in the
   // style's size, weight and color, its name below.
   void StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui);
-  // Insert ▾'s first item, Picture… (the tab opens its file dialog).
-  std::function<void()> insertPicture;
-  // More of Insert ▾, after Picture…: page layout's breaks (DocPage), each its label and action.
-  std::vector<std::pair<std::wstring, std::function<void()>>> insertMore;
-  // The style box's last items, after the styles: Modify style… and New style… (DocStyles).
-  std::vector<std::pair<std::wstring, std::function<void()>>> styleMore;
-
   // The format painter: its button takes the selection's format, and the next selection made
   // gets it (Esc cancels). Ctrl+Shift+C and Ctrl+Shift+V copy and paste a format the same way.
   bool PainterOn() const { return painter_ != Painter::Off; }

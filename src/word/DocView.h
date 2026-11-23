@@ -305,7 +305,6 @@ class DocView : public PagedView {
   // The commands, toolbar items and context menu entries of D3.
   bool ExecuteD3(int cmd);
   std::optional<CommandState> QueryD3(int cmd);
-  void AddD3Toolbar(ToolbarModel& m);
   void FillD3Menu(HMENU m, int x, int y);
   // The commands, keys and context menu entries of D4: footnotes, endnotes, tables of contents
   // (DocNotes.cpp).
@@ -355,7 +354,6 @@ class DocView : public PagedView {
   enum class Markup : uint8_t { Simple, All, None, Original };  // Word's four views of changes
   bool ExecuteD4(int cmd);
   std::optional<CommandState> QueryD4(int cmd);
-  void AddD4Toolbar(ToolbarModel& m);
   void FillD4Menu(HMENU m);
   // The tracked change after (or before) the caret, selected: in its story, then the next story.
   bool GoToChange(bool back);
@@ -404,7 +402,7 @@ class DocView : public PagedView {
   friend class DocStyles;  // its panels' buttons
 
   // ---- Content controls and form fields (DocForms.cpp, D4)
-  static std::vector<int> FormCommands();  // Insert ▾'s content controls
+  static std::vector<int> FormCommands();  // the Developer tab's content controls
   std::optional<CommandState> QueryForms(int cmd);
   bool ExecuteForms(int cmd);
   // A plain click at `pos` (x, y in the window): a check box ticks, a placeholder is selected whole
@@ -464,7 +462,6 @@ class DocView : public PagedView {
   std::optional<CommandState> QueryPicture(int cmd);
   bool ExecutePicture(int cmd);
   void SetPictureWrap(fw::doc::edit::Wrap wrap);
-  void AddPictureToolbar(ToolbarModel& m);
   void FillPictureMenu(HMENU m);
   // The Picture panel shows the selected picture.
   void SyncPicturePanel();
