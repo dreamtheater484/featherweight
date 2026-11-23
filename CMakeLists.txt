@@ -153,6 +153,7 @@ if(FW_BUILD_TESTS)
   if(FW_TEST_SCREENS)
     fw_ribbon_test(ribbon_screens screens)
     fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
+    fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
   # R1 (r1-word): the document's ribbon reaches every command its toolbar and ⋯ menu did.
   add_test(NAME document_ribbon COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"

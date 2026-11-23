@@ -3,6 +3,7 @@
 # Merge, Chart and Insert boxes replaced by the commands they held, and the commands in its
 # Data, Conditional, Number format and Page setup lists. ribboncheck:<this file> checks each is
 # reachable from the ribbon, the File page, the right-click menu or Alt+Q.
+# Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
 reach 100 Open
 reach 102 Save as…
 reach 103 Print

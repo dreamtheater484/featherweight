@@ -463,22 +463,6 @@ bool WorkbookView::ShapesCommand(int cmd) {
   return true;
 }
 
-void WorkbookView::AddShapeTools(ToolbarModel& m) {
-  ToolItem insert;
-  insert.kind = ToolKind::Dropdown;
-  insert.cmd = CmdObjectsBox;
-  insert.width = 64;
-  insert.priority = 3;
-  insert.text = insert.menuLabel = L"Insert";
-  insert.fitText = true;
-  insert.tooltip = L"Insert a picture or a shape";
-  insert.choices = {L"Pictures…", L"Rectangle", L"Rounded rectangle", L"Oval", L"Line", L"Arrow", L"Text box", L"Format object…"};
-  insert.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 8) ShapesCommand(CmdObjectPicture + v.index);
-  };
-  m.left.push_back(insert);
-}
-
 bool WorkbookView::ShapesScriptOp(const std::wstring& arg) {
   // object:picture,<path>; object:<rect|roundrect|oval|line|arrow|textbox>[,<text>]; on the selected
   // object: object:fill,<RRGGBB|none|auto>; object:outline,<RRGGBB|none|auto>[,<points>];

@@ -20,16 +20,14 @@ namespace fw::sheet::view {
 
 namespace {
 
-// Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10) code points the toolbar didn't use. Where
-// the font has nothing like Excel's picture (borders, merge, charts, Σ), the nearest one stands in
-// until ui/Icons.h draws one.
+// Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10) code points the toolbar didn't name; the
+// rest are ui/Icons.h's, its drawn ones (icon::AlignTop, icon::MergeCenter...) where the fonts have
+// nothing like Excel's picture.
 namespace g {
-constexpr wchar_t Paste = 0xE77F, Cut = 0xE8C6, FontUp = 0xE8E8, FontDown = 0xE8E7, Sort = 0xE8CB, Filter = 0xE71C,
-                  Sync = 0xE895, Calculator = 0xE8EF, Zoom = 0xE71E, Tag = 0xE8EC, Key = 0xE8D7, Down = 0xE74B,
-                  Up = 0xE74A, Eraser = 0xE75C, Wrap = 0xE751, Percent = 0xE94C, Plus = 0xE948, Minus = 0xE949,
-                  Pin = 0xE718, Note = 0xE70B, Pie = 0xEB05, Line = 0xEAFC, Area = 0xE9D2, Grid = 0xF0E2,
-                  Pencil = 0xE70F, Check = 0xE930, Select = 0xE8B3, Window = 0xE8A7, Money = 0xE8C7, Case = 0xE8D2,
-                  Equal = 0xE94E, Shapes = 0xF156, Next = 0xE76C, Prev = 0xE76B, List = 0xE8FD;
+constexpr wchar_t Calculator = 0xE8EF, Check = 0xE930, Cut = 0xE8C6, Down = 0xE74B, Eraser = 0xE75C,
+                  Filter = 0xE71C, FontDown = 0xE8E7, FontUp = 0xE8E8, Key = 0xE8D7, Next = 0xE76C,
+                  Note = 0xE70B, Paste = 0xE77F, Pencil = 0xE70F, Prev = 0xE76B, Select = 0xE8B3,
+                  Sort = 0xE8CB, Sync = 0xE895, Tag = 0xE8EC, Window = 0xE8A7, Zoom = 0xE71E;
 }
 
 // Item sizes and flags, as the tables below write them.
@@ -71,37 +69,37 @@ constexpr Spec kHome[] = {
     {CmdBold, 0, icon::Bold, S, kToggle, "1", "Bold"},
     {CmdItalic, 0, icon::Italic, S, kToggle | kSameRow, "2", "Italic"},
     {CmdUnderline, 0, icon::Underline, S, kToggle | kSameRow, "3", "Underline"},
-    {CmdBordersBox, 0, icon::Table, S, kTool | kSameRow, "B", "Borders"},
-    {CmdFillColor, 0, icon::Color, S, kTool | kSameRow, "H", "Fill Color"},
+    {CmdBordersBox, 0, icon::BordersBottom, S, kTool | kSameRow, "B", "Borders"},
+    {CmdFillColor, 0, icon::FillBucket, S, kTool | kSameRow, "H", "Fill Color"},
     {CmdFontColor, 0, icon::FontColor, S, kTool | kSameRow, "FC", "Font Color"},
     {0, CmdFormatCellsAlignment, icon::AlignLeft, 2, 0, "ZA", "Alignment"},
-    {CmdAlignTop, 0, g::Up, S, kToggle, "AT", "Top Align"},
-    {CmdAlignMiddle, 0, g::Equal, S, kToggle | kSameRow, "AM", "Middle Align"},
-    {CmdAlignBottom, 0, g::Down, S, kToggle | kSameRow, "AB", "Bottom Align"},
+    {CmdAlignTop, 0, icon::AlignTop, S, kToggle, "AT", "Top Align"},
+    {CmdAlignMiddle, 0, icon::AlignMiddle, S, kToggle | kSameRow, "AM", "Middle Align"},
+    {CmdAlignBottom, 0, icon::AlignBottom, S, kToggle | kSameRow, "AB", "Bottom Align"},
     {CmdAlignLeft, 0, icon::AlignLeft, S, kToggle, "AL", "Align Left"},
     {CmdAlignCenter, 0, icon::AlignCenter, S, kToggle | kSameRow, "AC", "Center"},
     {CmdAlignRight, 0, icon::AlignRight, S, kToggle | kSameRow, "AR", "Align Right"},
     {CmdOutdent, 0, icon::DecreaseIndent, S, kSameRow, "5", "Decrease Indent"},
     {CmdIndent, 0, icon::IncreaseIndent, S, kSameRow, "6", "Increase Indent"},
-    {CmdWrapText, 0, g::Wrap, M, kToggle | kNewColumn, "W", "Wrap Text"},
-    {CmdMergeCenter, 0, icon::Table, M, kSplit, "M", "Merge & Center"},
-    {0, CmdNumberFormatBox, g::Percent, 2, 0, "ZN", "Number"},
+    {CmdWrapText, 0, icon::WrapCell, M, kToggle | kNewColumn, "W", "Wrap Text"},
+    {CmdMergeCenter, 0, icon::MergeCenter, M, kSplit, "M", "Merge & Center"},
+    {0, CmdNumberFormatBox, icon::Percent, 2, 0, "ZN", "Number"},
     {CmdNumberFormatBox, 0, 0, M, kTool, "N", "Number Format"},
-    {CmdNumAccounting, 0, g::Money, S, 0, "AN", "Accounting Number Format"},
-    {CmdNumPercent, 0, g::Percent, S, kSameRow, "P", "Percent Style"},
-    {CmdCommaStyle, 0, g::Case, S, kSameRow, "K", "Comma Style"},
-    {CmdIncreaseDecimal, 0, g::Plus, S, kSameRow, "0", "Increase Decimal"},
-    {CmdDecreaseDecimal, 0, g::Minus, S, kSameRow, "9", "Decrease Decimal"},
+    {CmdNumAccounting, 0, icon::Accounting, S, 0, "AN", "Accounting Number Format"},
+    {CmdNumPercent, 0, icon::Percent, S, kSameRow, "P", "Percent Style"},
+    {CmdCommaStyle, 0, icon::Comma, S, kSameRow, "K", "Comma Style"},
+    {CmdIncreaseDecimal, 0, icon::IncreaseDecimal, S, kSameRow, "0", "Increase Decimal"},
+    {CmdDecreaseDecimal, 0, icon::DecreaseDecimal, S, kSameRow, "9", "Decrease Decimal"},
     {0, 0, icon::Color, 3, 0, "ZS", "Styles"},
-    {CmdCondFormatBox, 0, g::Check, L, kMenu, "L", "Conditional Formatting"},
+    {CmdCondFormatBox, 0, icon::ConditionalFormat, L, kMenu, "L", "Conditional Formatting"},
     {CmdCreateTable, 0, icon::Table, L, 0, "T", "Format as Table"},
-    {CmdCellStyles, 0, g::Case, L, kTool, "J", "Cell Styles"},
+    {CmdCellStyles, 0, icon::CellStyles, L, kTool, "J", "Cell Styles"},
     {0, 0, icon::Add, 3, 0, "ZC", "Cells"},
-    {CmdInsertCells, 0, icon::Add, L, kSplit, "I", "Insert"},
+    {CmdInsertCells, 0, icon::InsertCells, L, kSplit, "I", "Insert"},
     {CmdDeleteCells, 0, icon::Delete, L, kSplit, "D", "Delete"},
     {CmdCellsFormatMenu, 0, icon::Settings, L, kMenu, "O", "Format"},
     {0, 0, icon::Search, 3, 0, "ZE", "Editing"},
-    {CmdAutoSum, 0, g::Calculator, M, 0, "U", "AutoSum"},
+    {CmdAutoSum, 0, icon::AutoSum, M, 0, "U", "AutoSum"},
     {CmdFillMenu, 0, g::Down, M, kMenu, "FI", "Fill"},
     {CmdClearMenu, 0, g::Eraser, M, kMenu, "E", "Clear"},
     {CmdSortFilterMenu, 0, g::Sort, L, kMenu, "S", "Sort & Filter"},
@@ -110,38 +108,38 @@ constexpr Spec kHome[] = {
 
 constexpr Spec kInsert[] = {
     {0, 0, icon::Table, 3, 0, "ZB", "Tables"},
-    {CmdPivotTable, 0, g::Grid, L, 0, "V", "PivotTable"},
+    {CmdPivotTable, 0, icon::PivotTable, L, 0, "V", "PivotTable"},
     {CmdCreateTable, 0, icon::Table, L, 0, "T", "Table"},
     {0, 0, icon::Picture, 3, 0, "ZI", "Illustrations"},
     {CmdObjectPicture, 0, icon::Picture, L, 0, "P", "Pictures"},
-    {CmdShapesMenu, 0, g::Shapes, L, kMenu, "SH", "Shapes"},
+    {CmdShapesMenu, 0, icon::Shapes, L, kMenu, "SH", "Shapes"},
     {0, CmdInsertChart, icon::Report, 3, 0, "ZC", "Charts"},
-    {CmdColumnChartMenu, 0, icon::Report, S, kMenu, "C", "Insert Column or Bar Chart"},
-    {CmdLineChartMenu, 0, g::Line, S, kMenu, "N1", "Insert Line or Area Chart"},
-    {CmdPieChartMenu, 0, g::Pie, S, kMenu, "Q", "Insert Pie or Doughnut Chart"},
-    {CmdChartScatter, 0, g::Area, S, kNewColumn, "D", "Insert Scatter (X, Y) Chart"},
-    {CmdChartCombo, 0, icon::Report, S, 0, "SD", "Insert Combo Chart"},
+    {CmdColumnChartMenu, 0, icon::ChartColumn, S, kMenu, "C", "Insert Column or Bar Chart"},
+    {CmdLineChartMenu, 0, icon::ChartLine, S, kMenu, "N1", "Insert Line or Area Chart"},
+    {CmdPieChartMenu, 0, icon::ChartPie, S, kMenu, "Q", "Insert Pie or Doughnut Chart"},
+    {CmdChartScatter, 0, icon::ChartScatter, S, kNewColumn, "D", "Insert Scatter (X, Y) Chart"},
+    {CmdChartCombo, 0, icon::ChartCombo, S, 0, "SD", "Insert Combo Chart"},
     {0, 0, icon::Link, 3, 0, "ZL", "Links"},
     {CmdInsertLink, 0, icon::Link, L, 0, "I2", "Link"},
-    {0, 0, g::Case, 3, 0, "ZT", "Text"},
-    {CmdObjectTextBox, 0, g::Case, L, 0, "X", "Text Box"},
+    {0, 0, icon::TextBox, 3, 0, "ZT", "Text"},
+    {CmdObjectTextBox, 0, icon::TextBox, L, 0, "X", "Text Box"},
 };
 
 constexpr Spec kPageLayout[] = {
     {0, CmdPageSetup, icon::Page, 3, 0, "ZS", "Page Setup"},
-    {CmdMarginsMenu, 0, icon::Page, L, kMenu, "M", "Margins"},
-    {CmdOrientationMenu, 0, icon::Rotate, L, kMenu, "O", "Orientation"},
-    {CmdPrintAreaMenu, 0, icon::Print, L, kMenu, "R", "Print Area"},
-    {CmdBreaksMenu, 0, icon::TwoPage, L, kMenu, "B", "Breaks"},
-    {CmdPrintTitles, 0, g::List, L, 0, "I", "Print Titles"},
+    {CmdMarginsMenu, 0, icon::Margins, L, kMenu, "M", "Margins"},
+    {CmdOrientationMenu, 0, icon::Orientation, L, kMenu, "O", "Orientation"},
+    {CmdPrintAreaMenu, 0, icon::PrintArea, L, kMenu, "R", "Print Area"},
+    {CmdBreaksMenu, 0, icon::PageBreak, L, kMenu, "B", "Breaks"},
+    {CmdPrintTitles, 0, icon::PrintTitles, L, 0, "I", "Print Titles"},
     {0, CmdPageSetup, icon::FullScreen, 3, 0, "ZC", "Scale to Fit"},
     {CmdScaleWidth, 0, 0, M, kTool, "W", "Width"},
     {CmdScaleHeight, 0, 0, M, kTool, "H", "Height"},
 };
 
 constexpr Spec kFormulas[] = {
-    {0, 0, g::Calculator, 3, 0, "ZL", "Function Library"},
-    {CmdAutoSum, 0, g::Calculator, L, 0, "U", "AutoSum"},
+    {0, 0, icon::AutoSum, 3, 0, "ZL", "Function Library"},
+    {CmdAutoSum, 0, icon::AutoSum, L, 0, "U", "AutoSum"},
     {0, 0, g::Tag, 3, 0, "ZN", "Defined Names"},
     {CmdNameManager, 0, g::Tag, L, 0, "N", "Name Manager"},
     {CmdDefineName, 0, g::Pencil, M, 0, "M", "Define Name"},
@@ -156,16 +154,16 @@ constexpr Spec kData[] = {
     {0, 0, g::Sync, 3, 0, "ZC", "Queries & Connections"},
     {CmdPivotRefreshAll, 0, g::Sync, L, kSplit, "R", "Refresh All"},
     {0, 0, g::Sort, 2, 0, "ZS", "Sort & Filter"},
-    {CmdSortAscending, 0, g::Up, S, 0, "SA", "Sort A to Z"},
-    {CmdSortDescending, 0, g::Down, S, 0, "SD", "Sort Z to A"},
+    {CmdSortAscending, 0, icon::SortAscending, S, 0, "SA", "Sort A to Z"},
+    {CmdSortDescending, 0, icon::SortDescending, S, 0, "SD", "Sort Z to A"},
     {CmdDataBox, 0, g::Sort, L, 0, "SS", "Sort"},
     {CmdFilter, 0, g::Filter, L, kToggle, "T", "Filter"},
-    {0, 0, g::Check, 3, 0, "ZD", "Data Tools"},
-    {CmdRemoveDuplicates, 0, icon::Delete, L, 0, "M", "Remove Duplicates"},
-    {CmdDataValidation, 0, g::Check, L, kSplit, "V", "Data Validation"},
+    {0, 0, icon::RemoveDuplicates, 3, 0, "ZD", "Data Tools"},
+    {CmdRemoveDuplicates, 0, icon::RemoveDuplicates, L, 0, "M", "Remove Duplicates"},
+    {CmdDataValidation, 0, icon::DropDownList, L, kSplit, "V", "Data Validation"},
     {0, 0, icon::Add, 3, 0, "ZO", "Outline"},
-    {CmdGroup, 0, icon::Add, L, 0, "G", "Group"},
-    {CmdUngroup, 0, icon::Remove, L, 0, "U", "Ungroup"},
+    {CmdGroup, 0, icon::GroupRows, L, 0, "G", "Group"},
+    {CmdUngroup, 0, icon::UngroupRows, L, 0, "U", "Ungroup"},
 };
 
 constexpr Spec kReview[] = {
@@ -180,21 +178,21 @@ constexpr Spec kReview[] = {
 };
 
 constexpr Spec kView[] = {
-    {0, 0, icon::Table, 3, 0, "ZV", "Workbook Views"},
-    {CmdViewNormal, 0, icon::Table, L, kToggle, "L", "Normal"},
-    {CmdPageBreakPreview, 0, icon::Page, L, kToggle, "I", "Page Break Preview"},
+    {0, 0, icon::ViewNormal, 3, 0, "ZV", "Workbook Views"},
+    {CmdViewNormal, 0, icon::ViewNormal, L, kToggle, "L", "Normal"},
+    {CmdPageBreakPreview, 0, icon::PageBreakPreview, L, kToggle, "I", "Page Break Preview"},
     {0, 0, g::Zoom, 3, 0, "ZZ", "Zoom"},
     {CmdZoomMenu, 0, g::Zoom, L, kMenu, "Q", "Zoom"},
-    {CmdZoomActual, 0, icon::ZoomIn, L, 0, "J", "100%"},
-    {0, 0, g::Pin, 3, 0, "ZW", "Window"},
-    {CmdFreezeMenu, 0, g::Pin, L, kMenu, "F", "Freeze Panes"},
+    {CmdZoomActual, 0, icon::Zoom100, L, 0, "J", "100%"},
+    {0, 0, icon::FreezePanes, 3, 0, "ZW", "Window"},
+    {CmdFreezeMenu, 0, icon::FreezePanes, L, kMenu, "F", "Freeze Panes"},
 };
 
 // Contextual tabs, while what they work on is selected.
 constexpr Spec kTableDesign[] = {
     {0, 0, icon::Table, 3, 0, "ZT", "Tools"},
-    {CmdPivotTable, 0, g::Grid, M, 0, "V", "Summarize with PivotTable"},
-    {CmdRemoveDuplicates, 0, icon::Delete, M, 0, "M", "Remove Duplicates"},
+    {CmdPivotTable, 0, icon::PivotTable, M, 0, "V", "Summarize with PivotTable"},
+    {CmdRemoveDuplicates, 0, icon::RemoveDuplicates, M, 0, "M", "Remove Duplicates"},
     {CmdConvertToRange, 0, icon::Table, M, 0, "G", "Convert to Range"},
     {0, 0, g::Check, 3, 0, "ZL", "Table Style Options"},
     {CmdTableTotalRow, 0, 0, M, kToggle, "T", "Total Row"},  // no glyph: a check box, as Excel's
@@ -224,19 +222,19 @@ constexpr Spec kChartDesign[] = {
 constexpr Spec kPictureFormat[] = {
     {0, CmdFormatObject, icon::Picture, 3, 0, "ZS", "Picture Styles"},
     {CmdObjectOutline, 0, g::Pencil, M, kTool, "SO", "Picture Border"},
-    {0, 0, icon::Info, 3, 0, "Z1", "Accessibility"},
-    {CmdFormatObject, 0, icon::Info, L, 0, "AT", "Alt Text"},
+    {0, 0, icon::AltText, 3, 0, "Z1", "Accessibility"},
+    {CmdFormatObject, 0, icon::AltText, L, 0, "AT", "Alt Text"},
 };
 
 constexpr Spec kShapeFormat[] = {
-    {0, 0, g::Shapes, 3, 0, "ZH", "Insert Shapes"},
-    {CmdShapesMenu, 0, g::Shapes, L, kMenu, "SH", "Shapes"},
-    {CmdObjectTextBox, 0, g::Case, M, 0, "X", "Text Box"},
+    {0, 0, icon::Shapes, 3, 0, "ZH", "Insert Shapes"},
+    {CmdShapesMenu, 0, icon::Shapes, L, kMenu, "SH", "Shapes"},
+    {CmdObjectTextBox, 0, icon::TextBox, M, 0, "X", "Text Box"},
     {0, CmdFormatObject, icon::Color, 3, 0, "ZY", "Shape Styles"},
     {CmdObjectFill, 0, icon::Color, M, kTool, "SF", "Shape Fill"},
     {CmdObjectOutline, 0, g::Pencil, M, kTool, "SO", "Shape Outline"},
-    {0, 0, icon::Info, 3, 0, "Z1", "Accessibility"},
-    {CmdFormatObject, 0, icon::Info, L, 0, "AT", "Alt Text"},
+    {0, 0, icon::AltText, 3, 0, "Z1", "Accessibility"},
+    {CmdFormatObject, 0, icon::AltText, L, 0, "AT", "Alt Text"},
 };
 
 // Print preview, as Excel 2007's Print Preview tab (Featherweight's preview is a mode of the tab).
@@ -248,7 +246,7 @@ constexpr Spec kPrintPreview[] = {
     {CmdPrintWhatMenu, 0, icon::Page, M, kMenu, "A", "Print What"},
     {CmdScalingMenu, 0, icon::FullScreen, M, kMenu, "F", "Scaling"},
     {0, 0, g::Zoom, 3, 0, "ZZ", "Zoom"},
-    {CmdZoomMenu, 0, g::Zoom, L, kMenu, "Z", "Zoom"},
+    {CmdZoomMenu, 0, g::Zoom, L, kMenu, "Q", "Zoom"},
     {0, 0, g::Next, 3, 0, "ZV", "Preview"},
     {CmdNextPage, 0, g::Next, M, 0, "N", "Next Page"},
     {CmdPrevPage, 0, g::Prev, M, 0, "V", "Previous Page"},
@@ -328,6 +326,7 @@ const char* Turned(int cmd, const CommandState& q) {
   return nullptr;
 }
 
+#if FW_TEST_SCREENS
 // ribbon:dump's lines for a menu and its submenus.
 void DumpMenu(HMENU menu, int depth) {
   for (int i = 0; i < GetMenuItemCount(menu); ++i) {
@@ -342,6 +341,7 @@ void DumpMenu(HMENU menu, int depth) {
     if (mi.hSubMenu) DumpMenu(mi.hSubMenu, depth + 1);
   }
 }
+#endif
 
 std::wstring Hex(const D2D1_COLOR_F& c) {
   auto b = [](float x) { return static_cast<unsigned>(std::lround(std::clamp(x, 0.0f, 1.0f) * 255)); };
@@ -405,6 +405,22 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
   add(L"Data", L"A", kData);
   add(L"Review", L"R", kReview);
   add(L"View", L"W", kView);
+  // Quick access: Undo and Redo with their lists; picking a step takes it back (or does it again)
+  // with every newer one, as Excel's.
+  if (edit_ && !preview_)
+    for (const int cmd : {CmdUndo, CmdRedo}) {
+      ToolItem& t = m.quick.emplace_back();
+      t.cmd = cmd;
+      for (const std::u16string& name : cmd == CmdUndo ? edit_->UndoNames() : edit_->RedoNames()) {
+        if (t.choices.size() >= 30) break;
+        t.choices.emplace_back(name.begin(), name.end());
+      }
+      t.onChange = [this, cmd](const ToolValue& v) {
+        if (v.index < 0 || !edit_ || editor_.Active()) return;
+        const size_t steps = static_cast<size_t>(v.index) + 1;
+        EditRefused(cmd == CmdUndo ? edit_->Undo(steps) : edit_->Redo(steps));
+      };
+    }
   // Contextual tabs: Excel's, for what's selected.
   if (preview_) {
     add(L"Print Preview", L"JV", kPrintPreview, true);
@@ -536,8 +552,12 @@ bool WorkbookView::FillRibbonMenu(int which, HMENU menu) {
 }
 
 // ribbon:dump: the model as built now, each item with its command, state and KeyTip, and the lines
-// of each menu it opens (FillMenu), for checks (stderr, "ribbon: ...").
+// of each menu it opens (FillMenu), for checks (stderr, "ribbon: ..."). Test builds only (FW_TEST_SCREENS).
 bool WorkbookView::RibbonScriptOp(const std::wstring& arg) {
+#if !FW_TEST_SCREENS
+  (void)arg;
+  return false;
+#else
   if (arg != L"dump") return false;
   RibbonModel m;
   BuildRibbon(m, ToolbarContext{});
@@ -560,6 +580,7 @@ bool WorkbookView::RibbonScriptOp(const std::wstring& arg) {
   }
   if (!m.show.empty()) fwprintf(stderr, L"ribbon: show %s\n", m.show.c_str());
   return true;
+#endif
 }
 
 // ---------------------------------------------------------------------------

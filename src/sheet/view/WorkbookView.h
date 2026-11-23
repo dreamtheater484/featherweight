@@ -317,7 +317,6 @@ class WorkbookView : public PagedView {
   void FinishTabDrag();
   void DrawTabDrop(gfx::Canvas& c);
   // Undo and redo with their lists (split buttons: the arrow lists the steps, newest first).
-  void AddUndoToolbar(ToolbarModel& m);
   double calcSince_ = 0;  // anim::Now() when the recalculation under way began; 0: none
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
@@ -436,9 +435,8 @@ class WorkbookView : public PagedView {
   // Borders on the selection: 0 none, 1 outline, 2 all, 3 inside, 4..7 top, bottom, left, right.
   bool ApplyBorders(int which, const BorderSide& side);
   bool MergeCells(int how);  // 0 merge and center, 1 merge across, 2 merge, 3 unmerge
-  void AddFormatToolbar(ToolbarModel& m);
   // The Home tab's boxes and color buttons (font, size, colors, borders, styles, number format) with
-  // the active cell's values: the ribbon's, and the toolbar's.
+  // the active cell's values, for the ribbon.
   ToolItem FormatTool(int cmd);
   D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
   int lastBorders_ = 0;  // the borders button's choice its main part repeats
@@ -548,7 +546,6 @@ class WorkbookView : public PagedView {
   void ShowShapePanel();
   bool ShapesCommandState(int cmd, CommandState& s);
   bool ShapesCommand(int cmd);
-  void AddShapeTools(ToolbarModel& m);
   bool ShapesScriptOp(const std::wstring& arg);
   // Objects that move but don't size with cells (editAs="oneCell": pictures as Excel inserts them)
   // keep their size when row heights or column widths change under them: their sizes before the
@@ -661,7 +658,6 @@ class WorkbookView : public PagedView {
   int ScalingNow() const;  // the 4 scalings' index (-1: a scale of its own); WorkbookPageSetup.cpp
   int MarginsNow() const;  // Normal, Wide, Narrow's index (-1: others)
   uint32_t ribbonInserted_ = 0;  // an object just inserted and still selected: the ribbon shows its tab
-  void AddPageSetupToolbar(ToolbarModel& m);  // Page setup ▾, the scaling shortcuts
   edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
   void AfterPageChange();  // the preview and Page Break Preview paginate again
   void RefreshPreview();
@@ -706,7 +702,6 @@ class WorkbookView : public PagedView {
   ObjectDrag objectDrag_;
   bool ChartsCommandState(int cmd, CommandState& s);
   bool ChartsCommand(int cmd);
-  void AddChartTools(ToolbarModel& m);
   std::optional<SheetObjects::Object> SelectedObject() const;
   std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
   edit::drawing::Place PlaceFor(const draw::Rect& r) const;

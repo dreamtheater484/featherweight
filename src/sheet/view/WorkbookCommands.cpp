@@ -430,63 +430,23 @@ void WorkbookView::SetZoom100(double zoom) {
   host_.ViewInvalidate();
 }
 
+// The workbook's commands are on its ribbon (WorkbookRibbon.cpp, R1). The toolbar shows only while
+// the workbook isn't ready (loading, or its password card): Print, Find and Full screen.
 void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
-  auto item = [](int cmd, wchar_t glyph, const std::wstring& tooltip = L"") {
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = tooltip;
-    return t;
-  };
-  ToolItem print = item(CmdPrint, icon::Print);
-  ToolItem preview = item(CmdPrintPreview, icon::Page, L"Print preview (Ctrl+F2)");
-  preview.toggle = true;
-  preview.checked = preview_;
-  m.left = {print, preview};
-  AddPageSetupToolbar(m);  // s3-print: in the grid too (W3)
-  AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
-  AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
-  m.pager = preview_;
-  if (preview_) {
-    m.page = currentPage_;
-    m.pageCount = PageCount();
-    m.zoomText = fw::FormatPercent(Zoom());
-  }
-  ToolItem find = item(CmdFind, icon::Search);
+  ToolItem print;
+  print.cmd = CmdPrint;
+  print.glyph = icon::Print;
+  print.enabled = Ready();
+  m.left = {print};
+  ToolItem find;
+  find.cmd = CmdFind;
+  find.glyph = icon::Search;
   find.checked = ctx.searchOpen;
   find.toggle = true;
-  find.priority = 5;
-  find.sepBefore = true;
-  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
-  full.priority = 2;
+  ToolItem full;
+  full.cmd = CmdFullScreen;
+  full.glyph = ctx.fullscreen ? icon::BackToWindow : icon::FullScreen;
   m.right = {find, full};
-}
-
-void WorkbookView::AddUndoToolbar(ToolbarModel& m) {
-  if (!Ready() || preview_) return;
-  for (const int cmd : {CmdUndo, CmdRedo}) {
-    const CommandState q = QueryCommand(cmd);
-    ToolItem t;
-    t.kind = ToolKind::SplitButton;
-    t.cmd = cmd;
-    t.glyph = cmd == CmdUndo ? icon::Undo : icon::Redo;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.priority = cmd == CmdUndo ? 8 : 7;
-    t.sepBefore = cmd == CmdUndo;
-    // The list: picking a step undoes (or redoes) it and every newer one, as Excel's.
-    if (edit_)
-      for (const std::u16string& name : cmd == CmdUndo ? edit_->UndoNames() : edit_->RedoNames()) {
-        if (t.choices.size() >= 30) break;
-        t.choices.push_back(std::wstring(name.begin(), name.end()));
-      }
-    t.onChange = [this, cmd](const ToolValue& v) {
-      if (v.index < 0 || !edit_ || editor_.Active()) return;
-      const size_t steps = static_cast<size_t>(v.index) + 1;
-      EditRefused(cmd == CmdUndo ? edit_->Undo(steps) : edit_->Redo(steps));
-    };
-    m.left.push_back(std::move(t));
-  }
 }
 
 void WorkbookView::FillMenu(int which, HMENU menu) {
