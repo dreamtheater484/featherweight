@@ -59,6 +59,7 @@ void Settings::LoadFrom(const std::wstring& path) {
   spelling = ini_.GetBool(kGeneral, L"CheckSpelling", true);
   autoCorrect = ini_.GetBool(kGeneral, L"AutoCorrect", true);
   ruler = ini_.GetBool(kGeneral, L"Ruler", false);
+  developerTab = ini_.GetBool(kGeneral, L"DeveloperTab", false);
   reviewer = ini_.Get(kGeneral, L"Reviewer");
   ribbon = ini_.GetInt(kGeneral, L"Ribbon", -1);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
@@ -108,6 +109,7 @@ bool Settings::Save() {
   if (!spelling || ini_.Has(kGeneral, L"CheckSpelling")) ini_.SetBool(kGeneral, L"CheckSpelling", spelling);
   if (!autoCorrect || ini_.Has(kGeneral, L"AutoCorrect")) ini_.SetBool(kGeneral, L"AutoCorrect", autoCorrect);
   if (ruler || ini_.Has(kGeneral, L"Ruler")) ini_.SetBool(kGeneral, L"Ruler", ruler);
+  if (developerTab || ini_.Has(kGeneral, L"DeveloperTab")) ini_.SetBool(kGeneral, L"DeveloperTab", developerTab);
   if (!reviewer.empty() || ini_.Has(kGeneral, L"Reviewer")) ini_.Set(kGeneral, L"Reviewer", reviewer);
   if (ribbon >= 0) ini_.SetInt(kGeneral, L"Ribbon", ribbon);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);

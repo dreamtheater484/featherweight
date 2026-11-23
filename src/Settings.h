@@ -49,6 +49,7 @@ class Settings {
   bool spelling = true;     // Word documents: check spelling as you type
   bool autoCorrect = true;  // Word documents: AutoCorrect as you type
   bool ruler = false;       // Word documents: the rulers shown
+  bool developerTab = false;  // Word documents: the ribbon's Developer tab (content controls), off as in Word
   std::wstring reviewer;    // Word documents: the name changes and comments are made with (empty: Windows')
   // The editors' ribbon: -1 as the screen suits (only its tabs on a small screen), 0 shown, 1 only its
   // tabs (Ctrl+F1).

@@ -80,6 +80,7 @@ class App : public PdfHost, public DropHost {
   bool ViewSpelling() override { return settings_.spelling; }
   bool ViewAutoCorrect() override { return settings_.autoCorrect; }
   bool ViewRuler() override { return settings_.ruler; }
+  bool ViewDeveloperTab() override { return settings_.developerTab; }
   std::wstring ViewReviewer() override { return settings_.reviewer; }
   void ViewSetReviewer(const std::wstring& name) override {
     settings_.reviewer = name;

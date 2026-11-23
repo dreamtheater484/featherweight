@@ -164,6 +164,7 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Group(L"Styles", L"ZS");
   {
     RibbonItem& styles = b.Add(format_ ? format_->StyleBox() : Greyed(ToolKind::Dropdown, CmdStyleBox), Size::Large, L"Styles", L"L");
+    styles.tool.glyph = icon::FontCase;  // the gallery folded into one button (a narrow window)
     RibbonGallery g;
     g.columns = 6;
     g.choiceWidth = 84;
@@ -308,14 +309,17 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Toggle(CmdViewFacing, icon::ViewFacing, Size::Medium, L"Multiple Pages", L"2");
   b.Toggle(CmdZoomFitWidth, glyph::FitWidth, Size::Medium, L"Page Width", L"I");
 
-  // ---- Developer: content controls, which Word has only here.
-  b.Tab(L"Developer", L"L");
-  b.Group(L"Controls", L"ZC");
-  b.Button(CmdInsertRichText, icon::FontCase, Size::Small, L"Rich Text Content Control", L"R");
-  b.Button(CmdInsertPlainText, glyph::GrowFont, Size::Small, L"Plain Text Content Control", L"P");
-  b.Button(CmdInsertCheckBox, glyph::CheckBox, Size::Small, L"Check Box Content Control", L"K");
-  b.Button(CmdInsertDropDown, icon::DropDownList, Size::Small, L"Drop-Down List Content Control", L"Q");
-  b.Button(CmdInsertDatePicker, icon::Calendar, Size::Small, L"Date Picker Content Control", L"D");
+  // ---- Developer: content controls, which Word has only here. Hidden until File > Options > Show
+  // Developer tab, as in Word; Alt+Q finds them either way.
+  if (host_.ViewDeveloperTab() || ribbonAll_) {
+    b.Tab(L"Developer", L"L");
+    b.Group(L"Controls", L"ZC");
+    b.Button(CmdInsertRichText, icon::FontCase, Size::Small, L"Rich Text Content Control", L"R");
+    b.Button(CmdInsertPlainText, glyph::GrowFont, Size::Small, L"Plain Text Content Control", L"P");
+    b.Button(CmdInsertCheckBox, glyph::CheckBox, Size::Small, L"Check Box Content Control", L"K");
+    b.Button(CmdInsertDropDown, icon::DropDownList, Size::Small, L"Drop-Down List Content Control", L"Q");
+    b.Button(CmdInsertDatePicker, icon::Calendar, Size::Small, L"Date Picker Content Control", L"D");
+  }
 
   // ---- Contextual tabs
   // ribbon:check builds every contextual tab, to walk their commands too.
@@ -395,9 +399,9 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   else m.show = picture ? L"Picture Format" : L"Shape Format";
 
   // ---- The File page: Word's proofing and user name options.
-  m.file = {{RibbonFilePlace::Options, CmdToggleSpelling, L"Check spelling as you type", L"", 0},
-            {RibbonFilePlace::Options, CmdToggleAutoCorrect, L"AutoCorrect as you type", L"", 0},
-            {RibbonFilePlace::Options, CmdReviewerName, L"User name", L"The name your changes and comments carry", 0}};
+  // (Spelling and AutoCorrect as you type are the File page's own, under Editing.)
+  m.file = {{RibbonFilePlace::Options, CmdDeveloperTab, L"Show Developer tab", L"Content controls: text, check boxes, lists and dates", 0, true},
+            {RibbonFilePlace::Options, CmdReviewerName, L"User name…", L"The name your changes and comments carry", 0}};
 }
 
 ToolItem DocView::ObjectSizeBox(bool height) {

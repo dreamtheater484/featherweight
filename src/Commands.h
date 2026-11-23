@@ -457,6 +457,7 @@ enum Cmd : int {
   CmdObjectWidthBox,
   CmdRowHeightBox,          // Table Layout > Cell Size: the selected rows' height, the columns' width
   CmdColumnWidthBox,
+  CmdDeveloperTab,          // File > Options: the documents' Developer tab shown (a setting, off as in Word)
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5

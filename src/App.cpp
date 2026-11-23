@@ -1614,6 +1614,11 @@ void App::Execute(int cmd) {
       settings_.Save();
       for (auto& t : tabs_) t->SettingsChanged();
       break;
+    case CmdDeveloperTab:
+      settings_.developerTab = !settings_.developerTab;
+      settings_.Save();
+      Layout();  // the ribbon gains or loses the tab
+      break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
