@@ -33,7 +33,7 @@ Roy (2026-11-20): P1 starts now, while S4's PR finishes CI and before his manual
   - Before automating, check whether POWERPNT.EXE is running.
   - If Roy has PowerPoint open, don't automate it. Wait, and never close his window or his decks.
   - Only quit a PowerPoint that your own automation started, and set alerts off.
-- **Render references only while Roy is signed in at the console.** On Remote Desktop, or while his session is disconnected, Office lays out on the redirected printer and the renders come out wrong (S4: 56 renders failed). If the session is remote or disconnected (`qwinsta`), queue the renders and say so.
+- **Render PowerPoint references only from an active session: the console or Remote Desktop** (decision of 2026-11-22 below), never a disconnected one. If the session is disconnected (`qwinsta`), queue the renders and say so. Excel keeps its own check: it lays out on the redirected printer over Remote Desktop (S4: 56 renders failed).
 - Corpus downloads need Roy's yes. Ask in the session before the first download, listing the sources, the number of files and the total size, as in S1. Each download goes into its own quarantine folder and is screened before anything opens it.
 
 ## Pieces
@@ -89,3 +89,47 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
 - **Commits:** small, on your branch, no Co-Authored-By trailer. Push and say what's ready to merge.
 
 ## Decisions during P1
+
+- **2026-11-22: PowerPoint references may be rendered over Remote Desktop.** Probed: the 18 public decks rendered in Roy's active Remote Desktop session match the console references (97 slides, SSIM ≥ 0.99992; only a date field differs). An active `rdp-tcp` session now counts like the console; a disconnected one doesn't. `reference-renders.ps1` checks before every deck.
+- **2026-11-22: first corpus measurement, 59.22 %.**
+  - 1,490 of 2,516 slides pass (SSIM ≥ 0.95 at 100 dpi), fwtool on p1-int `ee37031f`.
+  - PowerPoint rendered 149 of the 152 decks; 3 fail PowerPoint's own export.
+  - Per kind: briefings 75.0 %, charts 52.6 %, features 57.0 %, lectures 60.2 %, photos 59.0 %, school 74.4 %, shows 80.0 %, statistics 58.2 %, templates 79.5 %, training 34.2 %.
+  - Mostly near misses: 21.5 % of the slides score 0.90–0.95, 12.9 % 0.80–0.90, 6.4 % below 0.80.
+  - Causes, with a deck and slide for each: `FeatherweightNotes\p1\p1-corpus-findings.md`.
+- **2026-11-22: re-render the references at full picture quality? Probed: PowerPoint can't, so they stay** (coordinator).
+  - PowerPoint's Save As PDF resamples some pictures (a 1920×1080 full-slide picture came out 1536×864) and recompresses some as JPEG. On a noisy full-slide picture that costs about 0.05–0.1 SSIM.
+  - Probe on two decks: ExportAsFixedFormat with the print intent (called early-bound through Office's interop assembly) writes exactly the same pictures as Save As; the screen intent writes smaller ones.
+  - The resampled pictures are the ones with transparency (`alphaModFix`) or flattened transparent groups, which PowerPoint rasterizes at its own resolution in any PDF. Pictures without effects keep their size.
+  - So the references stay as made, and this resampling is a known measurement artifact (p1-render reached the same conclusion for `alphaModFix` pictures).
+  - Coordinator: Save As stays the reference. Featherweight's slide PDFs bake see-through (`alphaModFix`) pictures at most 1536 px across, as every PowerPoint PDF export does (p1-render `b27a4905`). That's PDF output only: the slide view keeps them at full resolution, as PowerPoint shows them. A light `slide-pages -Through app` cross-check (the public set and about 20 corpus decks) compares the app's own drawing with fwtool's.
+- **2026-11-22: no criterion change yet** (coordinator).
+  - p1-render and p1-model work through the cause list, biggest first: font fallback (sans faces drawn in Times New Roman), text 1–2 px off, texture backgrounds, `defaultTextStyle` bold/italic applied to placeholders, layout `clrMapOvr`, then charts, SmartArt and WordArt.
+  - p1-corpus re-measures on the newest p1-int after each round of fixes.
+  - The criterion is revisited, as S4 did, only if real fixes plateau well below 90 %.
+- **2026-11-23: corpus at 75.44 % on p1-int `0317ed79`.**
+  - 1,898 of 2,516 slides pass, after 67.01 % on `af87058b` (references unchanged). The public set is at 92/97.
+  - Per kind: briefings 77.1 %, charts 72.6 %, features 72.5 %, lectures 81.8 %, photos 64.8 %, school 78.0 %, shows 80.0 %, statistics 66.4 %, templates 86.7 %, training 60.0 %.
+  - Near misses: 15.9 % of the slides score 0.90–0.95, 6.4 % 0.80–0.90, 2.3 % below 0.80.
+- **2026-11-23: cross-check of the slide view (`slide-pages -Through app`) against fwtool's PDF, same decks, same commit.**
+  - 20 corpus decks (two per kind, 233 slides): 100 pass in the app, 163 through fwtool. 64 slides pass only through fwtool, 1 only in the app. Mean SSIM is 0.018 lower in the app.
+  - Public set: 88/97 in the app, 92/97 through fwtool.
+  - Largest gaps:
+    - `backgrounds.pptx` slide 7: a pattern fill drawn at a coarser pitch, 0.127 against 0.810.
+    - `backgrounds.pptx` slide 6, `shapes-groups.pptx` slide 1.
+    - Every slide of `cpb-presentatie` (−0.08 to −0.13).
+  - So the fwtool number overstates what the slide view shows.
+- **2026-11-23: the gate's display measure** (coordinator).
+  - The gate number stays the fwtool path: Featherweight's PDF and PowerPoint's PDF, both rasterized by pdfium. It compares like with like, and the reference is PowerPoint's PDF, not its screen.
+  - Added to the gate: the app draws what its own PDF draws. The slide view (`pagepngs`, 100 dpi) is compared with Featherweight's own PDF (pdfium) on the 20-deck sample and the public set. Every slide differing by more than 0.05 SSIM is a slide-view bug, fixed or explained before the gate. A uniform rasterizer and antialiasing offset under that is accepted and recorded with its size.
+  - A full `-Through app` corpus run only if that check finds more than a few root causes.
+  - First check, on `0317ed79` (`FeatherweightNotes\p1\corpus-analysis\app-vs-own-pdf.ps1`):
+    - Public set: median SSIM 0.9966, 3 slides under 0.95.
+    - Corpus sample: median 0.972, 30 of 233 slides under 0.95.
+    - Root causes:
+      - Text in an embedded font isn't drawn in the slide view (`cpb-presentatie` slide 5, 0.796).
+      - Pattern fills at a different pitch (`backgrounds.pptx` slide 7, 0.123; `shapes-groups.pptx` slide 1, 0.899).
+      - Tiled picture fills at a different tile size and offset (`backgrounds.pptx` slide 6, 0.783).
+      - A picture drawn darker (`overheid-migratieketen` slide 3, 0.915).
+      - Pictures with an ellipse shape or soft edges drawn differently (`usgov-our-dynamic-sun-2025` slide 12, 0.927).
+    - Text antialiasing: dense text slides drop to about 0.935 with nothing else different (`un-ccsa` slide 12), more than the accepted 0.05.
