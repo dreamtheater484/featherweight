@@ -1084,11 +1084,15 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   if (dest.Width() == 0 || dest.Height() == 0 || bitmap.Width() <= 0 || bitmap.Height() <= 0) return;
   // A picture clipped inside its shadow (an ellipse crop) casts the clip's shape, as Direct2D's
   // shadow of what it drew does (our-dynamic-sun: round pictures, not blurred squares).
-  const State& now = states_.back();
-  if (now.clip && !captures_.empty() && now.clipDepth >= captures_.back().depth)
-    Cast(now.clip->first, now.clip->second, opacity);
-  else
-    Cast(Path::FromRect(dest), now.ctm, opacity);
+  // Copies, not references into states_: Save() below may move it (who-health's intermittent crash).
+  const Matrix m = states_.back().ctm, f = states_.back().written;
+  {
+    const State& now = states_.back();
+    if (now.clip && !captures_.empty() && now.clipDepth >= captures_.back().depth)
+      Cast(now.clip->first, now.clip->second, opacity);
+    else
+      Cast(Path::FromRect(dest), now.ctm, opacity);
+  }
   const int a = std::clamp(static_cast<int>(std::lround(opacity * 1000)), 0, 1000);
   if (a == 0) return;
   Save();
@@ -1134,8 +1138,6 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   // bottom a hair higher too, about 0.00006 (letters-home 1's background at 0.000061, era-systems'
   // hash overlay). The same here, through the transform as the file has it (its numbers rounded):
   // acuk 27 -> 40/41, unisaarland +2.
-  const Matrix& m = now.ctm;
-  const Matrix& f = now.written;
   if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m11 > 0 && m.m22 > 0 && f.m12 == 0 && f.m21 == 0 && f.m11 > 0 &&
       f.m22 > 0) {
     const double left = double(m.m11) * at.left + m.dx, right = double(m.m11) * at.right + m.dx;

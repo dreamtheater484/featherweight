@@ -18,6 +18,7 @@ constexpr size_t kMaxFiles = 512;
 struct Cloud {
   ComPtr<IDWriteFontSet> set;
   ComPtr<IDWriteFontCollection1> collection;
+  ComPtr<IDWriteFontSet> all;  // every face, under its own family name too
 };
 
 std::wstring EnglishName(IDWriteLocalizedStrings* names) {
@@ -86,10 +87,12 @@ const Cloud& Get() {
     ComPtr<IDWriteFontCollection> system;
     ComPtr<IDWriteFontCollection1> system1;
     ComPtr<IDWriteFontSet> systemSet;
-    ComPtr<IDWriteFontSetBuilder1> keep;
+    ComPtr<IDWriteFontSetBuilder1> keep, every;
     if (FAILED(factory->GetSystemFontCollection(&system)) || FAILED(system.As(&system1)) ||
-        FAILED(system1->GetFontSet(&systemSet)) || FAILED(factory->CreateFontSetBuilder(&keep)))
+        FAILED(system1->GetFontSet(&systemSet)) || FAILED(factory->CreateFontSetBuilder(&keep)) ||
+        FAILED(factory->CreateFontSetBuilder(&every)))
       return;
+    bool any = false;
     for (const FontFile& f : files) {
       // A file DirectWrite can't read as a font is left out.
       ComPtr<IDWriteFontFile> file;
@@ -102,11 +105,7 @@ const Cloud& Get() {
         ComPtr<IDWriteLocalizedStrings> names;
         BOOL exists = FALSE;
         if (FAILED(faces->GetPropertyValues(i, DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, &exists, &names)) || !exists) continue;
-        // Word finds them by the family it downloaded, the folder's name: "Open Sans Light" (a
-        // weight of Open Sans with a family name of its own) is drawn in a substitute, as
-        // a missing family (measured on the corpus: Calibri).
         const std::wstring family = EnglishName(names.Get());
-        if (!SameName(family, f.family)) continue;
         // A family the PC has stays its own.
         UINT32 index = 0;
         BOOL has = FALSE;
@@ -116,9 +115,18 @@ const Cloud& Get() {
             (SUCCEEDED(systemSet->GetMatchingFonts(&property, 1, &matches)) && matches && matches->GetFontCount() > 0))
           continue;
         ComPtr<IDWriteFontFaceReference> ref;
-        if (SUCCEEDED(faces->GetFontFaceReference(i, &ref))) keep->AddFontFaceReference(ref.Get());
+        if (FAILED(faces->GetFontFaceReference(i, &ref))) continue;
+        // PowerPoint finds every face by its own family name (worldbank's Open Sans Light). Word
+        // finds them by the family it downloaded, the folder's name: "Open Sans Light" (a weight of
+        // Open Sans with a family name of its own) is drawn in a substitute, as a missing family
+        // (measured on the corpus: Calibri).
+        every->AddFontFaceReference(ref.Get());
+        any = true;
+        if (SameName(family, f.family)) keep->AddFontFaceReference(ref.Get());
       }
     }
+    ComPtr<IDWriteFontSet> all;
+    if (any && SUCCEEDED(every->CreateFontSet(&all)) && all->GetFontCount() > 0) cloud.all = all;
     ComPtr<IDWriteFontSet> set;
     ComPtr<IDWriteFontCollection1> collection;
     if (FAILED(keep->CreateFontSet(&set)) || set->GetFontCount() == 0 ||
@@ -136,8 +144,10 @@ IDWriteFontSet* CloudFontSet() { return Get().set.Get(); }
 
 IDWriteFontCollection1* CloudFontCollection() { return Get().collection.Get(); }
 
-bool CloudFontsHave(std::wstring_view name) {
-  IDWriteFontSet* set = CloudFontSet();
+IDWriteFontSet* CloudFontSetAll() { return Get().all.Get(); }
+
+bool CloudFontsHave(std::wstring_view name, bool all) {
+  IDWriteFontSet* set = all ? CloudFontSetAll() : CloudFontSet();
   if (!set || name.empty()) return false;
   const std::wstring n(name);
   const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, n.c_str(), L""};
