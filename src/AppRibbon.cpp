@@ -591,23 +591,59 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     // Switching each tab (the tab's model built, laid out and the ribbon drawn) and laying the
     // ribbon out again at 1366, 1024, 800 and 640 px: within one frame (16 ms), or the run fails.
     // The whole window's frame after a switch is reported too (the page is the tab's, not the
-    // ribbon's; with --gpu as on screen). Each tab and width counts its best of five rounds, so a
-    // busy PC (ctest -j) doesn't fail it; the slowest single round is reported beside.
-    LARGE_INTEGER freq, t0, t1;
+    // ribbon's; with --gpu as on screen). Each tab and width counts its best of five rounds, and
+    // the thread's own CPU time is measured beside the clock (its cycles, at the rate the best of a
+    // few short spins shows): while other programs keep every core busy (parallel builds, ctest -j)
+    // the clock runs on as this thread waits, so a run fails only when both pass 16 ms.
+    LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
-    auto ms = [&] { return 1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart); };
+    auto now = [] {
+      LARGE_INTEGER t;
+      QueryPerformanceCounter(&t);
+      return t.QuadPart;
+    };
+    const HANDLE thread = GetCurrentThread();
+    auto cycles = [&] {
+      ULONG64 c = 0;
+      QueryThreadCycleTime(thread, &c);
+      return c;
+    };
+    auto wallMs = [&](LONGLONG from, LONGLONG to) { return 1000.0 * static_cast<double>(to - from) / static_cast<double>(freq.QuadPart); };
+    double cyclesPerMs = 0;
+    for (int k = 0; k < 8; ++k) {  // 2 ms spins: the fastest rate is the one with no waiting in it
+      const LONGLONG a = now();
+      const ULONG64 c = cycles();
+      LONGLONG b;
+      do b = now();
+      while (wallMs(a, b) < 2);
+      cyclesPerMs = std::max(cyclesPerMs, static_cast<double>(cycles() - c) / wallMs(a, b));
+    }
+    struct Time {
+      double wall = 1e9, cpu = 1e9;
+    };
+    LONGLONG t0 = 0;
+    ULONG64 c0 = 0;
+    double slowest = 0;
+    auto start = [&] {
+      t0 = now();
+      c0 = cycles();
+    };
+    auto stop = [&](Time& best) {
+      const double wall = wallMs(t0, now()), cpu = cyclesPerMs > 0 ? static_cast<double>(cycles() - c0) / cyclesPerMs : wall;
+      best.wall = std::min(best.wall, wall);
+      best.cpu = std::min(best.cpu, cpu);
+      slowest = std::max(slowest, wall);
+    };
     constexpr int kRounds = 5;
     const std::wstring was = ribbon_.Selected();
     std::vector<std::wstring> names;
     for (const RibbonTab& t : ribbon_.Model().tabs) names.push_back(t.name);
     const int widths[] = {1366, 1024, 800, 640};
-    std::vector<double> bestSwitch(names.size(), 1e9), bestFrame(names.size(), 1e9), bestLayout(std::size(widths), 1e9);
-    double slowest = 0;
+    std::vector<Time> switches(names.size()), frames(names.size()), layouts(std::size(widths));
     for (int round = 0; round < kRounds; ++round)
       for (size_t n = 0; n < names.size(); ++n) {
-        const std::wstring& name = names[n];
-        QueryPerformanceCounter(&t0);
-        ribbon_.Select(name);
+        start();
+        ribbon_.Select(names[n]);
         Layout();
         dc_->BeginDraw();
         canvas_.Begin(dc_.Get());
@@ -615,32 +651,36 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
         ribbon_.DrawPopup(canvas_);
         canvas_.End();
         dc_->EndDraw();
-        QueryPerformanceCounter(&t1);
-        bestSwitch[n] = std::min(bestSwitch[n], ms());
-        slowest = std::max(slowest, ms());
-        QueryPerformanceCounter(&t0);
+        stop(switches[n]);
+        const double keep = slowest;  // the whole frame isn't the ribbon's: not its slowest round
+        start();
         DrawSnapshotFrame();
-        QueryPerformanceCounter(&t1);
-        bestFrame[n] = std::min(bestFrame[n], ms());
+        stop(frames[n]);
+        slowest = keep;
       }
     const int top = TitleHeight();
     for (int round = 0; round < kRounds; ++round)
       for (size_t k = 0; k < std::size(widths); ++k) {
-        QueryPerformanceCounter(&t0);
+        start();
         ribbon_.Layout(RECT{0, top, widths[k], top + ToolbarHeight()}, ui_, CurrentRibbon());
-        QueryPerformanceCounter(&t1);
-        bestLayout[k] = std::min(bestLayout[k], ms());
-        slowest = std::max(slowest, ms());
+        stop(layouts[k]);
       }
     ribbon_.Select(was);
     Layout();
-    auto worst = [](const std::vector<double>& v) { return v.empty() ? 0.0 : *std::max_element(v.begin(), v.end()); };
-    const double worstSwitch = worst(bestSwitch), worstLayout = worst(bestLayout), worstFrame = worst(bestFrame);
+    auto worst = [](const std::vector<Time>& v) {
+      Time w{0, 0};
+      for (const Time& t : v) {
+        w.wall = std::max(w.wall, t.wall);
+        w.cpu = std::max(w.cpu, t.cpu);
+      }
+      return w;
+    };
+    const Time sw = worst(switches), lw = worst(layouts), fw = worst(frames);
     fwprintf(stderr,
-             L"ribbonbench: %d tabs, switch worst %.2f ms, relayout worst %.2f ms (the whole frame after a switch: %.2f ms; "
-             L"best of %d rounds each, slowest single round %.2f ms)\n",
-             static_cast<int>(names.size()), worstSwitch, worstLayout, worstFrame, kRounds, slowest);
-    if (worstSwitch > 16 || worstLayout > 16) scriptFailed_ = true;
+             L"ribbonbench: %d tabs, switch worst %.2f ms (CPU %.2f), relayout worst %.2f ms (CPU %.2f) (the whole frame "
+             L"after a switch: %.2f ms; best of %d rounds each, slowest single round %.2f ms)\n",
+             static_cast<int>(names.size()), sw.wall, sw.cpu, lw.wall, lw.cpu, fw.wall, kRounds, slowest);
+    if ((sw.wall > 16 && sw.cpu > 16) || (lw.wall > 16 && lw.cpu > 16)) scriptFailed_ = true;
     return true;
   }
 #endif
