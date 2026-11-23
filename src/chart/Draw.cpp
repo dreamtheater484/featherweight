@@ -695,7 +695,15 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
       for (const Label& l : names[i]) wide[i] = std::max(wide[i], l.width);
     }
   };
-  if ((pos == LegendPos::Right || pos == LegendPos::Left) && placed) {
+  // Entries in a row 0.976 text sizes apart (from the ink), less past 10 points (PowerPoint's PDFs:
+  // 15.8 points with 18-point text).
+  const float gap = (0.976f * std::min(ts, 10.0f) + 0.75f * std::max(0.0f, ts - 10)) * b.tall;
+  float row = 0;
+  for (const Label& l : labels) row += lead + l.width + gap;
+  // A legend at the top or bottom in a box of its own too narrow for its entries in a row lists
+  // them down it as at the side (business bodies 33's doughnuts: two entries in a tall, narrow box).
+  const bool down = placed && (pos == LegendPos::Top || pos == LegendPos::Bottom) && row - gap > r.right - r.left;
+  if ((pos == LegendPos::Right || pos == LegendPos::Left || down) && placed) {
     // In a box of its own: the keys 7.13 points in from its left, the entries spread evenly down it,
     // each centred in its share, as wide as the box allows (PowerPoint's PDFs, 15-213's memory gap:
     // six 12-point entries in a 91-point box). Too many for the box: a line apart, as many as fit.
@@ -739,9 +747,6 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   }
   // Top or bottom: rows of entries, centered; an entry at most about 90 % of the chart's width
   // (Excel), a row as tall as its tallest entry.
-  // Entries in a row 0.976 text sizes apart (from the ink), less past 10 points (PowerPoint's PDFs:
-  // 15.8 points with 18-point text).
-  const float gap = (0.976f * std::min(ts, 10.0f) + 0.75f * std::max(0.0f, ts - 10)) * b.tall;
   const float avail = r.right - r.left;
   wrap(0.9f * (avail + 2 * kPad) - lead, (r.bottom - r.top) / 2);
   std::vector<std::vector<size_t>> rows(1);
@@ -1436,8 +1441,12 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   float catW = 0;  // bars: the widest category name up the side
   if (bar)
     for (size_t i = 0; i < std::min<size_t>(names.size(), 64); ++i) catW = std::max(catW, b.Measure(names[i], ts).width);
-  const int most = bar ? acrossMost(std::min(catW, (r.right - r.left) * 0.4f) + valueGap)
-                       : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
+  int most = bar ? acrossMost(std::min(catW, (r.right - r.left) * 0.4f) + valueGap)
+                 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
+  // Bars in a plot the chart places itself (layoutTarget inner): as many as its own width has room
+  // for (business bodies 33: 0 to 100 % by 20 on a 339-point plot of 12-point labels).
+  if (bar && ch.plotLayout && ch.plotInner)
+    most = static_cast<int>((ch.plotLayout->right - ch.plotLayout->left) * W / (acrossPitch * ts));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const std::string vformat = ch.value.format.empty() && percent ? "0%" : ch.value.format;

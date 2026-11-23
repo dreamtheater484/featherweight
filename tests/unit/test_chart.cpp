@@ -341,6 +341,27 @@ TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
   CHECK(std::fabs(first.left - 287.13f) < 0.01 && std::fabs(second.left - 287.13f) < 0.01);
   CHECK(std::fabs((first.top + first.bottom) / 2 - 60) < 0.01);
   CHECK(std::fabs((second.top + second.bottom) / 2 - 100) < 0.01);
+  // One at the bottom in a box too narrow for its entries in a row lists them down it all the same
+  // (business bodies 33's doughnuts): a 60-point box.
+  std::string bottom = xml;
+  bottom.replace(bottom.find("<c:legendPos val=\"r\"/>"), 22, "<c:legendPos val=\"b\"/>");
+  bottom.replace(bottom.find("<c:w val=\"0.3\"/>"), 16, "<c:w val=\"0.15\"/>");
+  Parsed q(bottom);
+  Chart narrow;
+  REQUIRE(Read(q.Root(), Colors(), narrow));
+  const draw::Art down = Draw(narrow, {400, 200}, Colors(), L"Calibri");
+  const auto swatchIn = [&](const char* accent) {
+    const draw::Color color = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : down.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.left >= 280) return b;
+    }
+    return draw::Rect{};
+  };
+  const draw::Rect one = swatchIn("accent1"), two = swatchIn("accent2");
+  CHECK(std::fabs(one.left - 287.13f) < 0.01 && std::fabs(two.left - 287.13f) < 0.01);
+  CHECK(std::fabs((one.top + one.bottom) / 2 - 60) < 0.01);
+  CHECK(std::fabs((two.top + two.bottom) / 2 - 100) < 0.01);
 }
 
 TEST(Chart_LogarithmicValueAxis) {
