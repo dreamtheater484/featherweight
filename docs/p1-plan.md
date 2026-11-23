@@ -133,3 +133,11 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
       - A picture drawn darker (`overheid-migratieketen` slide 3, 0.915).
       - Pictures with an ellipse shape or soft edges drawn differently (`usgov-our-dynamic-sun-2025` slide 12, 0.927).
     - Text antialiasing: dense text slides drop to about 0.935 with nothing else different (`un-ccsa` slide 12), more than the accepted 0.05.
+- **2026-11-23: corpus at 77.23 % on p1-int `9eb0c84d`** (the gate number), after p1-render fixed the five slide-view causes.
+  - 1,943 of 2,516 slides pass. The public set is at 92/97.
+  - Per kind: briefings 77.1 %, charts 74.1 %, features 85.2 %, lectures 82.3 %, photos 65.6 %, school 79.2 %, shows 80.0 %, statistics 67.3 %, templates 87.1 %, training 63.4 %.
+  - Slide view against Featherweight's own PDF, app on `445d69b0` (p1-render `77b8d25c`: the view draws text as pdfium does; fwtool's PDF path unchanged):
+    - Public set: median 0.998. Only `text-autofit.pptx` slide 1 (0.944) is under 0.95: explained, antialiasing.
+    - Corpus sample: median 0.985.
+    - The app's page export stops after slide 6 of `govuk-cybersprinters-lesson-3-suspicious-contact` (exit 0, 6 of 22 pages; all 22 on `9eb0c84d`), a regression with `77b8d25c`.
+    - Four other slides score 0.932–0.949: `overheid-migratieketen` 7, `usgov-globe-widescreen` 8, `cpb-presentatie` 7, `zslbw-bnt-klasse-5-6` 17.
