@@ -38,6 +38,9 @@ class PdfDocument {
   // them as it does PowerPoint's; an EMF holding a bitmap drawn by GDI at its own pixel size
   // (RasterizeEmfWithGdi).
   void PicturesAsPowerPoint();
+  // A page side as PicturesAsPowerPoint writes it, in whole 600-dpi pixels as PowerPoint's PDFs have
+  // it (goettingen's 960.125-point slides: 960.12; unimuenster's 961: 960.96).
+  static double PowerPointBox(double points);
   // The file; nothing can be added after it.
   std::vector<uint8_t> Finish();
 
