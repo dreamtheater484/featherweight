@@ -1593,11 +1593,11 @@ std::vector<uint8_t> PdfDocument::Impl::Finish() {
       w.Object(o, a);
       annots += Ref(o) + " ";
     }
-    // A slide's page to 5 significant digits, as PowerPoint's (goettingen's 960.125-point slides are
-    // 960.12 wide there, which a PDF viewer draws a pixel narrower at 100 dpi, its scale with it).
-    const bool five = picturesUp;
-    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(five ? Round5(p.width) : p.width) + " " +
-                           N(five ? Round5(p.height) : p.height) +
+    // A slide's page in whole 600-dpi pixels, as PowerPoint's (goettingen's 960.125-point slides are
+    // 960.12 wide there, which a PDF viewer draws a pixel narrower at 100 dpi, its scale with it;
+    // unimuenster's 961 are 960.96).
+    const auto box = [&](double v) { return picturesUp ? std::nearbyint(v * 600 / 72) * 72 / 600 : v; };
+    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(box(p.width)) + " " + N(box(p.height)) +
                            "]/Contents " + Ref(p.contents) + "/Resources " + Ref(p.resources) +
                            (annots.empty() ? "" : "/Annots[" + annots + "]") + ">>");
     kids += Ref(p.object) + " ";

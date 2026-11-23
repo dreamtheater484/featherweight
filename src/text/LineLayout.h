@@ -62,6 +62,12 @@ struct TextStyle {
   float letterSpacing = 0;   // w:spacing: added after every character; may be negative
   float scale = 1;           // w:w: the glyphs' width, 1 for as designed (1.03 for 103 %)
   float baselineShift = 0;   // w:position: raised (positive) or lowered
+  // The shift doesn't make its line taller: the run's text sizes its line as it would on the
+  // baseline (PowerPoint's a:rPr baseline: usgov-anyone 13's subscripted title line).
+  bool shiftKeepsLine = false;
+  // Advances as GDI lays the text out at this many pixels a point, whole pixels each (PowerPoint's
+  // 600 dpi: 600 / 72); 0: DirectWrite's ideal ones.
+  float gdiPixelsPerPoint = 0;
   float kerningMinSize = 0;  // w:kern: kern pairs from this size up; 0: no kerning
   // Kerning by the font's legacy 'kern' table alone, which DirectWrite's shaping skips (PowerPoint's),
   // not by its OpenType pairs.
