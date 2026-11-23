@@ -197,8 +197,8 @@ constexpr Spec kTableDesign[] = {
     {CmdRemoveDuplicates, 0, icon::Delete, M, 0, "M", "Remove Duplicates"},
     {CmdConvertToRange, 0, icon::Table, M, 0, "G", "Convert to Range"},
     {0, 0, g::Check, 3, 0, "ZL", "Table Style Options"},
-    {CmdTableTotalRow, 0, g::Check, M, kToggle, "T", "Total Row"},
-    {CmdFilter, 0, g::Filter, M, kToggle, "B", "Filter Button"},
+    {CmdTableTotalRow, 0, 0, M, kToggle, "T", "Total Row"},  // no glyph: a check box, as Excel's
+    {CmdFilter, 0, 0, M, kToggle, "B", "Filter Button"},
     {0, 0, icon::Color, 3, 0, "ZS", "Table Styles"},
     {CmdTableDesign, 0, icon::Color, L, 0, "S", "Quick Styles"},
 };
@@ -443,7 +443,7 @@ ToolItem WorkbookView::RibbonTool(int cmd) {
       // 1 page; together they pick No scaling, Fit sheet, Fit all columns or Fit all rows.
       t.cmd = cmd;
       t.kind = ToolKind::Dropdown;
-      t.width = 92;
+      t.width = 104;  // "Automatic" in full
       t.enabled = QueryCommand(cmd).enabled;
       t.choices = {L"Automatic", L"1 page"};
       const int now = ScalingNow();
