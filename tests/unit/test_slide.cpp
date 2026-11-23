@@ -297,9 +297,9 @@ TEST(SlideFontRefAndNumbering) {
       "<p:style><a:lnRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"3\"><a:schemeClr "
       "val=\"accent1\"/></a:fillRef><a:effectRef idx=\"2\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef "
       "idx=\"major\"><a:schemeClr val=\"accent2\"/></a:fontRef></p:style><p:txBody><a:bodyPr/><a:lstStyle/>"
-      "<a:p><a:pPr><a:buAutoNum type=\"arabicPeriod\"/></a:pPr><a:r><a:t>one</a:t></a:r></a:p>"
+      "<a:p><a:pPr><a:buFont typeface=\"+mj-lt\"/><a:buAutoNum type=\"arabicPeriod\"/></a:pPr><a:r><a:t>one</a:t></a:r></a:p>"
       "<a:p><a:pPr lvl=\"1\"><a:buAutoNum type=\"alphaLcParenR\"/></a:pPr><a:r><a:t>a</a:t></a:r></a:p>"
-      "<a:p><a:pPr><a:buAutoNum type=\"arabicPeriod\"/></a:pPr><a:r><a:t>two</a:t></a:r></a:p>"
+      "<a:p><a:pPr><a:buFont typeface=\"Arial\"/><a:buAutoNum type=\"arabicPeriod\"/></a:pPr><a:r><a:t>two</a:t></a:r></a:p>"
       "<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:t>break</a:t></a:r></a:p>"
       "<a:p><a:pPr><a:buAutoNum type=\"arabicPeriod\" startAt=\"5\"/></a:pPr><a:r><a:t>five</a:t></a:r></a:p>"
       "</p:txBody></p:sp>";
@@ -316,6 +316,10 @@ TEST(SlideFontRefAndNumbering) {
   CHECK_EQ(t->paragraphs[2].number, 2);
   CHECK_EQ(t->paragraphs[3].number, 0);
   CHECK_EQ(t->paragraphs[4].number, 5);
+  // A number font that names the theme's (+mj-lt), which PowerPoint doesn't draw numbers in, and
+  // one that names a family.
+  CHECK(t->paragraphs[0].props.bullet.themeFont && !t->paragraphs[0].props.bullet.font.empty());
+  CHECK(!t->paragraphs[2].props.bullet.themeFont && t->paragraphs[2].props.bullet.font == L"Arial");
   // A text box (no placeholder, no style): the default text style, 18 pt.
   CHECK_NEAR(t->paragraphs[0].runs[0].props.size, 18.f, 0.01f);
 }
