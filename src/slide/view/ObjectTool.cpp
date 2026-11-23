@@ -2059,171 +2059,160 @@ bool ObjectTool::Execute(int cmd) {
   }
 }
 
+ToolItem ObjectTool::Tool(int cmd) {
+  Map();
+  CommandState q;
+  Query(cmd, q);
+  ToolItem t;
+  t.cmd = cmd;
+  t.tooltip = q.Tooltip();
+  t.enabled = q.enabled;
+  t.checked = q.checked;
+  auto dropdown = [&](const wchar_t* text, wchar_t glyph, const wchar_t* tip) {
+    t.kind = ToolKind::Dropdown;
+    t.text = text;
+    t.glyph = glyph;
+    t.fitText = true;
+    t.width = 64;
+    t.tooltip = tip;
+  };
+  auto rgb = [](const ToolValue& v) {
+    return (static_cast<uint32_t>(std::lround(v.color.r * 255)) << 16) | (static_cast<uint32_t>(std::lround(v.color.g * 255)) << 8) |
+           static_cast<uint32_t>(std::lround(v.color.b * 255));
+  };
+  switch (cmd) {
+    case CmdInsertPicture:
+    case CmdInsertTextBox:
+      // Inserting also ends text editing, as the toolbar always let it.
+      t.enabled = Editable(false);
+      t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::FontCase;
+      t.tooltip = cmd == CmdInsertPicture ? L"Insert pictures" : L"Insert a text box";
+      break;
+    case CmdInsertShape:
+      dropdown(L"Shapes", 0, L"Insert a shape");
+      t.enabled = Editable(false);
+      t.width = 70;
+      t.maxRows = 16;
+      for (const ob::ShapePreset& p : ob::ShapeGallery()) t.choices.push_back(fw::Utf8ToWide(p.name));
+      t.onChange = [this](const ToolValue& v) { InsertShape(v.index); };
+      break;
+    case CmdInsertTable:
+      dropdown(L"Table", icon::Table, L"Insert a table (columns × rows)");
+      t.enabled = Editable(false);
+      for (const TableSize& ts : kTables) t.choices.push_back(std::to_wstring(ts.columns) + L" × " + std::to_wstring(ts.rows));
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index >= 0 && v.index < static_cast<int>(std::size(kTables))) InsertTable(kTables[v.index].rows, kTables[v.index].columns);
+      };
+      break;
+    case CmdInsertChart:
+      dropdown(L"Chart", icon::Report, L"Insert a chart");
+      t.enabled = Editable(false);
+      for (const wchar_t* n : kChartNames) t.choices.push_back(n);
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index >= 0 && v.index < 4) InsertChart(v.index);
+      };
+      break;
+    case CmdTableLayoutMenu:  // PowerPoint's Layout tab: rows, columns, merge and split
+      dropdown(L"Table layout", icon::Table, L"Insert and delete rows and columns, merge and split cells");
+      t.width = 96;
+      for (int c : kTableCmds) {
+        CommandState s;
+        Query(c, s);
+        t.choices.push_back(s.label);
+      }
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index >= 0 && v.index < static_cast<int>(std::size(kTableCmds))) Execute(kTableCmds[v.index]);
+      };
+      break;
+    case CmdArrangeMenu:
+      dropdown(L"Arrange", 0, L"Order, group, align and turn the selected objects");
+      t.width = 72;
+      t.maxRows = 20;
+      for (const ArrangeItem& a : kArrange) {
+        std::wstring label = (a.cmd == CmdAlignToSlide && alignToSlide_ ? L"✓ " : L"") + std::wstring(a.label);
+        if (*a.keys) label += std::wstring(L"\t") + a.keys;
+        t.choices.push_back(label);
+      }
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index >= 0 && v.index < static_cast<int>(std::size(kArrange))) Execute(kArrange[v.index].cmd);
+      };
+      break;
+    case CmdObjectFill:
+    case CmdObjectOutline: {
+      const bool fill = cmd == CmdObjectFill;
+      t.kind = ToolKind::ColorPicker;
+      t.glyph = fill ? icon::Color : icon::Brush;
+      t.tooltip = fill ? L"Shape fill" : L"Shape outline";
+      t.color = Rgb(0x4472C4);  // Office's accent 1
+      t.automaticLabel = fill ? L"No fill" : L"No outline";
+      t.automaticColor = D2D1::ColorF(0, 0, 0, 0);
+      t.onChange = [this, fill, rgb](const ToolValue& v) {
+        const std::optional<uint32_t> c = v.automatic ? std::nullopt : std::optional<uint32_t>(rgb(v));
+        if (fill) SetFillColor(c, v.automatic);
+        else SetLineColor(c, v.automatic);
+      };
+      break;
+    }
+    case CmdObjectOutlineWeight:
+      dropdown(L"Weight", 0, L"Outline weight and dashes, shadow");
+      for (const wchar_t* n : kWeightNames) t.choices.push_back(n);
+      for (const Dash& d : kDashes) t.choices.push_back(std::wstring(L"Dashes: ") + d.name);
+      t.choices.push_back(L"Shadow");
+      t.choices.push_back(L"No shadow");
+      t.onChange = [this](const ToolValue& v) {
+        const int nw = static_cast<int>(std::size(kWeights)), nd = static_cast<int>(std::size(kDashes));
+        if (v.index < 0) return;
+        if (v.index < nw) {
+          SetLineWidth(kWeights[v.index]);
+        } else if (v.index < nw + nd) {
+          const char* preset = kDashes[v.index - nw].preset;
+          std::wstring why;
+          const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Outline",
+                                  [&](pugi::xml_node n) { return ob::SetLineDash(n, preset); }, why);
+          if (!ok && !why.empty()) Refused(why);
+          if (ok) Edited();
+        } else {
+          SetShadow(v.index == nw + nd);
+        }
+      };
+      break;
+    case CmdPictureCrop:
+      t.glyph = icon::Crop;
+      t.tooltip = L"Crop the picture (drag its edges)";
+      t.toggle = true;
+      break;
+    default: break;
+  }
+  return t;
+}
+
 void ObjectTool::AddTools(ToolbarModel& m) {
   if (!Editable(false)) return;
   Map();
-  auto button = [](int cmd, wchar_t glyph, const wchar_t* tip, int priority) {
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = tip;
+  auto add = [&](int cmd, int priority, bool sep = false) {
+    ToolItem t = Tool(cmd);
     t.priority = priority;
-    return t;
+    t.sepBefore = sep;
+    m.left.push_back(std::move(t));
   };
-  ToolItem picture = button(CmdInsertPicture, icon::Picture, L"Insert pictures", 7);
-  picture.sepBefore = true;
-  m.left.push_back(picture);
-  ToolItem shapes;
-  shapes.kind = ToolKind::Dropdown;
-  shapes.cmd = CmdInsertShape;
-  shapes.text = L"Shapes";
-  shapes.fitText = true;
-  shapes.width = 70;
-  shapes.tooltip = L"Insert a shape";
-  shapes.priority = 6;
-  shapes.maxRows = 16;
-  for (const ob::ShapePreset& p : ob::ShapeGallery()) shapes.choices.push_back(fw::Utf8ToWide(p.name));
-  shapes.onChange = [this](const ToolValue& v) { InsertShape(v.index); };
-  m.left.push_back(shapes);
-  m.left.push_back(button(CmdInsertTextBox, icon::FontCase, L"Insert a text box", 5));
-  ToolItem table;
-  table.kind = ToolKind::Dropdown;
-  table.cmd = CmdInsertTable;
-  table.glyph = icon::Table;
-  table.text = L"Table";
-  table.fitText = true;
-  table.width = 64;
-  table.tooltip = L"Insert a table (columns × rows)";
-  table.priority = 5;
-  for (const TableSize& t : kTables) table.choices.push_back(std::to_wstring(t.columns) + L" × " + std::to_wstring(t.rows));
-  table.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kTables))) InsertTable(kTables[v.index].rows, kTables[v.index].columns);
-  };
-  m.left.push_back(table);
-  ToolItem chart;
-  chart.kind = ToolKind::Dropdown;
-  chart.cmd = CmdInsertChart;
-  chart.glyph = icon::Report;
-  chart.text = L"Chart";
-  chart.fitText = true;
-  chart.width = 64;
-  chart.tooltip = L"Insert a chart";
-  chart.priority = 5;
-  for (const wchar_t* n : kChartNames) chart.choices.push_back(n);
-  chart.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 4) InsertChart(v.index);
-  };
-  m.left.push_back(chart);
+  add(CmdInsertPicture, 7, true);
+  add(CmdInsertShape, 6);
+  add(CmdInsertTextBox, 5);
+  add(CmdInsertTable, 5);
+  add(CmdInsertChart, 5);
   // A table selected, or a cell of it being edited: its rows, columns and cells (PowerPoint's
   // Layout tab), at the cells chosen.
-  if (Map(), SelectedTable()) {
-    ToolItem layout;
-    layout.kind = ToolKind::Dropdown;
-    layout.cmd = CmdTableLayoutMenu;
-    layout.glyph = icon::Table;
-    layout.text = L"Table layout";
-    layout.fitText = true;
-    layout.width = 96;
-    layout.tooltip = L"Insert and delete rows and columns, merge and split cells";
-    layout.priority = 6;
-    layout.sepBefore = true;
-    for (int cmd : kTableCmds) {
-      CommandState s;
-      Query(cmd, s);
-      layout.choices.push_back(s.label);
-    }
-    layout.onChange = [this](const ToolValue& v) {
-      if (v.index >= 0 && v.index < static_cast<int>(std::size(kTableCmds))) Execute(kTableCmds[v.index]);
-    };
-    m.left.push_back(layout);
-  }
+  if (SelectedTable()) add(CmdTableLayoutMenu, 6, true);
   if (selection_.empty() || textEditing_) return;
   // The selection's tools.
-  ToolItem arrange;
-  arrange.kind = ToolKind::Dropdown;
-  arrange.cmd = CmdArrangeMenu;
-  arrange.text = L"Arrange";
-  arrange.fitText = true;
-  arrange.width = 72;
-  arrange.tooltip = L"Order, group, align and turn the selected objects";
-  arrange.priority = 7;
-  arrange.sepBefore = true;
-  arrange.maxRows = 20;
-  for (const ArrangeItem& a : kArrange) {
-    CommandState s;
-    Query(a.cmd, s);
-    std::wstring label = (a.cmd == CmdAlignToSlide && alignToSlide_ ? L"✓ " : L"") + std::wstring(a.label);
-    if (*a.keys) label += std::wstring(L"\t") + a.keys;
-    arrange.choices.push_back(label);
-  }
-  arrange.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kArrange))) Execute(kArrange[v.index].cmd);
-  };
-  m.left.push_back(arrange);
-  ToolItem fill;
-  fill.kind = ToolKind::ColorPicker;
-  fill.cmd = CmdObjectFill;
-  fill.glyph = icon::Color;
-  fill.tooltip = L"Shape fill";
-  fill.color = Rgb(0x4472C4);  // Office's accent 1
-  fill.automaticLabel = L"No fill";
-  fill.automaticColor = D2D1::ColorF(0, 0, 0, 0);
-  fill.priority = 6;
-  fill.onChange = [this](const ToolValue& v) {
-    if (v.automatic) SetFillColor(std::nullopt, true);
-    else SetFillColor((static_cast<uint32_t>(std::lround(v.color.r * 255)) << 16) | (static_cast<uint32_t>(std::lround(v.color.g * 255)) << 8) |
-                          static_cast<uint32_t>(std::lround(v.color.b * 255)), false);
-  };
-  m.left.push_back(fill);
-  ToolItem outline = fill;
-  outline.cmd = CmdObjectOutline;
-  outline.glyph = icon::Brush;
-  outline.tooltip = L"Shape outline";
-  outline.automaticLabel = L"No outline";
-  outline.onChange = [this](const ToolValue& v) {
-    if (v.automatic) SetLineColor(std::nullopt, true);
-    else SetLineColor((static_cast<uint32_t>(std::lround(v.color.r * 255)) << 16) | (static_cast<uint32_t>(std::lround(v.color.g * 255)) << 8) |
-                          static_cast<uint32_t>(std::lround(v.color.b * 255)), false);
-  };
-  m.left.push_back(outline);
-  ToolItem weight;
-  weight.kind = ToolKind::Dropdown;
-  weight.cmd = CmdObjectOutlineWeight;
-  weight.text = L"Weight";
-  weight.fitText = true;
-  weight.width = 64;
-  weight.tooltip = L"Outline weight and dashes, shadow";
-  weight.priority = 4;
-  for (const wchar_t* n : kWeightNames) weight.choices.push_back(n);
-  for (const Dash& d : kDashes) weight.choices.push_back(std::wstring(L"Dashes: ") + d.name);
-  weight.choices.push_back(L"Shadow");
-  weight.choices.push_back(L"No shadow");
-  weight.onChange = [this](const ToolValue& v) {
-    const int nw = static_cast<int>(std::size(kWeights)), nd = static_cast<int>(std::size(kDashes));
-    if (v.index < 0) return;
-    if (v.index < nw) {
-      SetLineWidth(kWeights[v.index]);
-    } else if (v.index < nw + nd) {
-      const char* preset = kDashes[v.index - nw].preset;
-      std::wstring why;
-      const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Outline",
-                              [&](pugi::xml_node n) { return ob::SetLineDash(n, preset); }, why);
-      if (!ok && !why.empty()) Refused(why);
-      if (ok) Edited();
-    } else {
-      SetShadow(v.index == nw + nd);
-    }
-  };
-  m.left.push_back(weight);
+  add(CmdArrangeMenu, 7, true);
+  add(CmdObjectFill, 6);
+  add(CmdObjectOutline, 6);
+  add(CmdObjectOutlineWeight, 4);
   size_t pictures = 0;
   for (uint32_t id : selection_)
     if (const ob::ObjectInfo* o = map_.Find(id)) pictures += o->kind == ob::ObjectKind::Picture;
-  if (selection_.size() == 1 && pictures == 1) {
-    ToolItem crop = button(CmdPictureCrop, icon::Crop, L"Crop the picture (drag its edges)", 6);
-    crop.toggle = true;
-    crop.checked = cropMode_;
-    m.left.push_back(crop);
-  }
+  if (selection_.size() == 1 && pictures == 1) add(CmdPictureCrop, 6);
 }
 
 namespace {

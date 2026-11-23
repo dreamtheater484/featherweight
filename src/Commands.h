@@ -531,4 +531,7 @@ enum Cmd : int {
   CmdTableMergeCells,            // the cells chosen in a table (text editing's) become one
   CmdTableSplitCell,             // a merged cell back into its cells
   CmdTableLayoutMenu,            // the toolbar's Layout dropdown with a table selected
+  // The presentation's ribbon (R1, r1-slide): 3750-3799.
+  CmdApplyTheme = 3750,          // Design > Themes: + index into BuiltInThemes() (up to 10), every slide
+  CmdApplyColors = 3760,         // Design > Variants > Colors: + index into ColorSchemes() (up to 30)
 };

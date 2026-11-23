@@ -5,6 +5,7 @@
 #include <wincodec.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "Commands.h"
@@ -181,6 +182,12 @@ CommandState PresentationView::QueryCommand(int cmd) {
           s.enabled = ready;
           s.checked = LayoutIndex(print_) == static_cast<int>(&l - kLayouts);
         }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {  // r1-slide: View > Zoom
+        const double z = fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)];
+        s.enabled = ready;
+        s.checked = zoom_ > 0 && std::fabs(zoom_ - z) < 1e-6;
+        s.label = fw::FormatPercent(z);
+      }
       break;
   }
   for (const CommandName& n : kNames)
@@ -202,6 +209,11 @@ std::vector<int> PresentationView::Commands() {
                   CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
                   CmdHeaderFooter, CmdSlideSize169, CmdSlideSize43})
     out.push_back(cmd);
+  // r1-slide: the text commands (while text is edited) and the ribbon's themes and theme colors.
+  for (int cmd : TextEditing::CommandIds())
+    if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
+  for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
+  for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
   return out;
 }
 
@@ -273,6 +285,10 @@ bool PresentationView::Execute(int cmd) {
     default:
       if (cmd >= CmdSlideShowMonitor && cmd < CmdSlideShowMonitor + 16) {
         showMonitor_ = cmd - CmdSlideShowMonitor;
+        return true;
+      }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {
+        SetZoom(fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)]);
         return true;
       }
       for (const LayoutChoice& l : kLayouts)

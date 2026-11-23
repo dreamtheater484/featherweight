@@ -537,8 +537,27 @@ bool PresentationView::DesignCommandState(int cmd, CommandState& s) {
       s.label = std::wstring(L"Slide size: ") + SlideSizes()[static_cast<size_t>(choice)].name;
       return true;
     }
-    default: return false;
+    default: break;
   }
+  // The ribbon's Themes gallery and Colors list (r1-slide): the current slide's theme checked.
+  const Slide* slide = any ? deck_->Model()->GetSlide(current_) : nullptr;
+  if (cmd >= CmdApplyTheme && cmd < CmdApplyTheme + 10) {
+    const size_t i = static_cast<size_t>(cmd - CmdApplyTheme);
+    if (i >= BuiltInThemes().size()) return false;
+    s.enabled = any;
+    s.label = std::wstring(L"Theme: ") + BuiltInThemes()[i].name;
+    s.checked = slide && slide->theme && Utf8ToWide(slide->theme->Name()) == BuiltInThemes()[i].name;
+    return true;
+  }
+  if (cmd >= CmdApplyColors && cmd < CmdApplyColors + 30) {
+    const size_t i = static_cast<size_t>(cmd - CmdApplyColors);
+    if (i >= ColorSchemes().size()) return false;
+    s.enabled = any;
+    s.label = std::wstring(L"Theme colors: ") + ColorSchemes()[i].name;
+    s.checked = slide && ColorSchemeOf(*slide) == static_cast<int>(i);
+    return true;
+  }
+  return false;
 }
 
 bool PresentationView::DesignCommand(int cmd) {
@@ -558,8 +577,12 @@ bool PresentationView::DesignCommand(int cmd) {
       return true;
     case CmdSlideSize169:
     case CmdSlideSize43: SetSlideSize(cmd == CmdSlideSize169 ? 0 : 1, static_cast<int>(ContentScale::EnsureFit)); return true;
-    default: return false;
+    default: break;
   }
+  const int theme = cmd - CmdApplyTheme, colors = cmd - CmdApplyColors;
+  if (theme >= 0 && theme < static_cast<int>(BuiltInThemes().size())) return ApplyTheme(theme, {}), true;
+  if (colors >= 0 && colors < static_cast<int>(ColorSchemes().size())) return ApplyColors(colors, {}), true;
+  return false;  // an open Design panel follows through DesignChanged
 }
 
 // ---------------------------------------------------------------------------

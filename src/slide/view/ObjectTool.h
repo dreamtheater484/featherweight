@@ -13,6 +13,8 @@
 
 #include "TabContent.h"
 #include "slide/objects/Frame.h"
+
+struct ToolItem;
 #include "slide/objects/Guides.h"
 #include "slide/objects/Selection.h"
 #include "ui/Toolbar.h"
@@ -83,6 +85,9 @@ class ObjectTool {
   bool Execute(int cmd);
   std::vector<int> Commands() const;
   void AddTools(ToolbarModel& m);
+  // The control for one of the objects' commands, as the ribbon and toolbar show it: the Insert
+  // dropdowns (shapes, table, chart), Arrange, fill and outline colors, Weight, Crop.
+  ToolItem Tool(int cmd);
   void ContextMenu(HMENU menu, float x, float y);
   // A table's items (insert and delete rows and columns, merge, split) when the selected object is
   // a table: the view adds them after text editing's own menu in a cell.
