@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 #include <cwctype>
+#include <string_view>
+#include <utility>
 
 #include "draw/Shapes.h"
 #include "draw/Xml.h"
@@ -42,6 +44,15 @@ std::wstring PresentationSubstitute(std::wstring_view family, text::Fonts& fonts
     if (size_t comma = s.find(L','); comma != std::wstring::npos) s.resize(comma);  // "Arial,0": a charset
     return s;
   }
+  // Families PowerPoint's PDFs show drawn in something else than the rules below give: its choice
+  // by the family's PANOSE numbers, which isn't modelled (Phosphate Solid, its numbers but for the
+  // contrast, is drawn in Calibri).
+  static constexpr std::pair<std::wstring_view, std::wstring_view> kMeasured[] = {
+      {L"Proxima Nova Rg", L"Tahoma"},  // edu-session-1 and -9, 02000506030000020004
+  };
+  for (const auto& [from, to] : kMeasured)
+    if (CompareStringOrdinal(name.c_str(), static_cast<int>(name.size()), from.data(), static_cast<int>(from.size()), TRUE) == CSTR_EQUAL)
+      return std::wstring(to);
   std::wstring lower = name;
   for (wchar_t& c : lower) c = static_cast<wchar_t>(std::towlower(c));
   for (std::wstring_view word : {L"mono", L"courier", L"consol", L"typewriter", L"code"})

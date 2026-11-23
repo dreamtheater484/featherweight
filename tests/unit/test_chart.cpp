@@ -341,6 +341,27 @@ TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
   CHECK(std::fabs(first.left - 287.13f) < 0.01 && std::fabs(second.left - 287.13f) < 0.01);
   CHECK(std::fabs((first.top + first.bottom) / 2 - 60) < 0.01);
   CHECK(std::fabs((second.top + second.bottom) / 2 - 100) < 0.01);
+  // One at the bottom in a box too narrow for its entries in a row lists them down it all the same
+  // (business bodies 33's doughnuts): a 60-point box.
+  std::string bottom = xml;
+  bottom.replace(bottom.find("<c:legendPos val=\"r\"/>"), 22, "<c:legendPos val=\"b\"/>");
+  bottom.replace(bottom.find("<c:w val=\"0.3\"/>"), 16, "<c:w val=\"0.15\"/>");
+  Parsed q(bottom);
+  Chart narrow;
+  REQUIRE(Read(q.Root(), Colors(), narrow));
+  const draw::Art down = Draw(narrow, {400, 200}, Colors(), L"Calibri");
+  const auto swatchIn = [&](const char* accent) {
+    const draw::Color color = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : down.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.left >= 280) return b;
+    }
+    return draw::Rect{};
+  };
+  const draw::Rect one = swatchIn("accent1"), two = swatchIn("accent2");
+  CHECK(std::fabs(one.left - 287.13f) < 0.01 && std::fabs(two.left - 287.13f) < 0.01);
+  CHECK(std::fabs((one.top + one.bottom) / 2 - 60) < 0.01);
+  CHECK(std::fabs((two.top + two.bottom) / 2 - 100) < 0.01);
 }
 
 TEST(Chart_LogarithmicValueAxis) {
@@ -520,16 +541,59 @@ TEST(Chart_StackedSeriesListedAsTheyStack) {
   const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
   // The legend's swatches: the second series' above the first's.
   const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
-  auto swatchTop = [&](const draw::Color& color) {
+  auto swatchTop = [&](const draw::Art& drawn, const draw::Color& color) {
     float top = -1;
-    for (const auto& m : art.marks) {
+    for (const auto& m : drawn.marks) {
       const draw::Rect b = m.path.Bounds();
       if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.right - b.left < 10 && b.bottom - b.top < 10)
         top = b.top;  // a swatch, not a bar
     }
     return top;
   };
-  CHECK(swatchTop(second) >= 0 && swatchTop(first) > swatchTop(second));
+  CHECK(swatchTop(art, second) >= 0 && swatchTop(art, first) > swatchTop(art, second));
+  // Stacked horizontal bars, left to right, list theirs in order (business bodies 33).
+  xml.replace(xml.find("<c:barDir val=\"col\"/>"), 21, "<c:barDir val=\"bar\"/>");
+  Parsed q(xml);
+  Chart bars;
+  REQUIRE(Read(q.Root(), Colors(), bars));
+  REQUIRE(bars.groups.size() == 1u && bars.groups[0].type == Type::Bar);
+  const draw::Art drawn = Draw(bars, {360, 216}, Colors(), L"Calibri");
+  CHECK(swatchTop(drawn, first) >= 0 && swatchTop(drawn, second) > swatchTop(drawn, first));
+}
+
+TEST(Chart_SeriesLabelsTakeTheirOwnTextAndFields) {
+  // A series' labels in its c:dLbls/c:txPr's size, weight and color, a point's own text with its
+  // value field filled in (business bodies 33's 14-point bold navy "[VALUE]%" labels).
+  std::string xml = ColumnChart();
+  const std::string dLbls =
+      "<c:dLbls><c:dLbl><c:idx val=\"0\"/><c:tx><c:rich><a:bodyPr/><a:p><a:fld id=\"{0}\" type=\"VALUE\"><a:rPr lang=\"en-US\"/>"
+      "<a:t>[VALUE]</a:t></a:fld><a:r><a:rPr lang=\"en-US\"/><a:t>%</a:t></a:r></a:p></c:rich></c:tx><c:showVal val=\"1\"/></c:dLbl>"
+      "<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1400\" b=\"1\"><a:solidFill><a:srgbClr val=\"002060\"/></a:solidFill></a:defRPr>"
+      "</a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr><c:showVal val=\"1\"/></c:dLbls>";
+  xml.insert(xml.find("</c:ser>"), dLbls);
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1u && c.groups[0].series.size() == 2u);
+  const Series& s = c.groups[0].series[0];
+  CHECK_EQ(s.labelSize, 14.0f);
+  CHECK(s.labelBold == true);
+  CHECK(s.labelColor && Same(*s.labelColor, draw::Rgb(0x002060)));
+  REQUIRE(s.pointLabels.size() == 1u);
+  CHECK(s.pointLabels[0].text == std::wstring(1, kValueField) + L"%");
+  CHECK(!s.pointLabels[0].bold && s.pointLabels[0].size < 0);  // its own text says neither: the series'
+  CHECK(c.groups[0].series[1].labelSize < 0 && !c.groups[0].series[1].labelBold);  // unstated: the chart's
+  // Drawn: the first series' three labels in navy, 14-point (digits about 9 points high).
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  int navy = 0;
+  float tallest = 0;
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, draw::Rgb(0x002060))) {
+      ++navy;
+      tallest = std::max(tallest, m.path.Bounds().bottom - m.path.Bounds().top);
+    }
+  CHECK(navy >= 1);
+  CHECK(tallest > 8 && tallest < 12);
 }
 
 TEST(Chart_OtherTypesStayPlaceholders) {

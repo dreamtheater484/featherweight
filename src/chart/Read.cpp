@@ -108,9 +108,8 @@ std::wstring TextOf(pugi::xml_node tx, DataSource* source = nullptr) {
   return Wide(out);
 }
 
-// The size (points), color and weight of text from a c:txPr or a:rich's first paragraph properties.
-void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size, std::optional<draw::Color>* color,
-              bool* bold = nullptr) {
+// A c:txPr's or a:rich's first paragraph's text properties: its a:defRPr, else its first run's.
+pugi::xml_node RunProps(pugi::xml_node body) {
   pugi::xml_node rPr;
   ForEachChild(body, [&](pugi::xml_node p) {
     if (LocalNameOf(p) != "p") return true;
@@ -118,12 +117,28 @@ void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size
     if (!rPr) rPr = A(A(p, "r"), "rPr");
     return false;
   });
+  return rPr;
+}
+
+// The size (points), color and weight of text from a c:txPr or a:rich's first paragraph properties.
+void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size, std::optional<draw::Color>* color,
+              bool* bold = nullptr) {
+  const pugi::xml_node rPr = RunProps(body);
   if (!rPr) return;
   if (size && rPr.attribute("sz")) *size = static_cast<float>(std::clamp(Number(rPr, "sz", 900) / 100, 1.0, 200.0));
   if (bold && rPr.attribute("b")) *bold = Bool(rPr, "b", true);
   if (color)
     if (pugi::xml_node f = A(rPr, "solidFill"))
       if (auto c = draw::ReadColor(f, colors)) *color = c;
+}
+
+// What a label's text doesn't state yet from `body` (a c:txPr or a:rich): size, color, weight.
+void LabelLook(pugi::xml_node body, const draw::ColorContext& colors, float& size, std::optional<draw::Color>& color,
+               std::optional<bool>& bold) {
+  if (size < 0) TextLook(body, colors, &size, nullptr);
+  if (!color) TextLook(body, colors, nullptr, &color);
+  if (!bold)
+    if (const pugi::xml_node r = RunProps(body); r.attribute("b")) bold = Bool(r, "b", true);
 }
 
 // A preset dash (a:prstDash) as dashes and gaps in multiples of the line's width; empty: solid.
@@ -256,6 +271,7 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   s.separator = l.separator;
   s.labelFormat = LabelFormat(C(ser, "dLbls"));
   s.labelPos = Val(C(C(ser, "dLbls"), "dLblPos"));
+  LabelLook(C(C(ser, "dLbls"), "txPr"), colors, s.labelSize, s.labelColor, s.labelBold);
   ForEachChild(C(ser, "dLbls"), [&](pugi::xml_node d) {
     if (LocalNameOf(d) != "dLbl" || s.pointLabels.size() >= 256) return true;
     Series::PointLabel pl;
@@ -291,15 +307,18 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
     insets(A(C(C(ser, "dLbls"), "txPr"), "bodyPr"));
     pl.pos = Val(C(d, "dLblPos"));
     if (pl.pos.size() > 8) pl.pos.clear();
-    TextLook(C(d, "txPr"), colors, &pl.size, &pl.color);
     if (pugi::xml_node rich = C(C(d, "tx"), "rich")) {
-      TextLook(rich, colors, &pl.size, &pl.color);
+      LabelLook(rich, colors, pl.size, pl.color, pl.bold);
       std::wstring text;
       ForEachChild(rich, [&](pugi::xml_node p) {
         if (LocalNameOf(p) != "p") return true;
         std::wstring line;
         ForEachChild(p, [&](pugi::xml_node r) {
-          if (LocalNameOf(r) == "fld" && std::string_view(r.attribute("type").value()) == "SERIESNAME") line += s.name;
+          const std::string_view field = LocalNameOf(r) == "fld" ? r.attribute("type").value() : "";
+          if (field == "SERIESNAME") line += s.name;
+          else if (field == "VALUE") line += kValueField;
+          else if (field == "CATEGORYNAME") line += kCategoryField;
+          else if (field == "PERCENTAGE") line += kPercentField;
           else if (LocalNameOf(r) == "r" || LocalNameOf(r) == "fld") line += Wide(A(r, "t").text().get());
           return line.size() < 1000;
         });
@@ -308,6 +327,8 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
       });
       pl.text = text;
     }
+    // Then its own c:txPr's; what neither states, its series' labels' (where it's drawn).
+    LabelLook(C(d, "txPr"), colors, pl.size, pl.color, pl.bold);
     s.pointLabels.push_back(std::move(pl));
     return true;
   });
@@ -467,6 +488,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       if (LocalNameOf(s) == "axId") ids.emplace_back(Val(s));
       else if (LocalNameOf(s) == "ser" && seriesCount < 255) {
         g.series.push_back(SeriesOf(s, g.type, colors, budget, data));
+        Series& added = g.series.back();
+        LabelLook(C(C(c, "dLbls"), "txPr"), colors, added.labelSize, added.labelColor, added.labelBold);
         ++seriesCount;
       }
       return true;

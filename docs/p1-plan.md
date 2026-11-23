@@ -167,8 +167,48 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - In this run `fwtool slides` crashed with 0xC0000005 on `who-health-in-all-policies-training-slide-template`, so all 23 of its slides counted as failing. Without the crash the total would be about 87.3 %.
   - The crash is intermittent: none in 2 runs alone, 2 of 20 with four runs in parallel, 1 of 32 with `--png`. That run stopped after slide 7, so it likely died drawing slide 8 (a group with custom geometry, a picture and an outer shadow).
   - Script: `FeatherweightNotes\p1\corpus-analysis\crash-repro.ps1`.
+- **2026-11-23: slide PDFs write pictures as PowerPoint's Save As PDF does** (coordinator: agreed as PowerPoint's export behaviour; the gate report counts these gains apart from drawing gains).
+  - The rules, measured on its PDFs:
+    - Every JPEG picture is encoded again at quality 75: byte for byte libjpeg's quality 75, which WIC's encoder at 0.75 gives (`draw::EncodeJpeg`, WIC, in the exe since `6217503c`: no new encoder).
+    - A picture's place is written in page coordinates (y up), each number to 5 significant digits, from its bottom left, about 0.00006 pt high (its float arithmetic), through the transforms as the file has them.
+    - The page box is a whole number of 600-dpi pixels (961 pt is 960.96, 960.125 is 960.12); a PDF viewer's page width in pixels, and so its whole page's scale, follows it.
+    - Not modelled: which pictures it downsamples (mostly to about 200 ppi where placed; some 220, 150 or 96; full-slide pictures at most 1536 px).
+  - Export-matching gains: `7d70c42c` +18 slides on 14 photo decks (p1-corpus, full corpus: +11 net, 13 gained, 2 lost: unimuenster's template slides 23 and 20, 0.953 to 0.945); `a78d3c9e` (page box) +1, goettingen 3 (0.92 to 0.99). Earlier, `161a2922`'s era-systems gain (above) is of the same kind.
+  - Drawing gains in the same round, for contrast: slide text laid out with GDI's advances in PowerPoint's master units (`babda789`, +70 over 46 near-miss decks), a baseline shift that doesn't make its line taller (`23b4d98f`, +17), Proxima Nova in Tahoma (`ce9971d6`, +10).
 - **2026-11-23: native Office math in slides** (coordinator, unparked). Slides lay out a14:m themselves, reusing fwdoclayout's typesetter (src/doc/layout/Math.cpp, already in the exe for Word: a few KB of glue), instead of Office's fallback picture.
   - Conditions: it stays behind a switch that is off (`FW_SLIDE_MATH=1` turns it on; `draw::xml::SlideMathLaidOut`) until it measures better on the corpus's math slides as a set, and no slide that passes with the fallback drops below 0.90.
   - p1-model owns the math path in `TextBody.cpp` (agreed with p1-render). Typesetter changes in src/doc/layout keep Word's math tests and the D-milestone checks green.
   - First step (p1-model, measured on the 137 corpus slides with a14:m): fallback 111 pass, native 68. Display integrals now take PowerPoint's variant (glyph 3505 of Cambria Math, one past DisplayOperatorMinHeight); lines of math are 1.2 times their font size unless the equation is taller.
   - **Parked again (coordinator's checkpoint, 2026-11-23):** native stays at 68 of 137 against the fallback's 111, so `FW_SLIDE_MATH` stays off. Lowering math baselines by 0.15 em went to 62 (enee-205 7 to 1) and was dropped. What's left is fine typesetting calibration against PowerPoint, not one big cause. Our math sets wider than PowerPoint's: cs-444's f_K(h_{K-1}, w_K) overflows its oval. A line after a display equation sits about 2 pt low. Baselines are 0.15-0.2 em high on probability-for-computing but not on enee-205. cs-444 vision 8 has a red display paragraph that PowerPoint's PDF doesn't show. Measuring and comparison scripts: `FeatherweightNotes\p1\corpus-analysis\mathcmp.py` and `eqpos.py`; state in `p1-model-state.md`.
+- **On p1-int `cb26c73e`: corpus at 88.31 %** (p1-render: camera rev, spcFirstLastPara, chart margins, pies and doughnuts, hanging indents, empty charts, and `7d70c42c` export matching; p1-model: SmartArt text style, native math off).
+  - 2,222 of 2,516 slides pass, +48 against `d630a3c6`. 14 decks gained 50 slides, 2 lost one each. The public set is at 92/97.
+  - The gain splits three ways, measured against p1-int `34b12323` (`cb26c73e` without `7d70c42c` and the empty-chart fix):
+    - `7d70c42c`'s export matching (picture placement, page box, JPEG at q75): +11 net, 13 gained and 2 lost. All 13 gains are slides with their own pictures: acuk general +4, unisaarland +3, acuk dual-gaelic +2, and 1 each on morocco, goettingen, cs-2110 graphs and course-100. The 2 losses are layout-picture slides in the two unimuenster templates (en 23, de 20: 0.953 → 0.945). 256 slides moved up by more than 0.001, 28 down.
+    - who-health didn't crash this time: +23. The bug is still in `cb26c73e`. p1-render fixed it in `a2210fdf` (a use-after-free in `PdfPainter::DrawBitmap`), which isn't in p1-int yet.
+    - Drawing fixes: +14, none lost: virtual-memory +7, rlf-webinar-i +2, business bodies +2, and 1 each on physik 7-8, the poi line chart and the overheid webinar.
+    - The empty-chart fix flips no corpus slide: goettingen 2 already passed.
+  - Without export matching the corpus is at 2,211 (87.88 %).
+  - Per kind: briefings 85.7 %, charts 86.7 %, features 88.7 %, lectures 89.3 %, photos 83.6 %, school 86.8 %, shows 92.0 %, statistics 80.0 %, templates 92.9 %, training 89.2 %.
+  - Of the 294 failing slides, 223 are near misses (0.90–0.95).
+  - Failing slides by content:
+    - Pictures: 116 (88.5 % of picture slides pass).
+    - Text: 112 (89.4 % pass).
+    - Equations: 24.
+    - SmartArt: 13.
+    - Tables: 11.
+    - Charts: 9 (15 of 24 now pass).
+    - Other: 9.
+  - 90 % needs 43 more slides. Script for the split: `FeatherweightNotes\p1\corpus-analysis\split.py`.
+- **2026-11-23: five corpus references re-exported (stale cloud fonts)** (p1-model's finding, coordinator's go).
+  - Why: Office downloads a missing cloud font during the first export that needs it, and that export finishes with a substitute. These five PDFs were written 0–3 s after their font arrived in `%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`:
+    - worldbank-evolution (Open Sans SemiBold/ExtraBold);
+    - course-100 (Source Sans Pro);
+    - our-dynamic-sun (Montserrat);
+    - cybersprinters-1 (Poppins);
+    - cybersprinters-3 (Libre Baskerville).
+  - Re-exported from PowerPoint on 23 Nov at 22:11 from Roy's active session, under the usual rules (quiet-pc.lock, our own instance, AutomationSecurity 3, read-only). The old PDFs are kept beside the new ones as `<name>.stale-cloudfont.pdf`, and the old manifest as `reference\manifest.before-cloudfont.json`.
+  - The new PDFs use the cloud faces: Open Sans SemiBold/ExtraBold, Source Sans Pro, Montserrat, and Poppins in place of Nirmala UI. cybersprinters-3's new PDF draws the same pages as before (no page under 0.999 against the old one), so it wasn't really stale.
+  - **Gate on `cb26c73e`, the reference fix alone:** 2,222 → 2,225 of 2,516 (88.31 % → 88.43 %).
+    - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
+    - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
+  - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).

@@ -326,7 +326,7 @@ TEST(Pdf_CroppedPictureKeepsWholePixelsAsPowerPoint) {
 }
 
 TEST(Pdf_SlidePicturesAsPowerPointWritesThem) {
-  // PowerPoint's PDFs of slides: the page to 5 significant digits (960.125 -> 960.12); a picture's
+  // PowerPoint's PDFs of slides: the page in 600-dpi pixels (960.125 -> 960.12); a picture's
   // place in page coordinates to 5 significant digits from its bottom (goettingen 3's photo: 960.12
   // by 465.4, its bottom 0.4411 up, a hair higher); a JPEG encoded again (its quality 75), not as
   // the file has it.
@@ -358,6 +358,12 @@ TEST(Pdf_SlidePicturesAsPowerPointWritesThem) {
   CHECK_NEAR(y, 539.55884, 0.0002);
   CHECK(s.find("/DCTDecode") != std::string::npos);
   CHECK(s.find(std::string(reinterpret_cast<const char*>(jpeg.data()), jpeg.size())) == std::string::npos);
+  // The page in whole 600-dpi pixels: unimuenster's 961-point slides are 960.96 wide (8008 pixels).
+  PdfDocument wide;
+  wide.PicturesAsPowerPoint();
+  wide.AddPage(961, 540, [](Painter&) {});
+  const std::vector<uint8_t> other = wide.Finish();
+  CHECK(std::string(other.begin(), other.end()).find("/MediaBox[0 0 960.96 540]") != std::string::npos);
 }
 
 TEST(Pdf_SpacesGoWithTheirWords) {

@@ -524,8 +524,9 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.rise = rise;
     seg.level = level[pos];
     FontMetrics m = face->Metrics(seg.emSize, style.directWriteMetrics);
-    seg.ascent = m.ascent + rise;
-    seg.descent = m.descent - rise;
+    const float lineRise = style.shiftKeepsLine ? rise - style.baselineShift : rise;
+    seg.ascent = m.ascent + lineRise;
+    seg.descent = m.descent - lineRise;
     seg.lineGap = m.lineGap;
     if (style.verticalAlign != VerticalAlign::Baseline) {
       // Superscript and subscript text sizes its line as the run's text would on the baseline, at
@@ -591,9 +592,15 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     IDWriteFontFace* placed = style.simulatedBoldKeepsAdvances && (face->GetSimulations() & DWRITE_FONT_SIMULATIONS_BOLD)
                                   ? seg.face->Plain()
                                   : face;
-    hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
-                                              glyphProps.data(), actual, placed, seg.emSize, FALSE, rtlRun, &script,
-                                              locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
+    if (style.gdiPixelsPerPoint > 0)
+      hr = fonts.Analyzer()->GetGdiCompatibleGlyphPlacements(
+          str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(), glyphProps.data(), actual, placed, seg.emSize,
+          style.gdiPixelsPerPoint, nullptr, FALSE, FALSE, rtlRun, &script, locale, fl, flen, ranges, seg.advances.data(),
+          seg.offsets.data());
+    else
+      hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
+                                                glyphProps.data(), actual, placed, seg.emSize, FALSE, rtlRun, &script,
+                                                locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
     // The legacy 'kern' table's pairs: each glyph's advance takes its pair with the next one's.
     ComPtr<IDWriteFontFace1> face1;
     if (SUCCEEDED(hr) && kern && style.kernTable && !rtlRun && actual > 1 && SUCCEEDED(placed->QueryInterface(IID_PPV_ARGS(&face1))) &&

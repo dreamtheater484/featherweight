@@ -74,6 +74,7 @@ struct Bullet {
   std::string scheme;            // AutoNumber: ST_TextAutonumberScheme ("arabicPeriod", "romanUcParenR"…)
   int startAt = 1;               // AutoNumber
   std::wstring font;             // empty: the first run's font (buFontTx)
+  bool themeFont = false;        // `font` is the theme's, named as such (buFont +mj-lt...)
   std::optional<draw::Color> color;  // empty: the first run's color (buClrTx)
   float sizePercent = 1;         // of the first run's size (buSzPct); with sizePoints 0
   float sizePoints = 0;          // > 0: buSzPts
