@@ -1539,6 +1539,7 @@ void Ribbon::Describe(uia::Tree& t, int parent) {
   }
 }
 
+#if FW_TEST_SCREENS  // dumpribbon and ribboncheck (tests only)
 std::wstring Ribbon::Dump() {
   std::wstring out;
   auto num = [](float v) { return std::to_wstring(static_cast<int>(std::lround(v))); };
@@ -1606,6 +1607,7 @@ std::vector<std::wstring> Ribbon::Problems() const {
   check(items);
   return out;
 }
+#endif
 
 std::vector<std::pair<int, std::wstring>> Ribbon::Commands() const {
   std::vector<std::pair<int, std::wstring>> out;

@@ -28,8 +28,10 @@ constexpr float kSmallScreenH = 720;
 // A menu of a ribbon item's choices: ids from here (never commands).
 constexpr int kChoiceFirst = 0xB000;
 
+#if FW_TEST_SCREENS
 // A script step's report on stderr, as UTF-8 (fwprintf's C locale turns "…" and "›" into "?").
 void Report(const std::wstring& s) { fputs(fw::WideToUtf8(s).c_str(), stderr); }
+#endif
 
 // Menus take & as the next letter's underline: a name's own & is doubled.
 std::wstring MenuText(const std::wstring& s) {
@@ -41,6 +43,7 @@ std::wstring MenuText(const std::wstring& s) {
   return out;
 }
 
+#if FW_TEST_SCREENS
 // Every command id in a menu and its submenus.
 void MenuCommands(HMENU m, std::vector<int>& out) {
   const int n = GetMenuItemCount(m);
@@ -61,6 +64,7 @@ int Canonical(int cmd) {
   if (cmd >= CmdUserTemplate && cmd < CmdUserTemplatesFolder) return CmdUserTemplate;
   return cmd;
 }
+#endif
 
 }  // namespace
 
@@ -387,8 +391,9 @@ void App::RibbonAltReleased() {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage
+// Coverage (test builds: FW_TEST_SCREENS)
 
+#if FW_TEST_SCREENS
 std::vector<int> App::ToolbarCommands() {
   std::vector<int> out;
   TabContent* v = Active();
@@ -458,6 +463,7 @@ std::vector<int> App::ReachableCommands(std::wstring* report) {
               std::to_wstring(context.size()) + L", Alt+Q " + std::to_wstring(search.size());
   return all;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Script steps (snapshots and tests)
@@ -496,6 +502,7 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
       }
     return true;
   }
+#if FW_TEST_SCREENS  // the checks and dumps are for tests only
   if (op == L"dumpribbon") {
     Layout();
     Report(ribbon_.Dump());
@@ -624,5 +631,6 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     if (worstSwitch > 16 || worstLayout > 16) scriptFailed_ = true;
     return true;
   }
+#endif
   return false;
 }
