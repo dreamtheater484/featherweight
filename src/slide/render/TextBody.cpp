@@ -434,11 +434,15 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     float start = 0, height = 0;
     for (Impl::Para& p : m.paras)
       for (size_t i = 0; i < p.rows.size(); ++i) {
-        // A line goes on to the next column once it would reach below this one's bottom; but a
+        // A line goes on to the next column once its text would reach below this one's bottom: its
+        // top and its fonts' own ascent and descent, whatever its spacing (ilo 24: 20-point Arial at
+        // single spacing, 22.35 of its 24 points, stays with 0.15 to spare; cbs 5 at 80 % goes). But a
         // paragraph's last line that starts above the bottom stays with the lines before it, however
-        // far it reaches below (era-systems 41).
+        // far it reaches below (era-systems 41), and so does an empty paragraph, which would start the
+        // next column with a blank line (ilo 18).
         const bool lastOfSeveral = i > 0 && i + 1 == p.rows.size();
-        const bool below = lastOfSeveral ? p.rows[i].first - start >= room - 0.01f : p.rows[i].second - start > room + 0.01f;
+        const bool below = lastOfSeveral || p.empty ? p.rows[i].first - start >= room - 0.01f
+                                                    : p.rows[i].first + p.lines[i].ascent + p.lines[i].descent - start > room + 0.01f;
         if (column + 1 < columns && below && p.rows[i].first > start) {
           ++column;
           start = p.rows[i].first;
