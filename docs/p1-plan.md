@@ -141,3 +141,4 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - Corpus sample: median 0.985.
     - The app's page export stops after slide 6 of `govuk-cybersprinters-lesson-3-suspicious-contact` (exit 0, 6 of 22 pages; all 22 on `9eb0c84d`), a regression with `77b8d25c`.
     - Four other slides score 0.932–0.949: `overheid-migratieketen` 7, `usgov-globe-widescreen` 8, `cpb-presentatie` 7, `zslbw-bnt-klasse-5-6` 17.
+- **2026-11-23: `usgov-how-well-do-you-know-era-systems` from 13 to 54 of 58 slides with p1-render `161a2922`** (coordinator). The gain is mostly the resampling phase of its see-through background picture now matching PowerPoint's PDF, not a change anyone would see.
