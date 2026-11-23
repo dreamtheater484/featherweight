@@ -715,7 +715,9 @@ void Ribbon::AssignKeyTips() {
   }
   for (int g = 0; g < static_cast<int>(tab->groups.size()); ++g) {
     const RibbonGroup& grp = tab->groups[g];
-    if (grp.launcher) itemTips_[{g, -2}] = AutoTip(grp.name, items, false, grp.name.empty() ? L'Q' : towupper(grp.name[0]));
+    if (grp.launcher)
+      itemTips_[{g, -2}] = !grp.launcherKeyTip.empty() ? grp.launcherKeyTip
+                                                        : AutoTip(grp.name, items, false, grp.name.empty() ? L'Q' : towupper(grp.name[0]));
     itemTips_[{g, -1}] = grp.keyTip.empty() ? AutoTip(grp.name, items, false, L'Z') : grp.keyTip;
   }
   for (size_t i = 0; i < parts_.size(); ++i) {

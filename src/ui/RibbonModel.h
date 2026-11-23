@@ -100,6 +100,8 @@ struct RibbonGroup {
   wchar_t glyph = 0;
   // That button's KeyTip ("ZC"); empty: the ribbon makes one.
   std::wstring keyTip;
+  // The launcher's KeyTip (Excel's Number ↘ is "FM"); empty: the ribbon makes one.
+  std::wstring launcherKeyTip;
   int rows = 3;          // rows in a column of Medium and Small items: 3, or 2 (Font, Paragraph)
   // Groups with higher values shrink first as the window narrows; equal ones from the right.
   int shrinkFirst = 0;
