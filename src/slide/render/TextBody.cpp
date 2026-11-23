@@ -552,35 +552,43 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
         }
     }
   }
-  // Reflected text (a:reflection, rlf-webinar-iv's titles): the glyphs mirrored about the last line's
-  // baseline, fading out over endPos of the text's height (PowerPoint's PDF bakes it as a picture,
-  // its reflection starting at the letters' feet; the blur is left out).
+  // Reflected text (a:reflection, rlf-webinar-iv's titles): each line's glyphs mirrored about its own
+  // baseline (morocco 2's two-line title), fading out over endPos of the line's height (PowerPoint's
+  // PDF bakes it as a picture, its reflection starting at the letters' feet; the blur is left out).
   struct Reflected {
     draw::Path outline;  // at `origin` in the text box's coordinates
     draw::Point origin;
     const RunDraw* rd;
+    size_t line;  // in `inkTops` and `baselines`
   };
   std::vector<Reflected> reflected;
-  float inkTop = 1e9f, baseline = -1e9f;
+  std::vector<float> inkTops, baselines;
   for (size_t pi = 0; pi < m.paras.size(); ++pi) {
     const Impl::Para& para = m.paras[pi];
     if (filter && !filter->Paragraph(shape, static_cast<int>(pi))) continue;
-    for (size_t li = 0; li < para.lines.size(); ++li)
+    for (size_t li = 0; li < para.lines.size(); ++li) {
+      bool started = false;  // this line's group begun
       for (const text::GlyphPiece& g : para.lines[li].pieces) {
         if (g.glyphs.empty() || g.run >= para.runs.size() || !para.runs[g.run].color || para.runs[g.run].reflScale == 0) continue;
         draw::Path outline = draw::GlyphRunOutline(g.Run());
         if (outline.Empty()) continue;
         const draw::Point at{para.origins[li].x + g.OriginX(), para.origins[li].y - g.rise};
-        inkTop = std::min(inkTop, at.y + outline.Bounds().top);
-        baseline = std::max(baseline, at.y);
-        reflected.push_back({std::move(outline), at, &para.runs[g.run]});
+        if (!started) {
+          inkTops.push_back(1e9f);
+          baselines.push_back(para.origins[li].y);
+        }
+        started = true;
+        inkTops.back() = std::min(inkTops.back(), at.y + outline.Bounds().top);
+        reflected.push_back({std::move(outline), at, &para.runs[g.run], inkTops.size() - 1});
       }
+    }
   }
   for (const Reflected& r : reflected) {
     const RunDraw& rd = *r.rd;
     draw::Color from = *rd.color, to = *rd.color;
     from.a *= rd.reflStart;
     to.a *= rd.reflEnd;
+    const float baseline = baselines[r.line], inkTop = inkTops[r.line];
     const float fadeTop = baseline - rd.reflEndPos * (baseline - inkTop);
     p.Save();
     p.Transform({1, 0, 0, rd.reflScale, 0, baseline + rd.reflDist - rd.reflScale * baseline});
