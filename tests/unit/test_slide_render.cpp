@@ -482,7 +482,8 @@ TEST(SlideRender_FirstParagraphSpacingWithSpcFirstLastPara) {
                     "<a:off x=\"635000\" y=\"635000\"/><a:ext cx=\"3810000\" cy=\"2540000\"/></a:xfrm><a:prstGeom prst=\"rect\"/></p:spPr>"
                     "<p:txBody><a:bodyPr") +
         attrs +
-        "/><a:lstStyle/><a:p><a:pPr><a:spcBef><a:spcPts val=\"1200\"/></a:spcBef></a:pPr><a:r><a:rPr sz=\"2000\"/>"
+        "/><a:lstStyle/><a:p><a:pPr><a:spcBef><a:spcPts val=\"1200\"/></a:spcBef><a:spcAft><a:spcPts val=\"600\"/></a:spcAft>"
+        "</a:pPr><a:r><a:rPr sz=\"2000\"/>"
         "<a:t>Text</a:t></a:r></a:p></p:txBody></p:sp>";
     auto deck = Modified(Slide1(box));
     if (!deck) return -1;
@@ -495,6 +496,10 @@ TEST(SlideRender_FirstParagraphSpacingWithSpcFirstLastPara) {
   const float plain = top(""), spaced = top(" spcFirstLastPara=\"1\"");
   REQUIRE(plain > 0 && spaced > 0);
   CHECK_NEAR(spaced - plain, 12, 0.05);
+  // Anchored at the bottom, the last paragraph's 6 pt after counts too: the text sits 6 pt higher.
+  const float plainB = top(" anchor=\"b\""), spacedB = top(" anchor=\"b\" spcFirstLastPara=\"1\"");
+  REQUIRE(plainB > 0 && spacedB > 0);
+  CHECK_NEAR(plainB - spacedB, 6, 0.05);
 }
 
 TEST(SlideRender_ShrunkTextKeepsPointSpacing) {

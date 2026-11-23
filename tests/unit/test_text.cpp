@@ -365,6 +365,30 @@ TEST(Text_HangingIndentIsATabStop) {
   CHECK_NEAR(lines[1].CaretX(lines[1].start), 36, 0.01);
 }
 
+TEST(Text_HangingStopOfItsOwn) {
+  // PowerPoint's indent hanging past the edge (marL 33, indent -36): the first line starts at the
+  // edge, its text after the bullet at 36, the lines after it at 33 (rlf-webinar-i 5). With marL 0
+  // the stop is there all the same (business bodies 10: indent -11.34).
+  TextStyle s = Style();
+  ParagraphFormat f;
+  f.startIndent = 33;
+  f.firstLineIndent = -33;
+  f.hangingStop = 36;
+  std::wstring text = L"*\tFirst item that wraps around";
+  auto lines = Lay(text, s, Chars(s, 20) + 36, f);
+  CHECK(lines.size() >= 2);
+  if (lines.size() < 2) return;
+  CHECK_NEAR(lines[0].CaretX(0), 0, 0.01);
+  CHECK_NEAR(lines[0].CaretX(2), 36, 0.01);
+  CHECK_NEAR(lines[1].CaretX(lines[1].start), 33, 0.01);
+  ParagraphFormat zero;
+  zero.hangingStop = 11.34f;
+  auto flush = Lay(L"*\tText", s, 200, zero);
+  CHECK(!flush.empty());
+  if (flush.empty()) return;
+  CHECK_NEAR(flush[0].CaretX(2), 11.34, 0.01);
+}
+
 TEST(Text_TabPastTheLineWraps) {
   TextStyle s = Style();
   std::wstring text = L"aaa\tbbb";
