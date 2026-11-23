@@ -181,6 +181,8 @@ struct CellFill {
   draw::Color color;     // Solid; Other: its first color
   pugi::xml_node node;   // Other: the gradFill, blipFill or pattFill element (blip r:embeds are the
                          // slide's), its colors against Table::colors
+  pugi::xml_node shape;  // Other: a rectangle (p:sp) filled so, the cell's size in the grid, for
+                         // fwdraw to draw into the cell (scaled when its row grows)
 };
 
 // One edge of a cell, resolved.
@@ -213,6 +215,7 @@ struct Table {
   CellFill background;               // the table style's tblBg, under every cell
   draw::ColorContext colors;         // what fills' and borders' colors resolve against
   pugi::xml_node node;               // a:tbl
+  const SlideBase* owner = nullptr;  // the part the table is in: its fills' pictures are its
   bool rtl = false;                  // columns run right to left
   const TableCell* Cell(int row, int column) const;
 };
@@ -351,7 +354,8 @@ class Presentation {
   std::map<std::pair<const void*, const void*>, std::unique_ptr<Table>> tables_;
   bool tableStylesRead_ = false;
   std::unique_ptr<pkg::XmlDom> tableStyles_;  // ppt/tableStyles.xml
-  std::unique_ptr<pugi::xml_document> builtInStyles_;  // the built-in styles decks name without defining
+  // The built-in styles decks name without defining, and the rectangles of cells' other fills.
+  std::unique_ptr<pugi::xml_document> tableScratch_;
   std::vector<std::unique_ptr<TextBody>> cellTexts_;
   mutable std::recursive_mutex mutex_;
   std::vector<std::string> problems_;

@@ -993,6 +993,38 @@ TEST(DrawingML_GroupsRotationAndFlips) {
   CHECK_NEAR(b.bottom, 25, 0.5);
 }
 
+TEST(DrawingML_GroupInAScaledGroup) {
+  // A group 40 x 40 whose children are in 80 x 80 units (half size) holds a group of 40 x 40 units
+  // at (0, 0, 40, 40), in its own 40 x 40 units, with a blue square filling it: the square shows at
+  // the top left 20 x 20, as PowerPoint draws it (cs-444's convolution slides), not 40 x 40.
+  TestResources res;
+  fw::pkg::XmlDom dom;
+  std::string group =
+      R"(<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="508000" cy="508000"/>)"
+      R"(<a:chOff x="0" y="0"/><a:chExt cx="1016000" cy="1016000"/></a:xfrm></wpg:grpSpPr>)"
+      R"(<wpg:grpSp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="508000" cy="508000"/>)"
+      R"(<a:chOff x="0" y="0"/><a:chExt cx="508000" cy="508000"/></a:xfrm></wpg:grpSpPr>)" +
+      Wsp(Xfrm(0, 0, 40, 40) + R"(<a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>)") +
+      "</wpg:grpSp></wpg:wgp>";
+  auto d = WordDrawing(WordAnchor(40, 40, kWpgUri, group), res, dom);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(40, 40);
+  Render(s, *d);
+  CHECK(s.End());
+  CHECK(Near(s.At(10, 10), 0x0000FF));
+  CHECK(Near(s.At(30, 10), 0xFFFFFF));
+  CHECK(Near(s.At(10, 30), 0xFFFFFF));
+  // Parts and text boxes agree with what is drawn.
+  bool found = false;
+  for (const Drawing::Part& p : d->Parts()) {
+    if (p.group) continue;
+    CHECK_NEAR(p.size.width, 20, 0.01);
+    found = true;
+  }
+  CHECK(found);
+}
+
 TEST(DrawingML_LinesAndArrows) {
   TestResources res;
   fw::pkg::XmlDom dom;
@@ -1119,6 +1151,49 @@ TEST(Images_BoxResampleAverages) {
   const uint8_t* p = out->Pixels();
   CHECK(p[0] == 20 && p[4] == 140 && p[8] == 140 && p[12] == 20);  // (0 + .25*100)/1.25, (.75*100 + .5*200)/1.25
   CHECK(p[3] == 255 && p[15] == 255);
+}
+
+TEST(DrawingML_SmartArtInAScaledGroupKeepsItsDrawnSize) {
+  // Office saves a SmartArt's drawing at the size it shows: in a group drawn at half size, a frame
+  // of 100 x 50 child units shows 50 x 25 and its drawing is 50 x 25 (govuk Scotland census 6). A
+  // shape filling the drawing's left half fills the frame's left half, not a quarter.
+  struct Parts : TestResources {
+    fw::pkg::XmlDom data, drawing;
+    pugi::xml_node GetPartXml(std::string_view relId) override {
+      return relId == "rIdDm" ? data.Root() : relId == "rIdDrawing" ? drawing.Root() : pugi::xml_node();
+    }
+  } res;
+  res.data = ParseXml(R"(<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" )"
+                      R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:extLst>)"
+                      R"(<a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt )"
+                      R"(xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rIdDrawing"/></a:ext>)"
+                      R"(</dgm:extLst></dgm:dataModel>)");
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>)" +
+                         Xfrm(0, 0, 25, 25) +
+                         R"(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>)"
+                         R"(</dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>)");
+  fw::pkg::XmlDom dom = ParseXml(
+      "<p:grpSp" + kNs + R"(><p:nvGrpSpPr><p:cNvPr id="2" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>)"
+      R"(<a:xfrm><a:off x="0" y="0"/><a:ext cx="635000" cy="317500"/><a:chOff x="0" y="0"/><a:chExt cx="1270000" cy="635000"/>)"
+      R"(</a:xfrm></p:grpSpPr><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 3"/><p:cNvGraphicFramePr/><p:nvPr/>)"
+      R"(</p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></p:xfrm><a:graphic>)"
+      R"(<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds )"
+      R"(xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>)"
+      R"(</a:graphicData></a:graphic></p:graphicFrame></p:grpSp>)");
+  auto d = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(50, 25);
+  {
+    D2DPainter p(s.dc.Get());
+    d->Draw(p, d->Bounds());
+  }
+  CHECK(s.End());
+  CHECK(Near(s.At(20, 12), 0xFF0000));
+  CHECK(Near(s.At(40, 12), 0xFFFFFF));
 }
 
 TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {

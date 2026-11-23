@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "draw/Drawing.h"
 #include "draw/Painter.h"
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
@@ -33,9 +34,12 @@ class TableRender {
     const fw::slide::TableCell* cell = nullptr;
     draw::Rect rect;
     TextBlock text;
+    std::unique_ptr<draw::Drawing> fill;  // a gradient, picture or pattern fill
   };
   std::vector<float> colX_, rowY_;  // edges
   std::vector<Cell> cells_;
+  std::unique_ptr<draw::DrawingResources> resources_;  // for the fills' drawings
+  std::unique_ptr<draw::Drawing> background_;
   const fw::slide::Table& table_;
 };
 
