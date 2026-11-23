@@ -215,6 +215,11 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
     - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
   - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).
+- **2026-11-24: fidelity work stops at the gate** (coordinator). The corpus passed at 93.36 % on `fbbbfbaa` (84 slides over 90 %; about 92.6 % without export matching and the reference fix). The gate code is `ea3fe681`; later commits on `claude/p1-int` change docs only. Further drawing changes would need a full re-measure, so p1-render's and p1-model's remaining ideas are parked under "After P1".
+- **2026-11-24: goettingen's view against its own PDF accepted as explained** (coordinator).
+  - Slides 3 and 4 are export-matching gaps: the JPEG re-encode at q75, and a 0.1-px offset.
+  - Slides 1 and 6 (0.941, 0.943) differ by a picture scaled up to 1.6 px narrower in Direct2D than in pdfium, at the 1333-px box only. It isn't one-sided against PowerPoint: on slide 1 the PDF is closer, on slide 6 the view is.
+  - No code change before the next fidelity round. Every other sampled slide stays within 0.05.
 
 ## After P1: notes for P3 or later
 
