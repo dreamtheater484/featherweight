@@ -191,3 +191,16 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - Charts: 9 (15 of 24 now pass).
     - Other: 9.
   - 90 % needs 43 more slides. Script for the split: `FeatherweightNotes\p1\corpus-analysis\split.py`.
+- **2026-11-23: five corpus references re-exported (stale cloud fonts)** (p1-model's finding, coordinator's go).
+  - Why: Office downloads a missing cloud font during the first export that needs it, and that export finishes with a substitute. These five PDFs were written 0–3 s after their font arrived in `%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`:
+    - worldbank-evolution (Open Sans SemiBold/ExtraBold);
+    - course-100 (Source Sans Pro);
+    - our-dynamic-sun (Montserrat);
+    - cybersprinters-1 (Poppins);
+    - cybersprinters-3 (Libre Baskerville).
+  - Re-exported from PowerPoint on 23 Nov at 22:11 from Roy's active session, under the usual rules (quiet-pc.lock, our own instance, AutomationSecurity 3, read-only). The old PDFs are kept beside the new ones as `<name>.stale-cloudfont.pdf`, and the old manifest as `reference\manifest.before-cloudfont.json`.
+  - The new PDFs use the cloud faces: Open Sans SemiBold/ExtraBold, Source Sans Pro, Montserrat, and Poppins in place of Nirmala UI. cybersprinters-3's new PDF draws the same pages as before (no page under 0.999 against the old one), so it wasn't really stale.
+  - **Gate on `cb26c73e`, the reference fix alone:** 2,222 → 2,225 of 2,516 (88.31 % → 88.43 %).
+    - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
+    - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
+  - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).
