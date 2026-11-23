@@ -1426,6 +1426,7 @@ bool WorkbookView::CreateTable(Range r, bool headers, const std::string& style) 
   if (!cells.empty() && EditRefused(Ed().SetCells(sheet, cells))) return false;
   if (EditRefused(Ed().AddTable(sheet, t))) return false;
   group.done = true;
+  ribbonInserted_ = kRibbonTable;  // the ribbon shows Table Design (R1)
   host_.ViewInvalidate();
   return true;
 }

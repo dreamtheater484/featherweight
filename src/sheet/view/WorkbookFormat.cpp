@@ -1408,7 +1408,6 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (op == L"object") return ShapesScriptOp(arg);  // WorkbookShapes.cpp
   if (op == L"name" || op == L"names") return NamesScriptOp(op, arg);  // s3-calc's (WorkbookNames.cpp)
   if (op == L"pagesetup") return PageScriptOp(arg);  // s3-print's (WorkbookPageSetup.cpp)
-  if (op == L"ribbon") return RibbonScriptOp(arg);  // R1 (WorkbookRibbon.cpp)
   if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
   const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));

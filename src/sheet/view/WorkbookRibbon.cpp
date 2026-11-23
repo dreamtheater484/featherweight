@@ -40,6 +40,7 @@ enum : uint8_t {
   kNewColumn = 16,  // starts a column
   kTool = 32,       // a box, color button or dropdown of its own (RibbonTool)
   kKeepLarge = 64,  // a large item that stays large as the window narrows (Paste)
+  kNoLabel = 128,   // a box Excel draws without "Label:" in front (its tooltip names it)
 };
 
 // One line of a tab's table: a group (cmd 0: its ↘ launcher, collapsed glyph, rows in `size`, how
@@ -62,8 +63,8 @@ constexpr Spec kHome[] = {
     {CmdCopy, 0, icon::Copy, M, 0, "C", "Copy"},
     {CmdFormatPainter, 0, icon::Brush, M, kToggle, "FP", "Format Painter"},
     {0, CmdFormatCellsFont, icon::FontColor, 2, 0, "ZF", "Font"},
-    {CmdFontBox, 0, 0, M, kTool, "FF", "Font"},
-    {CmdSizeBox, 0, 0, M, kTool | kSameRow, "FS", "Font Size"},
+    {CmdFontBox, 0, 0, M, kTool | kNoLabel, "FF", "Font"},
+    {CmdSizeBox, 0, 0, M, kTool | kSameRow | kNoLabel, "FS", "Font Size"},
     {CmdGrowFont, 0, g::FontUp, S, kSameRow, "FG", "Increase Font Size"},
     {CmdShrinkFont, 0, g::FontDown, S, kSameRow, "FK", "Decrease Font Size"},
     {CmdBold, 0, icon::Bold, S, kToggle, "1", "Bold"},
@@ -84,7 +85,7 @@ constexpr Spec kHome[] = {
     {CmdWrapText, 0, icon::WrapCell, M, kToggle | kNewColumn, "W", "Wrap Text"},
     {CmdMergeCenter, 0, icon::MergeCenter, M, kSplit, "M", "Merge & Center"},
     {0, CmdNumberFormatBox, icon::Percent, 2, 0, "ZN", "Number"},
-    {CmdNumberFormatBox, 0, 0, M, kTool, "N", "Number Format"},
+    {CmdNumberFormatBox, 0, 0, M, kTool | kNoLabel, "N", "Number Format"},
     {CmdNumAccounting, 0, icon::Accounting, S, 0, "AN", "Accounting Number Format"},
     {CmdNumPercent, 0, icon::Percent, S, kSameRow, "P", "Percent Style"},
     {CmdCommaStyle, 0, icon::Comma, S, kSameRow, "K", "Comma Style"},
@@ -326,23 +327,6 @@ const char* Turned(int cmd, const CommandState& q) {
   return nullptr;
 }
 
-#if FW_TEST_SCREENS
-// ribbon:dump's lines for a menu and its submenus.
-void DumpMenu(HMENU menu, int depth) {
-  for (int i = 0; i < GetMenuItemCount(menu); ++i) {
-    wchar_t text[128] = {};
-    MENUITEMINFOW mi{sizeof mi, MIIM_ID | MIIM_STRING | MIIM_SUBMENU | MIIM_STATE | MIIM_FTYPE};
-    mi.dwTypeData = text;
-    mi.cch = 127;
-    GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &mi);
-    if (mi.fType & MFT_SEPARATOR) continue;
-    fwprintf(stderr, L"ribbon: %*smenu %u %s%s%s\n", depth * 2, L"", mi.hSubMenu ? 0 : mi.wID, text,
-             mi.fState & MFS_DISABLED ? L" (off)" : L"", mi.fState & MFS_CHECKED ? L" (on)" : L"");
-    if (mi.hSubMenu) DumpMenu(mi.hSubMenu, depth + 1);
-  }
-}
-#endif
-
 std::wstring Hex(const D2D1_COLOR_F& c) {
   auto b = [](float x) { return static_cast<unsigned>(std::lround(std::clamp(x, 0.0f, 1.0f) * 255)); };
   wchar_t buf[8];
@@ -381,7 +365,8 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         const CommandState q = QueryCommand(s.cmd);
         t.cmd = s.cmd;
         t.enabled = q.enabled;
-        t.checked = q.checked;
+        // Pressed only for toggles and Merge & Center (Close Print Preview's command is "checked" in preview).
+        t.checked = q.checked && (s.flags & (kToggle | kSplit));
         t.toggle = (s.flags & kToggle) != 0;
         t.dropdown = (s.flags & kMenu) != 0;
         if (s.flags & kSplit) t.kind = ToolKind::SplitButton;
@@ -392,7 +377,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
       it.size = static_cast<RibbonSize>(s.size);
       // Large items go to medium before their group folds, as Excel's Cells and Styles; others to small.
       it.smallest = s.flags & kKeepLarge ? RibbonSize::Large : s.size == L ? RibbonSize::Medium : RibbonSize::Small;
-      if (it.label.empty()) it.label = Utf8ToWide(s.label);
+      if (it.label.empty() && !(s.flags & kNoLabel)) it.label = Utf8ToWide(s.label);
       it.keyTip = Utf8ToWide(s.key);
       it.sameRow = (s.flags & kSameRow) != 0;
       it.newColumn = (s.flags & kNewColumn) != 0;
@@ -428,17 +413,15 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
     return;
   }
   const std::optional<SheetObjects::Object> object = SelectedObject();
-  // An object just inserted shows its tab, as in Office; selecting one later doesn't.
-  if (!object || object->id != ribbonInserted_) ribbonInserted_ = 0;
+  const bool table = !object && !ChartSheet() && TableIndexAt(active_) >= 0;
+  // An object or table just inserted shows its tab, as in Office; selecting one later doesn't.
+  if (object ? object->id != ribbonInserted_ : !table || ribbonInserted_ != kRibbonTable) ribbonInserted_ = 0;
   if (ChartSheet() || (object && object->chart)) {
     add(L"Chart Design", L"JC", kChartDesign, true);
   } else if (object) {
     add(object->picture ? L"Picture Format" : L"Shape Format", object->picture ? L"JP" : L"JD",
         object->picture ? std::span<const Spec>(kPictureFormat) : std::span<const Spec>(kShapeFormat), true);
-  }
-  if (ribbonInserted_ && m.tabs.back().contextual) m.show = m.tabs.back().name;
-  if (object || ChartSheet()) return;
-  if (TableIndexAt(active_) >= 0) {
+  } else if (table) {
     add(L"Table Design", L"JT", kTableDesign, true);
   } else if (const auto* looks = PivotLooksFor(sheet_)) {
     for (const pivot::Look& l : *looks)
@@ -447,6 +430,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         break;
       }
   }
+  if (ribbonInserted_ && m.tabs.back().contextual) m.show = m.tabs.back().name;
 }
 
 // The boxes, color buttons and dropdowns that set something of their own.
@@ -549,38 +533,6 @@ bool WorkbookView::FillRibbonMenu(int which, HMENU menu) {
     menu::AppendItem(menu, static_cast<UINT>(l.cmd), Utf8ToWide(turned ? turned : l.label), enabled, checked, l.radio);
   }
   return true;
-}
-
-// ribbon:dump: the model as built now, each item with its command, state and KeyTip, and the lines
-// of each menu it opens (FillMenu), for checks (stderr, "ribbon: ..."). Test builds only (FW_TEST_SCREENS).
-bool WorkbookView::RibbonScriptOp(const std::wstring& arg) {
-#if !FW_TEST_SCREENS
-  (void)arg;
-  return false;
-#else
-  if (arg != L"dump") return false;
-  RibbonModel m;
-  BuildRibbon(m, ToolbarContext{});
-  for (const RibbonTab& t : m.tabs) {
-    fwprintf(stderr, L"ribbon: tab %s [%s]%s\n", t.name.c_str(), t.keyTip.c_str(), t.contextual ? L" contextual" : L"");
-    for (const RibbonGroup& g : t.groups) {
-      fwprintf(stderr, L"ribbon:  group %s [%s] launcher %d\n", g.name.c_str(), g.keyTip.c_str(), g.launcher);
-      for (const RibbonItem& it : g.items) {
-        fwprintf(stderr, L"ribbon:   item %d %s [%s] size %d%s%s%s\n", it.tool.cmd, it.label.c_str(), it.keyTip.c_str(),
-                 static_cast<int>(it.size), it.tool.enabled ? L"" : L" (off)", it.tool.checked ? L" (on)" : L"",
-                 it.tool.text.empty() ? L"" : (L" \"" + it.tool.text + L"\"").c_str());
-        if (it.tool.dropdown || (it.tool.kind == ToolKind::SplitButton && it.tool.choices.empty())) {
-          HMENU menu = CreatePopupMenu();
-          FillMenu(it.tool.cmd, menu);
-          DumpMenu(menu, 2);
-          DestroyMenu(menu);
-        }
-      }
-    }
-  }
-  if (!m.show.empty()) fwprintf(stderr, L"ribbon: show %s\n", m.show.c_str());
-  return true;
-#endif
 }
 
 // ---------------------------------------------------------------------------

@@ -652,12 +652,14 @@ class WorkbookView : public PagedView {
   bool RibbonCommandState(int cmd, CommandState& s);
   bool RibbonCommand(int cmd);
   bool FillRibbonMenu(int which, HMENU menu);
-  bool RibbonScriptOp(const std::wstring& arg);  // ribbon:dump
   void AppendTabColorMenu(HMENU m, const wchar_t* label);  // the sheet tab's submenus (WorkbookSheetOps.cpp)
   void AppendUnhideSheetMenu(HMENU m, const wchar_t* label);
   int ScalingNow() const;  // the 4 scalings' index (-1: a scale of its own); WorkbookPageSetup.cpp
   int MarginsNow() const;  // Normal, Wide, Narrow's index (-1: others)
-  uint32_t ribbonInserted_ = 0;  // an object just inserted and still selected: the ribbon shows its tab
+  // An object just inserted and still selected, or kRibbonTable (a table just created, the active
+  // cell still in it): the ribbon shows its tab.
+  static constexpr uint32_t kRibbonTable = 0xFFFFFFFFu;
+  uint32_t ribbonInserted_ = 0;
   edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
   void AfterPageChange();  // the preview and Page Break Preview paginate again
   void RefreshPreview();
