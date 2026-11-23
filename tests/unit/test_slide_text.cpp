@@ -696,6 +696,40 @@ TEST(SlideText_TypesThroughTheEditLayer) {
   CHECK(session.Caret().para == 0);
 }
 
+// The session lays its text out with its own copy of the bodyPr, never the slide part's node: the
+// first edit replaces that part and frees the old one (layout reads spcFirstLastPara from it).
+TEST(SlideText_SessionKeepsItsOwnBodyProps) {
+  auto deck = Modified(Slide1(TextBox(4, 100, 100, 300, 60,
+                                      "<a:p><a:pPr><a:spcBef><a:spcPts val=\"1200\"/></a:spcBef></a:pPr><a:r><a:rPr lang=\"en-US\"/>"
+                                      "<a:t>Hello</a:t></a:r></a:p>",
+                                      "<a:bodyPr wrap=\"square\" spcFirstLastPara=\"1\"/>")));
+  REQUIRE(deck != nullptr);
+  fw::slide::edit::Editor editor(*deck);
+  EditTextModel model(*deck, editor);
+  fw::text::Fonts fonts;
+  auto slide = render::SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  render::SlideRender::TextFrame frame;
+  REQUIRE(slide->FindText(4, -1, -1, frame));
+  TextTarget t;
+  t.shape = 4;
+  TextSession session(model, t, fonts);
+  REQUIRE(session.Start(frame, {}));
+  const pugi::xml_node part = model.Body(t).root();
+  CHECK(session.Frame().box.properties);
+  CHECK(session.Frame().box.properties.root() != part);
+  CHECK(!session.Frame().box.content);
+  session.MoveCaret(TextSession::Move::End, false);
+  for (wchar_t c : std::wstring(L" world")) CHECK(session.Type(std::wstring(1, c)));
+  CHECK(draw::xml::Bool(session.Frame().box.properties, "spcFirstLastPara", false));
+  // The slide laid out anew, as the tab does after an edit.
+  slide = render::SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  REQUIRE(slide->FindText(4, -1, -1, frame));
+  session.SetFrame(frame);
+  CHECK(session.Frame().box.properties.root() != model.Body(t).root());
+  CHECK(draw::xml::Bool(session.Frame().box.properties, "spcFirstLastPara", false));
+  CHECK(session.Doc().Text(0) == L"Hello world");
+}
+
 // What XML can't hold never reaches the text: control characters, U+FFFE and U+FFFF, and halves of
 // surrogate pairs on their own (a pair stays).
 TEST(SlideText_TypedTextIsWhatXmlCanHold) {
