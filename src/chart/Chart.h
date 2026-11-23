@@ -54,7 +54,8 @@ struct Series {
   struct PointLabel {
     uint32_t index = 0;
     bool deleted = false;
-    std::optional<bool> value, seriesName, category;
+    std::optional<bool> value, seriesName, category, percent;
+    std::optional<std::wstring> separator;  // its own c:separator
     std::optional<std::wstring> text;  // c:tx/c:rich, series name fields filled in
     float dx = 0, dy = 0;
     std::optional<draw::Color> fill, color;

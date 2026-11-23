@@ -280,6 +280,34 @@ TEST(Chart_PlacedPlotKeepsItsLabelsInsideTheChart) {
   }
 }
 
+TEST(Chart_PlotKeepsTheSideMarginBesideALegend) {
+  // With 18-point text and the legend at the right, the plot ends 11.2 + 4.6 points before the
+  // legend's keys, the margin at the sides not growing past 10-point text on the legend's side
+  // either (PowerPoint's PDF of the poi line chart: 15.6 points).
+  std::string xml = PlacedLineChart("<c:spPr><a:ln><a:solidFill><a:srgbClr val=\"0000FF\"/></a:solidFill></a:ln></c:spPr>", 0, 1);
+  const size_t layout = xml.find("<c:layout>"), end = xml.find("</c:layout>") + 11;
+  xml.erase(layout, end - layout);
+  xml.replace(xml.find("</c:plotArea></c:chart>"), 23,
+              "</c:plotArea><c:legend><c:legendPos val=\"r\"/><c:overlay val=\"0\"/></c:legend></c:chart>"
+              "<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr></a:p></c:txPr>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {480, 320}, Colors(), L"Calibri");
+  float plotRight = -1, keyLeft = -1;
+  for (const auto& m : art.marks) {
+    if (m.line.fill.kind != draw::Fill::Kind::Solid) continue;
+    draw::Rect b = m.path.Bounds();
+    b = {b.left * m.transform.m11 + m.transform.dx, b.top + m.transform.dy, b.right * m.transform.m11 + m.transform.dx,
+         b.bottom + m.transform.dy};
+    if (b.bottom - b.top > 0.01f) continue;  // horizontal strokes only
+    if (Same(m.line.fill.color, draw::Rgb(0x0000FF)) && b.right - b.left < 25) keyLeft = b.left;
+    else if (b.right - b.left > 100) plotRight = std::max(plotRight, b.right);
+  }
+  REQUIRE(plotRight > 0 && keyLeft > 0);
+  CHECK_NEAR(keyLeft - plotRight, 11.2f + 4.6f, 0.05);
+}
+
 TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
   // A legend at the side the chart places (c:manualLayout) fills its box: the keys 7.13 points in
   // from its left, the entries spread evenly down it, its border as its c:spPr says (PowerPoint's
@@ -351,6 +379,71 @@ TEST(Chart_PieSlicesAndPercentLabels) {
     CHECK_EQ(Filled(art, slice), 2u);  // a slice and its legend swatch
   }
   for (const auto& m : art.marks) CHECK(m.fill.kind != draw::Fill::Kind::Solid || m.line.fill.kind == draw::Fill::Kind::None || m.path.Bounds().right - m.path.Bounds().left > 290);
+}
+
+TEST(Chart_PlacedPieIsTheLargestCircleInItsBox) {
+  // A pie whose plot area the chart places (c:manualLayout, inner) is the largest circle in that
+  // box, centred in it (PowerPoint's PDFs, govuk business bodies' doughnuts): here 160 points
+  // across, centred at (260, 100) in a 400 x 200 chart.
+  std::string xml = PieChart();
+  xml.insert(xml.find("<c:plotArea>") + 12,
+             "<c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.4\"/>"
+             "<c:y val=\"0.1\"/><c:w val=\"0.5\"/><c:h val=\"0.8\"/></c:manualLayout></c:layout>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  draw::Rect pie{1e9f, 1e9f, -1e9f, -1e9f};
+  for (const char* accent : {"accent1", "accent2", "accent3", "accent4"}) {
+    draw::Color slice = *draw::SchemeColor(accent, Colors());
+    draw::ApplyColorTransform(slice, "shade", 76000);
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind != draw::Fill::Kind::Solid || !Same(m.fill.color, slice) || b.right - b.left < 20) continue;  // not swatches
+      pie = {std::min(pie.left, b.left), std::min(pie.top, b.top), std::max(pie.right, b.right), std::max(pie.bottom, b.bottom)};
+    }
+  }
+  // (The arcs' points, not the curves: within half a point of the circle's extremes.)
+  CHECK_NEAR(pie.left, 180, 0.5);
+  CHECK_NEAR(pie.right, 340, 0.5);
+  CHECK_NEAR(pie.top, 20, 0.5);
+  CHECK_NEAR(pie.bottom, 180, 0.5);
+}
+
+TEST(Chart_PlacedDoughnutPullsItsSlicesOut) {
+  // A placed doughnut whose series is pulled out 10 % and its second slice 20 %: the ring's radius
+  // is the box's half over 1.1, each slice moved out by its share of it, the second past the box
+  // (PowerPoint's PDFs, business bodies 10). Two halves: the first right, the second left.
+  const std::string xml =
+      std::string("<c:chartSpace") + kNs +
+      "><c:chart><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/>"
+      "<c:yMode val=\"edge\"/><c:x val=\"0.25\"/><c:y val=\"0\"/><c:w val=\"0.5\"/><c:h val=\"1\"/></c:manualLayout></c:layout>"
+      "<c:doughnutChart><c:varyColors val=\"1\"/>" +
+      [] {
+        std::string s = Ser(0, "Share", {"A", "B"}, {"1", "1"});
+        s.insert(s.find("</c:tx>") + 7, "<c:dPt><c:idx val=\"1\"/><c:bubble3D val=\"0\"/><c:explosion val=\"20\"/></c:dPt>");
+        s.insert(s.find("</c:ser>"), "<c:explosion val=\"10\"/>");
+        return s;
+      }() +
+      "<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart></c:plotArea></c:chart></c:chartSpace>";
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  std::vector<draw::Rect> slices;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    // (Not the chart area's own fill.)
+    if (m.fill.kind == draw::Fill::Kind::Solid && b.right - b.left > 20 && b.right - b.left < 300 && b.bottom - b.top > 100)
+      slices.push_back(b);
+  }
+  REQUIRE(slices.size() == 2u);
+  const float R = 100 / 1.1f;
+  const draw::Rect& right = slices[0].left > slices[1].left ? slices[0] : slices[1];
+  const draw::Rect& left = slices[0].left > slices[1].left ? slices[1] : slices[0];
+  CHECK_NEAR(right.right, 200 + R * 1.1f, 0.5);
+  CHECK_NEAR(left.left, 200 - R * 1.2f, 0.5);
+  CHECK_NEAR(right.top, 100 - R, 0.5);
 }
 
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
