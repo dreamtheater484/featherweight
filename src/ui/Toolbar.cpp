@@ -44,7 +44,10 @@ Button& Toolbar::ItemButton(const ToolItem& item) {
 }
 
 Control& Toolbar::ItemControl(const ToolItem& item) {
-  return ConfigureControl(controls_[item.cmd], controlKinds_[item.cmd], item, [this](int cmd) {
+  std::unique_ptr<Control> none;  // a tab's own control (Custom) takes no slot here
+  ToolKind noKind = item.kind;
+  const bool own = item.kind == ToolKind::Custom && item.control;
+  return ConfigureControl(own ? none : controls_[item.cmd], own ? noKind : controlKinds_[item.cmd], item, [this](int cmd) {
     if (onCommand) onCommand(cmd);
   });
 }
@@ -227,7 +230,8 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
     c.visible = true;
   };
   for (Button* b : all_) b->visible = false;
-  for (auto& [cmd, c] : controls_) c->visible = false;
+  for (auto& [cmd, c] : controls_)
+    if (c) c->visible = false;
   pageBox_.rc = {};
   shown_.clear();
 

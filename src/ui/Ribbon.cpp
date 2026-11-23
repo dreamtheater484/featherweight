@@ -57,6 +57,21 @@ bool IsSplit(const RibbonItem& it, RibbonSize size) {
   return it.tool.kind == ToolKind::SplitButton && OwnDrawn(it, size);
 }
 
+// A split button or color picker the toolbar's control draws, at Medium size: its label between
+// the icon and the arrow (Excel's "Merge & Center ▾", "Shape Fill ▾").
+bool LabelledPicker(const RibbonItem& it, RibbonSize size) {
+  return size == RibbonSize::Medium && it.tool.glyph && !OwnDrawn(it, size) &&
+         (it.tool.kind == ToolKind::SplitButton || it.tool.kind == ToolKind::ColorPicker);
+}
+
+// A Medium box whose item has a label: the label in front ("Width: [Automatic ▾]").
+bool LabelledBox(const RibbonItem& it, RibbonSize size) {
+  return size == RibbonSize::Medium && !it.label.empty() && !OwnDrawn(it, size) &&
+         (it.tool.kind == ToolKind::Dropdown || it.tool.kind == ToolKind::ComboBox || it.tool.kind == ToolKind::SpinBox);
+}
+
+std::wstring BoxLabel(const RibbonItem& it) { return it.label.back() == L':' ? it.label : it.label + L":"; }
+
 // A large label's two lines: at "\n", or at the space that balances them.
 std::pair<std::wstring, std::wstring> SplitLabel(const std::wstring& s, const std::function<float(const std::wstring&)>& w) {
   if (const size_t nl = s.find(L'\n'); nl != std::wstring::npos) return {s.substr(0, nl), s.substr(nl + 1)};
@@ -203,6 +218,8 @@ float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumn
   const float u = ui_;
   if (galleryColumns > 0)
     return std::round((galleryColumns * it.gallery->choiceWidth + 2 + kGalleryScrollW) * u);
+  if (LabelledPicker(it, size)) return std::round((TextW(LabelOf(it), kItemFont) + 52) * u);
+  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + std::max(it.tool.width, 20.f)) * u);
   if (!OwnDrawn(it, size) && !it.gallery) return std::round(std::max(it.tool.width, 20.f) * u);
   const bool arrow = IsMenuButton(it) || IsSplit(it, size) || it.gallery.has_value();
   const std::wstring label = LabelOf(it);
@@ -375,9 +392,20 @@ float Ribbon::FlowGroup(int g, int stage, float x, float y, bool place, Layer la
             Control& ctl = Toolbar::ConfigureControl(controls_[it.tool.cmd], kinds_[it.tool.cmd], it.tool, [this](int cmd) {
               if (onCommand) onCommand(cmd);
             });
-            ctl.rc = r;
+            if (it.tool.kind == ToolKind::SplitButton || it.tool.kind == ToolKind::ColorPicker) {
+              const std::wstring text = LabelledPicker(it, cell.size) ? LabelOf(it) : L"";
+              if (auto* s = dynamic_cast<SplitButton*>(&ctl)) {
+                s->text = text;
+                s->textSize = kItemFont;
+              } else if (auto* cp = dynamic_cast<ColorPicker*>(&ctl)) {
+                cp->text = text;
+                cp->textSize = kItemFont;
+              }
+            }
+            // A labelled box: the label at the left (drawn with the part), the box after it.
+            ctl.rc = LabelledBox(it, cell.size) ? RectF(r.left + std::round((TextW(BoxLabel(it), kItemFont) + 6) * u), r.top, r.right, r.bottom) : r;
             ctl.visible = true;
-            Part p{PartKind::Control, r, g, cell.item};
+            Part p{PartKind::Control, ctl.rc, g, cell.item};
             p.size = cell.size;
             p.layer = layer;
             p.control = &ctl;
@@ -570,7 +598,8 @@ void Ribbon::Layout(const RECT& rc, float ui, RibbonModel m) {
   if (tab_ != before) popupGroup_ = gridGroup_ = -1;
 
   parts_.clear();
-  for (auto& [cmd, c] : controls_) c->visible = false;
+  for (auto& [cmd, c] : controls_)
+    if (c) c->visible = false;  // (a tab's own control, Custom, leaves its slot empty)
   if (!model_.tabs.empty()) {
     PlaceTabs();
     // Which step each group is at: shrink the groups a step at a time, those that go first first,
@@ -823,7 +852,13 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
       break;
     }
     case PartKind::Control:
-      if (part.control) part.control->Draw(c);
+      if (!part.control) break;
+      if (const RibbonItem* it = ItemAt(part.group, part.item); it && LabelledBox(*it, part.size)) {
+        const std::wstring s = BoxLabel(*it);
+        c.Text(s, RectF(part.rc.left - std::round((TextW(s, kItemFont) + 6) * u), part.rc.top, part.rc.left, part.rc.bottom - 1 * u),
+               it->tool.enabled ? p.text : p.textDisabled, kItemFont * u);
+      }
+      part.control->Draw(c);
       break;
     case PartKind::GroupButton: {
       const RibbonGroup& grp = Tab()->groups[part.group];

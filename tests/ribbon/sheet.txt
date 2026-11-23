@@ -1,0 +1,48 @@
+# The commands the toolbar and the ⋯ menu reached in sheet before R1 (dumpreach on tests/office/generated/simple.xlsx).
+# ribboncheck:<this file> fails when one isn't reachable from the ribbon, the File page, the right-click menu
+# or Alt+Q. Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
+reach 100 Open
+reach 102 Save as…
+reach 103 Print
+reach 107 Find
+reach 133 Night reading: dark pages
+reach 134 Full screen
+reach 135 Present
+reach 137 App theme: use Windows setting
+reach 138 App theme: light
+reach 139 App theme: dark
+reach 140 Highlight form fields
+reach 141 Update automatically
+reach 142 Check for updates now
+reach 143 Make Featherweight the default PDF app
+reach 144 About Featherweight
+reach 157 Undo
+reach 158 Redo
+reach 701 New document
+reach 702 New workbook
+reach 720 New from template 1
+reach 721 New from template 2
+reach 722 New from template 3
+reach 1000 Bold
+reach 1001 Italic
+reach 1002 Underline
+reach 1013 Font color
+reach 1015 Format painter: copy these cells' formats to the cells you select next
+reach 1018 Align left
+reach 1019 Center
+reach 1020 Align right
+reach 1042 Font box
+reach 1043 Font size box
+reach 1250 Page setup
+reach 1400 Export PDF…
+reach 1500 Print preview
+reach 2701 More number formats…
+reach 2704 Merge
+reach 2705 Borders
+reach 2706 Fill color
+reach 2717 Cell styles
+reach 2719 Custom sort…
+reach 2808 Chart
+reach 2854 Conditional formatting
+reach 2880 Insert
+reach 3036 More templates (user templates folder)
