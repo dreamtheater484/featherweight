@@ -229,7 +229,8 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - Failing slides by content: pictures 62, text 59, equations 18, SmartArt 12, charts 7 (17 of 24 pass), tables 5, other 3. 127 of the 166 are near misses.
   - The who-health crash is gone: none in 48 runs of `crash-repro.ps1` (8 at a time, `--png`), and none in the two corpus runs.
   - `fwtool check` passes all 152 screened decks (warnings only).
-  - The Open XML SDK validator finds 141 of the 152 decks clean. The other 11 have schema errors in the downloaded originals: unexpected child elements, invalid or undeclared attributes, one part the SDK can't open. Mostly they're chart extension elements, in POI's chart decks, business bodies, goettingen and the uantwerpen templates. P1 never saves, so these are P2's baseline (no new errors).
+  - The Open XML SDK validator finds 141 of the 152 decks clean. The other 11 have schema errors in the downloaded originals: unexpected child elements, invalid or undeclared attributes, one part the SDK can't open. Mostly they're chart extension elements, in POI's chart decks, business bodies, goettingen and the uantwerpen templates.
+  - **Decision (coordinator, 2026-11-24):** these 11 decks count as P2's baseline, not as P1 failures. P1 never saves; P2's check is that a saved deck has no validator errors its original doesn't (`fwvalidate --compare`). For P1's "never damage a file" criterion, `fwtool check` passes all 152 and no deck changed on opening.
   - Opening never changed a deck: every one still has its screened hash (reference-renders checks each against `real-world.json`).
   - Shipped exe at `fbbbfbaa` (`build-release`, FW_TEST_SCREENS off): 11,149,824 bytes. That's +611,328 (597 KB) over S4 final, within the 1.0 MB budget.
     - The quiet-PC timings committed as `f828277f` used `build-release`'s exe from 20 Nov (`abebf66`; that build wasn't redone), so its ledger line's size matches `abebf66`'s to the byte.
