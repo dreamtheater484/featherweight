@@ -109,11 +109,13 @@ struct Builder {
     t.contextual = contextual;
     m.tabs.push_back(std::move(t));
   }
-  void Group(const wchar_t* name, int rows = 3, int launcher = 0) {
+  // `shrinkFirst`: higher shrinks sooner as the window narrows (PowerPoint folds Editing, then
+  // Drawing, then Paragraph, and keeps Font and the Clipboard longest).
+  void Group(const wchar_t* name, int rows = 3, int shrinkFirst = 0) {
     RibbonGroup g;
     g.name = name;
     g.rows = rows;
-    g.launcher = launcher;
+    g.shrinkFirst = shrinkFirst;
     m.tabs.back().groups.push_back(std::move(g));
   }
   RibbonItem& Add(ToolItem t, S size, const wchar_t* label, const wchar_t* keyTip, S smallest = S::Small) {
@@ -167,7 +169,11 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     t.dropdown = !MenuOf(cmd).empty();
   }
   if (glyph) t.glyph = glyph;
-  if (cmd == CmdObjectOutlineWeight) t.text.clear();  // the ribbon writes "Weight:" before the box
+  if (cmd == CmdObjectOutlineWeight) {  // a list button: the weights, then the dashes (shadow is Shape Effects')
+    t.kind = ToolKind::Button;
+    t.dropdown = true;
+    t.choices.resize(t.choices.size() - 2);
+  }
   return t;
 }
 
@@ -265,7 +271,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdChangeCase, 0, S::Small, L"Change Case", L"7").sameRow = true;
   add(CmdHighlightColor, 0, S::Small, L"Text Highlight Color", L"TC").sameRow = true;
   add(CmdFontColor, 0, S::Small, L"Font Color", L"FC").sameRow = true;
-  b.Group(L"Paragraph", 2);
+  b.Group(L"Paragraph", 2, 1);
   add(CmdBullets, 0, S::Small, L"Bullets", L"U");
   add(CmdNumbering, 0, S::Small, L"Numbering", L"N").sameRow = true;
   add(CmdOutdent, 0, S::Small, L"Decrease List Level", L"AO").sameRow = true;
@@ -275,14 +281,14 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdAlignCenter, 0, S::Small, L"Center", L"AC").sameRow = true;
   add(CmdAlignRight, 0, S::Small, L"Align Right", L"AR").sameRow = true;
   add(CmdAlignJustify, 0, S::Small, L"Justify", L"AJ").sameRow = true;
-  b.Group(L"Drawing");
+  b.Group(L"Drawing", 3, 2);
   shapes(add(CmdInsertShape, icon::Shapes, S::Large, L"Shapes", L"SH"));
   add(CmdArrangeMenu, icon::Arrange, S::Large, L"Arrange", L"G");
   add(CmdObjectFill, 0, S::Medium, L"Shape Fill", L"SF");
   add(CmdObjectOutline, 0, S::Medium, L"Shape Outline", L"SO");
   add(CmdSlideEffectsMenu, icon::ShapeEffects, S::Medium, L"Shape Effects", L"SE");
   add(CmdObjectOutlineWeight, 0, S::Medium, L"Weight", L"SW").newColumn = true;
-  b.Group(L"Editing");
+  b.Group(L"Editing", 3, 3);
   RibbonItem& find = add(CmdFind, icon::Search, S::Medium, L"Find", L"FD");
   find.tool.enabled = true;
   find.tool.checked = ctx.searchOpen;
@@ -311,7 +317,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
 
   // ---- Design
   b.Tab(L"Design", L"G");
-  b.Group(L"Themes");
+  b.Group(L"Themes", 3, 1);  // the gallery narrows before Variants and Customize
   {
     RibbonItem& themes = add(CmdDesignPanel, icon::Color, S::Large, L"Themes", L"H");
     themes.tool.toggle = false;
@@ -337,7 +343,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   }
   b.Group(L"Variants");
   {
-    RibbonItem& colors = add(CmdSlideColorsMenu, icon::Color, S::Large, L"Colors", L"V");
+    RibbonItem& colors = add(CmdSlideColorsMenu, icon::Color, S::Large, L"Colors", L"V", S::Large);
     colors.tool.dropdown = true;
     for (int i = 0; i < static_cast<int>(ColorSchemes().size()); ++i) {
       colors.tool.choices.push_back(ColorSchemes()[static_cast<size_t>(i)].name);
@@ -355,8 +361,8 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     colors.gallery = std::move(g);
   }
   b.Group(L"Customize");
-  add(CmdSlideSizeMenu, icon::SlideSize, S::Large, L"Slide\nSize", L"S");
-  add(CmdFormatBackground, icon::FormatBackground, S::Large, L"Format\nBackground", L"F");
+  add(CmdSlideSizeMenu, icon::SlideSize, S::Large, L"Slide\nSize", L"S", S::Large);
+  add(CmdFormatBackground, icon::FormatBackground, S::Large, L"Format\nBackground", L"F", S::Large);
 
   // ---- Slide Show (Transitions and Animations come with P3's commands)
   b.Tab(L"Slide Show", L"S");
