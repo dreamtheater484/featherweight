@@ -73,7 +73,8 @@ bool LabelledBox(const RibbonItem& it, RibbonSize size) {
 std::wstring BoxLabel(const RibbonItem& it) { return it.label.back() == L':' ? it.label : it.label + L":"; }
 
 // A large label's two lines: at "\n", or at the space that balances them.
-std::pair<std::wstring, std::wstring> SplitLabel(const std::wstring& s, const std::function<float(const std::wstring&)>& w) {
+template <class Width>
+std::pair<std::wstring, std::wstring> SplitLabel(const std::wstring& s, const Width& w) {
   if (const size_t nl = s.find(L'\n'); nl != std::wstring::npos) return {s.substr(0, nl), s.substr(nl + 1)};
   std::pair<std::wstring, std::wstring> best{s, L""};
   float bestW = 1e9f;
@@ -599,7 +600,7 @@ void Ribbon::Layout(const RECT& rc, float ui, RibbonModel m) {
 
   parts_.clear();
   for (auto& [cmd, c] : controls_)
-    if (c) c->visible = false;  // (a tab's own control, Custom, leaves its slot empty)
+    if (c) c->visible = false;  // a Custom item's slot stays empty: the control is the tab's
   if (!model_.tabs.empty()) {
     PlaceTabs();
     // Which step each group is at: shrink the groups a step at a time, those that go first first,
