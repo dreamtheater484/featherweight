@@ -172,3 +172,22 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - p1-model owns the math path in `TextBody.cpp` (agreed with p1-render). Typesetter changes in src/doc/layout keep Word's math tests and the D-milestone checks green.
   - First step (p1-model, measured on the 137 corpus slides with a14:m): fallback 111 pass, native 68. Display integrals now take PowerPoint's variant (glyph 3505 of Cambria Math, one past DisplayOperatorMinHeight); lines of math are 1.2 times their font size unless the equation is taller.
   - **Parked again (coordinator's checkpoint, 2026-11-23):** native stays at 68 of 137 against the fallback's 111, so `FW_SLIDE_MATH` stays off. Lowering math baselines by 0.15 em went to 62 (enee-205 7 to 1) and was dropped. What's left is fine typesetting calibration against PowerPoint, not one big cause. Our math sets wider than PowerPoint's: cs-444's f_K(h_{K-1}, w_K) overflows its oval. A line after a display equation sits about 2 pt low. Baselines are 0.15-0.2 em high on probability-for-computing but not on enee-205. cs-444 vision 8 has a red display paragraph that PowerPoint's PDF doesn't show. Measuring and comparison scripts: `FeatherweightNotes\p1\corpus-analysis\mathcmp.py` and `eqpos.py`; state in `p1-model-state.md`.
+- **On p1-int `cb26c73e`: corpus at 88.31 %** (p1-render: camera rev, spcFirstLastPara, chart margins, pies and doughnuts, hanging indents, empty charts, and `7d70c42c` export matching; p1-model: SmartArt text style, native math off).
+  - 2,222 of 2,516 slides pass, +48 against `d630a3c6`. 14 decks gained 50 slides, 2 lost one each. The public set is at 92/97.
+  - The gain splits three ways, measured against p1-int `34b12323` (`cb26c73e` without `7d70c42c` and the empty-chart fix):
+    - `7d70c42c`'s export matching (picture placement, page box, JPEG at q75): +11 net, 13 gained and 2 lost. All 13 gains are slides with their own pictures: acuk general +4, unisaarland +3, acuk dual-gaelic +2, and 1 each on morocco, goettingen, cs-2110 graphs and course-100. The 2 losses are layout-picture slides in the two unimuenster templates (en 23, de 20: 0.953 → 0.945). 256 slides moved up by more than 0.001, 28 down.
+    - who-health didn't crash this time: +23. The bug is still in `cb26c73e`. p1-render fixed it in `a2210fdf` (a use-after-free in `PdfPainter::DrawBitmap`), which isn't in p1-int yet.
+    - Drawing fixes: +14 (virtual-memory +7, rlf-webinar-i +2, business bodies +2, physik 7-8 +1, morocco +1 and others).
+    - The empty-chart fix flips no corpus slide: goettingen 2 already passed.
+  - Without export matching the corpus is at 2,211 (87.88 %).
+  - Per kind: briefings 85.7 %, charts 86.7 %, features 88.7 %, lectures 89.3 %, photos 83.6 %, school 86.8 %, shows 92.0 %, statistics 80.0 %, templates 92.9 %, training 89.2 %.
+  - Of the 294 failing slides, 223 are near misses (0.90–0.95).
+  - Failing slides by content:
+    - Pictures: 116 (88.5 % of picture slides pass).
+    - Text: 112 (89.4 % pass).
+    - Equations: 24.
+    - SmartArt: 13.
+    - Tables: 11.
+    - Charts: 9 (15 of 24 now pass).
+    - Other: 9.
+  - 90 % needs 43 more slides. Script for the split: `FeatherweightNotes\p1\corpus-analysis\split.py`.
