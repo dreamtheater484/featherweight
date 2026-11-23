@@ -147,6 +147,36 @@ TEST(Chart_LegendEntriesLeftOutAndALabelStep) {
   CHECK_EQ(Filled(art, second), 3u);  // three bars, no swatch
 }
 
+TEST(Chart_ManualLayoutPlacesThePlotAndLegend) {
+  // c:manualLayout in edge mode: the plot area's inner box is the plot itself; the legend sits in
+  // its own box and takes no room from the plot (govuk business bodies, 15-213).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:plotArea>"), 12,
+              "<c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/>"
+              "<c:x val=\"0.25\"/><c:y val=\"0.1\"/><c:w val=\"0.5\"/><c:h val=\"0.6\"/></c:manualLayout></c:layout>");
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"b\"/><c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.8\"/>"
+              "<c:y val=\"0\"/><c:w val=\"0.2\"/><c:h val=\"0.1\"/></c:manualLayout></c:layout>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.plotLayout.has_value() && c.legendLayout.has_value());
+  CHECK(c.plotInner);
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  // The bars stand on the plot's bottom (0.7 x 200) and keep within its sides (100 to 300).
+  const draw::Color first = *draw::SchemeColor("accent1", Colors());
+  bool any = false;
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, first)) {
+      const draw::Rect b = m.path.Bounds();
+      if (b.top < 20) continue;  // the legend's swatch, at the top
+      any = true;
+      CHECK(b.left >= 99 && b.right <= 301);
+      CHECK(std::fabs(b.bottom - 140) < 1);
+    }
+  CHECK(any);
+}
+
 TEST(Chart_LogarithmicValueAxis) {
   // c:logBase 10 with a minimum of 0.01: values a thousandfold apart, gridlines at each power of
   // ten up to the one above the largest (15-213's memory gap chart).

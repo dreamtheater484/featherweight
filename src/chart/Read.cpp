@@ -247,6 +247,18 @@ std::string SourceFormat(pugi::xml_node group, const char* tag, DataSource* sour
   return C(CacheOf(C(C(group, "ser"), tag), "numRef", "numCache", "numLit"), "formatCode").text().get();
 }
 
+// An element's c:layout/c:manualLayout in edge mode, as fractions of the chart (factor mode, an
+// offset from where the chart would put it, isn't followed); `inner`: layoutTarget inner.
+std::optional<draw::Rect> ManualLayout(pugi::xml_node owner, bool* inner = nullptr) {
+  pugi::xml_node m = C(C(owner, "layout"), "manualLayout");
+  if (!m || Val(C(m, "xMode")) != "edge" || Val(C(m, "yMode")) != "edge") return std::nullopt;
+  const double x = Number(C(m, "x"), "val", kNaN), y = Number(C(m, "y"), "val", kNaN);
+  const double w = Number(C(m, "w"), "val", kNaN), h = Number(C(m, "h"), "val", kNaN);
+  if (!(x >= -0.5 && x <= 1.5 && y >= -0.5 && y <= 1.5 && w > 0 && w <= 2 && h > 0 && h <= 2)) return std::nullopt;
+  if (inner) *inner = Val(C(m, "layoutTarget")) == "inner";
+  return draw::Rect{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + w), static_cast<float>(y + h)};
+}
+
 // An axis; `source` is the format its numbers take when they're linked to the data's.
 Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorContext& colors) {
   Axis a;
@@ -299,6 +311,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   pugi::xml_node chart = C(chartSpace, "chart");
   pugi::xml_node plot = C(chart, "plotArea");
   if (!plot) return false;
+  out.plotLayout = ManualLayout(plot, &out.plotInner);
   out.area = LookOf(C(chartSpace, "spPr"), colors);
   // In a workbook (where `data` comes from), Excel rounds the corners when the chart doesn't say,
   // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
@@ -467,6 +480,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const std::string_view pos = Val(C(legend, "legendPos"));
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
     out.legendOverlay = On(legend, "overlay", false);
+    out.legendLayout = ManualLayout(legend);
     for (pugi::xml_node e = legend.first_child(); e; e = e.next_sibling())
       if (LocalNameOf(e) == "legendEntry" && On(e, "delete", false))
         out.hiddenEntries.push_back(static_cast<uint32_t>(std::max(0.0, Number(C(e, "idx"), "val", 0.0))));

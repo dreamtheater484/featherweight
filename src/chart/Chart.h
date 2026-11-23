@@ -97,6 +97,10 @@ struct Chart {
   // c:overlay: the title or legend drawn over the plot area, which keeps the room it would take.
   bool titleOverlay = false, legendOverlay = false;
   std::vector<uint32_t> hiddenEntries;  // c:legendEntry/c:delete: the legend's entries left out, by index
+  // c:manualLayout (edge mode): the plot area's and the legend's boxes, as fractions of the chart's
+  // size; the plot area's is the plot itself (layoutTarget inner) or the plot with its axes' labels.
+  std::optional<draw::Rect> plotLayout, legendLayout;
+  bool plotInner = false;
   Look area, plot;  // the chart's and the plot area's c:spPr
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black

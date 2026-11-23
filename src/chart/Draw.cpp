@@ -1311,6 +1311,14 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     p.r.left = std::max(p.r.left, r.left + std::min(bottom.front().width / 2, maxSide));
     if (sw <= 0) p.r.right = std::min(p.r.right, r.right - side - std::min(bottom.back().width / 2, maxSide));
   }
+  // A plot area the chart places (c:manualLayout): the plot itself there, or the plot with its
+  // labels' room around it as worked out above.
+  if (ch.plotLayout) {
+    const Rect box{ch.plotLayout->left * W, ch.plotLayout->top * H, ch.plotLayout->right * W, ch.plotLayout->bottom * H};
+    p.r = ch.plotInner ? box
+                       : Rect{box.left + (p.r.left - r.left), box.top + (p.r.top - r.top), box.right - (r.right - p.r.right),
+                              box.bottom - (r.bottom - p.r.bottom)};
+  }
   if (p.r.right - p.r.left < 8 || p.r.bottom - p.r.top < 8) return;
   const Rect& P = p.r;
   if (!ch.plot.noFill && ch.plot.fill) b.Mark(Path::FromRect(P), ch.plot, *ch.plot.fill, std::nullopt, 0.75f);
@@ -1549,7 +1557,12 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   };
   if (!ch.title.empty() && !ch.titleOverlay) r.top = title();
   const std::vector<Entry> entries = ch.legend != LegendPos::None ? Entries(ch, colors) : std::vector<Entry>();
-  if (!entries.empty() && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
+  // A legend the chart places (c:manualLayout) goes in its box, taking no room from the plot.
+  const std::optional<Rect> legendBox =
+      ch.legendLayout ? std::optional<Rect>(Rect{ch.legendLayout->left * W, ch.legendLayout->top * H, ch.legendLayout->right * W,
+                                                 ch.legendLayout->bottom * H})
+                      : std::nullopt;
+  if (!entries.empty() && !legendBox && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
   if (r.right - r.left >= 10 && r.bottom - r.top >= 10) {
     const Group& g0 = ch.groups.front();
     if (g0.type == Type::Pie || g0.type == Type::Doughnut) DrawPie(b, g0, r, ts, text, colors, W, H, ch.presentation);
@@ -1557,7 +1570,8 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
     else DrawAxes(b, ch, r, ts, text, colors, W, H);
   }
   if (!ch.title.empty() && ch.titleOverlay) title();
-  if (!entries.empty() && ch.legendOverlay) DrawLegend(b, ch.legend, true, entries, ch.titleOverlay ? inner : Rect{inner.left, r.top, inner.right, inner.bottom}, ts, text);
+  if (!entries.empty() && legendBox) DrawLegend(b, ch.legend, true, entries, *legendBox, ts, text);
+  if (!entries.empty() && ch.legendOverlay && !legendBox) DrawLegend(b, ch.legend, true, entries, ch.titleOverlay ? inner : Rect{inner.left, r.top, inner.right, inner.bottom}, ts, text);
   return b.Take();
 }
 
