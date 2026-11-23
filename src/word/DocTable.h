@@ -57,6 +57,8 @@ class DocTable {
   ToolItem GridItem();
   ToolItem ShadingButton();
   ToolItem BordersButton();
+  // Table Layout > Cell Size: the selected rows' height (0: as the text needs) or columns' width.
+  ToolItem SizeBox(bool height);
   bool InTable() const { return Cell().has_value(); }
 
   // Tab or Shift+Tab: the next or previous cell's text selected (a new row after the last cell).

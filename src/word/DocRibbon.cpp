@@ -347,10 +347,12 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Merge", L"ZM");
     b.Button(CmdTableMerge, glyph::Merge, Size::Large, L"Merge\nCells", L"M");
     b.Button(CmdTableSplit, glyph::Merge, Size::Large, L"Split\nCells", L"P");
-    b.Group(L"Cell Size", L"ZS", CmdTableProperties);
+    b.Group(L"Cell Size", L"ZS", CmdTableProperties, 2);
     b.Menu(CmdTableAutoFitContents, glyph::Fit, Size::Large, L"AutoFit", L"F",
            {CmdTableAutoFitContents, CmdTableAutoFitWindow, CmdTableFixedWidth});
-    b.Button(CmdTableDistributeColumns, glyph::Columns, Size::Medium, L"Distribute Columns", L"UC");
+    b.Add(table_->SizeBox(true), Size::Medium, L"Height", L"H");
+    b.Add(table_->SizeBox(false), Size::Medium, L"Width", L"W");
+    b.Button(CmdTableDistributeColumns, glyph::Columns, Size::Medium, L"Distribute Columns", L"UC").newColumn = true;
     b.Group(L"Data", L"ZD2");
     b.Toggle(CmdTableHeaderRow, glyph::Header, Size::Large, L"Repeat\nHeader Rows", L"J");
     b.Button(CmdTableToText, glyph::TextBox, Size::Large, L"Convert\nto Text", L"V");
@@ -362,8 +364,10 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Accessibility", L"Z1");
     b.Toggle(CmdPicturePanel, icon::Picture, Size::Large, L"Alt\nText", L"AT");
     arrange();
-    b.Group(L"Size", L"ZZ", CmdPicturePanel);
+    b.Group(L"Size", L"ZZ", CmdPicturePanel, 2);
     b.Toggle(CmdPictureCrop, icon::Crop, Size::Large, L"Crop", L"V");
+    b.Add(ObjectSizeBox(true), Size::Medium, L"Height", L"H");
+    b.Add(ObjectSizeBox(false), Size::Medium, L"Width", L"W");
   }
   if (shape || ribbonAll_) {
     b.Tab(L"Shape Format", L"JD", true);
@@ -373,6 +377,9 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Shape Styles", L"ZY", CmdShapePanel);
     b.Toggle(CmdShapePanel, icon::Settings, Size::Large, L"Format\nShape", L"O");
     arrange();
+    b.Group(L"Size", L"ZZ", CmdShapePanel, 2);
+    b.Add(ObjectSizeBox(true), Size::Medium, L"Height", L"H");
+    b.Add(ObjectSizeBox(false), Size::Medium, L"Width", L"W");
   }
   if ((editing && hf_) || ribbonAll_) {
     b.Tab(L"Header & Footer", L"JH", true);
@@ -397,6 +404,42 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   m.file = {{RibbonFilePlace::Options, CmdToggleSpelling, L"Check spelling as you type", L"", 0},
             {RibbonFilePlace::Options, CmdToggleAutoCorrect, L"AutoCorrect as you type", L"", 0},
             {RibbonFilePlace::Options, CmdReviewerName, L"User name", L"The name your changes and comments carry", 0}};
+}
+
+ToolItem DocView::ObjectSizeBox(bool height) {
+  wchar_t measure[4] = L"";
+  const bool metric = !(GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IMEASURE, measure, 4) > 0 && measure[0] == L'1');
+  const double per = metric ? 360000.0 : 914400.0;  // EMUs in a centimeter or an inch
+  ToolItem t;
+  t.kind = ToolKind::SpinBox;
+  t.cmd = height ? CmdObjectHeightBox : CmdObjectWidthBox;
+  t.width = 84;
+  t.unit = metric ? L" cm" : L"\"";
+  t.minValue = 0.01;
+  t.maxValue = metric ? 55.87 : 22;  // Word's largest
+  t.step = metric ? 0.1 : 0.05;
+  t.decimals = 2;
+  const uint32_t d = SelectedPicture();
+  t.enabled = Editing() && d != fw::doc::kNone && Movable(d);
+  if (!t.enabled) return t;
+  const bool picture = PictureInfoOf(d).picture;
+  t.value = static_cast<double>(height ? (picture ? PictureInfoOf(d).cy : ShapeInfoOf(d).cy).Value()
+                                       : (picture ? PictureInfoOf(d).cx : ShapeInfoOf(d).cx).Value()) / per;
+  t.onChange = [this, height, per](const ToolValue& v) {
+    const uint32_t p = SelectedPicture();
+    if (p == fw::doc::kNone || v.number <= 0) return;
+    const bool pic = PictureInfoOf(p).picture;
+    double w = static_cast<double>((pic ? PictureInfoOf(p).cx : ShapeInfoOf(p).cx).Value());
+    double h = static_cast<double>((pic ? PictureInfoOf(p).cy : ShapeInfoOf(p).cy).Value());
+    const double now = v.number * per;
+    if (pic && w > 0 && h > 0) {  // as Word's locked aspect ratio, a picture's default
+      (height ? w : h) *= now / (height ? h : w);
+    }
+    (height ? h : w) = now;
+    const fw::Emu cx(std::llround(w)), cy(std::llround(h));
+    ApplyPicture(pic ? pictures_->Resize(p, cx, cy) : shapes_->Resize(p, cx, cy));
+  };
+  return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +490,30 @@ void MenuIds(HMENU menu, std::set<int>& ids) {
 }  // namespace
 
 bool DocView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"ribbon" || (arg != L"dump" && arg != L"check")) return false;
+  if (op != L"ribbon") return false;
+  if (arg.rfind(L"set=", 0) == 0) {
+    // ribbon:set=<command>,<value>: as if the item's box were set to the number, or its list's
+    // choice picked (checks without the control).
+    const size_t comma = arg.find(L',');
+    const int cmd = _wtoi(arg.c_str() + 4);
+    const std::wstring value = comma == std::wstring::npos ? std::wstring() : arg.substr(comma + 1);
+    RibbonModel m;
+    BuildRibbon(m, ToolbarContext{});
+    for (const RibbonTab& t : m.tabs)
+      for (const RibbonGroup& g : t.groups)
+        for (const RibbonItem& it : g.items)
+          if (it.tool.cmd == cmd && it.tool.onChange) {
+            ToolValue v;
+            v.number = _wtof(value.c_str());
+            v.index = _wtoi(value.c_str());
+            v.text = value;
+            it.tool.onChange(v);
+            return true;
+          }
+    fwprintf(stderr, L"ribbon: no box %d\n", cmd);
+    return true;
+  }
+  if (arg != L"dump" && arg != L"check") return false;
   const bool check = arg == L"check";
   RibbonModel m;
   ribbonAll_ = check;
@@ -475,9 +541,10 @@ bool DocView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
       for (const RibbonItem& it : g.items) {
         ++items;
         if (!check)
-          fwprintf(stderr, L"ribbon:   item %d %s [%s] size %d%s%s%s\n", it.tool.cmd, it.label.c_str(), it.keyTip.c_str(),
+          fwprintf(stderr, L"ribbon:   item %d %s [%s] size %d%s%s%s%s\n", it.tool.cmd, it.label.c_str(), it.keyTip.c_str(),
                    static_cast<int>(it.size), it.tool.enabled ? L"" : L" (off)", it.tool.checked ? L" (on)" : L"",
-                   it.tool.text.empty() ? L"" : (L" \"" + it.tool.text + L"\"").c_str());
+                   it.tool.text.empty() ? L"" : (L" \"" + it.tool.text + L"\"").c_str(),
+                   it.tool.kind == ToolKind::SpinBox ? (L" = " + std::to_wstring(it.tool.value)).c_str() : L"");
         note(it.tool.cmd, where);
         for (int cmd : it.menu) note(cmd, where + L" › " + it.label);
         if (it.gallery)

@@ -1798,6 +1798,13 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSpelling:
     case CmdWordCount: s = {Ready(), false}; break;
     case CmdLanguage: s = {Editing(), false}; break;
+    case CmdObjectHeightBox:
+    case CmdObjectWidthBox: {
+      const uint32_t d = SelectedPicture();
+      s = {Editing() && d != fw::doc::kNone && Movable(d), false};
+      s.label = cmd == CmdObjectHeightBox ? L"Height" : L"Width";
+      break;
+    }
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -1898,6 +1905,11 @@ bool DocView::Execute(int cmd) {
     case CmdCut: Cut(); return true;
     case CmdPaste: Paste(); return true;
     case CmdPasteMerge: Paste(true, true); return true;
+    case CmdObjectHeightBox:  // a box's KeyTip or command search: the panel with the size
+    case CmdObjectWidthBox:
+      if (const uint32_t d = SelectedPicture(); d != fw::doc::kNone)
+        return Execute(PictureInfoOf(d).picture ? CmdPicturePanel : CmdShapePanel);
+      return true;
     case CmdUndo: Undo(); return true;
     case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;

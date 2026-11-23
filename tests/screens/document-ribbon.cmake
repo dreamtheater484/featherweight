@@ -20,3 +20,16 @@ if(NOT err MATCHES "ribbon-check: ok:")
   message(FATAL_ERROR "the document's ribbon doesn't cover its commands:\n${report}")
 endif()
 message(STATUS "${report}")
+
+# The ribbon's own boxes edit the document: Layout › Paragraph's left indent and spacing after, set
+# through their items (ribbon:set), then read back from the selection.
+execute_process(COMMAND "${EXE}" --snapshot "${OUT}/boxes.png" --theme light --size 1366x768
+                        --script "ribbon:set=3650,2.5;ribbon:set=3653,12;ribbon:dump" "${DOCS}/simple.docx"
+                RESULT_VARIABLE code ERROR_VARIABLE err TIMEOUT 120)
+if(NOT code EQUAL 0)
+  message(FATAL_ERROR "the ribbon boxes run failed (${code})\n${err}")
+endif()
+if(NOT err MATCHES "item 3650 [^\n]* = 2\\.(49|50)" OR NOT err MATCHES "item 3653 [^\n]* = 12\\.0")
+  string(REGEX MATCHALL "ribbon: [^\n]*item 365[03][^\n]*" lines "${err}")
+  message(FATAL_ERROR "the paragraph boxes didn't change the paragraph: ${lines}")
+endif()

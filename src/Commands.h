@@ -453,6 +453,10 @@ enum Cmd : int {
   CmdSpaceAfterBox,
   CmdCellShading,           // Table Design > Shading: the selected cells' color (the last one picked)
   CmdCellBorders,           // Table Design > Borders: the selected cells' borders (the last ones picked)
+  CmdObjectHeightBox,       // Picture and Shape Format > Size: the selected one's height and width
+  CmdObjectWidthBox,
+  CmdRowHeightBox,          // Table Layout > Cell Size: the selected rows' height, the columns' width
+  CmdColumnWidthBox,
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5

@@ -338,6 +338,8 @@ class DocView : public PagedView {
   // The ribbon: the picture or shape just inserted, whose tab shows once; inserting one now; every
   // contextual tab built, for ribbon:check.
   uint32_t ribbonInserted_ = fw::doc::kNone;
+  // Picture and Shape Format > Size: the selected one's height or width (a picture keeps its shape).
+  ToolItem ObjectSizeBox(bool height);
   bool inserting_ = false;
   bool ribbonAll_ = false;
   TextPos bodyCaret_;  // where the caret was in the body before a header was edited
