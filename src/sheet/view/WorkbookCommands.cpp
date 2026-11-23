@@ -242,8 +242,13 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (preview_ && (cmd == CmdNextPage || cmd == CmdPrevPage || cmd == CmdFirstPage || cmd == CmdLastPage ||
                    cmd == CmdZoomAuto || cmd == CmdZoomFitPage || cmd == CmdZoomFitWidth || cmd == CmdZoomActual ||
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
-                   (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
-    return PagedView::QueryCommand(cmd);
+                   (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50))) {
+    s = PagedView::QueryCommand(cmd);
+    // Their names, for the ribbon's Print Preview tab (the window's toolbar showed them as arrows).
+    if (s.label.empty())
+      s.label = cmd == CmdNextPage ? L"Next page" : cmd == CmdPrevPage ? L"Previous page" : cmd == CmdZoomActual ? L"Zoom to 100 %" : L"";
+    return s;
+  }
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
