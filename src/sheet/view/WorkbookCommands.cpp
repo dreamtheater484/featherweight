@@ -238,11 +238,17 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState WorkbookView::QueryCommand(int cmd) {
   CommandState s;
   if (PageSetupCommandState(cmd, s)) return s;  // s3-print (in print preview too)
+  if (RibbonCommandState(cmd, s)) return s;     // the ribbon's menus and buttons (R1, WorkbookRibbon.cpp)
   if (preview_ && (cmd == CmdNextPage || cmd == CmdPrevPage || cmd == CmdFirstPage || cmd == CmdLastPage ||
                    cmd == CmdZoomAuto || cmd == CmdZoomFitPage || cmd == CmdZoomFitWidth || cmd == CmdZoomActual ||
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
-                   (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
-    return PagedView::QueryCommand(cmd);
+                   (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50))) {
+    s = PagedView::QueryCommand(cmd);
+    // Their names, for the ribbon's Print Preview tab (the window's toolbar showed them as arrows).
+    if (s.label.empty())
+      s.label = cmd == CmdNextPage ? L"Next page" : cmd == CmdPrevPage ? L"Previous page" : cmd == CmdZoomActual ? L"Zoom to 100 %" : L"";
+    return s;
+  }
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
@@ -335,6 +341,11 @@ std::vector<int> WorkbookView::Commands() {
     if (cmd != CmdCondFormatBox) ids.push_back(cmd);
   for (int cmd = CmdNameManager; cmd <= CmdPasteNames; ++cmd) ids.push_back(cmd);
   for (int cmd = CmdPivotRefresh; cmd <= CmdPivotRefreshAll; ++cmd) ids.push_back(cmd);
+  // What Excel's ribbon added (R1, r1-sheet).
+  for (int cmd = CmdFormatCellsFont; cmd <= CmdViewNormal; ++cmd) ids.push_back(cmd);
+  for (int cmd : {CmdGrowFont, CmdShrinkFont, CmdIndent, CmdOutdent, CmdMarginsNormal, CmdMarginsWide, CmdMarginsNarrow,
+                  CmdPortrait, CmdLandscape})
+    ids.push_back(cmd);
   return ids;
 }
 
@@ -342,6 +353,7 @@ bool WorkbookView::Execute(int cmd) {
   if (!Ready()) return false;
   if (bigLoad_) WorkDone();  // a large file still being read: all of it first (print, find, sort...)
   if (PageSetupCommand(cmd)) return true;  // s3-print (in print preview too)
+  if (RibbonCommand(cmd)) return true;     // R1
   if (preview_ && cmd != CmdPrintPreview && cmd != CmdCopy && cmd != CmdNextSheet && cmd != CmdPrevSheet &&
       !(cmd >= CmdSheetPick && cmd <= CmdSheetPickLast))
     return PagedView::Execute(cmd);
@@ -478,6 +490,7 @@ void WorkbookView::AddUndoToolbar(ToolbarModel& m) {
 }
 
 void WorkbookView::FillMenu(int which, HMENU menu) {
+  if (FillRibbonMenu(which, menu)) return;  // the ribbon's menus (R1)
   if (preview_ || which != CmdZoomMenu) {
     PagedView::FillMenu(which, menu);
     return;

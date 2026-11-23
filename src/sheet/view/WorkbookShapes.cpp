@@ -263,6 +263,7 @@ draw::Rect WorkbookView::NewObjectRect(double width, double height) const {
 
 void WorkbookView::SelectNewObject(uint32_t id) {
   object_ = id;
+  ribbonInserted_ = id;  // the ribbon shows its Format tab (R1)
   objectSheet_ = sheet_;
   host_.ViewInvalidate();
   host_.ViewStateChanged();

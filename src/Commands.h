@@ -462,6 +462,38 @@ enum Cmd : int {
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
   CmdPivotTable,           // Insert > PivotTable: its panel
 
+  // The workbook's ribbon (R1, r1-sheet): 3700-3749. What Excel's buttons do that Featherweight
+  // did only in Format Cells or the Page Setup panel, and the ribbon's menus (their lists come
+  // from WorkbookView::FillMenu or the item's `menu`).
+  CmdFormatCellsFont = 3700,  // Home > Font's launcher: Format Cells on its Font page
+  CmdFormatCellsAlignment,    // Home > Alignment's launcher
+  CmdAlignTop,                // the cells' vertical alignment (a second click: bottom again)
+  CmdAlignMiddle,
+  CmdAlignBottom,
+  CmdWrapText,                // on or off
+  CmdNumAccounting,           // Accounting Number Format
+  CmdCommaStyle,              // the Comma cell style
+  CmdViewNormal,              // View > Normal: page break preview and print preview off
+  CmdCellsFormatMenu = 3720,  // Home > Cells > Format ▾
+  CmdFillMenu,                // Home > Editing > Fill ▾
+  CmdClearMenu,               // Clear ▾
+  CmdSortFilterMenu,          // Sort & Filter ▾
+  CmdFindSelectMenu,          // Find & Select ▾
+  CmdShapesMenu,              // Insert > Shapes ▾
+  CmdColumnChartMenu,         // Insert > Charts: Column or Bar ▾, Line or Area ▾, Pie or Doughnut ▾
+  CmdLineChartMenu,
+  CmdPieChartMenu,
+  CmdMarginsMenu,             // Page Layout: Margins ▾, Orientation ▾, Print Area ▾, Breaks ▾
+  CmdOrientationMenu,
+  CmdPrintAreaMenu,
+  CmdBreaksMenu,
+  CmdScaleWidth,              // Scale to Fit: Width ▾ and Height ▾ (Automatic or 1 page)
+  CmdScaleHeight,
+  CmdNotesMenu,               // Review > Notes ▾
+  CmdFreezeMenu,              // View > Freeze Panes ▾
+  CmdPrintWhatMenu,           // Print Preview: what prints ▾, Scaling ▾
+  CmdScalingMenu,
+
   // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
   CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
 

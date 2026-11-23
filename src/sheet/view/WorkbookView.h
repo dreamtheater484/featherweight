@@ -29,6 +29,7 @@
 #include "sheet/view/WorkbookFile.h"
 #include "text/Fonts.h"
 
+struct ToolItem;
 
 namespace fw::sheet::calc {
 struct FunctionHelp;
@@ -101,6 +102,7 @@ class WorkbookView : public PagedView {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;  // WorkbookRibbon.cpp (R1)
   void FillMenu(int which, HMENU menu) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
   bool HasStatusBar() const override { return Ready() && !preview_; }
@@ -435,6 +437,9 @@ class WorkbookView : public PagedView {
   bool ApplyBorders(int which, const BorderSide& side);
   bool MergeCells(int how);  // 0 merge and center, 1 merge across, 2 merge, 3 unmerge
   void AddFormatToolbar(ToolbarModel& m);
+  // The Home tab's boxes and color buttons (font, size, colors, borders, styles, number format) with
+  // the active cell's values: the ribbon's, and the toolbar's.
+  ToolItem FormatTool(int cmd);
   D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
   int lastBorders_ = 0;  // the borders button's choice its main part repeats
   bool ApplyCellStyle(int index);  // one of Excel's built-in cell styles (WorkbookFormat.cpp's list)
@@ -645,6 +650,17 @@ class WorkbookView : public PagedView {
   bool PageSetupCommand(int cmd);
   void AddPageSetupTabItems(HMENU m);
   void AddPageSetupCellItems(HMENU m);
+  // ---- The ribbon (WorkbookRibbon.cpp, R1 r1-sheet): Excel's tabs on the tab's commands.
+  ToolItem RibbonTool(int cmd);  // a box, color button or dropdown of its own (FormatTool's and more)
+  bool RibbonCommandState(int cmd, CommandState& s);
+  bool RibbonCommand(int cmd);
+  bool FillRibbonMenu(int which, HMENU menu);
+  bool RibbonScriptOp(const std::wstring& arg);  // ribbon:dump
+  void AppendTabColorMenu(HMENU m, const wchar_t* label);  // the sheet tab's submenus (WorkbookSheetOps.cpp)
+  void AppendUnhideSheetMenu(HMENU m, const wchar_t* label);
+  int ScalingNow() const;  // the 4 scalings' index (-1: a scale of its own); WorkbookPageSetup.cpp
+  int MarginsNow() const;  // Normal, Wide, Narrow's index (-1: others)
+  uint32_t ribbonInserted_ = 0;  // an object just inserted and still selected: the ribbon shows its tab
   void AddPageSetupToolbar(ToolbarModel& m);  // Page setup ▾, the scaling shortcuts
   edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
   void AfterPageChange();  // the preview and Page Break Preview paginate again
