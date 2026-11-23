@@ -141,7 +141,7 @@ class Ribbon {
   RibbonItem* ItemAt(int g, int i);
   const RibbonItem* ItemAt(int g, int i) const;
   CommandState Query(int cmd) const;
-  std::wstring LabelOf(const RibbonItem& it) const;
+  std::wstring LabelOf(const RibbonItem& it, bool large = false) const;  // "\n" kept only for a large one
   float TextW(const std::wstring& s, float dip, bool semibold = false) const;
 
   // Layout of one group at a stage (0: as given ... 3: galleries as buttons), from `x` at body

@@ -164,8 +164,13 @@ const RibbonItem* Ribbon::ItemAt(int g, int i) const { return const_cast<Ribbon*
 
 CommandState Ribbon::Query(int cmd) const { return query && cmd ? query(cmd) : CommandState{}; }
 
-std::wstring Ribbon::LabelOf(const RibbonItem& it) const {
-  if (!it.label.empty()) return it.label;
+std::wstring Ribbon::LabelOf(const RibbonItem& it, bool large) const {
+  if (!it.label.empty()) {
+    if (large) return it.label;  // a large label's "\n" says where its two lines break
+    std::wstring s = it.label;
+    std::replace(s.begin(), s.end(), L'\n', L' ');
+    return s;
+  }
   std::wstring s = Query(it.tool.cmd).label;
   if (s.size() > 1 && s.back() == L'…') s.pop_back();  // "Save as…" on a button: "Save as"
   if (s.empty()) s = uia::SplitShortcut(it.tool.tooltip).first;
@@ -223,7 +228,7 @@ float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumn
   if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + std::max(it.tool.width, 20.f)) * u);
   if (!OwnDrawn(it, size) && !it.gallery) return std::round(std::max(it.tool.width, 20.f) * u);
   const bool arrow = IsMenuButton(it) || IsSplit(it, size) || it.gallery.has_value();
-  const std::wstring label = LabelOf(it);
+  const std::wstring label = LabelOf(it, size == RibbonSize::Large);
   switch (size) {
     case RibbonSize::Large: {
       auto [a, b] = SplitLabel(label, [&](const std::wstring& s) { return TextW(s, kItemFont); });
@@ -625,11 +630,26 @@ void Ribbon::Layout(const RECT& rc, float ui, RibbonModel m) {
     std::stable_sort(steps.begin(), steps.end(), [](const Step& a, const Step& b) {
       return a.round != b.round ? a.round < b.round : a.g != b.g ? a.g > b.g : a.s < b.s;
     });
+    struct Done {
+      int g, from, to;
+    };
+    std::vector<Done> done;
     for (const Step& st : steps) {
       if (total <= avail) break;
       if (stage_[st.g] < st.s && w[st.g][st.s] < w[st.g][stage_[st.g]] - 0.5f) {
         total -= w[st.g][stage_[st.g]] - w[st.g][st.s];
+        done.push_back({st.g, stage_[st.g], st.s});
         stage_[st.g] = st.s;
+      }
+    }
+    // A late step (a group folded) can free more room than it needed: earlier steps are taken
+    // back where they still fit, the latest first, so the most expanded set that fits shows.
+    for (auto d = done.rbegin(); d != done.rend(); ++d) {
+      if (stage_[d->g] != d->to) continue;
+      const float grow = w[d->g][d->from] - w[d->g][d->to];
+      if (total + grow <= avail) {
+        total += grow;
+        stage_[d->g] = d->from;
       }
     }
     const float bodyTop = rc.top + kTabsH * u;
@@ -963,7 +983,7 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
             c.StrokeRound(Inflate(part.rc, -0.5f, -0.5f), 3 * u, p.hover, 1);
       }
       subtle(part.rc, enabled, it.tool.checked && part.kind == PartKind::Item && (it.tool.glyph || part.size == RibbonSize::Large));
-      const std::wstring label = LabelOf(it);
+      const std::wstring label = LabelOf(it, part.size == RibbonSize::Large);
       const wchar_t glyph = it.tool.glyph;
       if (part.size == RibbonSize::Large) {
         const D2D1_RECT_F full = split ? RectF(part.rc.left, part.kind == PartKind::Item ? part.rc.top : part.rc.top - kLargeIconH * u,
