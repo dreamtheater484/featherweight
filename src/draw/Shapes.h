@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -181,6 +182,9 @@ Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, 
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
 // `font`'s ascent as DirectWrite gives it (usWinAscent mostly), per em; 0 when there's no such face.
 float TextAscent(const std::wstring& font, bool bold, bool italic);
+// Whether DirectWrite draws `sfnt`'s glyphs: some embedded CFF fonts load but give no outlines
+// (cpb deck: RijksoverheidSans), though a PDF viewer draws them. True when it can't tell.
+bool OutlinesInDirectWrite(std::span<const uint8_t> sfnt);
 // A run of shaped glyphs' outlines, its origin on the baseline at (0, 0): outlined text.
 Path GlyphRunOutline(const GlyphRun& run);
 

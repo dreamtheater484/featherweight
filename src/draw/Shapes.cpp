@@ -3,7 +3,7 @@
 #include "draw/CloudFonts.h"
 
 #include <d2d1.h>
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -996,6 +996,47 @@ float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold,
   float w = 0;
   for (float a : advances) w += a;
   return w;
+}
+
+bool OutlinesInDirectWrite(std::span<const uint8_t> sfnt) {
+  ComPtr<IDWriteFactory5> dw;
+  ComPtr<IDWriteInMemoryFontFileLoader> loader;
+  if (sfnt.empty() || sfnt.size() > UINT32_MAX ||
+      FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory5),
+                                 reinterpret_cast<IUnknown**>(dw.GetAddressOf()))) ||
+      FAILED(dw->CreateInMemoryFontFileLoader(&loader)) || FAILED(dw->RegisterFontFileLoader(loader.Get())))
+    return true;
+  bool drawn = true;
+  ComPtr<IDWriteFontFile> file;
+  ComPtr<IDWriteFontFace> face;
+  BOOL supported = FALSE;
+  DWRITE_FONT_FILE_TYPE fileType{};
+  DWRITE_FONT_FACE_TYPE faceType{};
+  UINT32 faces = 0;
+  if (SUCCEEDED(loader->CreateInMemoryFontFileReference(dw.Get(), sfnt.data(), static_cast<UINT32>(sfnt.size()), nullptr,
+                                                        &file)) &&
+      SUCCEEDED(file->Analyze(&supported, &fileType, &faceType, &faces)) && supported) {
+    IDWriteFontFile* files[] = {file.Get()};
+    if (SUCCEEDED(dw->CreateFontFace(faceType, 1, files, 0, DWRITE_FONT_SIMULATIONS_NONE, &face))) {
+      // The first of a few common letters the font has.
+      const UINT32 letters[] = {'a', 'e', 'o', 'n', 'A', 'H', '0'};
+      UINT16 glyphs[std::size(letters)] = {};
+      UINT16 glyph = 0;
+      if (SUCCEEDED(face->GetGlyphIndices(letters, static_cast<UINT32>(std::size(letters)), glyphs)))
+        for (UINT16 g : glyphs)
+          if (g && !glyph) glyph = g;
+      if (glyph) {
+        Path path;
+        PathSink sink(path);
+        face->GetGlyphRunOutline(100, &glyph, nullptr, nullptr, 1, FALSE, FALSE, &sink);
+        drawn = !path.Empty();
+      }
+    }
+  }
+  face.Reset();
+  file.Reset();
+  dw->UnregisterFontFileLoader(loader.Get());
+  return drawn;
 }
 
 float TextAscent(const std::wstring& font, bool bold, bool italic) {

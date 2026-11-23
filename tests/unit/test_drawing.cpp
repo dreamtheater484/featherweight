@@ -8,6 +8,8 @@
 #include <wrl/client.h>
 
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,6 +20,7 @@
 #include "draw/Drawing.h"
 #include "draw/Geometry.h"
 #include "draw/Images.h"
+#include "draw/Shapes.h"
 #include "draw/Theme.h"
 #include "draw/Xml.h"
 #include "pkg/XmlDom.h"
@@ -1048,6 +1051,27 @@ TEST(DrawingML_ChartIsPlaceholder) {
                        res, dom);
   CHECK(d && d->IsPlaceholder());
   CHECK(d && d->Extent().width == 100);
+}
+
+TEST(Shapes_OutlinesInDirectWriteFromMemory) {
+  // An installed TrueType font, from memory: DirectWrite draws its glyphs. A font whose tables
+  // don't hold together draws nothing it can tell, so it says yes (the caller keeps it).
+  wchar_t dir[MAX_PATH] = {};
+  GetWindowsDirectoryW(dir, MAX_PATH);
+  std::vector<uint8_t> arial;
+  if (FILE* f = _wfopen((std::wstring(dir) + L"\\Fonts\\arial.ttf").c_str(), L"rb")) {
+    std::fseek(f, 0, SEEK_END);
+    arial.resize(static_cast<size_t>(std::ftell(f)));
+    std::fseek(f, 0, SEEK_SET);
+    arial.resize(std::fread(arial.data(), 1, arial.size(), f));
+    std::fclose(f);
+  }
+  if (arial.empty()) return;
+  CHECK(draw::OutlinesInDirectWrite(arial));
+  // TrueType outlines under the OpenType (CFF) tag: no outlines.
+  std::vector<uint8_t> mistagged = arial;
+  std::memcpy(mistagged.data(), "OTTO", 4);
+  CHECK(!draw::OutlinesInDirectWrite(mistagged));
 }
 
 TEST(Images_BoxResampleAverages) {
