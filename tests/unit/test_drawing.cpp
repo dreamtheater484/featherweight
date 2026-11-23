@@ -122,8 +122,9 @@ std::vector<uint8_t> IconOf(const std::vector<uint8_t>& png, int size) {
   return ico;
 }
 
-// A metafile 100 x 50 (0.01 mm) with its left half red and its right half blue, made by GDI.
-std::vector<uint8_t> MakeEmf() {
+// A metafile 100 x 50 (0.01 mm) with its left half red and its right half blue, made by GDI; with
+// `picture`, the blue half is a bitmap (StretchDIBits).
+std::vector<uint8_t> MakeEmf(bool picture = false) {
   RECT frame{0, 0, 2000, 1000};  // 20 x 10 mm
   HDC dc = CreateEnhMetaFileW(nullptr, nullptr, &frame, nullptr);
   SetMapMode(dc, MM_ANISOTROPIC);
@@ -135,7 +136,14 @@ std::vector<uint8_t> MakeEmf() {
   HBRUSH red = CreateSolidBrush(RGB(255, 0, 0)), blue = CreateSolidBrush(RGB(0, 0, 255));
   RECT l{0, 0, 100, 100}, r{100, 0, 200, 100};
   FillRect(dc, &l, red);
-  FillRect(dc, &r, blue);
+  if (picture) {
+    BITMAPINFO bi{};
+    bi.bmiHeader = {sizeof(BITMAPINFOHEADER), 2, 2, 1, 32, BI_RGB};
+    const uint32_t bits[4] = {0x0000FF, 0x0000FF, 0x0000FF, 0x0000FF};
+    StretchDIBits(dc, 100, 0, 100, 100, 0, 0, 2, 2, bits, &bi, DIB_RGB_COLORS, SRCCOPY);
+  } else {
+    FillRect(dc, &r, blue);
+  }
   DeleteObject(red);
   DeleteObject(blue);
   HENHMETAFILE emf = CloseEnhMetaFile(dc);
@@ -421,6 +429,32 @@ TEST(Images_DamagedAndUnknown) {
   emf[50] = 0xFF;
   CHECK(Image::Open(emf) == nullptr);
   CHECK(Image::Open(Bytes("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect></svg>")) == nullptr);
+}
+
+TEST(Images_EmfRasterizedByGdiAtItsOwnSize) {
+  // As PowerPoint's PDFs have an EMF that holds a picture: GDI's pixels at the size of its bounds
+  // in its own device pixels; a picture drawing nothing at a pixel leaves it transparent. One of
+  // fills only stays vectors.
+  std::shared_ptr<Image> fills = Image::Open(MakeEmf());
+  CHECK(fills != nullptr && fills->Vector() != nullptr);
+  if (fills && fills->Vector()) CHECK(RasterizeEmfWithGdi(*fills->Vector()) == nullptr);
+  std::shared_ptr<Image> img = Image::Open(MakeEmf(true));
+  CHECK(img != nullptr && img->Vector() != nullptr);
+  if (!img || !img->Vector()) return;
+  const std::vector<uint8_t>& d = img->Vector()->Data();
+  int32_t b[4];
+  std::memcpy(b, d.data() + 8, sizeof b);
+  std::shared_ptr<const Bitmap> px = RasterizeEmfWithGdi(*img->Vector());
+  CHECK(px != nullptr);
+  if (!px) return;
+  CHECK_EQ(px->Width(), b[2] - b[0] + 1);
+  CHECK_EQ(px->Height(), b[3] - b[1] + 1);
+  const auto at = [&](int x, int y) { return px->Pixels() + (static_cast<size_t>(y) * px->Width() + x) * 4; };
+  const uint8_t* left = at(px->Width() / 4, px->Height() / 2);
+  const uint8_t* right = at(px->Width() * 3 / 4, px->Height() / 2);
+  CHECK(left[3] == 255 && left[2] > 240 && left[0] < 15);   // red, opaque (BGRA)
+  CHECK(right[3] == 255 && right[0] > 240 && right[2] < 15);
+  CHECK(RasterizeEmfWithGdi(*img->Vector()) == px);  // cached
 }
 
 TEST(Images_Metafiles) {

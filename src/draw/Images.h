@@ -110,6 +110,14 @@ class Image : public PixelHolder, public std::enable_shared_from_this<Image> {
 // Draws a vector picture into a `width` x `height` bitmap with Direct2D's software renderer: what
 // Painter::DrawVectorImage does by default, and how pictures are recolored.
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height);
+// An EMF holding a bitmap (no EMF+ records) as PowerPoint puts it in its PDFs: played by GDI at the
+// size of its bounds in its own device pixels, transparent where it draws nothing; nullptr for
+// anything else (SVG, EMF+, lines and fills only: PowerPoint keeps those vectors; too big). Cached
+// by picture.
+std::shared_ptr<const Bitmap> RasterizeEmfWithGdi(const VectorImage& image);
+// `bitmap`'s colors (taken as opaque) as a baseline JPEG, 4:2:0, at `quality` (0-1; Office writes
+// the pictures it re-encodes at 0.75); empty when encoding fails.
+std::vector<uint8_t> EncodeJpeg(const Bitmap& bitmap, float quality);
 // `source` averaged down (or stretched) to `width` x `height`, each pixel the mean of the area it covers.
 std::shared_ptr<const Bitmap> BoxResample(const Bitmap& source, int width, int height);
 

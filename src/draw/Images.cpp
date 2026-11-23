@@ -10,6 +10,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string_view>
 #include <vector>
@@ -578,6 +579,126 @@ std::shared_ptr<const Bitmap> BoxResample(const Bitmap& source, int width, int h
         px[(static_cast<size_t>(y) * width + x) * 4 + k] = static_cast<uint8_t>(std::clamp(c[k] + 0.5f, 0.f, 255.f));
     }
   return std::make_shared<Bitmap>(width, height, std::move(px));
+}
+
+std::shared_ptr<const Bitmap> RasterizeEmfWithGdi(const VectorImage& image) {
+  const std::vector<uint8_t>& d = image.Data();
+  if (image.GetKind() != VectorImage::Kind::Emf || d.size() < 88) return nullptr;
+  static std::mutex lock;
+  static std::map<uint64_t, std::shared_ptr<const Bitmap>> cache;  // nullptr: drawn as vectors
+  {
+    std::lock_guard<std::mutex> hold(lock);
+    if (auto it = cache.find(image.Id()); it != cache.end()) return it->second;
+  }
+  const auto remember = [&](std::shared_ptr<const Bitmap> out) {
+    std::lock_guard<std::mutex> hold(lock);
+    if (cache.size() >= 64) cache.clear();
+    cache[image.Id()] = out;
+    return out;
+  };
+  // PowerPoint rasterizes only an EMF that holds a picture (a bitmap record); one of lines and
+  // fills stays vectors. EMF+ records (in comments) would be drawn only by their GDI fallback.
+  bool picture = false;
+  for (size_t at = 0; at + 8 <= d.size();) {
+    uint32_t type, size;
+    std::memcpy(&type, d.data() + at, 4);
+    std::memcpy(&size, d.data() + at + 4, 4);
+    if (type == 70 && at + 16 <= d.size() && std::memcmp(d.data() + at + 12, "EMF+", 4) == 0) return remember(nullptr);
+    // SETDIBITSTODEVICE, STRETCHDIBITS; BITBLT, STRETCHBLT, MASKBLT, TRANSPARENTBLT, ALPHABLEND and
+    // PLGBLT with a source bitmap (GDI records FillRect as a BITBLT without one).
+    const auto source = [&](size_t field) {
+      uint32_t cb = 0;
+      if (at + field + 4 <= d.size()) std::memcpy(&cb, d.data() + at + field, 4);
+      return cb != 0;
+    };
+    if (type == 80 || type == 81 ||
+        ((type == 76 || type == 77 || type == 78 || type == 114 || type == 116) && source(88)) ||
+        (type == 79 && source(100)))
+      picture = true;
+    if (size < 8 || type == 14) break;
+    at += size;
+  }
+  if (!picture) return remember(nullptr);
+  int32_t b[4];
+  std::memcpy(b, d.data() + 8, sizeof b);
+  const int w = b[2] - b[0] + 1, h = b[3] - b[1] + 1;
+  if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || static_cast<int64_t>(w) * h > 16'000'000) return remember(nullptr);
+  HENHMETAFILE emf = SetEnhMetaFileBits(static_cast<UINT>(d.size()), d.data());
+  if (!emf) return nullptr;
+  // Played over black and over white: the difference gives each pixel's coverage.
+  std::vector<uint8_t> over[2];
+  HDC dc = CreateCompatibleDC(nullptr);
+  for (int pass = 0; pass < 2 && dc; ++pass) {
+    BITMAPINFO bi{};
+    bi.bmiHeader = {sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bmp || !bits) break;
+    HGDIOBJ old = SelectObject(dc, bmp);
+    std::memset(bits, pass ? 0xFF : 0, static_cast<size_t>(w) * h * 4);
+    const RECT r{0, 0, w, h};
+    PlayEnhMetaFile(dc, emf, &r);
+    GdiFlush();
+    over[pass].assign(static_cast<const uint8_t*>(bits), static_cast<const uint8_t*>(bits) + static_cast<size_t>(w) * h * 4);
+    SelectObject(dc, old);
+    DeleteObject(bmp);
+  }
+  if (dc) DeleteDC(dc);
+  DeleteEnhMetaFile(emf);
+  if (over[0].empty() || over[1].empty()) return nullptr;
+  std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+  for (size_t i = 0; i < px.size(); i += 4) {
+    int sum = 0;
+    for (int c = 0; c < 3; ++c) sum += over[1][i + c] - over[0][i + c];
+    const int a = std::clamp(255 - (sum + 1) / 3, 0, 255);
+    for (int c = 0; c < 3; ++c) px[i + c] = static_cast<uint8_t>(std::min<int>(over[0][i + c], a));  // premultiplied
+    px[i + 3] = static_cast<uint8_t>(a);
+  }
+  return remember(std::make_shared<const Bitmap>(w, h, std::move(px)));
+}
+
+std::vector<uint8_t> EncodeJpeg(const Bitmap& bitmap, float quality) {
+  std::vector<uint8_t> out;
+  const int w = bitmap.Width(), h = bitmap.Height();
+  if (w <= 0 || h <= 0 || w > 65500 || h > 65500) return out;
+  ComScope com;
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)))
+    return out;
+  PROPBAG2 name{};
+  name.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+  VARIANT value;
+  VariantInit(&value);
+  value.vt = VT_R4;
+  value.fltVal = std::clamp(quality, 0.f, 1.f);
+  options->Write(1, &name, &value);
+  WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+  if (FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(w, h)) || FAILED(frame->SetPixelFormat(&format)) ||
+      format != GUID_WICPixelFormat24bppBGR)
+    return out;
+  const UINT stride = static_cast<UINT>(w) * 3;
+  std::vector<uint8_t> rows(static_cast<size_t>(stride) * h);
+  const uint8_t* from = bitmap.Pixels();
+  for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) std::memcpy(&rows[i * 3], from + i * 4, 3);
+  if (FAILED(frame->WritePixels(h, stride, static_cast<UINT>(rows.size()), rows.data())) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()))
+    return out;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)) || FAILED(GetHGlobalFromStream(stream.Get(), &global))) return out;
+  if (const void* bytes = GlobalLock(global)) {
+    out.assign(static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + stat.cbSize.QuadPart);
+    GlobalUnlock(global);
+  }
+  return out;
 }
 
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height) {

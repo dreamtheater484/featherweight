@@ -1,4 +1,5 @@
 #include "draw/D2DPainter.h"
+#include "draw/Images.h"
 
 #include <d2d1_3.h>
 #include <d2d1effects.h>
@@ -472,6 +473,17 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   if (!b) return;
   D2D1_RECT_F d = RectF(dest), s{};
   if (src) s = RectF(*src);
+  // A cropped picture keeps whole pixels, as PdfDocument::PicturesAsPowerPoint has it.
+  // A JPEG decoded smaller (a big picture) in its own pixels.
+  if (src && picturesUp_ && bitmap.Width() > 0 && bitmap.Height() > 0) {
+    const std::shared_ptr<const Image> jpeg = bitmap.Jpeg();
+    const float W = jpeg && jpeg->Width() > 0 ? static_cast<float>(jpeg->Width()) : static_cast<float>(bitmap.Width());
+    const float H = jpeg && jpeg->Height() > 0 ? static_cast<float>(jpeg->Height()) : static_cast<float>(bitmap.Height());
+    const float kx = W / bitmap.Width(), ky = H / bitmap.Height();
+    const float l = std::round(s.left * kx), t = std::round(s.top * ky);
+    const float r = l + std::round((s.right - s.left) * kx), btm = t + std::round((s.bottom - s.top) * ky);
+    if (l >= 0 && t >= 0 && r > l && btm > t && r <= W && btm <= H) s = {l / kx, t / ky, r / kx, btm / ky};
+  }
   // An unturned picture covers whole device pixels, its edges pushed out to them, as a PDF viewer
   // draws an image (pdfium: the outer rectangle); the slide view then draws what its PDF does
   // (migratieketen's spreadsheet screenshots .92 -> .99).
@@ -499,6 +511,8 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
 }
 
 void D2DPainter::DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) {
+  if (picturesUp_)
+    if (std::shared_ptr<const Bitmap> gdi = RasterizeEmfWithGdi(image)) return DrawBitmap(*gdi, dest, nullptr, opacity);
   IUnknown* object = cache_->Get(dc_, image);
   if (!object || dest.Width() == 0 || dest.Height() == 0) return;
   ComPtr<ID2D1GdiMetafile> metafile;

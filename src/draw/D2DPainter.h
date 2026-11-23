@@ -67,7 +67,8 @@ class D2DPainter : public Painter {
   // Shadows left out: what's shadowed is drawn plainly (DrawFrame's second try).
   void SetNoShadows(bool on) { noShadows_ = on; }
   // Text as a PDF viewer draws it (pdfium): grayscale, the glyphs' outlines unhinted, gamma 1; and
-  // pictures placed a hair higher, as PdfDocument::PlacePicturesAsPowerPoint does. The slides' view,
+  // pictures as PdfDocument::PicturesAsPowerPoint has them (a hair higher; an EMF holding a bitmap
+  // drawn by GDI at its own pixel size). The slides' view,
   // show and pictures use it, so they show what their PDF does; the context's own text settings
   // come back when the painter ends.
   void UsePdfLikeDrawing();

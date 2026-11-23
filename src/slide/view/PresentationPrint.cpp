@@ -213,7 +213,7 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
     return false;
   }
   draw::PdfDocument pdf;
-  pdf.PlacePicturesAsPowerPoint();
+  pdf.PicturesAsPowerPoint();
   std::vector<int> pageOf(SlideCount(), -1);  // the page each slide is on, for links between slides
   for (size_t i = 0; i < pages.size(); ++i)
     for (const PageItem& it : pages[i].items)

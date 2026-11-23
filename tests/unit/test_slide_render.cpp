@@ -472,6 +472,32 @@ TEST(SlideRender_TightSpacingComesOffTheTop) {
   CHECK(std::abs(single - tight - 19) <= 2);  // 4.8 pt at 4 px per point
 }
 
+TEST(SlideRender_WideSpacingPutsTheBaselineAtThreeQuartersOfTheLine) {
+  // 150 % of a 48-pt single line (72 pt) in Arial: PowerPoint's baseline sits 54 pt down the line
+  // whatever the font (era-systems' Trebuchet, govau's Public Sans), 15.1 pt below where it is at
+  // single (Arial's ascent share of 48), not the ascent share of 72 pt (19.4 pt below).
+  auto inkTop = [](const char* spacing) {
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            std::string("<a:p><a:pPr><a:lnSpc><a:spcPct val=\"") + spacing +
+                                                "\"/></a:lnSpc><a:buNone/></a:pPr><a:r><a:rPr sz=\"4000\"><a:latin "
+                                                "typeface=\"Arial\"/></a:rPr><a:t>HHHH</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const float scale = 4;  // pixels per point
+    auto b = Render(*slide, static_cast<int>(slide->Size().width * scale), static_cast<int>(slide->Size().height * scale));
+    if (!b) return -1;
+    for (int y = 0; y < b->Height(); ++y)
+      for (int x = 0; x < b->Width(); ++x)
+        if ((Pixel(*b, x, y) & 0xFF) < 100) return y;
+    return -1;
+  };
+  const int single = inkTop("100000"), wide = inkTop("150000");
+  CHECK(single > 0 && wide > 0);
+  CHECK(std::abs(wide - single - 60) <= 3);  // 15.1 pt at 4 px per point
+}
+
 TEST(SlideRender_BottomAnchorIgnoresWideSpacingBelow) {
   // Bottom-anchored text at 150 %: its last line ends where it would at single spacing (cpb's
   // title), the wider spacing's share below the line not counted.
