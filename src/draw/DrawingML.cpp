@@ -374,6 +374,14 @@ class Reader {
   // spPr (and grpSpPr): placement, geometry, fill, line, effects.
   void ReadShapeProperties(pugi::xml_node spPr, Shape& s, const Fill* groupFill) {
     ReadXfrm(A(spPr, "xfrm"), s);
+    // A camera looking straight on (a:scene3d's camera rot, lat and lon 0) but turned about its
+    // view by rev turns the shape back by as much: PowerPoint draws a picture at rot 7.6° under a
+    // camera at rev 6° at 1.6° (letters-home 52).
+    if (pugi::xml_node rot = A(A(A(spPr, "scene3d"), "camera"), "rot");
+        rot && Number(rot, "lat", 0) == 0 && Number(rot, "lon", 0) == 0) {
+      s.rotation = std::fmod(s.rotation - Angle(rot, "rev"), 360.f);
+      if (s.rotation < 0) s.rotation += 360;
+    }
     ReadGeometry(spPr, s);
     ForEachChild(spPr, [&](pugi::xml_node c) {
       Fill f;

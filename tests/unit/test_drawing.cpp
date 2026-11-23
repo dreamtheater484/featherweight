@@ -1025,6 +1025,32 @@ TEST(DrawingML_GroupInAScaledGroup) {
   CHECK(found);
 }
 
+TEST(DrawingML_CameraTurnedAboutItsViewTurnsTheShapeBack) {
+  // A shape at rot 7.6° under a straight-on camera (lat and lon 0) turned by rev 6° shows at 1.6°,
+  // as PowerPoint draws letters-home 52's photo; a light rig's rev and a camera that isn't
+  // straight on leave the rotation alone.
+  auto angleOf = [](const std::string& scene) {
+    TestResources res;
+    fw::pkg::XmlDom dom;
+    auto d = WordDrawing(WordAnchor(40, 20, kWpsUri,
+                                    Wsp(Xfrm(0, 0, 40, 20, R"( rot="456000")") + R"(<a:prstGeom prst="rect"/>)" + scene)),
+                         res, dom);
+    if (!d || d->Parts().empty()) return -1000.f;
+    const Matrix& m = d->Parts()[0].transform;
+    return static_cast<float>(std::atan2(m.m12, m.m11) * 180 / 3.14159265358979);
+  };
+  CHECK_NEAR(angleOf(""), 7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"><a:rot lat="0" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             1.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"/>)"
+                     R"(<a:lightRig rig="threePt" dir="t"><a:rot lat="0" lon="0" rev="1200000"/></a:lightRig></a:scene3d>)"),
+             7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="perspectiveFront"><a:rot lat="600000" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             7.6, 0.01);
+}
+
 TEST(DrawingML_LinesAndArrows) {
   TestResources res;
   fw::pkg::XmlDom dom;
