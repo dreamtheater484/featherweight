@@ -6,9 +6,11 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <map>
 #include <optional>
@@ -53,6 +55,12 @@ std::string N(double v) {
   std::string s;
   Num(s, v);
   return s;
+}
+// To 5 significant digits, as PowerPoint writes its PDFs' page sizes and picture places.
+double Round5(double v) {
+  if (v == 0 || !std::isfinite(v)) return v;
+  const double scale = std::pow(10.0, 5 - static_cast<int>(std::ceil(std::log10(std::fabs(v)))));
+  return std::nearbyint(v * scale) / scale;
 }
 std::string Ref(uint32_t object) { return std::to_string(object) + " 0 R"; }
 
@@ -655,6 +663,8 @@ class PdfPainter : public Painter {
   void Transform(const Matrix& m) override {
     last_.face = nullptr;
     states_.back().ctm = m * states_.back().ctm;
+    const auto milli = [](float v) { return static_cast<float>(std::llround(std::clamp(std::isfinite(v) ? double(v) : 0.0, -1e12, 1e12) * 1000) / 1000.0); };
+    states_.back().written = Matrix{milli(m.m11), milli(m.m12), milli(m.m21), milli(m.m22), milli(m.dx), milli(m.dy)} * states_.back().written;
     Out() += MatrixOps(m) + "cm\n";
   }
   Matrix CurrentTransform() const override { return states_.back().ctm; }
@@ -756,6 +766,7 @@ class PdfPainter : public Painter {
  private:
   struct State {
     Matrix ctm;  // the engine's transform: points, y down
+    Matrix written;  // the same as the file has it, each cm's numbers rounded as written
     Color fill{0, 0, 0, 1}, stroke{0, 0, 0, 1};  // the current colors (alpha unused)
     int fillAlpha = 1000, strokeAlpha = 1000;
     bool group = false;  // Restore ends a group
@@ -917,12 +928,27 @@ class PdfPainter : public Painter {
   void DrawImage(const Bitmap& bitmap, const Rect& r, bool smooth, const std::vector<uint8_t>* jpeg = nullptr) {
     const auto image = doc_.ImageFor(bitmap, smooth, jpeg);
     Res().xobjects[image.first] = image.second;
-    Out() += "q " + N(r.Width()) + " 0 0 " + N(-r.Height()) + " " + N(r.left) + " " + N(r.bottom) + " cm /" + image.first +
-             " Do Q\n";
+    // Slides' pictures to 5 decimals: where PowerPoint puts them is a matter of thousandths of a
+    // point (DrawPicture).
+    const auto n = [&](double v) {
+      if (!doc_.picturesUp) return N(v);
+      char s[48];
+      std::snprintf(s, sizeof s, "%.5f", std::isfinite(v) ? std::clamp(v, -1e9, 1e9) : 0.0);
+      std::string t = s;
+      while (t.back() == '0') t.pop_back();
+      if (t.back() == '.') t.pop_back();
+      return t == "-0" ? std::string("0") : t;
+    };
+    // (Where DrawBitmap worked it out to the 5 decimals, not as floats.)
+    const std::array<double, 4> e = exact_ ? *exact_ : std::array<double, 4>{r.left, r.top, r.right, r.bottom};
+    exact_.reset();
+    Out() += "q " + n(e[2] - e[0]) + " 0 0 " + n(e[1] - e[3]) + " " + n(e[0]) + " " + n(e[3]) + " cm /" + image.first + " Do Q\n";
   }
 
   PdfDocument::Impl& doc_;
   float width_, height_;
+  // The next picture's place as DrawBitmap rounded it (left, top, right, bottom), for DrawImage.
+  std::optional<std::array<double, 4>> exact_;
   Matrix flip_;  // page points (y down) to PDF's default space
   std::vector<Level> levels_;
   std::vector<State> states_;
@@ -1101,11 +1127,26 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
           dest.top + (bitmap.Height() - src->top) * sy};
     ClipRect(dest);
   }
-  // PowerPoint's PDFs place pictures a float rounding high (0.00006 to 0.00024 pt): a PDF viewer
-  // (pdfium) gives one whose top lies on a pixel row one row more above it, and resamples it so
-  // (era-systems' 10 % hash overlay over every slide). The smallest step written does the same.
+  // PowerPoint writes a picture's place in the page's own coordinates (y up), each number to 5
+  // significant digits, from its bottom left, and a PDF viewer (pdfium) resamples it from wherever
+  // that puts it to a thousandth of a pixel: goettingen 3's photo, 465.3954 points high, is written
+  // 465.4 high from 0.44122, its top 0.0047 points above where it is. Its float arithmetic puts the
+  // bottom a hair higher too, about 0.00006 (letters-home 1's background at 0.000061, era-systems'
+  // hash overlay). The same here, through the transform as the file has it (its numbers rounded):
+  // acuk 27 -> 40/41, unisaarland +2.
   const Matrix& m = now.ctm;
-  if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m22 != 0) {
+  const Matrix& f = now.written;
+  if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m11 > 0 && m.m22 > 0 && f.m12 == 0 && f.m21 == 0 && f.m11 > 0 &&
+      f.m22 > 0) {
+    const double left = double(m.m11) * at.left + m.dx, right = double(m.m11) * at.right + m.dx;
+    const double top = double(m.m22) * at.top + m.dy, bottom = double(m.m22) * at.bottom + m.dy;
+    constexpr double kHair = 0.00006;
+    const double x = Round5(left), y = Round5(height_ - bottom) + kHair, w = Round5(right - left), h = Round5(bottom - top);
+    exact_ = std::array<double, 4>{(x - f.dx) / f.m11, (height_ - y - h - f.dy) / f.m22, (x + w - f.dx) / f.m11, (height_ - y - f.dy) / f.m22};
+    at = {static_cast<float>((*exact_)[0]), static_cast<float>((*exact_)[1]), static_cast<float>((*exact_)[2]),
+          static_cast<float>((*exact_)[3])};
+  } else if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m22 != 0) {
+    // Turned or flipped: a hair higher only.
     const float up = m.m22 > 0 ? -0.001f : 0.001f;
     at.top += up;
     at.bottom += up;
@@ -1114,6 +1155,14 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
     // A JPEG's kept pixels as a JPEG again, as PowerPoint writes them (its quality).
     const std::vector<uint8_t> file = EncodeJpeg(*kept, 0.75f);
     DrawImage(*kept, at, true, file.empty() ? nullptr : &file);
+  } else if (jpeg && doc_.picturesUp) {
+    // PowerPoint's PDFs hold every JPEG picture encoded again at its quality 75, whatever the file's
+    // own (goettingen 3's photo: byte for byte libjpeg's quality 75); once for each picture.
+    // (Its own pixels, all of them, though it was decoded smaller to draw: the file is the image.)
+    std::vector<uint8_t> file;
+    if (!doc_.images.count({bitmap.Id(), true}))
+      if (std::shared_ptr<const Bitmap> full = jpeg->Pixels()) file = EncodeJpeg(*full, 0.75f);
+    DrawImage(bitmap, at, true, file.empty() ? nullptr : &file);
   } else {
     DrawImage(kept ? *kept : bitmap, at, true);
   }
@@ -1542,7 +1591,11 @@ std::vector<uint8_t> PdfDocument::Impl::Finish() {
       w.Object(o, a);
       annots += Ref(o) + " ";
     }
-    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(p.width) + " " + N(p.height) +
+    // A slide's page to 5 significant digits, as PowerPoint's (goettingen's 960.125-point slides are
+    // 960.12 wide there, which a PDF viewer draws a pixel narrower at 100 dpi, its scale with it).
+    const bool five = picturesUp;
+    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(five ? Round5(p.width) : p.width) + " " +
+                           N(five ? Round5(p.height) : p.height) +
                            "]/Contents " + Ref(p.contents) + "/Resources " + Ref(p.resources) +
                            (annots.empty() ? "" : "/Annots[" + annots + "]") + ">>");
     kids += Ref(p.object) + " ";
