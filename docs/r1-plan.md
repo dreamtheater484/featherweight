@@ -44,3 +44,5 @@ The ids are for new commands only, such as Ctrl+F1 or a group's dialog launcher 
 ## Decisions during R1
 
 (Each piece adds its decisions here.)
+
+- **r1-slide (PowerPoint):** Transitions, Animations, Table Design and Chart Design are left out until their commands exist (P3); View's Presentation Views too (only Normal exists). Print layout (slides, notes, handouts) goes to File > Print's settings, as in PowerPoint. Menu buttons with no command of their own (Align ▾, Group ▾, Rotate ▾, Slide Size ▾…) get ids 3786–3796, enabled while a command in the menu is. Shape Outline's weights and dashes stay a Weight dropdown beside it. Date & Time and Slide Number open Header & footer, as PowerPoint's open its dialog. Slide text gets a format painter (CmdFormatPainter), and its commands are in Alt+Q.
