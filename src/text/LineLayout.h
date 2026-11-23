@@ -67,6 +67,9 @@ struct TextStyle {
   // A bold the font lacks, simulated, keeps the regular face's advances (PowerPoint's); otherwise
   // DirectWrite widens them, as Word's text is.
   bool simulatedBoldKeepsAdvances = false;
+  // Lines as high as DirectWrite's metrics say (PowerPoint's: a font's typo metrics when it asks
+  // for them), not GDI's (Word's).
+  bool directWriteMetrics = false;
   Caps caps = Caps::None;    // w:caps, w:smallCaps
   VerticalAlign verticalAlign = VerticalAlign::Baseline;  // w:vertAlign
   bool hidden = false;         // w:vanish: laid out as if absent

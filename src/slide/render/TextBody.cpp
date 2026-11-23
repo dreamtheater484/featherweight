@@ -167,6 +167,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       size *= 2.f / 3;
     }
     s.size = std::max(0.5f, size);
+    s.directWriteMetrics = true;  // a font's typo metrics when it asks (embedded Public Sans, govau decks)
     s.bold = s.complexBold = r.bold;
     s.italic = s.complexItalic = r.italic;
     s.caps = r.caps == fw::slide::Caps::All ? text::Caps::All : r.caps == fw::slide::Caps::Small ? text::Caps::Small : text::Caps::None;

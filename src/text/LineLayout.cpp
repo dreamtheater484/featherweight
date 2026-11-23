@@ -468,7 +468,7 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
 
   float size = sf.size * (smallCaps[start] ? kSmallCapsScale : 1.0f);
   float rise = style.baselineShift;
-  FontMetrics bm = base->Metrics(size);
+  FontMetrics bm = base->Metrics(size, style.directWriteMetrics);
   if (style.verticalAlign == VerticalAlign::Superscript) {
     rise += bm.superscriptRaise;
     size = bm.superscriptSize;
@@ -505,7 +505,7 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.emSize = size * (scale > 0 ? scale : 1);
     seg.rise = rise;
     seg.level = level[pos];
-    FontMetrics m = face->Metrics(seg.emSize);
+    FontMetrics m = face->Metrics(seg.emSize, style.directWriteMetrics);
     seg.ascent = m.ascent + rise;
     seg.descent = m.descent - rise;
     seg.lineGap = m.lineGap;
@@ -658,7 +658,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
   rf.size = s.size;
   rf.rise = s.baselineShift;
   if (rf.face) {
-    FontMetrics m = rf.face->Metrics(s.size);
+    FontMetrics m = rf.face->Metrics(s.size, s.directWriteMetrics);
     if (s.verticalAlign == VerticalAlign::Superscript) {
       rf.rise += m.superscriptRaise;
       rf.size = m.superscriptSize;
@@ -666,7 +666,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
       rf.rise -= m.subscriptLower;
       rf.size = m.subscriptSize;
     }
-    rf.metrics = rf.face->Metrics(rf.size);
+    rf.metrics = rf.face->Metrics(rf.size, s.directWriteMetrics);
   }
   return rf;
 }
@@ -904,7 +904,7 @@ void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
   const Face* face = fonts.FaceFor(mark->family, mark->bold, mark->italic);
   if (!face) return;
-  FontMetrics m = face->Metrics(mark->size);
+  FontMetrics m = face->Metrics(mark->size, mark->directWriteMetrics);
   CombineMetrics(line, m.ascent, m.descent, m.lineGap);
 }
 

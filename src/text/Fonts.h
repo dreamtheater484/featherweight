@@ -43,7 +43,9 @@ class Face {
   const std::wstring& Family() const { return family_; }
   DWRITE_FONT_WEIGHT Weight() const { return weight_; }
   DWRITE_FONT_STYLE Style() const { return style_; }
-  FontMetrics Metrics(float size) const;
+  // `directWrite`: ascent, descent and gap as DirectWrite gives them (a font's typo metrics when its
+  // USE_TYPO_METRICS bit asks; PowerPoint's) rather than GDI's.
+  FontMetrics Metrics(float size, bool directWrite = false) const;
   // The same face without DirectWrite's bold and oblique simulations (itself when it has none).
   IDWriteFontFace* Plain() const;
   // The glyph's advance for one character at `size` points, without shaping; 0 if it's missing.
@@ -58,6 +60,7 @@ class Face {
   float upem_ = 2048;
   // In design units, from the font's tables (see FontMetrics).
   float ascent_ = 0, descent_ = 0, lineGap_ = 0;
+  float dwAscent_ = 0, dwDescent_ = 0, dwLineGap_ = 0;  // DirectWrite's
   float underlinePos_ = 0, underlineThick_ = 0, strikePos_ = 0, strikeThick_ = 0;
   float supSize_ = 0, supRaise_ = 0, subSize_ = 0, subLower_ = 0;
 };

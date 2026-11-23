@@ -95,9 +95,9 @@ Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family, DWRITE_FONT_WEIGHT
   DWRITE_FONT_METRICS fm{};
   face_->GetMetrics(&fm);
   upem_ = fm.designUnitsPerEm ? fm.designUnitsPerEm : 2048.0f;
-  ascent_ = fm.ascent;
-  descent_ = fm.descent;
-  lineGap_ = fm.lineGap;
+  ascent_ = dwAscent_ = fm.ascent;
+  descent_ = dwDescent_ = fm.descent;
+  lineGap_ = dwLineGap_ = fm.lineGap;
   underlinePos_ = -static_cast<float>(fm.underlinePosition);
   underlineThick_ = fm.underlineThickness;
   strikePos_ = fm.strikethroughPosition;
@@ -149,12 +149,12 @@ IDWriteFontFace* Face::Plain() const {
   return plain_.Get();
 }
 
-FontMetrics Face::Metrics(float size) const {
+FontMetrics Face::Metrics(float size, bool directWrite) const {
   float k = size / upem_;
   FontMetrics m;
-  m.ascent = ascent_ * k;
-  m.descent = descent_ * k;
-  m.lineGap = lineGap_ * k;
+  m.ascent = (directWrite ? dwAscent_ : ascent_) * k;
+  m.descent = (directWrite ? dwDescent_ : descent_) * k;
+  m.lineGap = (directWrite ? dwLineGap_ : lineGap_) * k;
   m.underlinePosition = underlinePos_ * k;
   m.underlineThickness = underlineThick_ * k;
   m.strikethroughPosition = strikePos_ * k;
