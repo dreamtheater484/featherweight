@@ -161,3 +161,9 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - Other: 7.
     - Script: `FeatherweightNotes\p1\corpus-analysis\causes.py`.
   - One regression: `un-country-presentation-morocco` fell from 2 to 0 of 15 (median 0.862).
+- **On p1-int `d630a3c6`: corpus at 86.41 %** (p1-render `c28a07f7`: charts, columns, Arabic in Tahoma; p1-model `a3ff3d68`: table styles, cell fills, nested groups).
+  - 2,174 of 2,516 slides pass, +12 net. 9 decks gained 35 slides; morocco is back to 7 of 15.
+  - Chart slides now pass 12 of 24, table slides 89 %.
+  - In this run `fwtool slides` crashed with 0xC0000005 on `who-health-in-all-policies-training-slide-template`, so all 23 of its slides counted as failing. Without the crash the total would be about 87.3 %.
+  - The crash is intermittent: none in 2 runs alone, 2 of 20 with four runs in parallel, 1 of 32 with `--png`. That run stopped after slide 7, so it likely died drawing slide 8 (a group with custom geometry, a picture and an outer shadow).
+  - Script: `FeatherweightNotes\p1\corpus-analysis\crash-repro.ps1`.
