@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cwctype>
 
+#include "draw/Shapes.h"
 #include "draw/Xml.h"
 #include "slide/render/SlideRender.h"
 #include "slide/render/Table.h"
@@ -280,11 +282,45 @@ void SlideRender::Draw(draw::Painter& p, const draw::Rect& frame, DrawFilter* fi
   p.Restore();
 }
 
-void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck) {
+namespace {
+
+// Where an sfnt font's table `tag` starts, from its table directory; 0 if it has none.
+size_t TableAt(const std::vector<uint8_t>& sfnt, const char (&tag)[5]) {
+  if (sfnt.size() < 12) return 0;
+  const size_t count = static_cast<size_t>(sfnt[4]) << 8 | sfnt[5];
+  for (size_t i = 0; i < count && 12 + 16 * i + 16 <= sfnt.size(); ++i) {
+    const uint8_t* e = sfnt.data() + 12 + 16 * i;
+    if (std::memcmp(e, tag, 4) == 0) return static_cast<size_t>(e[8]) << 24 | e[9] << 16 | e[10] << 8 | e[11];
+  }
+  return 0;
+}
+
+}  // namespace
+
+void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool directWrite) {
   std::vector<std::vector<uint8_t>> files;
   std::vector<std::wstring> names;
   for (const fw::slide::EmbeddedFont& f : deck.EmbeddedFonts()) {
-    files.push_back(f.sfnt);
+    std::vector<uint8_t> sfnt = f.sfnt;
+    if (TableAt(sfnt, "CFF ") > 0) {
+      // CFF outlines under TrueType's version tag (cpb deck: RijksoverheidSans): DirectWrite looks
+      // for glyf outlines and draws nothing; tagged as the OpenType font it is, it draws. Its lines
+      // keep the heights they had (Windows' metrics, which PowerPoint's PDF matches), so its
+      // USE_TYPO_METRICS bit, which DirectWrite honours only for the OpenType tag, goes.
+      static constexpr uint8_t kTrueType[] = {0, 1, 0, 0};
+      if (std::memcmp(sfnt.data(), kTrueType, 4) == 0) {
+        std::memcpy(sfnt.data(), "OTTO", 4);
+        if (const size_t os2 = TableAt(sfnt, "OS/2"); os2 > 0 && os2 + 64 <= sfnt.size()) sfnt[os2 + 63] &= ~0x80;
+      }
+      // One DirectWrite still can't outline would leave its text blank on screen: drawn in the
+      // font's substitute instead, noted once in the debugger's log.
+      if (directWrite && !draw::OutlinesInDirectWrite(sfnt)) {
+        OutputDebugStringW((L"Featherweight: embedded font " + f.typeface +
+                            L" has no outlines DirectWrite draws; its text is drawn in a substitute\n").c_str());
+        continue;
+      }
+    }
+    files.push_back(std::move(sfnt));
     names.push_back(f.typeface);
   }
   if (!files.empty()) fonts.UseDocumentFonts(files, names);
