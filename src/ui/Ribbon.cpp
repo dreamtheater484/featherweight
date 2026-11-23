@@ -44,6 +44,7 @@ bool IsMenuButton(const RibbonItem& it) {
 // Whether the ribbon draws the item itself (buttons, menu buttons, split buttons with a menu or at
 // large size); the rest are the toolbar's controls.
 bool OwnDrawn(const RibbonItem& it, RibbonSize size) {
+  if (it.gallery) return true;  // as a button that opens its grid (a strip is placed apart)
   switch (it.tool.kind) {
     case ToolKind::Button: return true;
     case ToolKind::Dropdown: return it.tool.glyph != 0;
@@ -93,15 +94,14 @@ std::wstring AutoTip(const std::wstring& name, std::vector<std::wstring>& used, 
     }
   }
   std::vector<std::wstring> cands;
-  if (lead) {
+  if (lead)
     for (wchar_t ch : letters) cands.push_back({lead, ch});
-  } else {
-    if (single)
-      for (wchar_t ch : letters) cands.push_back({ch});
-    if (initials.size() >= 2) cands.push_back(initials.substr(0, 2));
-    for (size_t k = 1; k < letters.size(); ++k)
-      if (!letters.empty()) cands.push_back({letters[0], letters[k]});
-  }
+  if (single)
+    for (wchar_t ch : letters) cands.push_back({ch});
+  if (initials.size() >= 2) cands.push_back(initials.substr(0, 2));
+  // Its first letter with each of the others, then any two of its letters.
+  for (size_t a = 0; a < letters.size(); ++a)
+    for (size_t k = a + 1; k < letters.size(); ++k) cands.push_back({letters[a], letters[k]});
   for (const std::wstring& c : cands)
     if (!TipConflicts(c, used)) {
       used.push_back(c);
@@ -189,7 +189,8 @@ RibbonSize Ribbon::SizeAt(const RibbonItem& it, int stage) const {
 int Ribbon::GalleryColumns(const RibbonItem& it, int stage) const {
   if (!it.gallery) return 0;
   const RibbonGallery& g = *it.gallery;
-  const int full = std::max(1, g.columns), least = std::clamp(g.minColumns, 1, full);
+  if (g.columns <= 0) return 0;  // only a button that opens the grid
+  const int full = g.columns, least = std::clamp(g.minColumns, 1, full);
   switch (stage) {
     case 0: return full;
     case 1: return std::max(least, (full + least + 1) / 2);
@@ -211,8 +212,8 @@ float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumn
       const float w = std::max(TextW(a, kItemFont), TextW(b, kItemFont) + (arrow && !b.empty() ? 10 : 0));
       return std::round(std::max(kLargeMinW, w + 12) * u);
     }
-    case RibbonSize::Medium:
-      return std::round((6 + (it.tool.glyph ? kGlyph + 5 : 0) + TextW(label, kItemFont) + 7 + (arrow ? kArrowW : 0)) * u);
+    case RibbonSize::Medium:  // a toggle without a glyph is a check box
+      return std::round((6 + (it.tool.glyph || it.tool.toggle ? kGlyph + 5 : 0) + TextW(label, kItemFont) + 7 + (arrow ? kArrowW : 0)) * u);
     case RibbonSize::Small: break;
   }
   return std::round((kSmallW + (arrow ? kArrowW - 2 : 0)) * u);
@@ -266,8 +267,8 @@ float Ribbon::FlowGroup(int g, int stage, float x, float y, bool place, Layer la
     const RibbonItem& it = grp.items[i];
     RibbonSize size = SizeAt(it, stage);
     const int gcols = GalleryColumns(it, stage);
-    const bool largeCapable = OwnDrawn(it, RibbonSize::Large) || it.gallery.has_value();
-    if (it.gallery && gcols == 0) size = RibbonSize::Large;  // a gallery folded into its button
+    const bool largeCapable = OwnDrawn(it, RibbonSize::Large) || it.tool.kind == ToolKind::Custom;
+    if (it.gallery && gcols == 0 && it.gallery->columns > 0) size = RibbonSize::Large;  // a strip folded into its button
     if (gcols > 0 || (size == RibbonSize::Large && largeCapable)) {
       Col c;
       c.item = i;
@@ -334,6 +335,18 @@ float Ribbon::FlowGroup(int g, int stage, float x, float y, bool place, Layer la
           p.layer = layer;
           parts_.push_back(p);
         }
+      } else if (!OwnDrawn(it, RibbonSize::Large)) {  // the tab's own control, the group's full height
+        if (it.tool.tooltip.empty()) it.tool.tooltip = Query(it.tool.cmd).Tooltip();
+        Control& ctl = Toolbar::ConfigureControl(controls_[it.tool.cmd], kinds_[it.tool.cmd], it.tool, [this](int cmd) {
+          if (onCommand) onCommand(cmd);
+        });
+        ctl.rc = r;
+        ctl.visible = true;
+        Part p{PartKind::Control, r, g, c.item};
+        p.size = RibbonSize::Large;
+        p.layer = layer;
+        p.control = &ctl;
+        parts_.push_back(p);
       } else if (IsSplit(it, RibbonSize::Large)) {
         Part a{PartKind::Item, RectF(r.left, r.top, r.right, r.top + kLargeIconH * u), g, c.item};
         Part b{PartKind::ItemArrow, RectF(r.left, r.top + kLargeIconH * u, r.right, r.bottom), g, c.item};
@@ -478,7 +491,7 @@ void Ribbon::PlaceGrid() {
   const RibbonGallery& gal = *it->gallery;
   const float u = ui_;
   const int n = static_cast<int>(it->tool.choices.size());
-  gridCols_ = std::max(1, gal.popupColumns > 0 ? gal.popupColumns : gal.columns);
+  gridCols_ = std::max(1, gal.popupColumns > 0 ? gal.popupColumns : gal.columns > 0 ? gal.columns : 4);
   const int rows = (n + gridCols_ - 1) / gridCols_;
   const float tw = gal.choiceWidth * u, th = gal.choiceHeight * u;
   const float menuH = gal.menu.empty() ? 0 : (gal.menu.size() * kGridMenuH + 9) * u;
@@ -913,7 +926,7 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
               parts_[k].layer == part.layer)
             c.StrokeRound(Inflate(part.rc, -0.5f, -0.5f), 3 * u, p.hover, 1);
       }
-      subtle(part.rc, enabled, it.tool.checked && part.kind == PartKind::Item);
+      subtle(part.rc, enabled, it.tool.checked && part.kind == PartKind::Item && (it.tool.glyph || part.size == RibbonSize::Large));
       const std::wstring label = LabelOf(it);
       const wchar_t glyph = it.tool.glyph;
       if (part.size == RibbonSize::Large) {
@@ -941,6 +954,17 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
       float x = part.rc.left + (part.size == RibbonSize::Small ? 4 * u : 6 * u);
       if (glyph) {
         DrawGlyph(c, glyph, RectF(x, part.rc.top, x + kGlyph * u, part.rc.bottom), fg, kGlyph * u);
+        x += (kGlyph + 5) * u;
+      } else if (it.tool.toggle) {  // a check box
+        const float s = std::round(14 * u), by = std::round((part.rc.top + part.rc.bottom - s) / 2), bx = std::round(x + 1 * u);
+        const D2D1_RECT_F box = RectF(bx, by, bx + s, by + s);
+        if (it.tool.checked) {
+          c.FillRound(box, 3 * u, enabled ? p.accent : p.textDisabled);
+          c.Icon(icon::CheckMark, box, p.onAccent, 10 * u);
+        } else {
+          c.FillRound(box, 3 * u, p.inputBg);
+          c.StrokeRound(Inflate(box, -0.5f, -0.5f), 3 * u, enabled ? p.inputBorder : p.textDisabled, 1);
+        }
         x += (kGlyph + 5) * u;
       }
       if (part.size == RibbonSize::Medium || !glyph)
@@ -977,7 +1001,7 @@ void Ribbon::DrawKeyTips(Canvas& c) {
   for (size_t i = 0; i < parts_.size(); ++i) {
     const Part& q = parts_[i];
     if (q.layer != layer || !partTips_.count(i)) continue;
-    if (q.kind == PartKind::ItemArrow) continue;
+    if (q.kind == PartKind::ItemArrow || q.kind == PartKind::Tab || q.kind == PartKind::File) continue;
     if (q.size == RibbonSize::Large || q.kind == PartKind::GroupButton)
       badge(partTips_[i], (q.rc.left + q.rc.right) / 2, (q.kind == PartKind::Item && IsSplit(*ItemAt(q.group, q.item), q.size)
                                                               ? q.rc.bottom + 30 * u
@@ -1214,7 +1238,8 @@ void Ribbon::OpenGrid(int g, int i, bool byKeyboard) {
   const RibbonItem* it = ItemAt(g, i);
   gridHot_ = byKeyboard && it ? std::max(0, it->tool.choice) : -1;
   if (it && it->tool.choice > 0 && it->gallery) {
-    const int cols = std::max(1, it->gallery->popupColumns > 0 ? it->gallery->popupColumns : it->gallery->columns);
+    const RibbonGallery& gal = *it->gallery;
+    const int cols = std::max(1, gal.popupColumns > 0 ? gal.popupColumns : gal.columns > 0 ? gal.columns : 4);
     gridScroll_ = it->tool.choice / cols;
   }
 }
@@ -1284,8 +1309,9 @@ void Ribbon::Activate(size_t index, bool byKeyboard) {
     case PartKind::ItemArrow: {
       const RibbonItem* it = ItemAt(p.group, p.item);
       if (!it || !it->tool.enabled) break;
-      if (it->gallery) {  // a gallery folded into its button
-        OpenGrid(p.group, p.item, byKeyboard);
+      if (it->gallery) {  // a gallery's button opens its grid; a split one's main part runs its command
+        if (p.kind == PartKind::Item && it->tool.kind == ToolKind::SplitButton) run(cmdOf);
+        else OpenGrid(p.group, p.item, byKeyboard);
         break;
       }
       const bool menu = IsMenuButton(*it) || p.kind == PartKind::ItemArrow;
@@ -1392,7 +1418,8 @@ bool Ribbon::KeyTipKey(UINT vk) {
   } else {
     const Layer layer = tips_ == Tips::Group ? Layer::Popup : collapsed_ ? Layer::Overlay : Layer::Body;
     for (size_t i = 0; i < parts_.size(); ++i)
-      if (parts_[i].layer == layer && parts_[i].kind != PartKind::ItemArrow && partTips_.count(i))
+      if (parts_[i].layer == layer && parts_[i].kind != PartKind::ItemArrow && parts_[i].kind != PartKind::Tab &&
+          parts_[i].kind != PartKind::File && partTips_.count(i))
         choices.push_back({partTips_[i], static_cast<int>(i)});
   }
   bool prefix = false;

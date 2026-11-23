@@ -300,7 +300,7 @@ void App::Layout() {
   RibbonModel ribbon = CurrentRibbon();
   ribbonShown_ = !ribbon.tabs.empty();
   if (!ribbonShown_ && filePage_.IsOpen()) filePage_.Close();
-  title_.SetQuickAccess(ribbonShown_ && !fullscreen_ ? QuickAccess() : std::vector<TitleBar::QuickButton>{});
+  title_.SetQuickAccess(ribbonShown_ && !fullscreen_ ? QuickAccess(ribbon) : std::vector<TitleBar::QuickButton>{});
   const int titleH = TitleHeight();
   const int toolH = ToolbarHeight();
   title_.Layout(RECT{0, 0, rc.right, titleH}, ui_, static_cast<int>(tabs_.size()));
@@ -1038,6 +1038,7 @@ void App::OnMouseUp(int x, int y, int button) {
         case TitleBar::Part::NewTab: Execute(CmdNewTab); break;
         case TitleBar::Part::TabClose: CloseTab(a.index); break;
         case TitleBar::Part::Quick: Execute(title_.QuickCommand(a.index)); break;
+        case TitleBar::Part::QuickList: ShowQuickList(a.index); break;
         default: break;
       }
       break;

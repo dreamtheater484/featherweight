@@ -96,14 +96,30 @@ RibbonModel App::CurrentRibbon() {
   return m;
 }
 
-std::vector<TitleBar::QuickButton> App::QuickAccess() {
+std::vector<TitleBar::QuickButton> App::QuickAccess(const RibbonModel& m) {
   std::vector<TitleBar::QuickButton> q;
   const std::pair<int, wchar_t> buttons[] = {{CmdSave, icon::Save}, {CmdUndo, icon::Undo}, {CmdRedo, icon::Redo}};
   for (const auto& [cmd, glyph] : buttons) {
     const CommandState s = QueryCommand(cmd);
-    if (s.visible) q.push_back({cmd, glyph, s.Tooltip(), s.enabled});
+    if (!s.visible) continue;
+    TitleBar::QuickButton b{cmd, glyph, s.Tooltip(), s.enabled};
+    // The tab's list for it (the actions Undo takes back), behind a ▾.
+    for (const ToolItem& it : m.quick)
+      if (it.cmd == cmd && !it.choices.empty()) b.list = true;
+    q.push_back(b);
   }
   return q;
+}
+
+void App::ShowQuickList(int index) {
+  const int cmd = title_.QuickCommand(index);
+  for (const ToolItem& it : ribbon_.Model().quick)
+    if (it.cmd == cmd && !it.choices.empty()) {
+      RibbonItem item;
+      item.tool = it;
+      ShowRibbonMenu(item, title_.QuickRect(index));
+      return;
+    }
 }
 
 void App::ShowRibbonMenu(const RibbonItem& item, const D2D1_RECT_F& anchor) {
@@ -260,7 +276,9 @@ ui::FilePage::Model App::CurrentFilePage() {
       FP::Entry e = entry(f.cmd, f.label.empty() ? s.label : f.label, f.glyph, f.description);
       e.enabled = s.enabled;
       e.checked = s.checked;
-      e.toggle = settings && !e.label.empty() && e.label.back() != L'…';  // "Reviewer name…" opens a box
+      e.radio = f.choice;
+      // A setting is shown on or off; in Options, anything but "Reviewer name…" (which opens a box).
+      e.toggle = f.setting || (settings && !f.choice && !e.label.empty() && e.label.back() != L'…');
       to.push_back(e);
     }
   };
@@ -280,8 +298,15 @@ ui::FilePage::Model App::CurrentFilePage() {
   m.enabled[FP::kSave] = QueryCommand(CmdSave).enabled;
   m.run[FP::kSaveAs] = CmdSaveAs;
   m.enabled[FP::kSaveAs] = ready;
-  m.run[FP::kPrint] = CmdPrint;
+  // Print: the dialog at once, or a Print button over the tab's print settings (PowerPoint's layouts).
+  auto& print = m.entries[FP::kPrint];
+  own(RibbonFilePlace::Print, print, false);
   m.enabled[FP::kPrint] = QueryCommand(CmdPrint).enabled;
+  if (print.empty()) {
+    m.run[FP::kPrint] = CmdPrint;
+  } else {
+    print.insert(print.begin(), {command(CmdPrint, icon::Print, L"Ctrl+P"), heading(L"Settings")});
+  }
   m.run[FP::kClose] = CmdCloseTab;
 
   // Export.
@@ -544,12 +569,14 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     return true;
   }
   if (op == L"ribbonbench") {
-    // Switching each tab and laying the ribbon out again at 1366, 1024 and 800 px, each to a painted
-    // frame: within one frame (16 ms), or the run fails.
+    // Switching each tab (the tab's model built, laid out and the ribbon drawn) and laying the
+    // ribbon out again at 1366, 1024, 800 and 640 px: within one frame (16 ms), or the run fails.
+    // The whole window's frame after a switch is reported too (the page is the tab's, not the
+    // ribbon's; with --gpu as on screen).
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq);
     auto ms = [&] { return 1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart); };
-    double worstSwitch = 0, worstLayout = 0;
+    double worstSwitch = 0, worstLayout = 0, worstFrame = 0;
     const std::wstring was = ribbon_.Selected();
     std::vector<std::wstring> names;
     for (const RibbonTab& t : ribbon_.Model().tabs) names.push_back(t.name);
@@ -557,9 +584,19 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
       for (const std::wstring& name : names) {
         QueryPerformanceCounter(&t0);
         ribbon_.Select(name);
-        DrawSnapshotFrame();
+        Layout();
+        dc_->BeginDraw();
+        canvas_.Begin(dc_.Get());
+        ribbon_.Draw(canvas_);
+        ribbon_.DrawPopup(canvas_);
+        canvas_.End();
+        dc_->EndDraw();
         QueryPerformanceCounter(&t1);
         worstSwitch = std::max(worstSwitch, ms());
+        QueryPerformanceCounter(&t0);
+        DrawSnapshotFrame();
+        QueryPerformanceCounter(&t1);
+        worstFrame = std::max(worstFrame, ms());
       }
     RECT rc;
     GetClientRect(hwnd_, &rc);
@@ -573,8 +610,8 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
       }
     ribbon_.Select(was);
     Layout();
-    fwprintf(stderr, L"ribbonbench: %d tabs, switch worst %.2f ms, relayout worst %.2f ms\n", static_cast<int>(names.size()),
-             worstSwitch, worstLayout);
+    fwprintf(stderr, L"ribbonbench: %d tabs, switch worst %.2f ms, relayout worst %.2f ms (the whole frame after a switch: %.2f ms)\n",
+             static_cast<int>(names.size()), worstSwitch, worstLayout, worstFrame);
     if (worstSwitch > 16 || worstLayout > 16) scriptFailed_ = true;
     return true;
   }

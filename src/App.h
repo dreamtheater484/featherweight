@@ -269,7 +269,9 @@ class App : public PdfHost, public DropHost {
   // The active editor's ribbon, without the commands this kind of tab doesn't offer; empty for
   // the PDF reader, the start screen and an editor whose ribbon isn't done (its toolbar shows).
   RibbonModel CurrentRibbon();
-  std::vector<TitleBar::QuickButton> QuickAccess();
+  std::vector<TitleBar::QuickButton> QuickAccess(const RibbonModel& m);
+  // A quick access button's list (Undo's actions), from the tab's RibbonModel::quick.
+  void ShowQuickList(int index);
   void ShowRibbonMenu(const RibbonItem& item, const D2D1_RECT_F& anchor);
   void ToggleRibbon();
   void OpenFilePage();

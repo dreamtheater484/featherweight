@@ -18,7 +18,7 @@ struct TabInfo {
 // The custom title bar: app mark, tabs, new-tab button and the caption buttons.
 class TitleBar {
  public:
-  enum class Part { None, Caption, Tab, TabClose, NewTab, Minimize, Maximize, Close, Quick };
+  enum class Part { None, Caption, Tab, TabClose, NewTab, Minimize, Maximize, Close, Quick, QuickList };
   struct Hit {
     Part part = Part::None;
     int index = -1;
@@ -36,6 +36,7 @@ class TitleBar {
     wchar_t glyph = 0;
     std::wstring tooltip;
     bool enabled = true;
+    bool list = false;  // a ▾ beside it opens a list (Undo's actions): Part::QuickList
   };
   void SetQuickAccess(const std::vector<QuickButton>& buttons);
   int QuickCommand(int index) const { return index >= 0 && index < quickCount_ ? quickCmd_[index] : 0; }
@@ -70,7 +71,7 @@ class TitleBar {
   float tabsLeft_ = 0, tabW_ = 0;
   Button min_, max_, close_, newTab_;
   static constexpr int kQuickMax = 3;
-  Button quick_[kQuickMax];
+  Button quick_[kQuickMax], quickList_[kQuickMax];
   int quickCmd_[kQuickMax] = {};
   int quickCount_ = 0;
   bool newTabMenu_ = false, newTabOpen_ = false;

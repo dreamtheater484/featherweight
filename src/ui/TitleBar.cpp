@@ -43,6 +43,11 @@ TitleBar::TitleBar() {
     quick_[i].id = 10 + i;
     quick_[i].visible = false;
     buttons_.Add(&quick_[i]);
+    quickList_[i].id = 20 + i;
+    quickList_[i].visible = false;
+    quickList_[i].glyph = icon::ChevronDown;
+    quickList_[i].glyphSize = 8;
+    buttons_.Add(&quickList_[i]);
   }
 }
 
@@ -51,7 +56,10 @@ void TitleBar::SetQuickAccess(const std::vector<QuickButton>& buttons) {
   for (int i = 0; i < kQuickMax; ++i) {
     Button& b = quick_[i];
     b.visible = i < quickCount_;
+    quickList_[i].visible = b.visible && buttons[i].list;
     if (!b.visible) continue;
+    quickList_[i].enabled = buttons[i].enabled;
+    quickList_[i].tooltip = buttons[i].tooltip;
     quickCmd_[i] = buttons[i].cmd;
     b.glyph = buttons[i].glyph;
     b.tooltip = buttons[i].tooltip;
@@ -76,9 +84,17 @@ void TitleBar::Layout(const RECT& rc, float ui, int tabCount) {
 
   tabsLeft_ = rc.left + kMarkW * ui;
   if (quickCount_ > 0) {  // Save, Undo, Redo, then a little room before the tabs
-    const float qw = 32 * ui, qh = 28 * ui, qy = std::round((top + bottom) / 2 - qh / 2 + 2 * ui);
-    for (int i = 0; i < quickCount_; ++i) quick_[i].rc = RectF(tabsLeft_ + i * qw, qy, tabsLeft_ + (i + 1) * qw, qy + qh);
-    tabsLeft_ += quickCount_ * qw + 10 * ui;
+    const float qw = 32 * ui, lw = 14 * ui, qh = 28 * ui, qy = std::round((top + bottom) / 2 - qh / 2 + 2 * ui);
+    float qx = tabsLeft_;
+    for (int i = 0; i < quickCount_; ++i) {
+      quick_[i].rc = RectF(qx, qy, qx + qw, qy + qh);
+      qx += qw;
+      if (quickList_[i].visible) {
+        quickList_[i].rc = RectF(qx, qy, qx + lw, qy + qh);
+        qx += lw;
+      }
+    }
+    tabsLeft_ = qx + 10 * ui;
   }
   float avail = x - tabsLeft_ - kNewTabW * ui - kDragMinW * ui;
   tabW_ = tabCount > 0 ? std::clamp(avail / tabCount, kTabMinW * ui, kTabMaxW * ui) : 0;
@@ -156,9 +172,12 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
     }
   }
 
-  for (int i = 0; i < quickCount_; ++i) DrawButton(c, quick_[i], u, windowActive);
+  for (int i = 0; i < quickCount_; ++i) {
+    DrawButton(c, quick_[i], u, windowActive);
+    DrawButton(c, quickList_[i], u, windowActive);
+  }
   if (quickCount_ > 0) {
-    const float sx = std::round(quick_[quickCount_ - 1].rc.right + 5 * u) - 0.5f, cy = (rc_.top + rc_.bottom) / 2.0f + 2 * u;
+    const float sx = std::round(tabsLeft_ - 5 * u) - 0.5f, cy = (rc_.top + rc_.bottom) / 2.0f + 2 * u;
     c.Line(sx, cy - 8 * u, sx, cy + 8 * u, Alpha(p.textSecondary, 0.35f), 1);
   }
 
@@ -184,8 +203,10 @@ TitleBar::Hit TitleBar::HitTest(int x, int y) const {
   if (Contains(max_.rc, fx, fy)) return {Part::Maximize, -1};
   if (Contains(min_.rc, fx, fy)) return {Part::Minimize, -1};
   if (Contains(newTab_.rc, fx, fy)) return {Part::NewTab, -1};
-  for (int i = 0; i < quickCount_; ++i)
+  for (int i = 0; i < quickCount_; ++i) {
     if (Contains(quick_[i].rc, fx, fy)) return {Part::Quick, i};
+    if (quickList_[i].visible && Contains(quickList_[i].rc, fx, fy)) return {Part::QuickList, i};
+  }
   for (int i = 0; i < tabCount_; ++i) {
     if (Contains(TabRect(i), fx, fy)) {
       if (Contains(TabCloseRect(i), fx, fy)) return {Part::TabClose, i};
@@ -241,6 +262,9 @@ TitleBar::Action TitleBar::OnMouseUp(int x, int y, int button) {
     case 10:
     case 11:
     case 12: return {Part::Quick, id - 10};
+    case 20:
+    case 21:
+    case 22: return {Part::QuickList, id - 20};
   }
   if (up.part == Part::TabClose && down.part == Part::TabClose && down.index == up.index) return {Part::TabClose, up.index};
   return {};
@@ -253,6 +277,7 @@ std::wstring TitleBar::TooltipAt(int x, int y, const std::vector<TabInfo>& tabs)
     case Part::TabClose: return L"Close tab (Ctrl+W)";
     case Part::NewTab: return newTab_.tooltip;
     case Part::Quick: return quick_[h.index].tooltip;
+    case Part::QuickList: return quickList_[h.index].tooltip;
     case Part::Minimize: return min_.tooltip;
     case Part::Maximize: return max_.tooltip;
     case Part::Close: return close_.tooltip;
