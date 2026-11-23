@@ -47,7 +47,9 @@ void App::DescribeUia(uia::Tree& t) {
       return cmd == CmdZoomMenu || cmd == CmdViewMenu || cmd == CmdSaveMenu || cmd == CmdMoreMenu ||
              cmd == CmdToolbarOverflow;
     };
-    toolbar_.Describe(t, 0, isMenu, openMenu_, [this](TextBox* box) { FocusBox(box); });
+    if (ribbonShown_) ribbon_.Describe(t, 0);
+    else toolbar_.Describe(t, 0, isMenu, openMenu_, [this](TextBox* box) { FocusBox(box); });
+    filePage_.Describe(t, 0);
   }
 
   // The document area. It has the keyboard when nothing else does (arrows scroll the pages).
@@ -66,7 +68,11 @@ void App::DescribeUia(uia::Tree& t) {
     const bool inTab = k > doc;
     t[k].focus = [this, inTab, f = std::move(t[k].focus)] {
       FocusBox(nullptr);
-      if (inTab) toolbar_.Blur();
+      if (inTab) {
+        toolbar_.Blur();
+      ribbon_.Blur();
+        ribbon_.Blur();
+      }
       panel_.Blur();
       status_.Blur();
       f();

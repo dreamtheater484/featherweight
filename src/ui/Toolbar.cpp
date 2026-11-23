@@ -44,6 +44,13 @@ Button& Toolbar::ItemButton(const ToolItem& item) {
 }
 
 Control& Toolbar::ItemControl(const ToolItem& item) {
+  return ConfigureControl(controls_[item.cmd], controlKinds_[item.cmd], item, [this](int cmd) {
+    if (onCommand) onCommand(cmd);
+  });
+}
+
+Control& Toolbar::ConfigureControl(std::unique_ptr<Control>& slot, ToolKind& slotKind, const ToolItem& item,
+                                   const std::function<void(int)>& invoke) {
   if (item.kind == ToolKind::Custom && item.control) {
     Control& c = *item.control;
     c.id = item.cmd;
@@ -51,8 +58,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
     c.enabled = item.enabled;
     return c;
   }
-  std::unique_ptr<Control>& slot = controls_[item.cmd];
-  if (!slot || controlKinds_[item.cmd] != item.kind) {
+  if (!slot || slotKind != item.kind) {
     switch (item.kind) {
       case ToolKind::Dropdown: slot = std::make_unique<Dropdown>(); break;
       case ToolKind::ComboBox: slot = std::make_unique<ComboBox>(); break;
@@ -60,7 +66,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       case ToolKind::ColorPicker: slot = std::make_unique<ColorPicker>(); break;
       default: slot = std::make_unique<SpinBox>(); break;
     }
-    controlKinds_[item.cmd] = item.kind;
+    slotKind = item.kind;
   }
   Control& c = *slot;
   c.id = item.cmd;
@@ -114,8 +120,8 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
         s.selected = item.choice;
       }
       const int cmd = item.cmd;
-      s.onInvoke = [this, cmd] {
-        if (onCommand) onCommand(cmd);
+      s.onInvoke = [invoke, cmd] {
+        if (invoke) invoke(cmd);
       };
       s.onPick = [send](int i) {
         ToolValue v;

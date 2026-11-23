@@ -39,6 +39,25 @@ TitleBar::TitleBar() {
   buttons_.Add(&max_);
   buttons_.Add(&close_);
   buttons_.Add(&newTab_);
+  for (int i = 0; i < kQuickMax; ++i) {
+    quick_[i].id = 10 + i;
+    quick_[i].visible = false;
+    buttons_.Add(&quick_[i]);
+  }
+}
+
+void TitleBar::SetQuickAccess(const std::vector<QuickButton>& buttons) {
+  quickCount_ = std::min(static_cast<int>(buttons.size()), kQuickMax);
+  for (int i = 0; i < kQuickMax; ++i) {
+    Button& b = quick_[i];
+    b.visible = i < quickCount_;
+    if (!b.visible) continue;
+    quickCmd_[i] = buttons[i].cmd;
+    b.glyph = buttons[i].glyph;
+    b.tooltip = buttons[i].tooltip;
+    b.enabled = buttons[i].enabled;
+    b.glyphSize = 14;
+  }
 }
 
 void TitleBar::Layout(const RECT& rc, float ui, int tabCount) {
@@ -56,6 +75,11 @@ void TitleBar::Layout(const RECT& rc, float ui, int tabCount) {
   x -= kCaptionW * ui;
 
   tabsLeft_ = rc.left + kMarkW * ui;
+  if (quickCount_ > 0) {  // Save, Undo, Redo, then a little room before the tabs
+    const float qw = 32 * ui, qh = 28 * ui, qy = std::round((top + bottom) / 2 - qh / 2 + 2 * ui);
+    for (int i = 0; i < quickCount_; ++i) quick_[i].rc = RectF(tabsLeft_ + i * qw, qy, tabsLeft_ + (i + 1) * qw, qy + qh);
+    tabsLeft_ += quickCount_ * qw + 10 * ui;
+  }
   float avail = x - tabsLeft_ - kNewTabW * ui - kDragMinW * ui;
   tabW_ = tabCount > 0 ? std::clamp(avail / tabCount, kTabMinW * ui, kTabMaxW * ui) : 0;
   tabW_ = std::floor(tabW_);
@@ -132,6 +156,12 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
     }
   }
 
+  for (int i = 0; i < quickCount_; ++i) DrawButton(c, quick_[i], u, windowActive);
+  if (quickCount_ > 0) {
+    const float sx = std::round(quick_[quickCount_ - 1].rc.right + 5 * u) - 0.5f, cy = (rc_.top + rc_.bottom) / 2.0f + 2 * u;
+    c.Line(sx, cy - 8 * u, sx, cy + 8 * u, Alpha(p.textSecondary, 0.35f), 1);
+  }
+
   // New tab button and caption buttons.
   max_.glyph = maximized ? icon::ChromeRestore : icon::ChromeMaximize;
   max_.tooltip = maximized ? L"Restore" : L"Maximize";
@@ -154,6 +184,8 @@ TitleBar::Hit TitleBar::HitTest(int x, int y) const {
   if (Contains(max_.rc, fx, fy)) return {Part::Maximize, -1};
   if (Contains(min_.rc, fx, fy)) return {Part::Minimize, -1};
   if (Contains(newTab_.rc, fx, fy)) return {Part::NewTab, -1};
+  for (int i = 0; i < quickCount_; ++i)
+    if (Contains(quick_[i].rc, fx, fy)) return {Part::Quick, i};
   for (int i = 0; i < tabCount_; ++i) {
     if (Contains(TabRect(i), fx, fy)) {
       if (Contains(TabCloseRect(i), fx, fy)) return {Part::TabClose, i};
@@ -206,6 +238,9 @@ TitleBar::Action TitleBar::OnMouseUp(int x, int y, int button) {
     case 2: return {Part::Maximize, -1};
     case 3: return {Part::Close, -1};
     case 4: return {Part::NewTab, -1};
+    case 10:
+    case 11:
+    case 12: return {Part::Quick, id - 10};
   }
   if (up.part == Part::TabClose && down.part == Part::TabClose && down.index == up.index) return {Part::TabClose, up.index};
   return {};
@@ -217,6 +252,7 @@ std::wstring TitleBar::TooltipAt(int x, int y, const std::vector<TabInfo>& tabs)
     case Part::Tab: return h.index < static_cast<int>(tabs.size()) ? tabs[h.index].path : L"";
     case Part::TabClose: return L"Close tab (Ctrl+W)";
     case Part::NewTab: return newTab_.tooltip;
+    case Part::Quick: return quick_[h.index].tooltip;
     case Part::Minimize: return min_.tooltip;
     case Part::Maximize: return max_.tooltip;
     case Part::Close: return close_.tooltip;
@@ -248,6 +284,7 @@ void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, c
       t[close].invoke = [act, i] { act(Part::TabClose, i); };
     }
   }
+  for (int i = 0; i < quickCount_; ++i) uia::AddButton(t, bar, 6 + i, quick_[i], [act, i] { act(Part::Quick, i); });
   int newTab = uia::AddButton(t, bar, 2, newTab_, [act] { act(Part::NewTab, -1); });
   if (newTabMenu_) {
     // A menu button. The menu is modal, so `act` opens it after the UI Automation call returns.
