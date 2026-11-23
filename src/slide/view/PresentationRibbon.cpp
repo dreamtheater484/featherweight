@@ -5,10 +5,14 @@
 // control and where it went is in r1-slide's state note; docs/r1-plan.md has the decisions.
 
 #include <algorithm>
+#include <cmath>
 
 #include "Commands.h"
 #include "core/Layout.h"
 #include "core/Strings.h"
+#include "draw/D2DPainter.h"
+#include "draw/Geometry.h"
+#include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationPanels.h"
@@ -66,6 +70,31 @@ std::vector<int> MenuOf(int cmd) {
       return out;
     }
     default: return {};
+  }
+}
+
+// Shape `i` of the Shapes gallery as an outline in `r`, as PowerPoint's gallery shows its shapes.
+void DrawShapeChoice(Canvas& c, const D2D1_RECT_F& r, int i, float ui) {
+  const auto& gallery = fw::slide::objects::ShapeGallery();
+  if (i < 0 || static_cast<size_t>(i) >= gallery.size()) return;
+  const std::string_view preset = gallery[static_cast<size_t>(i)].preset;
+  const bool line = fw::slide::objects::IsLinePreset(preset);
+  const float pad = 5 * ui, w = Width(r) - 2 * pad, h = Height(r) - 2 * pad;
+  const std::shared_ptr<const draw::Geometry> g = draw::Geometry::Preset(line ? "line" : preset);
+  if (!g || w <= 0 || h <= 0) return;
+  const D2D1_COLOR_F ink = theme::P().text;
+  draw::Pen pen;
+  pen.brush = draw::Brush::Solid({ink.r, ink.g, ink.b, ink.a});
+  pen.width = std::max(1.f, ui);
+  draw::D2DPainter painter(c.DC());
+  painter.Transform(draw::Matrix::Translate(r.left + pad, r.top + pad));
+  for (const draw::Geometry::Figure& f : g->Evaluate({w, h}).figures)
+    if (f.stroke) painter.StrokePath(f.path, pen);
+  if (preset == "straightConnector1") {  // the arrow's head at the end of the line
+    const float k = 5 * ui, len = std::max(1.f, std::hypot(w, h)), ux = w / len, uy = h / len;
+    const float x = r.left + pad + w, y = r.top + pad + h;
+    c.Line(x, y, x - k * (ux + uy * 0.6f), y - k * (uy - ux * 0.6f), ink, pen.width);
+    c.Line(x, y, x - k * (ux - uy * 0.6f), y - k * (uy + ux * 0.6f), ink, pen.width);
   }
 }
 
@@ -190,6 +219,17 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
       else SetSlidesLayout(SelectedSlides(), layout);
     };
   };
+  // The shapes as outlines in a grid, opened from Shapes (it inserts the one picked).
+  auto shapes = [&](RibbonItem& it) {
+    it.tool.kind = ToolKind::Button;
+    it.tool.dropdown = true;
+    RibbonGallery g;
+    g.choiceWidth = g.choiceHeight = 30;
+    g.columns = 0;
+    g.popupColumns = 8;
+    g.drawChoice = DrawShapeChoice;
+    it.gallery = std::move(g);
+  };
   auto newSlide = [&] {
     RibbonItem& it = split(CmdSlideNew, 0, S::Large, L"New\nSlide", L"I", {});
     it.smallest = S::Large;
@@ -234,7 +274,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdAlignRight, 0, S::Small, L"Align Right", L"AR").sameRow = true;
   add(CmdAlignJustify, 0, S::Small, L"Justify", L"AJ").sameRow = true;
   b.Group(L"Drawing");
-  add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH");
+  shapes(add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH"));
   add(CmdArrangeMenu, 0, S::Large, L"Arrange", L"G");
   add(CmdObjectFill, 0, S::Medium, L"Shape Fill", L"SF");
   add(CmdObjectOutline, 0, S::Medium, L"Shape Outline", L"SO");
@@ -256,7 +296,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Group(L"Images");
   add(CmdInsertPicture, 0, S::Large, L"Pictures", L"P");
   b.Group(L"Illustrations");
-  add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH");
+  shapes(add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH"));
   add(CmdInsertChart, 0, S::Large, L"Chart", L"C");
   b.Group(L"Links");
   add(CmdInsertLink, 0, S::Large, L"Link", L"I");
@@ -363,7 +403,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   if (kinds.shapes > 0) {
     b.Tab(L"Shape Format", L"JD", true);
     b.Group(L"Insert Shapes");
-    add(CmdInsertShape, 0, S::Medium, L"Shapes", L"SH");
+    shapes(add(CmdInsertShape, 0, S::Medium, L"Shapes", L"SH"));
     add(CmdInsertTextBox, 0, S::Medium, L"Text Box", L"X");
     b.Group(L"Shape Styles");
     add(CmdObjectFill, 0, S::Medium, L"Shape Fill", L"SF");
