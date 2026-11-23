@@ -215,3 +215,41 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
     - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
   - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).
+
+## After P1: notes for P3 or later
+
+P1 stopped at the gate (93.36 % on `fbbbfbaa`). What is known about the slides still failing, from p1-model's analysis (24 Nov 2026). The scripts named here are in `FeatherweightNotes\p1\corpus-analysis\`; the details are in `FeatherweightNotes\p1\p1-model-picture-findings.md`.
+
+- **SmartArt layout engine.** Six SmartArt slides fail because their decks keep no saved drawing (`dsp:drawing`), so we show the "Diagram" placeholder: the LibreOffice and POI test decks chevron, cycle, org-chart, picture-strip, vertical-box-list and smartart-simple (0.88–0.947). PowerPoint lays them out from the data model and the layout definition (`layoutN.xml`: the layout language's algorithms lin, snake, cycle, hierRoot, composite, tx, sp; constraints and rules).
+  - Real-world decks almost always save the drawing, which is what we draw today (`dgm:extLst` → `dsp:drawing`, children placed at the drawn size: `Shape::childrenAsDrawn`).
+  - An engine matters for files written by other programs, and for editing SmartArt (P2/P3), where the drawing has to be made again.
+- **Native Office math (`FW_SLIDE_MATH`, off).** Equations are drawn through `mc:Fallback`'s picture: 111 of 137 math slides pass that way, against 68 drawn natively. 18 equation slides still fail, 16 of them near misses.
+  - Native math is wired up: math runs in `src/slide/render/TextBody.cpp`, fwdoclayout's typesetter, display integrals, and the math line pitch.
+  - It needs calibration against PowerPoint's PDFs (`mathcmp.py`, `eqpos.py`, `naryids.py`). Our equations set wider; the line after display math is about 2 pt low; baselines sit 0.15–0.2 em high in some decks but not others (a flat shift lost 68 → 62).
+  - Tables with math need it too. PowerPoint draws the `mc:Choice` table and grows a row to fit its math; the fallback table's saved row heights can be stale (cs-2110 sorting 43: Selection row 31.6 pt drawn, 28.8 pt saved; 0.947).
+- **Embedded fonts PowerPoint doesn't use.** cpb (RijksoverheidSansHeading/Text) and goettingen (Futura PT Cond Medium) embed fonts that PowerPoint ignores: its PDFs draw Calibri. We draw the embedded fonts, so cpb 4–6 and goettingen 6 fail.
+  - The fonts look normal: not subset, MTX-compressed EOT, fsType 0 or 8.
+  - Windows' t2embed loads them, and renames them to numbers as PowerPoint does, without complaint (`t2load.py`, `t2rename.py`). So the refusal is PowerPoint's own.
+  - PowerPoint does draw overheid's Raleway (also not subset, fsType 0), govau's Public Sans and ndsu's Antonio.
+  - Next step: a PowerPoint probe, for example cpb with govau's font parts swapped in, or the reverse.
+- **3-D shapes (`a:sp3d`, `a:scene3d`).** After the gate this is the biggest failing cluster outside text layout: 11 slides with bevelT (materials-to-support-optional 6–9 and 11, letters-home 30/42/48/52, business-bodies 6, tdf140865) and two with isometric cameras (rlf-webinar-iv 3, 13). Count: `sp3dcount.py`.
+  - PowerPoint draws such a shape as one image of the whole shape at about 200 ppi.
+  - It lights the front face: on materials 7 (threePt rig, dir t, default material) the picture comes out about 1.4 × brighter in linear light, plus 0.02 (`facelight.py`).
+  - It shades the bevel along the edges, and gives a compound line square corners.
+  - A fit of front-face lighting per light rig, plus bevel edge shading, would cover most of these.
+- **Smaller ones:**
+  - WordArt `prstTxWarp textPlain` stretches each line to fill its box (tum 6, 0.82; the only one in the corpus).
+  - A bullet character that comes from a fallback font isn't measured when deciding whether the text follows the bullet (15-213 VM 10, Noto Sans Symbols "⬛"; `8aba28b6` measures only the bullet font's own glyphs).
+  - The camera's `rot rev` is an in-plane rotation added to the shape's own (letters-home 52, zslbw-physik 22). Both pass or nearly pass now.
+- **Word: cloud faces by their own family names.** Word draws "Open Sans Light", a face in the Open Sans cloud folder, as itself: a 23 Nov re-export of `docx/letters/edu-uw-letterhead-brand-w-a.docx` has 2 pages in Open Sans Light.
+  - The stored reference has 1 page, because it was exported in the second the font arrived.
+  - Slides take the faces by their own names since `086420c4` (`Fonts::SetAllCloudFaces`); Word keeps the folder-family rule.
+  - To change Word too: re-export that reference first, then call `SetAllCloudFaces` for documents as well. Featherweight then gets 24/24 lines against the new export.
+- **Analysis tools for the next fidelity round:**
+  - `categories.py`: failing slides by content.
+  - `pictriage.py`: the share of a slide's loss inside its pictures, and their offsets.
+  - `textcmp.py`: font, size and colour differences.
+  - `textpos.py`: text displacement.
+  - `bulletpos.py`: where the text starts after a bullet.
+  - `fontsubst.py`: what PowerPoint draws a missing font in.
+  - `embedfonts.py`, `eotheader.py`, `t2load.py`: embedded fonts.
