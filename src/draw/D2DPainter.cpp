@@ -5,6 +5,7 @@
 #include <shlwapi.h>
 
 #include <algorithm>
+#include <cmath>
 
 using Microsoft::WRL::ComPtr;
 
@@ -257,13 +258,34 @@ ID2D1Brush* D2DPainter::MakeBrush(const Brush& b) {
   if (b.kind == Brush::Kind::Bitmap) {
     ID2D1Bitmap* bitmap = b.bitmap ? cache_->Get(dc_, *b.bitmap) : nullptr;
     ComPtr<ID2D1BitmapBrush1> brush;
+    // A tile (a pattern's cell, a tiled picture) spans whole device pixels, as a PDF viewer draws
+    // a tiling pattern (pdfium at 100 dpi: a 6-pt pattern cell, 8.33 pixels, at 9); so the slide
+    // view draws what its PDF does. Unsmoothed (a pattern) stays sharp only where a cell's pixel
+    // covers a few device pixels or more: nearer one, nearest-neighbour sampling drops or doubles
+    // whole rows, so they blend there as pdfium's do.
+    bool smooth = b.smooth;
+    Matrix t = b.bitmapTransform;
+    if (bitmap) {
+      D2D1_MATRIX_3X2_F w{};
+      dc_->GetTransform(&w);
+      float dpiX = 96, dpiY = 96;
+      dc_->GetDpi(&dpiX, &dpiY);
+      // Device pixels per bitmap pixel along the bitmap's x and y.
+      const float ux = std::hypot(t.m11 * w._11 + t.m12 * w._21, t.m11 * w._12 + t.m12 * w._22) * dpiX / 96;
+      const float uy = std::hypot(t.m21 * w._11 + t.m22 * w._21, t.m21 * w._12 + t.m22 * w._22) * dpiY / 96;
+      const float tw = ux * static_cast<float>(b.bitmap->Width()), th = uy * static_cast<float>(b.bitmap->Height());
+      if (b.extendX != Brush::Extend::Clamp && b.extendY != Brush::Extend::Clamp && tw >= 1 && th >= 1 && tw < 4096 &&
+          th < 4096)
+        t = Matrix::Scale(std::ceil(tw - 0.001f) / tw, std::ceil(th - 0.001f) / th) * t;
+      if (!smooth) smooth = std::sqrt(ux * uy) < 3;
+    }
     if (bitmap &&
         SUCCEEDED(dc_->CreateBitmapBrush(
             bitmap,
             D2D1::BitmapBrushProperties1(Extend(b.extendX), Extend(b.extendY),
-                                         b.smooth ? D2D1_INTERPOLATION_MODE_LINEAR
-                                                  : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
-            D2D1::BrushProperties(1.f, ToD2D(b.bitmapTransform)), &brush))) {
+                                         smooth ? D2D1_INTERPOLATION_MODE_LINEAR
+                                                : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
+            D2D1::BrushProperties(1.f, ToD2D(t)), &brush))) {
       gradient_ = brush;
       return gradient_.Get();
     }
