@@ -203,7 +203,8 @@ class DocView : public PagedView {
   // of its characters the offset in the paragraph's text.
   void VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const;
   // Pages laid out since the last call: their sizes join the view's. True when there were any.
-  bool TakeNewPages();
+  // `quiet`: the window isn't painted again for them (IdleWork decides).
+  bool TakeNewPages(bool quiet = false);
   void ShowNotices();
   void DrawPage(gfx::Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted);
   void DrawRanges(gfx::Canvas& c, int first, int last);
@@ -515,6 +516,10 @@ class DocView : public PagedView {
   draw::ColorMap colorMap_;
   std::shared_ptr<draw::ImageCache> images_;
   uint32_t revision_ = 0;
+  // Pages laid out below the screen since then and not drawn yet (IdleWork shows them at most
+  // kHeldPagesMs later); 0 when none.
+  double heldSince_ = 0;
+  static constexpr double kHeldPagesMs = 100;
   bool noticesShown_ = false;
   // Words in the main story, for the status bar: counted in idle time by paragraph, and for the
   // paragraphs an edit replaces as it's made (DocProof.cpp).
