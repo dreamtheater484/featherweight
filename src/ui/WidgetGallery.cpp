@@ -6,6 +6,7 @@
 
 #include "core/Strings.h"
 #include "ui/Icons.h"
+#include "ui/RibbonModel.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
 
@@ -24,7 +25,20 @@ enum GalleryCmd : int {
   kSpacing,
   kBullets,
   kFormatPanel,
-  kCommentsPanel
+  kCommentsPanel,
+  // The demo ribbon's own (R1).
+  kPaste,
+  kPasteValues,
+  kPasteText,
+  kCut,
+  kCopy,
+  kPainter,
+  kFind,
+  kReplace,
+  kSelect,
+  kSelectAll,
+  kSelectObjects,
+  kTableStyle
 };
 
 constexpr float kMargin = 24;   // around the content
@@ -362,11 +376,174 @@ CommandState WidgetGallery::QueryCommand(int cmd) {
     case kBullets: return {true, false, true, L"Apply bullets", L""};
     case kFormatPanel: return {true, host_.ViewShownPanel() == &format_, true, L"Format panel", L""};
     case kCommentsPanel: return {true, host_.ViewShownPanel() == &comments_, true, L"Comments panel", L""};
+    case kStyle: return {true, false, true, L"Style", L""};
+    case kFont: return {true, false, true, L"Font", L"Ctrl+Shift+F"};
+    case kSize: return {true, false, true, L"Font size", L"Ctrl+Shift+P"};
+    case kHighlight: return {true, false, true, L"Text highlight color", L""};
+    case kSpacing: return {true, false, true, L"Spacing after", L""};
+    case kPaste: return {true, false, true, L"Paste", L"Ctrl+V"};
+    case kPasteValues: return {true, false, true, L"Paste values", L""};
+    case kPasteText: return {true, false, true, L"Paste text only", L""};
+    case kCut: return {true, false, true, L"Cut", L"Ctrl+X"};
+    case kCopy: return {true, false, true, L"Copy", L"Ctrl+C"};
+    case kPainter: return {false, false, true, L"Format Painter", L""};
+    case kFind: return {true, false, true, L"Find", L"Ctrl+F"};
+    case kReplace: return {true, false, true, L"Replace", L"Ctrl+H"};
+    case kSelect: return {true, false, true, L"Select", L""};
+    case kSelectAll: return {true, false, true, L"Select all", L"Ctrl+A"};
+    case kSelectObjects: return {true, false, true, L"Select objects", L""};
+    case kTableStyle: return {true, false, true, L"Table style", L""};
     default: return {};
   }
 }
 
 std::vector<int> WidgetGallery::Commands() { return {kBold, kFontColor, kBullets, kFormatPanel, kCommentsPanel}; }
+
+bool WidgetGallery::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op != L"galleryribbon") return false;
+  ribbon_ = arg != L"off";
+  tableTools_ = arg == L"table";
+  return true;
+}
+
+void WidgetGallery::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
+  if (!ribbon_) return;
+  // The toolbar's controls, placed as Word's Home tab places them, and the demo's own buttons.
+  ToolbarModel tb;
+  BuildToolbar(tb, ctx);
+  auto from = [&](int cmd, RibbonSize size = RibbonSize::Small) {
+    RibbonItem it;
+    for (const std::vector<ToolItem>* items : {&tb.left, &tb.right})
+      for (const ToolItem& t : *items)
+        if (t.cmd == cmd) it.tool = t;
+    it.tool.sepBefore = false;
+    it.size = size;
+    return it;
+  };
+  auto button = [](int cmd, wchar_t glyph, RibbonSize size, const wchar_t* keyTip, RibbonSize smallest = RibbonSize::Small) {
+    RibbonItem it;
+    it.tool.cmd = cmd;
+    it.tool.glyph = glyph;
+    it.size = size;
+    it.smallest = smallest;
+    it.keyTip = keyTip;
+    return it;
+  };
+  RibbonTab home{L"Home", L"H"};
+  RibbonGroup clip{L"Clipboard", kFormatPanel};
+  RibbonItem paste = button(kPaste, 0xE77F, RibbonSize::Large, L"V", RibbonSize::Large);
+  paste.tool.kind = ToolKind::SplitButton;
+  paste.menu = {kPasteValues, 0, kPasteText};
+  RibbonItem painter = button(kPainter, icon::Brush, RibbonSize::Medium, L"FP");
+  painter.tool.enabled = false;
+  clip.items = {paste, button(kCut, 0xE8C6, RibbonSize::Medium, L"X"), button(kCopy, icon::Copy, RibbonSize::Medium, L"C"), painter};
+  RibbonGroup font{L"Font", kFormatPanel};
+  font.rows = 2;
+  RibbonItem name = from(kFont), size = from(kSize), bold = from(kBold), color = from(kFontColor), mark = from(kHighlight);
+  name.keyTip = L"FF";
+  size.keyTip = L"FS";
+  size.sameRow = true;
+  bold.keyTip = L"1";
+  color.keyTip = L"FC";
+  color.sameRow = true;
+  mark.keyTip = L"I";
+  mark.sameRow = true;
+  font.items = {name, size, bold, color, mark};
+  RibbonGroup para{L"Paragraph"};
+  para.rows = 2;
+  RibbonItem bullets = from(kBullets), after = from(kSpacing);
+  bullets.keyTip = L"U";
+  after.keyTip = L"SA";
+  para.items = {bullets, after};
+  RibbonGroup styles{L"Styles", kFormatPanel};
+  styles.shrinkFirst = 1;
+  RibbonItem gallery = from(kStyle);
+  gallery.label = L"Styles";
+  gallery.keyTip = L"L";
+  gallery.tool.glyph = icon::FontCase;
+  RibbonGallery g;
+  g.columns = 5;
+  g.minColumns = 2;
+  g.popupColumns = 4;
+  g.menu = {kFormatPanel};
+  g.drawChoice = [](gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui) {
+    const Palette& p = theme::P();
+    const float size = (index == 1 ? 17 : index == 2 ? 15 : index == 3 ? 22 : 13) * ui;
+    c.Text(L"AaBbCc", gfx::RectF(r.left, r.top, r.right, r.bottom - 14 * ui), index == 3 ? p.accentText : p.text, size,
+           index == 1 || index == 2 ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
+    c.Text(Styles()[index], gfx::RectF(r.left, r.bottom - 15 * ui, r.right, r.bottom), p.textSecondary, 11 * ui,
+           DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
+  };
+  gallery.gallery = g;
+  styles.items = {gallery};
+  RibbonGroup editing{L"Editing"};
+  editing.glyph = icon::Search;
+  RibbonItem select = button(kSelect, 0xE8B3, RibbonSize::Medium, L"SL");
+  select.tool.dropdown = true;
+  select.menu = {kSelectAll, kSelectObjects};
+  editing.items = {button(kFind, icon::Search, RibbonSize::Medium, L"FD"), button(kReplace, 0xE8AB, RibbonSize::Medium, L"R"), select};
+  home.groups = {clip, font, para, styles, editing};
+
+  RibbonTab insert{L"Insert", L"N"};
+  RibbonGroup panels{L"Panels"};
+  panels.items = {from(kFormatPanel, RibbonSize::Large), from(kCommentsPanel, RibbonSize::Large)};
+  panels.items[0].label = L"Format\npanel";
+  panels.items[1].label = L"Comments";
+  RibbonGroup lists{L"Lists"};
+  lists.items = {from(kBullets, RibbonSize::Large)};
+  lists.items[0].label = L"Bullets";
+  lists.items[0].smallest = RibbonSize::Large;
+  insert.groups = {panels, lists};
+
+  RibbonTab view{L"View", L"W"};
+  RibbonGroup look{L"Style"};
+  look.items = {from(kStyle)};
+  view.groups = {look};
+  m.tabs = {home, insert, view};
+
+  if (tableTools_) {
+    RibbonTab design{L"Table Design", L"JT"};
+    design.contextual = true;
+    RibbonGroup ts{L"Table Styles"};
+    RibbonItem t;
+    t.tool.kind = ToolKind::Dropdown;
+    t.tool.cmd = kTableStyle;
+    t.tool.glyph = icon::Table;
+    t.tool.choices = {L"Plain", L"Grid", L"List", L"Banded rows", L"Dark header", L"Accent"};
+    t.tool.choice = tableStyle_;
+    t.tool.onChange = [this](const ToolValue& v) {
+      tableStyle_ = v.index;
+      Note(L"Table style set to " + v.text);
+    };
+    t.label = L"Table Styles";
+    RibbonGallery tg;
+    tg.choiceWidth = 64;
+    tg.choiceHeight = 52;
+    tg.columns = 6;
+    tg.minColumns = 3;
+    tg.drawChoice = [](gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui) {
+      const Palette& p = theme::P();
+      const float rh = (r.bottom - r.top) / 5;
+      for (int row = 0; row < 5; ++row) {
+        const D2D1_RECT_F rr = gfx::RectF(r.left + 4 * ui, r.top + row * rh, r.right - 4 * ui, r.top + (row + 1) * rh - 1);
+        D2D1_COLOR_F fill = p.inputBg;
+        if (row == 0 && index >= 4) fill = index == 5 ? p.accent : p.text;
+        else if (index == 3 && row % 2 == 1) fill = gfx::Alpha(p.accent, 0.25f);
+        c.Fill(rr, fill);
+        if (index == 1 || index == 4) c.Stroke(rr, p.textSecondary, 1);
+      }
+    };
+    t.gallery = tg;
+    ts.items = {t};
+    design.groups = {ts};
+    m.tabs.push_back(design);
+  }
+  RibbonFileItem opt;
+  opt.place = RibbonFilePlace::Options;
+  opt.cmd = kFormatPanel;
+  opt.description = L"The widget gallery's own option";
+  m.file = {opt};
+}
 
 bool WidgetGallery::Execute(int cmd) {
   switch (cmd) {
@@ -380,6 +557,16 @@ bool WidgetGallery::Execute(int cmd) {
     case kCommentsPanel:
       host_.ViewShowPanel(host_.ViewShownPanel() == &comments_ ? nullptr : &comments_);
       return true;
+    case kPaste:
+    case kPasteValues:
+    case kPasteText:
+    case kCut:
+    case kCopy:
+    case kPainter:
+    case kFind:
+    case kReplace:
+    case kSelectAll:
+    case kSelectObjects: Note(L"Ran " + QueryCommand(cmd).label); return true;
     default: return false;
   }
 }

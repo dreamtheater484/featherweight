@@ -229,6 +229,7 @@ void App::ReloadActive() {
   if (search_.IsOpen()) CloseSearch();
   panel_.Show(nullptr, false);
   toolbar_.Forget();  // the old view's own toolbar controls go with it
+  ribbon_.Forget();
   tabs_[index] = std::move(view);  // the banner said changes here are discarded
   active_ = -1;
   ActivateTab(index);
