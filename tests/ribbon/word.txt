@@ -1,0 +1,75 @@
+# The commands the toolbar and the ⋯ menu reached in word before R1 (dumpreach on tests/office/generated/simple.docx).
+# ribboncheck:<this file> fails when one isn't reachable from the ribbon, the File page, the right-click menu
+# or Alt+Q. Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
+reach 100 Open
+reach 101 Save
+reach 102 Save as…
+reach 103 Print
+reach 107 Find
+reach 127 Single page
+reach 128 Continuous pages
+reach 129 Two pages
+reach 130 Show cover page on its own (View menu)
+reach 131 Rotate counterclockwise (View menu)
+reach 132 Rotate clockwise (View menu)
+reach 133 Night reading: dark pages
+reach 134 Full screen
+reach 135 Present
+reach 137 App theme: use Windows setting
+reach 138 App theme: light
+reach 139 App theme: dark
+reach 140 Highlight form fields
+reach 141 Update automatically
+reach 142 Check for updates now
+reach 143 Make Featherweight the default PDF app
+reach 144 About Featherweight
+reach 157 Undo
+reach 158 Redo
+reach 162 Restore original
+reach 701 New document
+reach 702 New workbook
+reach 720 New from template 1
+reach 721 New from template 2
+reach 722 New from template 3
+reach 803 Check spelling as you type
+reach 804 AutoCorrect as you type
+reach 1000 Bold
+reach 1001 Italic
+reach 1002 Underline
+reach 1013 Font color
+reach 1014 Text highlight color
+reach 1015 Format painter
+reach 1022 Alignment box
+reach 1027 Bullets
+reach 1028 Numbering
+reach 1032 Increase indent
+reach 1033 Decrease indent
+reach 1041 Style box
+reach 1042 Font box
+reach 1043 Font size box
+reach 1044 Insert box
+reach 1111 Navigation pane
+reach 1112 Show formatting marks
+reach 1150 Insert table
+reach 1200 Ruler
+reach 1207 Change case (Aa)
+reach 1250 Page setup…
+reach 1251 Layout
+reach 1268 Hyphenate automatically
+reach 1271 Paragraph…
+reach 1320 Comments and changes
+reach 1321 New comment
+reach 1322 Track changes
+reach 1323 Accept change
+reach 1324 Reject change
+reach 1325 Accept all changes
+reach 1326 Reject all changes
+reach 1327 Next change
+reach 1328 Previous change
+reach 1329 Simple markup
+reach 1330 All markup
+reach 1331 No markup
+reach 1332 Original
+reach 1333 Your name for changes and comments…
+reach 1400 Export PDF…
+reach 3036 More templates (user templates folder)

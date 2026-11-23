@@ -273,6 +273,7 @@ void WidgetGallery::Draw(Canvas& c, ID2D1DeviceContext*) {
   const float u = ui_;
   const D2D1_RECT_F all = RectF(vp_);
   c.Fill(all, p.docBg);
+  if (icons_) return DrawIconSheet(c);
   c.PushClip(all);
   const float left = status_.left, right = status_.right;
   c.Text(L"Widget gallery", RectF(left, vp_.top + 16 * u, right, vp_.top + 46 * u), p.text, 20 * u,
@@ -399,7 +400,44 @@ CommandState WidgetGallery::QueryCommand(int cmd) {
 
 std::vector<int> WidgetGallery::Commands() { return {kBold, kFontColor, kBullets, kFormatPanel, kCommentsPanel}; }
 
+// Every drawn icon at 16 and 32 pixels with its name, to look them over (galleryicons:on).
+void WidgetGallery::DrawIconSheet(Canvas& c) {
+  static const wchar_t* const kNames =
+      L"Subscript Superscript Strikethrough ClearFormatting MultilevelList LineSpacing Hyphenation IndentLeft "
+      L"IndentRight SpaceBefore SpaceAfter WordCount Footnote Endnote Replace Spelling Zoom100 TextBox "
+      L"FillBucket BordersAll BordersBottom AlignTop AlignMiddle AlignBottom WrapCell MergeCenter Accounting "
+      L"Percent Comma IncreaseDecimal DecreaseDecimal AutoSum InsertCells ConditionalFormat CellStyles PivotTable "
+      L"PageBreak Header Footer PageNumber Watermark Margins PaperSize Columns Orientation PrintArea PrintTitles "
+      L"TableOfContents Bookmark NewSlide SlideSize FormatBackground HideSlide FromCurrentSlide FitToWindow "
+      L"Shapes WrapSquare Arrange BringForward SendBackward AlignObjects Group ShapeEffects AltText DropDownList "
+      L"TableInsertAbove TableInsertBelow TableInsertLeft TableInsertRight TableDelete MergeCells SplitCells "
+      L"AutoFit DistributeColumns DistributeRows RepeatHeader ConvertToText ChartColumn ChartBar ChartLine "
+      L"ChartArea ChartPie ChartDoughnut ChartScatter ChartCombo SortAscending SortDescending RemoveDuplicates "
+      L"GroupRows UngroupRows ViewNormal PageBreakPreview FreezePanes";
+  const Palette& p = theme::P();
+  const float u = ui_, cellW = 150 * u, cellH = 64 * u;
+  const float left = vp_.left + 16 * u;
+  const int cols = std::max(1, (int)((vp_.right - vp_.left - 32 * u) / cellW));
+  const wchar_t* name = kNames;
+  for (wchar_t g = icon::kDrawnFirst; g < icon::kDrawnEnd; ++g) {
+    const int i = g - icon::kDrawnFirst;
+    const float x = left + (i % cols) * cellW, y = vp_.top + 12 * u + (i / cols) * cellH;
+    DrawGlyph(c, g, RectF(x, y, x + 36 * u, y + 36 * u), p.text, std::round(32 * u));
+    DrawGlyph(c, g, RectF(x + 40 * u, y + 10 * u, x + 56 * u, y + 26 * u), p.text, std::round(16 * u));
+    DrawGlyph(c, g, RectF(x + 62 * u, y + 10 * u, x + 78 * u, y + 26 * u), p.textSecondary, std::round(16 * u));
+    while (*name == L' ') ++name;
+    const wchar_t* end = name;
+    while (*end && *end != L' ') ++end;
+    c.Text(std::wstring(name, end), RectF(x, y + 38 * u, x + cellW - 4 * u, y + 56 * u), p.textSecondary, 11 * u);
+    name = end;
+  }
+}
+
 bool WidgetGallery::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op == L"galleryicons") {
+    icons_ = arg != L"off";
+    return true;
+  }
   if (op != L"galleryribbon") return false;
   ribbon_ = arg != L"off";
   tableTools_ = arg == L"table";
@@ -451,9 +489,12 @@ void WidgetGallery::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   font.items = {name, size, bold, color, mark};
   RibbonGroup para{L"Paragraph"};
   para.rows = 2;
-  RibbonItem bullets = from(kBullets), after = from(kSpacing);
+  // Medium: the split button with its label ("Bullets ▾"), the box with its label in front.
+  RibbonItem bullets = from(kBullets, RibbonSize::Medium), after = from(kSpacing, RibbonSize::Medium);
   bullets.keyTip = L"U";
+  bullets.label = L"Bullets";
   after.keyTip = L"SA";
+  after.label = L"After";
   para.items = {bullets, after};
   RibbonGroup styles{L"Styles", kFormatPanel};
   styles.shrinkFirst = 1;

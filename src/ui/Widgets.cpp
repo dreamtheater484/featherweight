@@ -52,7 +52,8 @@ void DrawCustomIcon(Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F
 }  // namespace
 
 void DrawGlyph(Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F color, float size) {
-  if (glyph >= 0xF8F0 && glyph <= 0xF8FF) DrawCustomIcon(c, glyph, r, color, size);
+  if (icon::IsDrawn(glyph)) icon::DrawDrawn(c, glyph, r, color, size);  // the ribbon's own (ui/Icons.cpp)
+  else if (glyph >= 0xF8F0 && glyph <= 0xF8FF) DrawCustomIcon(c, glyph, r, color, size);
   else c.Icon(glyph, r, color, size);
 }
 
@@ -109,11 +110,8 @@ void DrawButton(Canvas& c, const Button& b, float ui, bool windowActive) {
   float glyphW = b.glyph ? glyphPx : 0;
   float total = glyphW + gap + textW + chevW;
   float x = std::round((b.rc.left + b.rc.right - total) / 2);
-  if (b.glyph >= 0xF8F0 && b.glyph <= 0xF8FF) {
-    DrawCustomIcon(c, b.glyph, RectF(x, b.rc.top, x + glyphW, b.rc.bottom), fg, glyphPx);
-    x += glyphW + gap;
-  } else if (b.glyph) {
-    c.Icon(b.glyph, RectF(x, b.rc.top, x + glyphW, b.rc.bottom), fg, glyphPx);
+  if (b.glyph) {
+    DrawGlyph(c, b.glyph, RectF(x, b.rc.top, x + glyphW, b.rc.bottom), fg, glyphPx);
     x += glyphW + gap;
   }
   if (!b.text.empty()) {

@@ -164,6 +164,8 @@ class WidgetGallery : public TabContent {
   bool tbNoHighlight_ = false;
   double tbAfter_ = 8;
   bool ribbon_ = false, tableTools_ = false;
+  bool icons_ = false;  // galleryicons:on: the drawn icons (ui/Icons.cpp) instead of the cards
+  void DrawIconSheet(gfx::Canvas& c);
   int tableStyle_ = 0;
   int tbBullet_ = 0;
   double zoom_ = 1;  // what the status bar's zoom shows

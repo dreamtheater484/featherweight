@@ -28,6 +28,9 @@ constexpr float kSmallScreenH = 720;
 // A menu of a ribbon item's choices: ids from here (never commands).
 constexpr int kChoiceFirst = 0xB000;
 
+// A script step's report on stderr, as UTF-8 (fwprintf's C locale turns "…" and "›" into "?").
+void Report(const std::wstring& s) { fputs(fw::WideToUtf8(s).c_str(), stderr); }
+
 // Menus take & as the next letter's underline: a name's own & is doubled.
 std::wstring MenuText(const std::wstring& s) {
   std::wstring out;
@@ -122,9 +125,10 @@ void App::ShowQuickList(int index) {
     }
 }
 
-void App::ShowRibbonMenu(const RibbonItem& item, const D2D1_RECT_F& anchor) {
+void App::ShowRibbonMenu(const RibbonItem& from, const D2D1_RECT_F& anchor) {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
+  const RibbonItem item = from;  // a copy: the menu's loop paints, and every frame replaces the ribbon's model
   if (item.menu.empty() && item.tool.choices.empty()) {
     ShowMenu(item.tool.cmd);  // the tab's own (FillMenu), or the window's (zoom, page layout)
     return;
@@ -415,7 +419,8 @@ std::vector<int> App::ReachableCommands(std::wstring* report) {
   // The ribbon: its items, their menus (the tab's FillMenu where the item has no list of its own)
   // and launchers, in every tab.
   for (const auto& [cmd, where] : ribbon_.Commands()) ribbon.push_back(cmd);
-  for (const RibbonTab& t : ribbon_.Model().tabs)
+  const RibbonModel model = ribbon_.Model();  // a copy: a menu's FillMenu may lay the window out again
+  for (const RibbonTab& t : model.tabs)
     for (const RibbonGroup& g : t.groups)
       for (const RibbonItem& it : g.items)
         if (it.menu.empty() && it.tool.choices.empty() &&
@@ -493,12 +498,12 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
   }
   if (op == L"dumpribbon") {
     Layout();
-    fwprintf(stderr, L"%s", ribbon_.Dump().c_str());
+    Report(ribbon_.Dump());
     return true;
   }
   if (op == L"dumpreach") {
     // The commands the toolbar and the ⋯ menu reach now, for a coverage baseline.
-    for (int cmd : ToolbarCommands()) fwprintf(stderr, L"reach %d %s\n", cmd, QueryCommand(cmd).label.c_str());
+    for (int cmd : ToolbarCommands()) Report(L"reach " + std::to_wstring(cmd) + L" " + QueryCommand(cmd).label + L"\n");
     return true;
   }
   if (op == L"ribboncheck") {
@@ -535,11 +540,14 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
         }
       }
     // Each tab: its groups fit, its KeyTips are unique.
+    // (The names are copied first: Layout replaces the ribbon's model.)
     const std::wstring was = ribbon_.Selected();
-    for (const RibbonTab& t : ribbon_.Model().tabs) {
-      ribbon_.Select(t.name);
+    std::vector<std::wstring> names;
+    for (const RibbonTab& t : ribbon_.Model().tabs) names.push_back(t.name);
+    for (const std::wstring& name : names) {
+      ribbon_.Select(name);
       Layout();
-      for (const std::wstring& p : ribbon_.Problems()) problems.push_back(t.name + L": " + p);
+      for (const std::wstring& p : ribbon_.Problems()) problems.push_back(name + L": " + p);
     }
     ribbon_.Select(was);
     Layout();
@@ -562,9 +570,10 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
         }
       }
     }
-    for (const std::wstring& p : problems) fwprintf(stderr, L"ribboncheck: %s\n", p.c_str());
-    fwprintf(stderr, L"ribboncheck: %d items in %d tabs; %d baseline commands; reachable %s; %d problems\n", items,
-             static_cast<int>(raw.tabs.size()), baseline, report.c_str(), static_cast<int>(problems.size()));
+    for (const std::wstring& p : problems) Report(L"ribboncheck: " + p + L"\n");
+    Report(L"ribboncheck: " + std::to_wstring(items) + L" items in " + std::to_wstring(raw.tabs.size()) + L" tabs; " +
+           std::to_wstring(baseline) + L" baseline commands; reachable " + report + L"; " + std::to_wstring(problems.size()) +
+           L" problems\n");
     if (!problems.empty()) scriptFailed_ = true;
     return true;
   }
