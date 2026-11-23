@@ -73,7 +73,7 @@ class DeckRenderer final : public SlideRenderer {
     dc->SetTransform(toTarget);
     {
       draw::D2DPainter painter(dc, &cache_);
-      painter.UsePdfLikeText();
+      painter.UsePdfLikeDrawing();
       draw::Size size = p.slide->Size();
       if (filter) {
         ById byId(p, *filter);

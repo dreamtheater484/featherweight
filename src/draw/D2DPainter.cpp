@@ -156,7 +156,8 @@ D2DPainter::~D2DPainter() {
   }
 }
 
-void D2DPainter::UsePdfLikeText() {
+void D2DPainter::UsePdfLikeDrawing() {
+  picturesUp_ = true;
   // Unhinted outlines at gamma 1 (un-ccsa's dense text slides: .935 -> .966 against their PDF).
   static const ComPtr<IDWriteRenderingParams> params = [] {
     ComPtr<IDWriteFactory> dw;
@@ -450,6 +451,11 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   D2D1_MATRIX_3X2_F w{};
   dc_->GetTransform(&w);
   if (w._12 == 0 && w._21 == 0 && w._11 != 0 && w._22 != 0) {
+    if (picturesUp_) {
+      const float up = w._22 > 0 ? -0.001f : 0.001f;
+      d.top += up;
+      d.bottom += up;
+    }
     float dpiX = 96, dpiY = 96;
     dc_->GetDpi(&dpiX, &dpiY);
     const auto out = [](float a, float b, float scale, float offset, float k, float& lo, float& hi) {
