@@ -141,3 +141,8 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - Corpus sample: median 0.985.
     - The app's page export stops after slide 6 of `govuk-cybersprinters-lesson-3-suspicious-contact` (exit 0, 6 of 22 pages; all 22 on `9eb0c84d`), a regression with `77b8d25c`.
     - Four other slides score 0.932–0.949: `overheid-migratieketen` 7, `usgov-globe-widescreen` 8, `cpb-presentatie` 7, `zslbw-bnt-klasse-5-6` 17.
+- **2026-11-23: `usgov-how-well-do-you-know-era-systems` from 13 to 54 of 58 slides with p1-render `161a2922`** (coordinator). The gain is mostly the resampling phase of its see-through background picture now matching PowerPoint's PDF, not a change anyone would see.
+- **2026-11-23: no page fails to draw on p1-int `0df66c49`** (after p1-render `ffec52c0`, which fixed whole slides failing in Direct2D with `D2DERR_BAD_NUMBER`).
+  - `fwtool slides --png` over all 152 corpus decks and the 18 public decks drew 2,652 pages: every deck its full slide count, no errors.
+  - 17 pages are one flat colour, and all 17 score SSIM 1.0 against PowerPoint: empty slides in the decks (templates' spacer slides, LibreOffice transition tests, `layouts-placeholders.pptx` slide 7).
+  - Script: `FeatherweightNotes\p1\corpus-analysis\png-sweep.py`.
