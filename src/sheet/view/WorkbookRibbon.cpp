@@ -58,7 +58,7 @@ struct Spec {
 };
 
 constexpr Spec kHome[] = {
-    {0, 0, g::Paste, 3, 1, "ZL", "Clipboard"},  // flags: shrinks first, as Excel's (Cut, Copy, Format Painter lose their labels)
+    {0, 0, g::Paste, 3, 0, "ZL", "Clipboard"},
     {CmdPaste, 0, g::Paste, L, kSplit | kKeepLarge, "V", "Paste"},
     {CmdCut, 0, g::Cut, M, 0, "X", "Cut"},
     {CmdCopy, 0, icon::Copy, M, 0, "C", "Copy"},
