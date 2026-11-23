@@ -177,7 +177,7 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - The gain splits three ways, measured against p1-int `34b12323` (`cb26c73e` without `7d70c42c` and the empty-chart fix):
     - `7d70c42c`'s export matching (picture placement, page box, JPEG at q75): +11 net, 13 gained and 2 lost. All 13 gains are slides with their own pictures: acuk general +4, unisaarland +3, acuk dual-gaelic +2, and 1 each on morocco, goettingen, cs-2110 graphs and course-100. The 2 losses are layout-picture slides in the two unimuenster templates (en 23, de 20: 0.953 → 0.945). 256 slides moved up by more than 0.001, 28 down.
     - who-health didn't crash this time: +23. The bug is still in `cb26c73e`. p1-render fixed it in `a2210fdf` (a use-after-free in `PdfPainter::DrawBitmap`), which isn't in p1-int yet.
-    - Drawing fixes: +14 (virtual-memory +7, rlf-webinar-i +2, business bodies +2, physik 7-8 +1, morocco +1 and others).
+    - Drawing fixes: +14, none lost: virtual-memory +7, rlf-webinar-i +2, business bodies +2, and 1 each on physik 7-8, the poi line chart and the overheid webinar.
     - The empty-chart fix flips no corpus slide: goettingen 2 already passed.
   - Without export matching the corpus is at 2,211 (87.88 %).
   - Per kind: briefings 85.7 %, charts 86.7 %, features 88.7 %, lectures 89.3 %, photos 83.6 %, school 86.8 %, shows 92.0 %, statistics 80.0 %, templates 92.9 %, training 89.2 %.
