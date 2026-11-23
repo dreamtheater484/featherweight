@@ -204,6 +204,15 @@ Brush PatternBrush(const Fill& f, Geometry::PathFill mode, const Matrix& ctm) {
     const float cx = 6 * ctm.m11, cy = 6 * ctm.m22;  // a cell on the page
     const float dx = std::floor(ctm.dx / cx) * cx - ctm.dx, dy = std::floor(ctm.dy / cy) * cy - ctm.dy;
     m = m * Matrix::Translate(dx / ctm.m11, dy / ctm.m22);
+  } else if (f.pageAnchored) {
+    // A turned or mirrored shape's pattern doesn't turn with it: square on the page, on its grid
+    // (zslbw-bnt's balloons, turned 183 degrees: PowerPoint's cells are upright).
+    const float k = std::sqrt(std::abs(ctm.m11 * ctm.m22 - ctm.m12 * ctm.m21));  // page units per point
+    if (k > 0) {
+      const float cell = 6 * k;
+      m = Matrix::Scale(0.75f * k, 0.75f * k) *
+          Matrix::Translate(std::floor(ctm.dx / cell) * cell, std::floor(ctm.dy / cell) * cell) * ctm.Inverse();
+    }
   }
   Brush b = Brush::FromBitmap(bmp, m, Brush::Extend::Repeat);
   b.smooth = false;
