@@ -44,6 +44,7 @@ class ViewHost {
   virtual bool ViewSpelling() { return true; }
   virtual bool ViewAutoCorrect() { return true; }
   virtual bool ViewRuler() { return false; }
+  virtual bool ViewDeveloperTab() { return false; }  // the ribbon's Developer tab shown
   // Word documents: the name changes and comments are made with (empty: Windows'), set in ⋯.
   virtual std::wstring ViewReviewer() { return {}; }
   virtual void ViewSetReviewer(const std::wstring& /*name*/) {}
