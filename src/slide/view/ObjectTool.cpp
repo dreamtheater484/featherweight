@@ -2097,11 +2097,11 @@ ToolItem ObjectTool::Tool(int cmd) {
     case CmdInsertTextBox:
       // Inserting also ends text editing, as the toolbar always let it.
       t.enabled = Editable(false);
-      t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::FontCase;
+      t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::TextBox;
       t.tooltip = cmd == CmdInsertPicture ? L"Insert pictures" : L"Insert a text box";
       break;
     case CmdInsertShape:
-      dropdown(L"Shapes", 0, L"Insert a shape");
+      dropdown(L"Shapes", icon::Shapes, L"Insert a shape");
       t.enabled = Editable(false);
       t.width = 70;
       t.maxRows = 16;

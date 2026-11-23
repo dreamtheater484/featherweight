@@ -146,6 +146,7 @@ if(FW_BUILD_TESTS)
   endfunction()
   if(FW_TEST_SCREENS)
     fw_ribbon_test(ribbon_screens screens)
+    fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
   endif()
 endif()
 
