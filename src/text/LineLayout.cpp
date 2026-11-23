@@ -471,15 +471,17 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   if (connected && fonts.PowerPointFallback()) {
     // A connected script's run (Arabic) whose font hasn't its letters: PowerPoint draws all of it,
     // its spaces too, in the font that has them (morocco: Tahoma's 10-point spaces at 32, not
-    // Franklin Gothic's 8).
+    // Franklin Gothic's 8). So too when its font isn't installed: no substitute (Calibri, which has
+    // Arabic now), but the fallback's font (morocco's Andalus: Tahoma).
+    const bool missing = !sf.family->empty() && !fonts.Installed(*sf.family);
     uint32_t first = start;
     while (first < end && std::iswspace(shape[first])) ++first;
     UINT32 mapped = 0;
     ComPtr<IDWriteFont> font;
     FLOAT scale = 1;
     if (first < end &&
-        SUCCEEDED(fonts.Fallback()->MapCharacters(&source, first, 1, fonts.Collection(), base->Family().c_str(), base->Weight(),
-                                                  base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) &&
+        SUCCEEDED(fonts.Fallback()->MapCharacters(&source, first, 1, fonts.Collection(), missing ? nullptr : base->Family().c_str(),
+                                                  base->Weight(), base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) &&
         font)
       if (const Face* other = fonts.Get(font.Get()); other && _wcsicmp(other->Family().c_str(), base->Family().c_str()) != 0) base = other;
   }

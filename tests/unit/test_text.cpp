@@ -553,6 +553,12 @@ TEST(Text_PowerPointFallbackDrawsArabicInTahoma) {
   CHECK(!lines.empty() && !lines[0].pieces.empty());
   if (lines.empty() || lines[0].pieces.empty()) return;
   for (const GlyphPiece& p : lines[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
+  // A font that isn't installed (morocco's Andalus) isn't substituted for Arabic: Tahoma too.
+  const TextStyle missing = Style(L"No Such Arabic Font", 20);
+  const std::vector<Line> unknown = Layout(slides, Para(arabic, missing), 400);
+  CHECK(!unknown.empty() && !unknown[0].pieces.empty());
+  if (unknown.empty() || unknown[0].pieces.empty()) return;
+  for (const GlyphPiece& p : unknown[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
   Fonts documents;
   const std::vector<Line> other = Layout(documents, Para(arabic, s), 400);
   CHECK(!other.empty() && !other[0].pieces.empty());
