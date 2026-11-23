@@ -149,7 +149,9 @@ class SlideRender {
 
 // The fonts the deck embeds, for `fonts` to use where this PC lacks them. Before anything is laid
 // out with `fonts`.
-void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck);
+// `directWrite`: the text is drawn through DirectWrite (the slide view, a show), so an embedded font
+// it can't outline is left out, its text drawn in the substitute; a PDF keeps it (its viewer draws it).
+void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool directWrite = true);
 
 // Draws a prepared slide into a new bitmap `width` x `height` pixels (premultiplied BGRA) on
 // Direct2D's software renderer: thumbnails and tests, no device needed. COM must be initialized

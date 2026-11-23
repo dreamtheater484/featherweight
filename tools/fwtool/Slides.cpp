@@ -76,7 +76,7 @@ int RunSlides(const Options& options) {
     }
     const double read = Ms(start);
     fw::text::Fonts fonts;
-    fw::slide::render::UseDeckFonts(fonts, *deck);
+    fw::slide::render::UseDeckFonts(fonts, *deck, options.png);  // a PDF keeps fonts only its viewer draws
     std::unique_ptr<fw::slide::render::SlideRender> first;
     double firstMs = 0, preparedMs = 0;
     if (deck->SlideCount() > 0) {
