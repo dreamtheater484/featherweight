@@ -481,7 +481,7 @@ void ColorPicker::Draw(Canvas& c) {
     ctl::DrawSubtle(c, rc, u, hv, pv);
     D2D1_RECT_F main = RectF(rc.left, rc.top, rc.right - chevW, rc.bottom);
     float cx = std::round((main.left + main.right) / 2), cy = std::round((rc.top + rc.bottom) / 2);
-    c.Icon(glyph, RectF(cx - 10 * u, cy - 12 * u, cx + 10 * u, cy + 6 * u), fg, 16 * u);
+    DrawGlyph(c, glyph, RectF(cx - 10 * u, cy - 12 * u, cx + 10 * u, cy + 6 * u), fg, 16 * u);
     D2D1_RECT_F bar = RectF(cx - 8 * u, cy + 6 * u, cx + 8 * u, cy + 6 * u + std::max(2.f, std::round(3 * u)));
     if (shown.a > 0) c.Fill(bar, enabled ? shown : Alpha(shown, 0.4f));
     else c.Stroke(bar, Alpha(fg, 0.5f), 1);
