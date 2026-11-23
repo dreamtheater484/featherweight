@@ -129,6 +129,46 @@ TEST(Chart_DrawsABarForEachValueAndALegend) {
   }
 }
 
+TEST(Chart_LegendEntriesLeftOutAndALabelStep) {
+  // c:legendEntry/c:delete leaves a series out of the legend (its bars stay); c:tickLblSkip is
+  // the category labels' step, as Office shows them (govuk business bodies' charts).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"b\"/><c:legendEntry><c:idx val=\"1\"/><c:delete val=\"1\"/></c:legendEntry>");
+  xml.replace(xml.find("<c:crossAx val=\"2\"/></c:catAx>"), 29, "<c:crossAx val=\"2\"/><c:tickLblSkip val=\"2\"/></c:catAx>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK(c.hiddenEntries == std::vector<uint32_t>{1});
+  CHECK_EQ(c.category.labelSkip, 2);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
+  CHECK_EQ(Filled(art, first), 4u);   // three bars and the legend's swatch
+  CHECK_EQ(Filled(art, second), 3u);  // three bars, no swatch
+}
+
+TEST(Chart_LogarithmicValueAxis) {
+  // c:logBase 10 with a minimum of 0.01: values a thousandfold apart, gridlines at each power of
+  // ten up to the one above the largest (15-213's memory gap chart).
+  std::string xml = ColumnChart();
+  const std::string from = "<c:axId val=\"2\"/><c:axPos val=\"l\"/>";
+  xml.replace(xml.find(from), from.size(),
+              "<c:axId val=\"2\"/><c:scaling><c:logBase val=\"10\"/><c:orientation val=\"minMax\"/><c:min val=\"0.01\"/></c:scaling>"
+              "<c:axPos val=\"l\"/>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK_EQ(c.value.logBase, 10.0);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  size_t marks = 0;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    CHECK(std::isfinite(b.left) && std::isfinite(b.top) && std::isfinite(b.right) && std::isfinite(b.bottom));
+    ++marks;
+  }
+  CHECK(marks > 0);
+}
+
 TEST(Chart_PieSlicesAndPercentLabels) {
   Parsed p(PieChart());
   Chart c;

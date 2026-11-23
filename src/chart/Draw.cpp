@@ -436,7 +436,11 @@ void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, Colo
 
 struct Scale {
   double min = 0, max = 1, step = 0.2;
-  double At(double v) const { return (v - min) / (max - min); }
+  double base = 0;  // logarithmic (c:logBase): ticks at powers of it, `step` unused; 0: linear
+  double At(double v) const {
+    if (base > 0) return v > 0 ? (std::log(v) - std::log(min)) / (std::log(max) - std::log(min)) : 0;
+    return (v - min) / (max - min);
+  }
 };
 
 double Up(double v, double step) { return std::ceil(v / step - 1e-9); }
@@ -457,6 +461,18 @@ double NiceStep(double lo, double hi, int most) {
 // units; the axis's own minimum and maximum win. (Excel's PDFs: a scatter of 55..86 up to 100, of
 // 160..190 from 155; columns of 95..175 up to 200.)
 Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
+  if (axis.logBase >= 2) {
+    // From the power of the base at or below the smallest value to the one at or above the
+    // largest; the axis's own minimum and maximum win (15-213's 0.01 to 10^8 by tens).
+    Scale s;
+    s.base = axis.logBase;
+    const double b = std::log(s.base);
+    const double low = std::isfinite(lo) && lo > 0 ? lo : 1, high = std::isfinite(hi) && hi > 0 ? hi : low * s.base;
+    s.min = axis.min && *axis.min > 0 ? *axis.min : std::pow(s.base, std::floor(std::log(low) / b + 1e-9));
+    s.max = axis.max && *axis.max > s.min ? *axis.max : std::pow(s.base, std::ceil(std::log(std::max(high, s.min)) / b - 1e-9));
+    if (!(s.max > s.min)) s.max = s.min * s.base;
+    return s;
+  }
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
   const bool narrow = hi > lo;  // a band of values: its far side keeps its room, a single value doesn't
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
@@ -482,6 +498,10 @@ Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int
 
 std::vector<double> Ticks(const Scale& s) {
   std::vector<double> out;
+  if (s.base > 0) {
+    for (double v = s.min; v <= s.max * (1 + 1e-9) && out.size() <= 60; v *= s.base) out.push_back(v);
+    return out;
+  }
   for (int i = 0; i <= 60; ++i) {
     double v = s.min + i * s.step;
     if (v > s.max + s.step * 1e-6) break;
@@ -505,6 +525,11 @@ struct Entry {
   bool circle = false;  // a bubble's key: a circle
 };
 
+// A legend entry the chart leaves out (c:legendEntry/c:delete).
+bool Hidden(const Chart& ch, size_t index) {
+  return std::find(ch.hiddenEntries.begin(), ch.hiddenEntries.end(), index) != ch.hiddenEntries.end();
+}
+
 std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
   std::vector<Entry> out;
   const Group& g0 = ch.groups.front();
@@ -518,7 +543,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       Entry e;
       e.name = i < s.categories.size() ? s.categories[i] : std::to_wstring(i + 1);
       e.color = c;
-      out.push_back(std::move(e));
+      if (!Hidden(ch, i)) out.push_back(std::move(e));
     }
     return out;
   }
@@ -542,7 +567,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
         e.symbol = MarkerSymbol(s, scatter || g.marker, k);
         e.markerSize = s.markerSize;
       }
-      out.push_back(std::move(e));
+      if (!Hidden(ch, k)) out.push_back(std::move(e));
       if (++k >= 64) break;
     }
   // Horizontal bars list their series bottom up, as they're stacked in each category; so do
@@ -1370,7 +1395,10 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     // Every label when they fit, else every second, third…
     const double room = cats.Band() * (bar ? P.bottom - P.top : P.right - P.left);
     const double need = bar ? ts * 1.2 : cw + ts * 0.5;
-    const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
+    // A stated step (c:tickLblSkip) as it is, whether or not the labels fit.
+    const size_t every = ch.category.labelSkip > 0 ? static_cast<size_t>(ch.category.labelSkip)
+                         : room > 0              ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room)))
+                                                 : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
       const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Fit(catName(i), ts, catRoom) : clabels[i];

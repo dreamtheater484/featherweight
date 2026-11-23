@@ -375,6 +375,28 @@ TEST(SlideRender_KernsOnlyByTheKernTable) {
   if (franklin > 0) CHECK(width("Franklin Gothic Medium", true) < franklin - 1);
 }
 
+TEST(SlideRender_SymbolCharactersTakeTheRunsSymFont) {
+  // A run with a:sym Wingdings: its U+F0FC (a tick) in Wingdings as PowerPoint draws it, the rest
+  // in the run's own font (letters-home's "(SP)" after a tick).
+  auto width = [](const std::string& rPr, const char* text) {
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                            "<a:p><a:pPr><a:buNone/></a:pPr><a:r>" + rPr + "<a:t>" + text + "</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const std::string sym = "<a:rPr sz=\"4000\"><a:latin typeface=\"Arial\"/><a:sym typeface=\"Wingdings\"/></a:rPr>";
+  const std::string wingdings = "<a:rPr sz=\"4000\"><a:latin typeface=\"Wingdings\"/></a:rPr>";
+  const std::string arial = "<a:rPr sz=\"4000\"><a:latin typeface=\"Arial\"/></a:rPr>";
+  const float tick = width(wingdings, "&#xF0FC;");
+  CHECK(tick > 0);
+  CHECK(std::fabs(width(sym, "&#xF0FC;") - tick) < 0.01f);
+  CHECK(std::fabs(width(sym, "&#xF0FC;(SP)") - tick - width(arial, "(SP)")) < 0.5f);
+}
+
 TEST(SlideRender_TextReflectionIsDrawnUnderTheText) {
   // a:reflection on a run (rlf-webinar-iv's titles): the text mirrored under its baseline, fading out.
   auto render = [](bool reflect) -> std::shared_ptr<const draw::Bitmap> {

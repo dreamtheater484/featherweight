@@ -265,7 +265,12 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
   if (a.min && !(*a.min == *a.min)) a.min.reset();
   if (a.max && !(*a.max == *a.max)) a.max.reset();
   a.reversed = Val(C(scaling, "orientation")) == "maxMin";
+  if (pugi::xml_node b = C(scaling, "logBase")) {
+    const double base = Number(b, "val", 0.0);
+    if (base >= 2 && base <= 1000) a.logBase = base;
+  }
   if (pugi::xml_node cb = C(ax, "crossBetween")) a.between = Val(cb) != "midCat";
+  if (pugi::xml_node s = C(ax, "tickLblSkip")) a.labelSkip = static_cast<int>(std::clamp(Number(s, "val", 0.0), 0.0, 1e6));
   if (pugi::xml_node t = C(ax, "title")) {
     a.title = TextOf(C(t, "tx"));
     a.titleOverlay = On(t, "overlay", false);
@@ -462,6 +467,9 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const std::string_view pos = Val(C(legend, "legendPos"));
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
     out.legendOverlay = On(legend, "overlay", false);
+    for (pugi::xml_node e = legend.first_child(); e; e = e.next_sibling())
+      if (LocalNameOf(e) == "legendEntry" && On(e, "delete", false))
+        out.hiddenEntries.push_back(static_cast<uint32_t>(std::max(0.0, Number(C(e, "idx"), "val", 0.0))));
   }
   return true;
 }
