@@ -1,0 +1,167 @@
+# The document's toolbar and ⋯ menu before the ribbon (R1): `dumpreach` on simple.docx, with what they
+# showed only in a table, with a picture or shape selected or in a header (r1-word). ribboncheck finds
+# each one on the ribbon, the File page, the right-click menu or in Alt+Q.
+# Left out: 130-132 (cover page, rotate pages: in the old View menu, never on for documents) and 1044 (the
+# Insert ▾ box itself; each of its entries is listed).
+reach 100 Open
+reach 101 Save
+reach 102 Save as…
+reach 103 Print
+reach 107 Find
+reach 121 
+reach 127 Single page
+reach 128 Continuous pages
+reach 129 Two pages
+reach 133 Night reading: dark pages
+reach 134 Full screen
+reach 135 Present
+reach 137 App theme: use Windows setting
+reach 138 App theme: light
+reach 139 App theme: dark
+reach 140 Highlight form fields
+reach 141 Update automatically
+reach 142 Check for updates now
+reach 143 Make Featherweight the default PDF app
+reach 144 About Featherweight
+reach 157 Undo
+reach 158 Redo
+reach 162 
+reach 701 
+reach 702 
+reach 720 
+reach 721 
+reach 722 
+reach 803 Check spelling as you type
+reach 804 AutoCorrect as you type
+reach 900 Insert picture…
+reach 901 Picture: in line with text
+reach 902 Picture: square wrapping
+reach 903 Picture: tight wrapping
+reach 904 Picture: top and bottom
+reach 905 Picture: behind text
+reach 906 Picture: in front of text
+reach 908 Crop picture
+reach 909 Rotate picture 90°
+reach 911 Picture size, rotation and alt text…
+reach 1000 Bold
+reach 1001 Italic
+reach 1002 Underline
+reach 1013 Font color
+reach 1014 Text highlight color
+reach 1015 Format painter
+reach 1018 Align left
+reach 1019 Center
+reach 1020 Align right
+reach 1021 Justify
+reach 1022 Line and paragraph spacing
+reach 1023 Line spacing 1.0
+reach 1024 Line spacing 1.5
+reach 1025 Line spacing 2.0
+reach 1027 Bullets
+reach 1028 Numbering
+reach 1029 Multilevel list
+reach 1030 Restart numbering at 1
+reach 1031 Continue numbering
+reach 1032 Increase indent
+reach 1033 Decrease indent
+reach 1041 Styles
+reach 1042 Font
+reach 1043 Font size
+reach 1047 Line spacing 1.15
+reach 1048 Box border
+reach 1049 Bottom border
+reach 1050 No border
+reach 1051 Gray shading
+reach 1052 No shading
+reach 1100 Edit header
+reach 1101 Edit footer
+reach 1102 Close header and footer
+reach 1103 Different first page
+reach 1104 Different odd and even pages
+reach 1105 Link to previous
+reach 1106 Page numbers…
+reach 1107 Insert link…
+reach 1110 Bookmarks…
+reach 1111 Navigation pane
+reach 1112 Show formatting marks
+reach 1150 Insert table
+reach 1154 Convert table to text
+reach 1155 Insert rows above
+reach 1156 Insert rows below
+reach 1157 Insert columns to the left
+reach 1158 Insert columns to the right
+reach 1159 Delete rows
+reach 1160 Delete columns
+reach 1161 Delete table
+reach 1162 Merge cells
+reach 1163 Split cells…
+reach 1165 Select row
+reach 1166 Select column
+reach 1167 Select table
+reach 1168 AutoFit to contents
+reach 1169 AutoFit to window
+reach 1170 Fixed column width
+reach 1171 Distribute columns
+reach 1172 Repeat as header row
+reach 1173 Table properties…
+reach 1200 Ruler
+reach 1202 Sentence case.
+reach 1203 lowercase
+reach 1204 UPPERCASE
+reach 1205 Capitalize Each Word
+reach 1206 tOGGLE cASE
+reach 1207 Change case
+reach 1230 Modify style…
+reach 1231 New style from selection…
+reach 1250 Page setup…
+reach 1251 Layout
+reach 1252 Portrait
+reach 1253 Landscape
+reach 1254 Margins: Normal
+reach 1255 Margins: Narrow
+reach 1256 Margins: Moderate
+reach 1257 Margins: Wide
+reach 1258 One column
+reach 1259 Two columns
+reach 1260 Three columns
+reach 1261 Page break
+reach 1262 Column break
+reach 1263 Section break (next page)
+reach 1264 Section break (continuous)
+reach 1265 Section break (even page)
+reach 1266 Section break (odd page)
+reach 1268 Hyphenate automatically
+reach 1271 Paragraph…
+reach 1320 Comments and changes
+reach 1321 New comment
+reach 1322 Track changes
+reach 1323 Accept change
+reach 1324 Reject change
+reach 1325 Accept all changes
+reach 1326 Reject all changes
+reach 1327 Next change
+reach 1328 Previous change
+reach 1329 Simple markup
+reach 1330 All markup
+reach 1331 No markup
+reach 1332 Original
+reach 1333 Your name for changes and comments…
+reach 1340 Footnote
+reach 1341 Endnote
+reach 1342 Table of contents
+reach 1400 Export PDF…
+reach 1410 Rich text content control
+reach 1411 Plain text content control
+reach 1412 Check box content control
+reach 1413 Drop-down list content control
+reach 1414 Date picker content control
+reach 1460 Insert text box
+reach 1461 Insert rectangle
+reach 1462 Insert rounded rectangle
+reach 1463 Insert oval
+reach 1464 Insert line
+reach 1465 Insert arrow
+reach 1466 Insert callout
+reach 1469 Shape wrap, size, fill and outline…
+reach 1470 Watermark…
+reach 3036 

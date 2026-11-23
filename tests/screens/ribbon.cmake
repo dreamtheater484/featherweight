@@ -55,9 +55,32 @@ if(MODE STREQUAL "screens")
   run(gallery-bench 1366x768 light "galleryribbon:table;ribbonbench" --widget-gallery)
   message(STATUS "ribbon screens: ${OUT}")
 elseif(MODE STREQUAL "word")
+  # r1-word: the coverage check as the document opens, and with every contextual tab built
+  # (docribbon:all: Table Design and Layout, Picture and Shape Format, Header & Footer); Home and
+  # Insert in both themes; each contextual tab once.
+  file(REMOVE_RECURSE "${OUT}")
+  file(MAKE_DIRECTORY "${OUT}")
   foreach(size ${sizes})
     run(word-${size} ${size} light "ribboncheck:${BASELINES}/word.txt" "${FILES}/simple.docx")
+    run(word-all-${size} ${size} light "docribbon:all;ribboncheck:${BASELINES}/word.txt" "${FILES}/simple.docx")
+    foreach(theme light dark)
+      run(word-home-${size}-${theme} ${size} ${theme} "wait:100" "${FILES}/simple.docx")
+      run(word-insert-${size}-${theme} ${size} ${theme} "ribbon:Insert" "${FILES}/simple.docx")
+    endforeach()
   endforeach()
+  foreach(tab "Table Design" "Table Layout" "Picture Format" "Shape Format" "Header & Footer")
+    string(REGEX REPLACE "[ &]+" "-" name "${tab}")
+    run(word-${name} 1366x768 light "docribbon:all;ribbon:${tab}" "${FILES}/simple.docx")
+  endforeach()
+  # The ribbon's own boxes edit the document: Layout › Paragraph's left indent and spacing after,
+  # set through their items, then read back from the paragraph.
+  execute_process(COMMAND "${EXE}" --snapshot "${OUT}/word-boxes.png" --size 1366x768 --theme light
+                          --script "ribbon:Layout;docribbon:set=3650,2.5;docribbon:set=3653,12;docribbon:print=3650;docribbon:print=3653"
+                          "${FILES}/simple.docx"
+                  RESULT_VARIABLE code ERROR_VARIABLE err TIMEOUT 120)
+  if(NOT code EQUAL 0 OR NOT err MATCHES "docribbon: 3650 = 2\\.(49|50)" OR NOT err MATCHES "docribbon: 3653 = 12\\.0")
+    message(FATAL_ERROR "Layout › Paragraph's boxes didn't change the paragraph (${code}):\n${err}")
+  endif()
 elseif(MODE STREQUAL "sheet")
   foreach(size ${sizes})
     run(sheet-${size} ${size} light "ribboncheck:${BASELINES}/sheet.txt" "${FILES}/simple.xlsx")

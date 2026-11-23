@@ -570,7 +570,8 @@ void Ribbon::Layout(const RECT& rc, float ui, RibbonModel m) {
   if (tab_ != before) popupGroup_ = gridGroup_ = -1;
 
   parts_.clear();
-  for (auto& [cmd, c] : controls_) c->visible = false;
+  for (auto& [cmd, c] : controls_)
+    if (c) c->visible = false;  // a Custom item's slot stays empty: the control is the tab's
   if (!model_.tabs.empty()) {
     PlaceTabs();
     // Which step each group is at: shrink the groups a step at a time, those that go first first,

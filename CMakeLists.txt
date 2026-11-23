@@ -135,10 +135,6 @@ if(FW_BUILD_TESTS)
     "${_fw_protected}/tables-images-links-protected.doc")
   add_test(NAME office_protected_standard COMMAND fwtool decrypt --password Password1234_
     --out "${CMAKE_BINARY_DIR}/protected-standard" "${_fw_protected}/ecma376-standard.docx")
-  # R1 (r1-word): the document's ribbon reaches every command its toolbar and ⋯ menu did.
-  add_test(NAME document_ribbon COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
-           "-DDOCS=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/document-ribbon"
-           -P "${PROJECT_SOURCE_DIR}/tests/screens/document-ribbon.cmake")
   # The ribbon (R1): tests/screens/ribbon.cmake. fw_ribbon_test(<name> <mode>) runs a mode of it:
   # screens (the widget gallery's demo ribbon and the editors at 1366, 1024 and 800 px, light and
   # dark, KeyTips, the File page, tab switches within 16 ms), or an editor's coverage check (word,
@@ -151,6 +147,7 @@ if(FW_BUILD_TESTS)
   if(FW_TEST_SCREENS)
     fw_ribbon_test(ribbon_screens screens)
   endif()
+  fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.
