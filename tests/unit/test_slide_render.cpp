@@ -519,6 +519,30 @@ TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
   CHECK(std::fabs(p[1].bounds.top - p[0].bounds.bottom - 12.f) < 0.05f);
 }
 
+TEST(SlideRender_PointSpacingInWholePoints) {
+  // Spacing in points is laid out in whole points, as PowerPoint draws it: 5.5 pt before as 6
+  // (cs-2110's bodies), 6.41 as 6, exact 26.2-pt lines as 26 (annual-deaths' contact lines).
+  auto tops = [](const char* pPr) {
+    const std::string para = std::string("<a:p><a:pPr>") + pPr + "<a:buNone/></a:pPr><a:r><a:t>Line</a:t></a:r></a:p>";
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>", para + para), 2));
+    std::vector<float> out;
+    if (!deck) return out;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    for (const ParagraphInfo& p : slide->Paragraphs()) out.push_back(p.bounds.top);
+    return out;
+  };
+  const std::vector<float> none = tops("<a:spcBef><a:spcPts val=\"0\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> half = tops("<a:spcBef><a:spcPts val=\"550\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> less = tops("<a:spcBef><a:spcPts val=\"641\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> exact = tops(
+      "<a:lnSpc><a:spcPts val=\"2620\"/></a:lnSpc><a:spcBef><a:spcPts val=\"0\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  REQUIRE(none.size() == 2 && half.size() == 2 && less.size() == 2 && exact.size() == 2);
+  CHECK_NEAR((half[1] - half[0]) - (none[1] - none[0]), 6, 0.01);
+  CHECK_NEAR((less[1] - less[0]) - (none[1] - none[0]), 6, 0.01);
+  CHECK_NEAR(exact[1] - exact[0], 26, 0.01);
+}
+
 TEST(SlideRender_SimulatedBoldKeepsAdvances) {
   // Calibri Light has no bold: PowerPoint emboldens it in place, its advances as the light face's.
   auto width = [](bool bold) {

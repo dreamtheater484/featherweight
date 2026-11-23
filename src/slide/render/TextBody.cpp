@@ -472,7 +472,11 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       for (const text::GlyphPiece& g : para.lines.front().pieces)
         if (counts(g.run)) largest = std::max(largest, g.emSize);
     if (largest <= 0) largest = para.lines.empty() ? para.mark.size : emptySize(para.lines.front());
-    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : s.value; };
+    // Spacing given in points is laid out in whole points (PowerPoint's PDFs: cs-2110's 5.5 pt before
+    // as 6, 16.5 as 17 and usgov-materials' 13.68 as 14; font-scale's 6.41 as 6 and annual-deaths'
+    // exact 26.2-pt lines as 26); in percent, as worked out (20 % of 33.6 stays 6.72, cmsc-201).
+    const auto points = [](float v) { return std::round(v); };
+    auto spacing = [&](const fw::slide::Spacing& s) { return s.percent ? s.value * largest * 1.2f : points(s.value); };
     if (!first || firstLastSpacing) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
@@ -497,7 +501,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       if (size <= 0) size = emptySize(line);
       const float natural = std::max(1.2f * size, mathExtent);
       // Exact spacing stays as stated when autofit shrinks the text (govuk annual-deaths 7: 28 pt).
-      const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value;
+      const float pitch = pp.lineSpacing.percent ? natural * lineFactor : points(pp.lineSpacing.value);
       const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
       // Spacing under single, stated or an autofit's reduction, comes off the line's top: the part
       // below the baseline stays as at single (cbs at 90 %: 28-pt text 0.72 pt and a 44-pt title
