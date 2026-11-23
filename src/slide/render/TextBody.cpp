@@ -257,7 +257,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       std::wstring t;
       if (b.kind == Bullet::Kind::Char) {
         if (!b.font.empty()) bp.latin = bp.eastAsian = bp.complexScript = b.font;
-        t = b.character;
+        // Only the first character ("••" draws one, PowerPoint's PDF of a SmartArt list).
+        t = b.character.substr(0, b.character.size() > 1 && b.character[0] >= 0xD800 && b.character[0] < 0xDC00 ? 2 : 1);
         if (IsSymbolFont(bp.latin))
           for (wchar_t& c : t)
             if (c >= 0x20 && c < 0x100) c = static_cast<wchar_t>(0xF000 + c);
