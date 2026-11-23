@@ -230,6 +230,10 @@ void D2DPainter::DrawShadowed(const Saved& s) {
     effect->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(c.r, c.g, c.b, c.a));
     dc_->SetTransform(ToD2D(user.Inverse() * s.shadow.transform * user));
     dc_->DrawImage(effect.Get());
+    // Batched with the recording drawn over it, the shadow can fail the whole frame (EndDraw:
+    // D2DERR_BAD_NUMBER, nothing drawn: era-systems slides 8 and 44, pictures with a soft shadow
+    // right under them); flushed apart, both draw.
+    dc_->Flush();
   }
   dc_->SetTransform(D2D1::IdentityMatrix());
   if (!shadowsOnly_) dc_->DrawImage(s.recording.Get());
