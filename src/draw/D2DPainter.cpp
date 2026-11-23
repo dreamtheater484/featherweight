@@ -420,6 +420,23 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   if (!b) return;
   D2D1_RECT_F d = RectF(dest), s{};
   if (src) s = RectF(*src);
+  // An unturned picture covers whole device pixels, its edges pushed out to them, as a PDF viewer
+  // draws an image (pdfium: the outer rectangle); the slide view then draws what its PDF does
+  // (migratieketen's spreadsheet screenshots .92 -> .99).
+  D2D1_MATRIX_3X2_F w{};
+  dc_->GetTransform(&w);
+  if (w._12 == 0 && w._21 == 0 && w._11 != 0 && w._22 != 0) {
+    float dpiX = 96, dpiY = 96;
+    dc_->GetDpi(&dpiX, &dpiY);
+    const auto out = [](float a, float b, float scale, float offset, float k, float& lo, float& hi) {
+      const float da = (a * scale + offset) * k, db = (b * scale + offset) * k;
+      const float from = std::floor(std::min(da, db)), to = std::ceil(std::max(da, db));
+      const float ua = ((da <= db ? from : to) / k - offset) / scale, ub = ((da <= db ? to : from) / k - offset) / scale;
+      lo = ua, hi = ub;
+    };
+    out(d.left, d.right, w._11, w._31, dpiX / 96, d.left, d.right);
+    out(d.top, d.bottom, w._22, w._32, dpiY / 96, d.top, d.bottom);
+  }
   dc_->DrawBitmap(b, &d, std::clamp(opacity, 0.f, 1.f), D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                   src ? &s : nullptr, nullptr);
 }
