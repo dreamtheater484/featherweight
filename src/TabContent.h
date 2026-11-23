@@ -24,6 +24,7 @@ class PdfView;
 class PanelContent;
 struct StatusBarModel;
 struct ToolbarModel;
+struct RibbonModel;
 namespace uia {
 class Tree;
 }
@@ -157,6 +158,9 @@ class TabContent {
   // Runs one of the tab's commands. Returns false for commands it doesn't have.
   virtual bool Execute(int cmd) = 0;
   virtual void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) = 0;
+  // The editor's ribbon (ui/RibbonModel.h, plan §5.6): its tabs, groups and items, filled whenever
+  // the ribbon lays out or repaints. Left empty (the default), the window shows the tab's toolbar.
+  virtual void BuildRibbon(RibbonModel& /*m*/, const ToolbarContext& /*ctx*/) {}
   // Fills the menu of one of the tab's toolbar dropdowns (zoom, page layout).
   virtual void FillMenu(int /*which*/, HMENU /*menu*/) {}
   // Fills the right-click menu for a point in the viewport (client coordinates).
