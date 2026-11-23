@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <span>
+#include <utility>
 
 #include "Commands.h"
 #include "core/Strings.h"
@@ -114,7 +116,7 @@ constexpr Spec kInsert[] = {
     {0, 0, icon::Picture, 3, 0, "ZI", "Illustrations"},
     {CmdObjectPicture, 0, icon::Picture, L, 0, "P", "Pictures"},
     {CmdShapesMenu, 0, icon::Shapes, L, kMenu, "SH", "Shapes"},
-    {0, CmdInsertChart, icon::Report, 3, 0, "ZC", "Charts"},
+    {0, CmdInsertChart, icon::ChartColumn, 3, 0, "ZC", "Charts"},
     {CmdColumnChartMenu, 0, icon::ChartColumn, S, kMenu, "C", "Insert Column or Bar Chart"},
     {CmdLineChartMenu, 0, icon::ChartLine, S, kMenu, "N1", "Insert Line or Area Chart"},
     {CmdPieChartMenu, 0, icon::ChartPie, S, kMenu, "Q", "Insert Pie or Doughnut Chart"},
@@ -327,6 +329,17 @@ const char* Turned(int cmd, const CommandState& q) {
   return nullptr;
 }
 
+// Excel's KeyTips for the ↘ launchers, by group (the ribbon's own lead with the group's letter, and
+// Number's clashed with its box, N).
+const wchar_t* LauncherKey(const char* group) {
+  static constexpr std::pair<const char*, const wchar_t*> kKeys[] = {
+      {"Font", L"FN"},       {"Alignment", L"FA"},    {"Number", L"FM"},         {"Charts", L"K"},
+      {"Page Setup", L"SP"}, {"Scale to Fit", L"SC"}, {"Picture Styles", L"O"}, {"Shape Styles", L"O"}};
+  for (const auto& [name, key] : kKeys)
+    if (std::strcmp(name, group) == 0) return key;
+  return L"";
+}
+
 std::wstring Hex(const D2D1_COLOR_F& c) {
   auto b = [](float x) { return static_cast<unsigned>(std::lround(std::clamp(x, 0.0f, 1.0f) * 255)); };
   wchar_t buf[8];
@@ -354,6 +367,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         group.glyph = s.glyph;
         group.rows = s.size;
         group.launcher = s.launcher;
+        if (s.launcher) group.launcherKeyTip = LauncherKey(s.label);
         group.shrinkFirst = s.flags;  // a group's flags: how early it shrinks
         continue;
       }
