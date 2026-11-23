@@ -35,7 +35,10 @@ param(
   # How our slides are drawn: "fwtool" (fwtool slides --out DIR deck: p1-render's renderer writes the
   # deck as a PDF, every slide at its size, which pdf-compare renders at 100 dpi), or "app" (the app's
   # pagepngs:DIR|100 script op, page-N.png, drawn as the slide view draws them).
-  [ValidateSet("fwtool", "app")][string]$Through = "fwtool"
+  [ValidateSet("fwtool", "app")][string]$Through = "fwtool",
+  # Only these decks (their manifest sources, such as pptx/charts/x.pptx), for a sample: a cross-check of
+  # -Through app against fwtool, say.
+  [string[]]$Only = @()
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -64,7 +67,9 @@ function Invoke-Compare([string[]]$CompareArgs) {
 }
 
 $deckExt = '(?i)\.(pptx|pptm|ppsx|ppsm|potx|potm)$'
-$entries = @($manifest.files | Where-Object { $_.source -match $deckExt -and $Folders -contains ($_.source -split '/')[0] -and $_.pdf -and -not $_.error } | Sort-Object source)
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$entries = @($manifest.files | Where-Object { $_.source -match $deckExt -and $Folders -contains ($_.source -split '/')[0] -and $_.pdf -and -not $_.error -and
+                                              (-not $Only.Count -or $Only -contains $_.source) } | Sort-Object source)
 if (-not $entries.Count) { throw "The manifest in $refRoot has no rendered decks under $($Folders -join ', ')." }
 $rows = @()
 $n = 0

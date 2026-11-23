@@ -574,6 +574,11 @@ if ($Child) {
         # whichever way the missing print range is passed). So hidden slides are shown in the copy
         # PowerPoint has open, which is read-only and closed without saving, and then saved as PDF.
         foreach ($i in $result.hidden) { $doc.Slides.Item([int]$i).SlideShowTransition.Hidden = 0 }
+        # No export keeps every picture at its size (probed 2026-11-22): ExportAsFixedFormat, called
+        # early-bound through Office's interop assembly, writes the same pictures as this with the print
+        # intent, and smaller ones with the screen intent. PowerPoint rasterizes a picture with
+        # transparency (alphaModFix) or a flattened transparent group at its own resolution in any PDF
+        # (a 1920x1080 full-slide picture comes out 1536x864): a known difference fwtool compare can't avoid.
         $doc.SaveCopyAs($Pdf, 32)  # ppSaveAsPDF
         $doc.Close()
         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($doc)
