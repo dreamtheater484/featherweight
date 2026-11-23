@@ -95,6 +95,8 @@ class DocView : public PagedView {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
+  // Word's tabs and contextual tabs (DocRibbon.cpp).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
 
   bool HasStatusBar() const override { return Ready(); }
