@@ -1092,6 +1092,14 @@ std::string SafeName(const fs::path& file) {
   return name;
 }
 
+// SafeName with the extension when it isn't .pptx, for files named without it (reproducers): links.pptx
+// and links.ppsx side by side must not share one.
+std::string ReproName(const fs::path& file) {
+  std::string ext = file.extension().string();
+  for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return SafeName(file) + (ext.empty() || ext == ".pptx" ? std::string() : "-" + ext.substr(1));
+}
+
 std::string JsonText(std::string_view s) {
   std::string out = "\"";
   for (char c : s) {
@@ -1490,7 +1498,7 @@ int RunDeckTorture(const Options& options, const std::vector<std::filesystem::pa
     std::string note, savedPath, unchangedPath;
     auto fail = [&](uint32_t round, uint64_t seed, const Failure& f, const std::vector<Edit>& applied) {
       std::vector<Edit> kept = applied.empty() ? applied : Minimize(file, seed, applied, f.category);
-      const fs::path repro = out / "repro" / (SafeName(file) + "-round" + std::to_string(round) + ".txt");
+      const fs::path repro = out / "repro" / (ReproName(file) + "-round" + std::to_string(round) + ".txt");
       WriteEdits(repro, file, seed, round, f.category + ": " + f.message, kept);
       std::printf("[FAIL] %s: %s: %s: %s\n       reproducer (%zu of %zu edits): %s\n", name.c_str(),
                   applied.empty() ? "saved without edits" : ("round " + std::to_string(round)).c_str(), f.category.c_str(),
@@ -1536,7 +1544,7 @@ int RunDeckTorture(const Options& options, const std::vector<std::filesystem::pa
         const fs::path saved = out / "saved" / (SafeName(file) + file.extension().string());
         WriteBytes(saved, r.saved);
         // Its edits, so that what the validator or PowerPoint finds in it can be replayed.
-        WriteEdits(out / "saved" / (SafeName(file) + ".edits.txt"), file, seed, round,
+        WriteEdits(out / "saved" / (ReproName(file) + ".edits.txt"), file, seed, round,
                    r.failure ? r.failure->category + ": " + r.failure->message : "none", r.applied);
         savedPath = AbsoluteUtf8(saved);
         pairs << AbsoluteUtf8(file) << "\t" << savedPath << "\n";

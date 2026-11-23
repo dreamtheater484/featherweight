@@ -371,6 +371,11 @@ Result Editor::DuplicateSlides(const std::vector<size_t>& slides, std::vector<ui
   return call.End({});
 }
 
+// A deletion refused: something Featherweight doesn't know names the slide (an empty r:id would damage).
+static Result Unknown() {
+  return Result::Fail(u"The slide can't be deleted, because another part of the presentation refers to it in a way Featherweight doesn't know.");
+}
+
 Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
   Call call(*this, slides.size() > 1 ? u"Delete Slides" : u"Delete Slide");
   Impl& m = *impl_;
@@ -406,14 +411,16 @@ Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
   for (const pkg::FoundRef& f : m.registry.Find(root, pkg::RefKind::RelationshipId)) {
     if (!rels.count(std::string(f.Value()))) continue;
     if (LocalNameOf(f.element) == "sld") gone.push_back(f.element);
-    else if (f.attr) pugi::xml_attribute(f.attr).set_value("");
+    else if (f.attr) return call.End(Unknown());  // never an empty r:id (PowerPoint repairs it)
   }
   for (pugi::xml_node n : gone) n.parent().remove_child(n);
   pkg::RelationshipSet& presRels = m.EditRels(pres);
   std::erase_if(presRels.items, [&](const pkg::Relationship& r) { return rels.count(r.id) > 0; });
   // Links to these slides from what stays (other slides, notes pages, layouts, masters) go: an
   // a:hlinkClick, a:hlinkHover or a:hlinkMouseOver that jumps to one is dropped, its text or shape kept
-  // without the link, and the relationship goes. (PowerPoint repairs a slide jump left without r:id.)
+  // without the link, and the relationship goes; so does a p:sld naming one in viewProps' outline list.
+  // (PowerPoint repairs a slide jump or an outline entry left without r:id.) Anything else naming one:
+  // the deletion is refused rather than leaving an empty r:id.
   std::set<std::string> going = parts;  // the deleted slides and their notes pages
   for (size_t i : slides) {
     if (const pkg::RelationshipSet* sr = m.Rels(list[i].part)) {
@@ -442,8 +449,8 @@ Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
       std::vector<pugi::xml_node> links;
       for (const pkg::FoundRef& f : uses(m.Edit(name))) {
         const std::string_view k = LocalNameOf(f.element);
-        if (k == "hlinkClick" || k == "hlinkHover" || k == "hlinkMouseOver") links.push_back(f.element);
-        else pugi::xml_attribute(f.attr).set_value("");  // not a link: nothing known names a slide otherwise
+        if (k == "hlinkClick" || k == "hlinkHover" || k == "hlinkMouseOver" || k == "sld") links.push_back(f.element);
+        else return call.End(Unknown());
       }
       for (pugi::xml_node n : links) n.parent().remove_child(n);
     }
