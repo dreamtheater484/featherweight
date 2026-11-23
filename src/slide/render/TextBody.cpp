@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cwctype>
 #include <deque>
+#include <limits>
 
 #include "core/Strings.h"
 #include "doc/layout/Math.h"
@@ -170,9 +171,13 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     float size = fontScale < 1 ? std::max(1.f, std::round(r.size * fontScale)) : r.size;
     if (r.baseline != 0) {
       s.baselineShift = r.baseline * size;
+      s.shiftKeepsLine = true;
       size *= 2.f / 3;
     }
     s.size = std::max(0.5f, size);
+    // Advances as GDI's in PowerPoint's master units, 576 an inch, each a whole number of them (its
+    // PDFs: physik's Arial, letters-home's Georgia, rlf-webinar-ii's Garamond wrap as they do there).
+    s.gdiPixelsPerPoint = 576.f / 72;
     s.directWriteMetrics = true;  // a font's typo metrics when it asks (embedded Public Sans, govau decks)
     s.bold = s.complexBold = r.bold;
     s.italic = s.complexItalic = r.italic;
@@ -287,7 +292,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       } else if (b.kind == Bullet::Kind::AutoNumber) {
         // A number font the PC doesn't have gives way to the text's (PowerPoint's PDF: buFont +mj-lt,
         // a theme font not installed, numbers in the run's Calibri).
-        if (!b.font.empty() && fonts.Installed(b.font)) bp.latin = b.font;
+        // Nor does a theme font named as such (+mj-lt), installed or not: edu-session-1's numbers in
+        // the text's Tahoma, not the theme's Calibri Light.
+        if (!b.font.empty() && !b.themeFont && fonts.Installed(b.font)) bp.latin = b.font;
         t = AutoNumber(b.scheme, std::max(src.number, 1));
       } else if (b.kind == Bullet::Kind::Picture && extras.picture) {
         para.picture = extras.picture(b.picturePart, b.pictureRel);
@@ -423,6 +430,29 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     f.squeezeSpaces = false;
     f.hangPunctuation = pp.hangingPunctuation;
     para.lines = text::Layout(fonts, tp, layoutW);
+    // A centred or right-aligned paragraph's bullet goes with its text, as far before the first
+    // line's text as the hanging indent says, not at the line's start (usgov-materials 7: "•" 27
+    // points before a centred "Magnifying glass").
+    if (para.bullet && pp.indent < 0 && !pp.rtl && (f.alignment == Alignment::Center || f.alignment == Alignment::End) &&
+        !para.lines.empty()) {
+      text::Line& first = para.lines.front();
+      float textX = std::numeric_limits<float>::infinity(), bulletX = textX;
+      for (const text::GlyphPiece& g : first.pieces) {
+        float& at = g.run == 0 ? bulletX : textX;
+        at = std::min(at, g.x);
+      }
+      for (const text::InlineObject& o : first.objects) {
+        float& at = o.run == 0 ? bulletX : textX;
+        at = std::min(at, o.x);
+      }
+      if (std::isfinite(textX) && std::isfinite(bulletX)) {
+        const float shift = textX + pp.indent - bulletX;
+        for (text::GlyphPiece& g : first.pieces)
+          if (g.run == 0) g.x += shift;
+        for (text::InlineObject& o : first.objects)
+          if (o.run == 0) o.x += shift;
+      }
+    }
 
     // Vertical placement. Percent line spacing scales each line's height (its fonts' ascent,
     // descent and gap), less the stored autofit's reduction; paragraph spacing in percent is of

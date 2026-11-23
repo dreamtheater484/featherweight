@@ -192,8 +192,10 @@ void ApplyPPr(pugi::xml_node pPr, ParagraphProps& p, RunProps* run, const Ctx& c
       b.sizePoints = std::clamp(static_cast<float>(Number(n, "val", 1800) / 100), 1.f, 4000.f);
     } else if (k == "buFontTx") {
       b.font.clear();
+      b.themeFont = false;
     } else if (k == "buFont") {
       b.font = Typeface(n.attribute("typeface").value(), c.theme);
+      b.themeFont = n.attribute("typeface").value()[0] == '+';
     } else if (k == "buNone") {
       b.kind = Bullet::Kind::None;
     } else if (k == "buAutoNum") {

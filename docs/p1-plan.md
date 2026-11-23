@@ -167,6 +167,14 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - In this run `fwtool slides` crashed with 0xC0000005 on `who-health-in-all-policies-training-slide-template`, so all 23 of its slides counted as failing. Without the crash the total would be about 87.3 %.
   - The crash is intermittent: none in 2 runs alone, 2 of 20 with four runs in parallel, 1 of 32 with `--png`. That run stopped after slide 7, so it likely died drawing slide 8 (a group with custom geometry, a picture and an outer shadow).
   - Script: `FeatherweightNotes\p1\corpus-analysis\crash-repro.ps1`.
+- **2026-11-23: slide PDFs write pictures as PowerPoint's Save As PDF does** (coordinator: agreed as PowerPoint's export behaviour; the gate report counts these gains apart from drawing gains).
+  - The rules, measured on its PDFs:
+    - Every JPEG picture is encoded again at quality 75: byte for byte libjpeg's quality 75, which WIC's encoder at 0.75 gives (`draw::EncodeJpeg`, WIC, in the exe since `6217503c`: no new encoder).
+    - A picture's place is written in page coordinates (y up), each number to 5 significant digits, from its bottom left, about 0.00006 pt high (its float arithmetic), through the transforms as the file has them.
+    - The page box is a whole number of 600-dpi pixels (961 pt is 960.96, 960.125 is 960.12); a PDF viewer's page width in pixels, and so its whole page's scale, follows it.
+    - Not modelled: which pictures it downsamples (mostly to about 200 ppi where placed; some 220, 150 or 96; full-slide pictures at most 1536 px).
+  - Export-matching gains: `7d70c42c` +18 slides on 14 photo decks (p1-corpus, full corpus: +11 net, 13 gained, 2 lost: unimuenster's template slides 23 and 20, 0.953 to 0.945); `a78d3c9e` (page box) +1, goettingen 3 (0.92 to 0.99). Earlier, `161a2922`'s era-systems gain (above) is of the same kind.
+  - Drawing gains in the same round, for contrast: slide text laid out with GDI's advances in PowerPoint's master units (`babda789`, +70 over 46 near-miss decks), a baseline shift that doesn't make its line taller (`23b4d98f`, +17), Proxima Nova in Tahoma (`ce9971d6`, +10).
 - **2026-11-23: native Office math in slides** (coordinator, unparked). Slides lay out a14:m themselves, reusing fwdoclayout's typesetter (src/doc/layout/Math.cpp, already in the exe for Word: a few KB of glue), instead of Office's fallback picture.
   - Conditions: it stays behind a switch that is off (`FW_SLIDE_MATH=1` turns it on; `draw::xml::SlideMathLaidOut`) until it measures better on the corpus's math slides as a set, and no slide that passes with the fallback drops below 0.90.
   - p1-model owns the math path in `TextBody.cpp` (agreed with p1-render). Typesetter changes in src/doc/layout keep Word's math tests and the D-milestone checks green.

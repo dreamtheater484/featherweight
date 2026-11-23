@@ -22,6 +22,10 @@ namespace fw::chart {
 enum class Type : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter, Radar, Bubble };
 enum class Grouping : uint8_t { Clustered, Stacked, Percent };
 
+// A data label's own text's fields (a:fld type VALUE, CATEGORYNAME, PERCENTAGE), private-use
+// characters standing for what each point fills in.
+inline constexpr wchar_t kValueField = 0xE000, kCategoryField = 0xE001, kPercentField = 0xE002;
+
 // A fill and an outline from c:spPr: plain colors, or none.
 struct Look {
   std::optional<draw::Color> fill, line;
@@ -49,16 +53,24 @@ struct Series {
   std::optional<std::wstring> separator;
   std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the group's
   std::string labelPos;     // c:dLbls/c:dLblPos ("outEnd", "ctr"...); empty: the group's
-  // c:dLbl: a point's own label (line charts): what it shows, its own text, where it's moved to
-  // (c:manualLayout x, y: fractions of the chart), its box's fill and its text's size and color.
+  // c:dLbls/c:txPr (the series', else its group's): its labels' text size (points; negative: the
+  // chart's), color and weight (business bodies 33's 14-point bold labels).
+  float labelSize = -1;
+  std::optional<draw::Color> labelColor;
+  std::optional<bool> labelBold;
+  // c:dLbl: a point's own label: what it shows, its own text, where it's moved to (c:manualLayout
+  // x, y: fractions of the chart), its box's fill and its text's size, color and weight.
   struct PointLabel {
     uint32_t index = 0;
     bool deleted = false;
     std::optional<bool> value, seriesName, category, percent;
     std::optional<std::wstring> separator;  // its own c:separator
-    std::optional<std::wstring> text;  // c:tx/c:rich, series name fields filled in
+    // c:tx/c:rich: series name fields filled in, the value, category name and percentage fields as
+    // kValueField, kCategoryField and kPercentField, filled in where they're drawn.
+    std::optional<std::wstring> text;
     float dx = 0, dy = 0;
     std::optional<draw::Color> fill, color;
+    std::optional<bool> bold;
     float size = -1;     // points; negative: the chart's
     std::string format;  // its value's: its own c:numFmt, else its series' source format
     float w = 0, h = 0;  // c15:layout: its box's size, fractions of the chart (0: as its text)
