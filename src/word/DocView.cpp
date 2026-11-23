@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 #include "Commands.h"
 #include "Util.h"
@@ -536,7 +537,7 @@ void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_
   }
 }
 
-bool DocView::TakeNewPages() {
+bool DocView::TakeNewPages(bool quiet) {
   const size_t n = pagination_->PageCount();
   if (n == 0) {
     // Nothing laid out (an empty document): one empty page of the first section's size.
@@ -576,7 +577,7 @@ bool DocView::TakeNewPages() {
   if (!first && VpW() > 0) {
     Anchor a = CaptureAnchor(0, 0);
     RecomputeScale();
-    Relayout(&a);
+    Relayout(&a, !quiet);
   }
   return true;
 }
@@ -886,10 +887,21 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   // Spelling, and words for the status bar (DocProof.cpp).
   repaint |= ProofIdle(deadlineMs);
   // Pages laid out here, or by finding or scrolling to a position (which lays out up to it).
-  if (TakeNewPages()) {
-    repaint = true;
-    host_.ViewStateChanged();
+  // While a long document is laid out, pages added below the screen change only the page count
+  // and the scroll bar: those are shown a few times a second rather than after every slice, since
+  // each frame draws the whole window again (the page on screen, the ribbon).
+  auto onScreen = [this] {  // the scale, the pages in view, and where the first and the last are
+    int first, last;
+    VisiblePages(first, last);
+    const RECT a = first <= last ? PageRect(first) : RECT{}, b = first <= last ? PageRect(last) : RECT{};
+    return std::make_tuple(scale_, first, last, a.left, a.top, a.right, a.bottom, b.left, b.top, b.right, b.bottom);
+  };
+  const auto before = onScreen();
+  if (TakeNewPages(true)) {
+    if (heldSince_ == 0) heldSince_ = anim::Now();
+    if (pagination_->Done() || onScreen() != before) repaint = true;
   }
+  if (heldSince_ != 0 && anim::Now() - heldSince_ >= kHeldPagesMs) repaint = true;
   if (pagination_->Revision() != revision_) {
     revision_ = pagination_->Revision();
     for (auto& m : matches_) m.measured = false;
@@ -907,6 +919,11 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   }
   // The font box's list, once the pages are there.
   if (format_ && pagination_->Done() && DocFormat::FontsPending()) DocFormat::ReadFonts();
+  // The pages held back go out with this frame: the status bar's count, the window's state.
+  if (repaint && heldSince_ != 0) {
+    heldSince_ = 0;
+    host_.ViewStateChanged();
+  }
   return repaint;
 }
 

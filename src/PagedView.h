@@ -68,7 +68,9 @@ class PagedView : public TabContent {
   virtual void OnPresentationChanged(bool /*on*/) {}
 
   // Layout and coordinates
-  void Relayout(const Anchor* anchor);
+  // `repaint` false: the caller decides whether the window is painted again (a document laying out
+  // pages below the screen).
+  void Relayout(const Anchor* anchor, bool repaint = true);
   void RecomputeScale();
   Anchor CaptureAnchor(double vx, double vy) const;
   void RestoreAnchor(const Anchor& a);
