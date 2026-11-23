@@ -155,10 +155,7 @@ if(FW_BUILD_TESTS)
     fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
     fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
-  # R1 (r1-word): the document's ribbon reaches every command its toolbar and ⋯ menu did.
-  add_test(NAME document_ribbon COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
-           "-DDOCS=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/document-ribbon"
-           -P "${PROJECT_SOURCE_DIR}/tests/screens/document-ribbon.cmake")
+  fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

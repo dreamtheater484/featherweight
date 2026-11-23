@@ -4,9 +4,7 @@
 // out. Contextual tabs follow the selection: a table, a picture, a shape, a header or footer.
 #include "word/DocView.h"
 
-#include <algorithm>
 #include <cstdio>
-#include <set>
 
 #include "Commands.h"
 #include "ui/Icons.h"
@@ -20,7 +18,10 @@ constexpr wchar_t Paste = 0xE77F, Cut = 0xE8C6, GrowFont = 0xE8E8, ShrinkFont = 
                   Strike = 0xEDE0, Replace = 0xE8AB, SelectAll = 0xE8B3, Spelling = 0xF87B, Language = 0xF2B7,
                   Panes = 0xE8F2, Track = 0xE932, Accept = 0xE8FB, Up = 0xE74A, Down = 0xE74B, Refresh = 0xE72C,
                   TextBox = 0xE8AC, Zoom = 0xE71E, FitWidth = 0xE9A6, Portrait = 0xF56E, Reset = 0xE777,
-                  CheckBox = 0xE739;
+                  CheckBox = 0xE739, Pilcrow = 0xE9AA;
+// r1-control's drawn icons (ui/Icons.h icon::Subscript and icon::Superscript, kDrawnFirst on): blank
+// until ui/Icons.cpp draws them.
+constexpr wchar_t Subscript = 0xF900, Superscript = 0xF901;
 // Word's own pictures with no glyph in the font; the nearest until ui/Icons.h draws them (r1-control).
 constexpr wchar_t PageBreak = 0xF56F, Shapes = 0xE8A9, Bookmark = 0xE8A4, Header = 0xE8A1, PageNumber = 0xF146,
                   Watermark = 0xE790, Margins = 0xE9A6, Size = 0xE7C3, Columns = 0xE89A, Breaks = 0xF56F,
@@ -131,7 +132,7 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
 
   b.Group(L"Font", L"ZF", 0, 2);
   b.Add(width(format_ ? format_->FontBox() : Greyed(ToolKind::ComboBox, CmdFontBox), 128), Size::Small, L"Font", L"FF");
-  b.Row(b.Add(width(format_ ? format_->SizeBox() : Greyed(ToolKind::ComboBox, CmdSizeBox), 48), Size::Small, L"Font Size", L"FS"));
+  b.Row(b.Add(width(format_ ? format_->SizeBox() : Greyed(ToolKind::ComboBox, CmdSizeBox), 60), Size::Small, L"Font Size", L"FS"));
   b.Row(b.Button(CmdGrowFont, glyph::GrowFont, Size::Small, L"Grow Font", L"FG"));
   b.Row(b.Button(CmdShrinkFont, glyph::ShrinkFont, Size::Small, L"Shrink Font", L"FK"));
   b.Row(b.Menu(CmdCaseBox, icon::FontCase, Size::Small, L"Change Case", L"7",
@@ -141,8 +142,8 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Row(b.Toggle(CmdItalic, icon::Italic, Size::Small, L"Italic", L"2"));
   b.Row(b.Toggle(CmdUnderline, icon::Underline, Size::Small, L"Underline", L"3"));
   b.Row(b.Toggle(CmdStrike, glyph::Strike, Size::Small, L"Strikethrough", L"4"));
-  b.Row(b.Toggle(CmdSubscript, 0, Size::Small, L"Subscript", L"5"));
-  b.Row(b.Toggle(CmdSuperscript, 0, Size::Small, L"Superscript", L"6"));
+  b.Row(b.Toggle(CmdSubscript, glyph::Subscript, Size::Small, L"Subscript", L"5"));
+  b.Row(b.Toggle(CmdSuperscript, glyph::Superscript, Size::Small, L"Superscript", L"6"));
   if (format_) {
     b.Row(b.Add(format_->ColorButton(true), Size::Small, L"Text Highlight Color", L"I"));
     b.Row(b.Add(format_->ColorButton(false), Size::Small, L"Font Color", L"FC"));
@@ -156,7 +157,7 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Row(b.Button(CmdMultilevel, glyph::Multilevel, Size::Small, L"Multilevel List", L"M"));
   b.Row(b.Button(CmdOutdent, icon::DecreaseIndent, Size::Small, L"Decrease Indent", L"AO"));
   b.Row(b.Button(CmdIndent, icon::IncreaseIndent, Size::Small, L"Increase Indent", L"AI"));
-  b.Row(b.Toggle(CmdShowMarks, 0x00B6, Size::Small, L"Show/Hide ¶", L"8"));
+  b.Row(b.Toggle(CmdShowMarks, glyph::Pilcrow, Size::Small, L"Show/Hide ¶", L"8"));
   b.Toggle(CmdAlignLeft, icon::AlignLeft, Size::Small, L"Align Left", L"AL");
   b.Row(b.Toggle(CmdAlignCenter, icon::AlignCenter, Size::Small, L"Center", L"AC"));
   b.Row(b.Toggle(CmdAlignRight, icon::AlignRight, Size::Small, L"Align Right", L"AR"));
@@ -443,57 +444,35 @@ ToolItem DocView::ObjectSizeBox(bool height) {
 }
 
 // ---------------------------------------------------------------------------
-// Checks
-
-namespace {
-
-// What the document's toolbar and ⋯ menu reached before the ribbon, besides the window's own (New,
-// Open, Save, Save As, Print, Export PDF, Restore original, the theme, updates, About: the File page
-// and quick access, r1-control's).
-constexpr int kOldCommands[] = {
-    // The toolbar.
-    CmdStyleBox, CmdModifyStyle, CmdNewStyle, CmdFontBox, CmdSizeBox, CmdBold, CmdItalic, CmdUnderline, CmdFontColor,
-    CmdHighlightColor, CmdFormatPainter, CmdCaseSentence, CmdCaseLower, CmdCaseUpper, CmdCaseCapitalize, CmdCaseToggle,
-    CmdAlignLeft, CmdAlignCenter, CmdAlignRight, CmdAlignJustify, CmdSpacing1, CmdSpacing115, CmdSpacing15, CmdSpacing2,
-    CmdBorderBox, CmdBorderBottom, CmdBorderNone, CmdShading, CmdShadingNone, CmdBullets, CmdNumbering, CmdMultilevel,
-    CmdRestartNumbering, CmdContinueNumbering, CmdOutdent, CmdIndent, CmdNewComment, CmdInsertLink, CmdBookmark,
-    CmdEditHeader, CmdEditFooter, CmdPageNumber, CmdInsertPicture, CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc,
-    CmdInsertTextBox, CmdWatermarkPanel, CmdPageBreak, CmdColumnBreak, CmdSectionNextPage, CmdSectionContinuous,
-    CmdSectionEvenPage, CmdSectionOddPage, CmdInsertRectangle, CmdInsertRoundedRectangle, CmdInsertOval, CmdInsertLine,
-    CmdInsertArrow, CmdInsertCallout, CmdInsertRichText, CmdInsertPlainText, CmdInsertCheckBox, CmdInsertDropDown,
-    CmdInsertDatePicker, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdCloseHeaderFooter,
-    CmdShowMarks, CmdNavigationPane, CmdReviewPane, CmdTableGrid, CmdTableInsertAbove, CmdTableInsertBelow,
-    CmdTableInsertLeft, CmdTableInsertRight, CmdTableDeleteRows, CmdTableDeleteColumns, CmdTableDeleteTable,
-    CmdTableMerge, CmdTableSplit, CmdTableSelectRow, CmdTableSelectColumn, CmdTableSelectTable, CmdTableAutoFitContents,
-    CmdTableAutoFitWindow, CmdTableFixedWidth, CmdTableDistributeColumns, CmdTableHeaderRow, CmdTableToText,
-    CmdTableProperties, CmdPortrait, CmdLandscape, CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate,
-    CmdMarginsWide, CmdColumnsOne, CmdColumnsTwo, CmdColumnsThree, CmdHyphenation, CmdPageSetup, CmdPictureInline,
-    CmdPictureSquare, CmdPictureTight, CmdPictureTopBottom, CmdPictureBehind, CmdPictureInFront, CmdPictureRotate,
-    CmdPictureCrop, CmdPicturePanel, CmdShapePanel, CmdViewSingle, CmdViewContinuous, CmdViewFacing, CmdFind,
-    CmdToggleInvert, CmdFullScreen, CmdZoomMenu,
-    // The ⋯ menu's document entries.
-    CmdPresentation, CmdToggleSpelling, CmdToggleAutoCorrect, CmdParagraph, CmdRuler, CmdTrackChanges, CmdAcceptChange,
-    CmdRejectChange, CmdAcceptAll, CmdRejectAll, CmdNextChange, CmdPrevChange, CmdMarkupSimple, CmdMarkupAll,
-    CmdMarkupNone, CmdMarkupOriginal, CmdReviewerName};
-
-// The window's commands the ribbon runs, which the document's own command table doesn't name.
-constexpr int kWindowCommands[] = {CmdFind,  CmdReplace,  CmdFullScreen, CmdToggleInvert, CmdRuler, CmdZoomMenu, CmdPresentation,
-                                   CmdToggleSpelling, CmdToggleAutoCorrect};
-
-void MenuIds(HMENU menu, std::set<int>& ids) {
-  for (int i = 0; i < GetMenuItemCount(menu); ++i) {
-    if (HMENU sub = GetSubMenu(menu, i)) MenuIds(sub, ids);
-    else if (const UINT id = GetMenuItemID(menu, i); id != 0 && id != static_cast<UINT>(-1)) ids.insert(static_cast<int>(id));
-  }
-}
-
-}  // namespace
+// Script steps (checks and snapshots)
 
 bool DocView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"ribbon") return false;
+  if (op != L"docribbon") return false;
+  if (arg == L"all") {
+    // docribbon:all: every contextual tab from now on, whatever is selected (for ribboncheck and
+    // the contextual tabs' snapshots).
+    ribbonAll_ = true;
+    host_.ViewStateChanged();
+    return true;
+  }
+  if (arg.rfind(L"print=", 0) == 0) {
+    // docribbon:print=<command>: the item's value now, as "docribbon: <command> = <value>".
+    const int cmd = _wtoi(arg.c_str() + 6);
+    RibbonModel m;
+    BuildRibbon(m, ToolbarContext{});
+    for (const RibbonTab& t : m.tabs)
+      for (const RibbonGroup& g : t.groups)
+        for (const RibbonItem& it : g.items)
+          if (it.tool.cmd == cmd) {
+            fwprintf(stderr, L"docribbon: %d = %s\n", cmd,
+                     it.tool.kind == ToolKind::SpinBox ? std::to_wstring(it.tool.value).c_str() : it.tool.text.c_str());
+            return true;
+          }
+    return true;
+  }
   if (arg.rfind(L"set=", 0) == 0) {
-    // ribbon:set=<command>,<value>: as if the item's box were set to the number, or its list's
-    // choice picked (checks without the control).
+    // docribbon:set=<command>,<value>: as if the item's box were set to the number, or its list's
+    // choice picked.
     const size_t comma = arg.find(L',');
     const int cmd = _wtoi(arg.c_str() + 4);
     const std::wstring value = comma == std::wstring::npos ? std::wstring() : arg.substr(comma + 1);
@@ -510,77 +489,8 @@ bool DocView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
             it.tool.onChange(v);
             return true;
           }
-    fwprintf(stderr, L"ribbon: no box %d\n", cmd);
+    fwprintf(stderr, L"docribbon: no box %d\n", cmd);
     return true;
   }
-  if (arg != L"dump" && arg != L"check") return false;
-  const bool check = arg == L"check";
-  RibbonModel m;
-  ribbonAll_ = check;
-  BuildRibbon(m, ToolbarContext{});
-  ribbonAll_ = false;
-  std::set<int> reach;  // the ribbon's and the File page's
-  int items = 0, unknown = 0;
-  auto known = [&](int cmd) {
-    return !QueryCommand(cmd).label.empty() || std::find(std::begin(kWindowCommands), std::end(kWindowCommands), cmd) != std::end(kWindowCommands);
-  };
-  auto note = [&](int cmd, const std::wstring& where) {
-    if (cmd == 0) return;
-    reach.insert(cmd);
-    if (check && !known(cmd)) {
-      ++unknown;
-      fwprintf(stderr, L"ribbon-check: unknown command %d (%s)\n", cmd, where.c_str());
-    }
-  };
-  for (const RibbonTab& t : m.tabs) {
-    if (!check) fwprintf(stderr, L"ribbon: tab %s [%s]%s\n", t.name.c_str(), t.keyTip.c_str(), t.contextual ? L" contextual" : L"");
-    for (const RibbonGroup& g : t.groups) {
-      const std::wstring where = t.name + L" › " + g.name;
-      if (!check) fwprintf(stderr, L"ribbon:  group %s [%s] launcher %d\n", g.name.c_str(), g.keyTip.c_str(), g.launcher);
-      note(g.launcher, where + L" ↘");
-      for (const RibbonItem& it : g.items) {
-        ++items;
-        if (!check)
-          fwprintf(stderr, L"ribbon:   item %d %s [%s] size %d%s%s%s%s\n", it.tool.cmd, it.label.c_str(), it.keyTip.c_str(),
-                   static_cast<int>(it.size), it.tool.enabled ? L"" : L" (off)", it.tool.checked ? L" (on)" : L"",
-                   it.tool.text.empty() ? L"" : (L" \"" + it.tool.text + L"\"").c_str(),
-                   it.tool.kind == ToolKind::SpinBox ? (L" = " + std::to_wstring(it.tool.value)).c_str() : L"");
-        note(it.tool.cmd, where);
-        for (int cmd : it.menu) note(cmd, where + L" › " + it.label);
-        if (it.gallery)
-          for (int cmd : it.gallery->menu) note(cmd, where + L" › " + it.label);
-        if (it.tool.dropdown && it.menu.empty() && it.tool.choices.empty()) {  // the tab's FillMenu
-          HMENU menu = CreatePopupMenu();
-          FillMenu(it.tool.cmd, menu);
-          std::set<int> ids;
-          MenuIds(menu, ids);
-          DestroyMenu(menu);
-          for (int cmd : ids) reach.insert(cmd);
-        }
-      }
-    }
-  }
-  if (!check) {
-    if (!m.show.empty()) fwprintf(stderr, L"ribbon: show %s\n", m.show.c_str());
-    return true;
-  }
-  for (const RibbonFileItem& f : m.file) note(f.cmd, L"File");
-  // Right-click at the caret, and command search (Alt+Q).
-  std::set<int> elsewhere;
-  HMENU menu = CreatePopupMenu();
-  const std::optional<RECT> caret = CaretRect();
-  FillContextMenu(menu, caret ? (caret->left + caret->right) / 2 : 0, caret ? (caret->top + caret->bottom) / 2 : 0);
-  MenuIds(menu, elsewhere);
-  DestroyMenu(menu);
-  for (int cmd : Commands()) elsewhere.insert(cmd);
-  int unreachable = 0;
-  for (int cmd : kOldCommands)
-    if (!reach.count(cmd) && !elsewhere.count(cmd)) {
-      ++unreachable;
-      fwprintf(stderr, L"ribbon-check: unreachable %d %s\n", cmd, QueryCommand(cmd).label.c_str());
-    }
-  fwprintf(stderr, L"ribbon-check: %s: %d tabs, %d items, %d commands on the ribbon, %d old commands, %d unknown, %d unreachable\n",
-           unknown || unreachable ? L"FAILED" : L"ok", static_cast<int>(m.tabs.size()), items, static_cast<int>(reach.size()),
-           static_cast<int>(std::size(kOldCommands)), unknown, unreachable);
-  return true;
+  return false;
 }

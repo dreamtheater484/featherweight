@@ -1798,6 +1798,8 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSpelling:
     case CmdWordCount: s = {Ready(), false}; break;
     case CmdLanguage: s = {Editing(), false}; break;
+    case CmdReplace: s = {Editing(), false}; s.label = L"Replace…"; s.shortcut = L"Ctrl+H"; break;  // the ribbon's Replace
+    case CmdZoomMenu: s = {Ready(), false}; s.label = L"Zoom"; break;                               // and Zoom ▾
     case CmdObjectHeightBox:
     case CmdObjectWidthBox: {
       const uint32_t d = SelectedPicture();
