@@ -8,7 +8,7 @@ add_library(fwslide_render STATIC
   Thumbnails.cpp
 )
 target_include_directories(fwslide_render PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwslide_render PUBLIC fwslide fwdraw fwtext PRIVATE fwpkg windowscodecs ole32)
+target_link_libraries(fwslide_render PUBLIC fwslide fwdraw fwtext PRIVATE fwpkg fwdoclayout windowscodecs ole32)
 target_compile_options(fwslide_render PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 if(TARGET fw_tests)

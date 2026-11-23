@@ -754,9 +754,13 @@ class Typesetter {
         std::vector<Variant> variants;
         std::vector<Part> parts;
         Construction(mf_, g, true, variants, parts);
+        // The first variant at least DisplayOperatorMinHeight tall; an integral one size more
+        // (PowerPoint 2021's PDFs: Cambria Math's sum at 1.91 em, its integral at 2.15 em where
+        // the constant, 1.22 em, gives 1.35).
+        int more = integral ? 1 : 0;
         for (const Variant& v : variants) {
           shown = v.glyph;
-          if (v.size >= mf_.displayOperatorMin) break;
+          if (v.size >= mf_.displayOperatorMin && more-- == 0) break;
         }
       }
       op = OnAxis(GlyphBox(shown, st, text), st);  // a box now: scripts go by its height

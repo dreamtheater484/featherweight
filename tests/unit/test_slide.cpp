@@ -727,6 +727,16 @@ TEST(SlideTextOfFreeBodies) {
   CHECK(t && std::fabs(t->paragraphs[0].runs[0].props.size - 26.f) < 0.01f);
   CHECK(t && t->body.anchor == BodyProps::Anchor::Middle);
   CHECK(deck->TextOf(body, *s, *s) == t);
+  // The presentation's default text style doesn't apply to it (a bold one leaves SmartArt regular).
+  std::string pres = PartText("simple.pptx", "/ppt/presentation.xml");
+  ReplaceBetween(pres, "<a:lvl1pPr marL=\"0\"", "</a:lvl1pPr>", "<a:lvl1pPr marL=\"0\"><a:defRPr sz=\"2200\" b=\"1\"/></a:lvl1pPr>");
+  auto bold = Modified({{"ppt/presentation.xml", pres}});
+  CHECK(bold != nullptr);
+  if (bold) {
+    const Slide* bs = bold->GetSlide(0);
+    const TextBody* bt = bold->TextOf(body, *bs, *bs);
+    CHECK(bt && !bt->paragraphs[0].runs[0].props.bold);
+  }
   // A body the model knows maps to its shape's text.
   CHECK(deck->TextOf(s->shapes[0].textNode, *s, *s) == deck->Text(s->shapes[0], *s));
   CHECK(deck->TextOf(pugi::xml_node(), *s, *s) == nullptr);

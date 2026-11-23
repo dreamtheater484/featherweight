@@ -243,17 +243,34 @@ bool Near(uint32_t c, uint32_t want, int tolerance = 12) {
 // ---- Pictures ----
 
 TEST(Drawing_MathChoiceGivesWayToFallback) {
-  // Office math in a text box (a14:m) isn't laid out: the fallback, Office's picture of it, is drawn.
+  // Office math in a text box (a14:m) is laid out only in slides (the slide renderer's): elsewhere
+  // (a sheet's shape) the fallback, Office's picture of it, is drawn.
   const std::string a14 = R"( xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main")";
-  fw::pkg::XmlDom math = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
-                                  R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
-                                  "</mc:AlternateContent></p:spTree>");
+  const std::string xdr = R"( xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing")";
+  fw::pkg::XmlDom math = ParseXml("<xdr:wsDr" + kNs + a14 + xdr + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                  R"(<xdr:sp><a:p><a14:m/></a:p></xdr:sp></mc:Choice><mc:Fallback><xdr:pic/></mc:Fallback>)"
+                                  "</mc:AlternateContent></xdr:wsDr>");
   std::vector<std::string> seen;
   draw::xml::ForEachChild(math.Root(), [&](pugi::xml_node n) {
     seen.emplace_back(n.name());
     return true;
   });
-  CHECK(seen == std::vector<std::string>{"p:pic"});
+  CHECK(seen == std::vector<std::string>{"xdr:pic"});
+  // A slide's shape keeps its math when the slide renderer lays it out (FW_SLIDE_MATH, off for now).
+  fw::pkg::XmlDom slide = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
+                                   "</mc:AlternateContent></p:spTree>");
+  const int was = draw::xml::SlideMathSetting();
+  for (int on : {0, 1}) {
+    draw::xml::SlideMathSetting() = on;
+    seen.clear();
+    draw::xml::ForEachChild(slide.Root(), [&](pugi::xml_node n) {
+      seen.emplace_back(n.name());
+      return true;
+    });
+    CHECK(seen == std::vector<std::string>{on ? "p:sp" : "p:pic"});
+  }
+  draw::xml::SlideMathSetting() = was;
   fw::pkg::XmlDom plain = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
                                    R"(<p:sp/></mc:Choice><mc:Fallback><p:pic/></mc:Fallback></mc:AlternateContent></p:spTree>)");
   seen.clear();
