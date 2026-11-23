@@ -4,6 +4,7 @@
 // bullet keeps its line's height and outlined text is stroked.
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -330,7 +331,8 @@ TEST(SlideRender_DirectWriteMetricsAgreeWithGdisForCalibri) {
 
 TEST(SlideRender_KernsOnlyByTheKernTable) {
   // kern="1200": Arial (a 'kern' table) is kerned, Georgia (OpenType pairs only) isn't, as in
-  // PowerPoint's PDFs.
+  // PowerPoint's PDFs; Franklin Gothic Medium (a 'kern' table, its GPOS without pairs, so
+  // DirectWrite alone wouldn't kern it) is kerned by the table (rlf-webinar decks).
   auto width = [](const char* font, bool kern) {
     const std::string rPr = std::string("<a:rPr sz=\"4000\"") + (kern ? " kern=\"1200\"" : " kern=\"0\"") + "><a:latin typeface=\"" + font +
                             "\"/></a:rPr>";
@@ -345,6 +347,45 @@ TEST(SlideRender_KernsOnlyByTheKernTable) {
   };
   CHECK(width("Arial", true) < width("Arial", false) - 1);
   CHECK(std::fabs(width("Georgia", true) - width("Georgia", false)) < 0.01f);
+  const float franklin = width("Franklin Gothic Medium", false);
+  if (franklin > 0) CHECK(width("Franklin Gothic Medium", true) < franklin - 1);
+}
+
+TEST(SlideRender_TextReflectionIsDrawnUnderTheText) {
+  // a:reflection on a run (rlf-webinar-iv's titles): the text mirrored under its baseline, fading out.
+  auto render = [](bool reflect) -> std::shared_ptr<const draw::Bitmap> {
+    const std::string effects = reflect ? "<a:effectLst><a:reflection blurRad=\"12700\" stA=\"48000\" endA=\"300\" endPos=\"55000\" "
+                                          "dir=\"5400000\" sy=\"-90000\" algn=\"bl\" rotWithShape=\"0\"/></a:effectLst>"
+                                        : "";
+    auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
+                                            "<a:p><a:r><a:rPr sz=\"4000\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>" + effects +
+                                                "</a:rPr><a:t>HHHH</a:t></a:r></a:p>")));
+    if (!deck) return nullptr;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    return Render(*slide, 480, 360);
+  };
+  auto plain = render(false), reflected = render(true);
+  REQUIRE(plain != nullptr && reflected != nullptr);
+  // The plain text's lowest inked row; the reflection's pixels all lie below it, lighter than the text.
+  auto dark = [](uint32_t c) { return ((c >> 16) & 0xFF) < 250; };
+  int bottom = -1;
+  for (int y = 0; y < plain->Height(); ++y)
+    for (int x = 0; x < plain->Width(); ++x)
+      if (dark(Pixel(*plain, x, y))) bottom = std::max(bottom, y);
+  REQUIRE(bottom > 0);
+  int below = 0, above = 0, darkest = 255;
+  for (int y = 0; y < reflected->Height(); ++y)
+    for (int x = 0; x < reflected->Width(); ++x) {
+      const uint32_t c = Pixel(*reflected, x, y);
+      if (dark(c) == dark(Pixel(*plain, x, y))) continue;
+      if (y > bottom) ++below;
+      else if (y < bottom - 1) ++above;  // the mirror starts on the baseline, which the text's last rows touch
+      if (y > bottom + 1) darkest = std::min(darkest, static_cast<int>((c >> 16) & 0xFF));
+    }
+  CHECK(below > 40);
+  CHECK(above == 0);
+  CHECK(darkest > 90);  // stA 48 %: never as dark as the text
 }
 
 TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
