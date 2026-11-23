@@ -1860,6 +1860,14 @@ std::vector<int> DocView::Commands() {
 }
 
 bool DocView::Execute(int cmd) {
+  if ((cmd == CmdInsertPicture || (cmd >= CmdInsertTextBox && cmd <= CmdInsertCallout)) && !inserting_) {
+    // An object inserted shows its ribbon tab once, as in Word (DocRibbon.cpp).
+    inserting_ = true;
+    const bool done = Execute(cmd);
+    inserting_ = false;
+    ribbonInserted_ = SelectedPicture();
+    return done;
+  }
   if (format_ && DocFormat::Owns(cmd)) {
     // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
     if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);

@@ -135,6 +135,10 @@ if(FW_BUILD_TESTS)
     "${_fw_protected}/tables-images-links-protected.doc")
   add_test(NAME office_protected_standard COMMAND fwtool decrypt --password Password1234_
     --out "${CMAKE_BINARY_DIR}/protected-standard" "${_fw_protected}/ecma376-standard.docx")
+  # R1 (r1-word): the document's ribbon reaches every command its toolbar and ⋯ menu did.
+  add_test(NAME document_ribbon COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DDOCS=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/document-ribbon"
+           -P "${PROJECT_SOURCE_DIR}/tests/screens/document-ribbon.cmake")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

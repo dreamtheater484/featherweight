@@ -104,6 +104,14 @@ class DocTable::GridPicker : public Control {
     const float u = Ui();
     ctl::DrawSubtle(c, rc, u, enabled ? hover_.V() : 0, enabled ? std::max(press_.V(), popup_.open ? 0.7f : 0.f) : 0);
     const D2D1_COLOR_F fg = enabled ? p.text : p.textDisabled;
+    if (rc.bottom - rc.top > 48 * u) {  // the ribbon's large button: the icon above "Table ▾"
+      c.Icon(icon::Table, RectF(rc.left, rc.top + 4 * u, rc.right, rc.top + 40 * u), fg, 32 * u);
+      c.Text(L"Table", RectF(rc.left, rc.top + 42 * u, rc.right, rc.top + 60 * u), fg, 12 * u,
+             DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
+      ctl::DrawChevron(c, RectF(rc.left, rc.top + 58 * u, rc.right, rc.top + 72 * u), enabled ? p.textSecondary : p.textDisabled, u);
+      if (FocusVisible()) ctl::DrawFocusRing(c, rc, u);
+      return;
+    }
     const float chevW = 16 * u;
     c.Icon(icon::Table, RectF(rc.left, rc.top, rc.right - chevW, rc.bottom), fg, 16 * u);
     ctl::DrawChevron(c, RectF(rc.right - chevW - 2 * u, rc.top, rc.right - 2 * u, rc.bottom), enabled ? p.textSecondary : p.textDisabled, u);

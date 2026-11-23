@@ -14,6 +14,7 @@
 #include "doc/edit/TreeEdit.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
+#include "ui/Theme.h"
 
 namespace edit = fw::doc::edit;
 using fw::doc::Justification;
@@ -321,6 +322,12 @@ CommandState DocFormat::Query(int cmd) {
     s.label = n->label;
     s.shortcut = n->keys;
   }
+  // The boxes and menus (the ribbon's tooltips and checks); command search doesn't list them.
+  static constexpr std::pair<int, const wchar_t*> kBoxes[] = {{CmdStyleBox, L"Styles"},    {CmdFontBox, L"Font"},
+                                                               {CmdSizeBox, L"Font size"}, {CmdCaseBox, L"Change case"},
+                                                               {CmdAlignBox, L"Line and paragraph spacing"}, {CmdInsertBox, L"Insert"}};
+  for (const auto& [id, label] : kBoxes)
+    if (id == cmd) s.label = label;
   const bool on = target_().any && Editable();
   s.enabled = on;
   switch (cmd) {
@@ -925,4 +932,25 @@ ToolItem DocFormat::DateBox() {
     if (v.index >= 0) InsertDateTime(static_cast<size_t>(v.index));
   };
   return t;
+}
+
+void DocFormat::StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui) {
+  const auto& g = Gallery();
+  if (index < 0 || index >= static_cast<int>(g.size())) return;
+  const fw::doc::RunProps run = Doc().StyleChainRun(g[static_cast<size_t>(index)].id);
+  const Palette& p = theme::P();
+  D2D1_COLOR_F color = p.text;
+  if (!run.color.automatic) {
+    const uint32_t v = run.color.rgb;
+    color = D2D1::ColorF(((v >> 16) & 0xFF) / 255.f, ((v >> 8) & 0xFF) / 255.f, (v & 0xFF) / 255.f);
+  }
+  // Word's sizes, as far as the box allows: Normal at 11 pt, a title at 28 pt shown at 18.
+  const float px = std::clamp(run.size.Value() / 2.0f, 9.0f, 18.0f) * 1.2f * ui;
+  const float nameH = 18 * ui;
+  c.PushClip(r);
+  c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
+         run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  c.Text(W(std::string_view(g[static_cast<size_t>(index)].name)), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
+         p.textSecondary, 11 * ui, DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  c.PopClip();
 }

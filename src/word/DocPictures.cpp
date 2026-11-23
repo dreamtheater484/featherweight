@@ -727,6 +727,7 @@ bool DocView::CopyPicture() {
 std::optional<CommandState> DocView::QueryPicture(int cmd) {
   if (cmd < CmdInsertPicture || cmd > CmdPicturePanel) return std::nullopt;
   CommandState s;
+  if (cmd == CmdPictureWrapBox) s.label = L"Wrap text";  // the ribbon's menu
   if (cmd == CmdInsertPicture) {
     s.enabled = Editing();
     return s;
