@@ -535,14 +535,14 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
   // Connected scripts (Arabic and others) keep the font's defaults, which they need.
   DWRITE_FONT_FEATURE list[4];
   UINT32 count = 0;
+  const bool kern = !connected && style.kerningMinSize > 0 && seg.emSize >= style.kerningMinSize;
   if (!connected) {
     if (!style.ligatures) {
       list[count++] = {DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, 0};
       list[count++] = {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES, 0};
     }
     list[count++] = {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES, 0};
-    bool kern = style.kerningMinSize > 0 && seg.emSize >= style.kerningMinSize;
-    list[count++] = {DWRITE_FONT_FEATURE_TAG_KERNING, kern ? 1u : 0u};
+    list[count++] = {DWRITE_FONT_FEATURE_TAG_KERNING, kern && !style.kernTable ? 1u : 0u};
   }
   DWRITE_TYPOGRAPHIC_FEATURES features{list, count};
   const DWRITE_TYPOGRAPHIC_FEATURES* featureList[1] = {&features};
@@ -576,6 +576,16 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
                                               glyphProps.data(), actual, placed, seg.emSize, FALSE, rtlRun, &script,
                                               locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
+    // The legacy 'kern' table's pairs: each glyph's advance takes its pair with the next one's.
+    ComPtr<IDWriteFontFace1> face1;
+    if (SUCCEEDED(hr) && kern && style.kernTable && !rtlRun && actual > 1 && SUCCEEDED(placed->QueryInterface(IID_PPV_ARGS(&face1))) &&
+        face1->HasKerningPairs()) {
+      std::vector<INT32> adjust(actual);
+      DWRITE_FONT_METRICS fm{};
+      placed->GetMetrics(&fm);
+      if (SUCCEEDED(face1->GetKerningPairAdjustments(actual, seg.glyphs.data(), adjust.data())) && fm.designUnitsPerEm)
+        for (UINT32 i = 0; i < actual; ++i) seg.advances[i] += adjust[i] * seg.emSize / fm.designUnitsPerEm;
+    }
   }
   if (FAILED(hr)) {
     // One glyph per character, unshaped: better than nothing.

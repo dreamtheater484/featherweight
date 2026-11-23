@@ -72,6 +72,9 @@ struct RunDraw {
   uint8_t strike = 0;     // 0 none, 1 single, 2 double
   float ulPos = 0, ulThick = 0, stPos = 0, stThick = 0;
   int link = -1;
+  // a:reflection: the text mirrored (scaled by reflScale, 0: none) under its baseline, `reflDist` points
+  // apart, its alpha from reflStart at the mirror line to reflEnd at reflEndPos of its height.
+  float reflScale = 0, reflDist = 0, reflStart = 1, reflEnd = 0, reflEndPos = 1;
 };
 
 // Whether a hyperlink keeps its text's color (a14's hlinkClr val="tx").
@@ -122,18 +125,36 @@ TextBlock& TextBlock::operator=(TextBlock&&) noexcept = default;
 
 namespace {
 
-// Whether the face drawn for `family` has a legacy 'kern' table.
-bool KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
+// How the face drawn for `family` kerns as PowerPoint does, by its legacy 'kern' table: not at all
+// without one; by DirectWrite when its GPOS kerns too (Calibri: the same pairs); otherwise by the
+// table itself, which DirectWrite's shaping skips (Franklin Gothic: rlf-webinar decks).
+enum class KernBy { None, DirectWrite, Table };
+KernBy KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
   const text::Face* face = fonts.FaceFor(family, bold, italic);
-  if (!face) return false;
+  if (!face) return KernBy::None;
+  IDWriteFontFace* f = face->Get();
   const void* data = nullptr;
   UINT32 size = 0;
   void* context = nullptr;
   BOOL exists = FALSE;
-  if (FAILED(face->Get()->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
-    return false;
-  face->Get()->ReleaseFontTable(context);
-  return size > 4;
+  if (FAILED(f->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
+    return KernBy::None;
+  f->ReleaseFontTable(context);
+  if (size <= 4) return KernBy::None;
+  // A GPOS 'kern' feature: its FeatureList's records.
+  bool gposKerns = false;
+  if (SUCCEEDED(f->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('G', 'P', 'O', 'S'), &data, &size, &context, &exists)) && exists) {
+    const auto* b = static_cast<const uint8_t*>(data);
+    auto u16 = [&](size_t at) { return at + 2 <= size ? static_cast<size_t>(b[at] << 8 | b[at + 1]) : size_t{0}; };
+    const size_t list = u16(6);
+    const size_t n = list ? u16(list) : 0;
+    for (size_t i = 0; i < n && !gposKerns; ++i) {
+      const size_t at = list + 2 + 6 * i;
+      gposKerns = at + 4 <= size && memcmp(b + at, "kern", 4) == 0;
+    }
+    f->ReleaseFontTable(context);
+  }
+  return gposKerns ? KernBy::DirectWrite : KernBy::Table;
 }
 
 }  // namespace
@@ -174,7 +195,11 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.letterSpacing = r.spacing;
     // PowerPoint kerns only by a font's 'kern' table, not by its OpenType (GPOS) pairs: Public Sans
     // (GPOS only) isn't kerned in its PDFs.
-    if (r.kern > 0 && KernTable(fonts, s.family, s.bold, s.italic)) s.kerningMinSize = r.kern;
+    if (r.kern > 0)
+      if (const KernBy by = KernTable(fonts, s.family, s.bold, s.italic); by != KernBy::None) {
+        s.kerningMinSize = r.kern;
+        s.kernTable = by == KernBy::Table;
+      }
     s.simulatedBoldKeepsAdvances = true;  // PowerPoint's (cbs deck: Calibri Light bold, 6 % narrower than DirectWrite's)
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
     return s;
@@ -188,6 +213,14 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     }
     d.highlight = r.highlight;
     d.underlineColor = r.underlineColor;
+    if (pugi::xml_node refl = A(r.effects, "reflection")) {
+      d.reflScale = static_cast<float>(Number(refl, "sy", 100000) / 100000);
+      d.reflDist = static_cast<float>(EmuToPt(Number(refl, "dist", 0)));
+      d.reflStart = std::clamp(static_cast<float>(Number(refl, "stA", 100000) / 100000), 0.f, 1.f);
+      d.reflEnd = std::clamp(static_cast<float>(Number(refl, "endA", 0) / 100000), 0.f, 1.f);
+      d.reflEndPos = std::clamp(static_cast<float>(Number(refl, "endPos", 100000) / 100000), 0.01f, 1.f);
+      if (d.reflScale > 0) d.reflScale = -d.reflScale;  // a reflection is mirrored
+    }
     using U = fw::slide::Underline;
     d.underline = r.underline == U::None ? 0 : r.underline == U::Double || r.underline == U::WavyDouble ? 2
                   : r.underline == U::Heavy || r.underline == U::DottedHeavy || r.underline == U::DashHeavy ||
@@ -502,6 +535,42 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
             p.DrawBitmap(*px, {o.x + obj.x, o.y - obj.ascent, o.x + obj.x + obj.width, o.y + obj.descent});
         }
     }
+  }
+  // Reflected text (a:reflection, rlf-webinar-iv's titles): the glyphs mirrored about the last line's
+  // baseline, fading out over endPos of the text's height (PowerPoint's PDF bakes it as a picture,
+  // its reflection starting at the letters' feet; the blur is left out).
+  struct Reflected {
+    draw::Path outline;  // at `origin` in the text box's coordinates
+    draw::Point origin;
+    const RunDraw* rd;
+  };
+  std::vector<Reflected> reflected;
+  float inkTop = 1e9f, baseline = -1e9f;
+  for (size_t pi = 0; pi < m.paras.size(); ++pi) {
+    const Impl::Para& para = m.paras[pi];
+    if (filter && !filter->Paragraph(shape, static_cast<int>(pi))) continue;
+    for (size_t li = 0; li < para.lines.size(); ++li)
+      for (const text::GlyphPiece& g : para.lines[li].pieces) {
+        if (g.glyphs.empty() || g.run >= para.runs.size() || !para.runs[g.run].color || para.runs[g.run].reflScale == 0) continue;
+        draw::Path outline = draw::GlyphRunOutline(g.Run());
+        if (outline.Empty()) continue;
+        const draw::Point at{para.origins[li].x + g.OriginX(), para.origins[li].y - g.rise};
+        inkTop = std::min(inkTop, at.y + outline.Bounds().top);
+        baseline = std::max(baseline, at.y);
+        reflected.push_back({std::move(outline), at, &para.runs[g.run]});
+      }
+  }
+  for (const Reflected& r : reflected) {
+    const RunDraw& rd = *r.rd;
+    draw::Color from = *rd.color, to = *rd.color;
+    from.a *= rd.reflStart;
+    to.a *= rd.reflEnd;
+    const float fadeTop = baseline - rd.reflEndPos * (baseline - inkTop);
+    p.Save();
+    p.Transform({1, 0, 0, rd.reflScale, 0, baseline + rd.reflDist - rd.reflScale * baseline});
+    p.Transform(draw::Matrix::Translate(r.origin.x, r.origin.y));
+    p.FillPath(r.outline, draw::Brush::Linear({0, baseline - r.origin.y}, {0, fadeTop - r.origin.y}, {{0, from}, {1, to}}));
+    p.Restore();
   }
   p.Restore();
 }

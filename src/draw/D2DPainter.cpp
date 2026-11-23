@@ -156,7 +156,8 @@ D2DPainter::~D2DPainter() {
   }
 }
 
-void D2DPainter::UsePdfLikeText() {
+void D2DPainter::UsePdfLikeDrawing() {
+  picturesUp_ = true;
   // Unhinted outlines at gamma 1 (un-ccsa's dense text slides: .935 -> .966 against their PDF).
   static const ComPtr<IDWriteRenderingParams> params = [] {
     ComPtr<IDWriteFactory> dw;
@@ -229,6 +230,10 @@ void D2DPainter::DrawShadowed(const Saved& s) {
     effect->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(c.r, c.g, c.b, c.a));
     dc_->SetTransform(ToD2D(user.Inverse() * s.shadow.transform * user));
     dc_->DrawImage(effect.Get());
+    // Batched with the recording drawn over it, the shadow can fail the whole frame (EndDraw:
+    // D2DERR_BAD_NUMBER, nothing drawn: era-systems slides 8 and 44, pictures with a soft shadow
+    // right under them); flushed apart, both draw.
+    dc_->Flush();
   }
   dc_->SetTransform(D2D1::IdentityMatrix());
   if (!shadowsOnly_) dc_->DrawImage(s.recording.Get());
@@ -450,6 +455,11 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   D2D1_MATRIX_3X2_F w{};
   dc_->GetTransform(&w);
   if (w._12 == 0 && w._21 == 0 && w._11 != 0 && w._22 != 0) {
+    if (picturesUp_) {
+      const float up = w._22 > 0 ? -0.001f : 0.001f;
+      d.top += up;
+      d.bottom += up;
+    }
     float dpiX = 96, dpiY = 96;
     dc_->GetDpi(&dpiX, &dpiY);
     const auto out = [](float a, float b, float scale, float offset, float k, float& lo, float& hi) {

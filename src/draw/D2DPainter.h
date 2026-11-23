@@ -63,10 +63,11 @@ class D2DPainter : public Painter {
   void BeginShadow(const Shadow& shadow) override;
   // Restore draws only the shadow: PDF export draws shadows as pictures under the vectors.
   void SetShadowsOnly(bool on) { shadowsOnly_ = on; }
-  // Text as a PDF viewer draws it (pdfium): grayscale, the glyphs' outlines unhinted, gamma 1. The
-  // slides' view, show and pictures use it, so they show what their PDF does; the context's own
-  // text settings come back when the painter ends.
-  void UsePdfLikeText();
+  // Text as a PDF viewer draws it (pdfium): grayscale, the glyphs' outlines unhinted, gamma 1; and
+  // pictures placed a hair higher, as PdfDocument::PlacePicturesAsPowerPoint does. The slides' view,
+  // show and pictures use it, so they show what their PDF does; the context's own text settings
+  // come back when the painter ends.
+  void UsePdfLikeDrawing();
 
  private:
   enum class Pushed : uint8_t { AxisClip, Layer };
@@ -90,9 +91,10 @@ class D2DPainter : public Painter {
   D2DBitmapCache* cache_;
   D2DBitmapCache ownCache_;
   D2D1_MATRIX_3X2_F initial_{};
-  Microsoft::WRL::ComPtr<IDWriteRenderingParams> oldText_;  // UsePdfLikeText's, to restore
+  Microsoft::WRL::ComPtr<IDWriteRenderingParams> oldText_;  // UsePdfLikeDrawing's, to restore
   D2D1_TEXT_ANTIALIAS_MODE oldAntialias_ = D2D1_TEXT_ANTIALIAS_MODE_DEFAULT;
   bool textSet_ = false;
+  bool picturesUp_ = false;  // UsePdfLikeDrawing
   D2D1_MATRIX_3X2_F current_{};
   std::vector<Pushed> pushed_;
   std::vector<Saved> saved_;
