@@ -87,6 +87,9 @@ class Fonts {
   // Families by their GDI names only, as PowerPoint finds them: DirectWrite's own families, made
   // by taking weight words off a name ("Gill Sans" for Gill Sans Ultra Bold), don't count.
   void SetGdiFamilies(bool on) { gdiFamilies_ = on; }
+  // Arabic letters a font doesn't have in Tahoma, before DirectWrite's own fallback (Segoe UI), as
+  // PowerPoint draws them (un-country morocco's PDF); off: DirectWrite's alone.
+  void SetPowerPointFallback(bool on);
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
@@ -158,7 +161,7 @@ class Fonts {
   bool FullName(const std::wstring& name, FaceName& out);
   std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
-  bool gdiFamilies_ = false;
+  bool gdiFamilies_ = false, powerPointFallback_ = false;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
   std::vector<Substitution> substitutions_;
