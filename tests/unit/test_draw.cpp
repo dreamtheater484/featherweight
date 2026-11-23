@@ -294,6 +294,30 @@ TEST(Painter_Shadow) {
   CHECK_EQ(s.At(36, 8), 0xFFFFFFu);
 }
 
+TEST(Painter_FailedFrameIsDrawnAgainWithoutShadows) {
+  // A frame Direct2D fails at EndDraw is drawn once more, shadows left out.
+  Surface s(40, 40);
+  CHECK(s.End());
+  int calls = 0;
+  const HRESULT hr = DrawFrame(s.dc.Get(), [&](bool fallback) {
+    ++calls;
+    s.dc->Clear(D2D1::ColorF(1, 1, 1, 1));
+    {
+      D2DPainter p(s.dc.Get());
+      p.SetNoShadows(fallback);
+      p.BeginShadow({kBlack, 1, Matrix::Translate(10, 10)});
+      p.FillRect({5, 5, 20, 20}, Brush::Solid(kRed));
+      p.Restore();
+    }
+    // The first frame fails when it ends (ended early here, so DrawFrame's EndDraw is out of place).
+    if (!fallback) s.dc->EndDraw();
+  });
+  CHECK(SUCCEEDED(hr));
+  CHECK_EQ(calls, 2);
+  CHECK_EQ(s.At(12, 12), 0xFF0000u);  // the square
+  CHECK_EQ(s.At(25, 25), 0xFFFFFFu);  // no shadow the second time
+}
+
 TEST(Painter_BitmapCacheBudget) {
   // Device copies stay within the cache's budget: the least recently drawn go first.
   Surface s(8, 8);

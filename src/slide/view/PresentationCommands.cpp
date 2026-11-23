@@ -545,15 +545,15 @@ void PresentationView::CopySlide(bool text, bool picture) {
         D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
     if (SUCCEEDED(gfx::WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) &&
         SUCCEEDED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) && SUCCEEDED(target.As(&dc))) {
-      dc->BeginDraw();
-      dc->Clear(D2D1::ColorF(1, 1, 1, 1));
-      dc->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
-      {
+      const HRESULT drawn = draw::DrawFrame(dc.Get(), [&](bool fallback) {
+        dc->Clear(D2D1::ColorF(1, 1, 1, 1));
+        dc->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
         draw::D2DPainter painter(dc.Get());
         painter.UsePdfLikeDrawing();
+        painter.SetNoShadows(fallback);
         deck_->Paint(current_, painter);
-      }
-      if (SUCCEEDED(dc->EndDraw())) {
+      });
+      if (SUCCEEDED(drawn)) {
         // PNG, through a memory stream.
         ComPtr<IStream> stream;
         ComPtr<IWICBitmapEncoder> encoder;

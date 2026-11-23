@@ -2716,13 +2716,14 @@ void App::RunScript(const std::wstring& script) {
         dpi = std::clamp(static_cast<float>(_wtof(dir.c_str() + bar + 1)), 24.f, 600.f);
         dir.resize(bar);
       }
-      int written = 0;
+      int written = 0, failed = 0;
       if (v && v->Ready() && v->Kind() == TabKind::Document) written = static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi);
       if (v && v->Ready() && v->Kind() == TabKind::Workbook)
         written = static_cast<fw::sheet::view::WorkbookView*>(v)->RenderPagesForTesting(dir, dpi);
       if (v && v->Ready() && v->Kind() == TabKind::Presentation)
-        written = static_cast<fw::slide::view::PresentationView*>(v)->RenderPagesForTesting(dir, dpi);
+        written = static_cast<fw::slide::view::PresentationView*>(v)->RenderPagesForTesting(dir, dpi, &failed);
       if (written == 0) fwprintf(stderr, L"pagepngs failed\n");
+      if (written == 0 || failed > 0) scriptFailed_ = true;
     } else if (op == L"workbookpdf") {
       // workbookpdf:out.pdf exports every sheet of a workbook, as Excel's reference PDFs have them.
       TabContent* v = Active();
@@ -2944,7 +2945,7 @@ int App::RunSnapshot(const AppOptions& opts) {
   wicTarget_.Reset();
   swap_.Reset();
   DestroyWindow(hwnd_);
-  return 0;
+  return scriptFailed_ ? 6 : 0;
 }
 
 ComPtr<IWICBitmapSource> App::SnapshotImage() {

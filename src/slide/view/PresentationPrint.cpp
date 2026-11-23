@@ -251,7 +251,7 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
   return true;
 }
 
-int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
+int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, int* failed) {
   if (!Ready()) return 0;
   CreateDirectoryW(dir.c_str(), nullptr);
   // Full page slides (the default): every slide, hidden ones too, in order, at the slide's size, for
@@ -263,8 +263,15 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
   }
   const std::vector<PrintPage> pages = LayoutPages(slides, deck_->SlideSize(), deck_->SlideSize(), deck_->NotesSize(), print_);
   const float scale = dpi / 72;
-  int written = 0;
+  int written = 0, lost = 0, number = 0;
+  // A page that can't be drawn or written is reported and skipped; the rest still come out, each
+  // named by its page number.
+  const auto fail = [&](const wchar_t* what) {
+    ++lost;
+    fwprintf(stderr, L"pagepngs: page %d %s\n", number, what);
+  };
   for (const PrintPage& page : pages) {
+    ++number;
     // As big as the PDF compare renders a page (pdf-compare: rounded), the page stretched to it, so
     // the two line up to the pixel (a widescreen slide at 100 dpi: 1333 pixels, not 1334).
     const UINT w = std::max(1u, static_cast<UINT>(std::lround(page.size.width * scale)));
@@ -276,18 +283,23 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
         D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
         96.f, 96.f);
     if (FAILED(gfx::WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) ||
-        FAILED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc)))
-      return written;
-    dc->BeginDraw();
-    dc->Clear(D2D1::ColorF(1, 1, 1, 1));
-    {
+        FAILED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc))) {
+      fail(L"has no bitmap to draw on");
+      continue;
+    }
+    const HRESULT drawn = draw::DrawFrame(dc.Get(), [&](bool fallback) {
+      dc->Clear(D2D1::ColorF(1, 1, 1, 1));
       draw::D2DPainter painter(dc.Get());
       painter.UsePdfLikeDrawing();
+      painter.SetNoShadows(fallback);
       painter.Transform(draw::Matrix::Scale(w / page.size.width, h / page.size.height));
       PaintPage(*deck_, page, print_, PageFonts(), painter);
+    });
+    if (FAILED(drawn)) {
+      fail(L"failed to draw");
+      continue;
     }
-    if (FAILED(dc->EndDraw())) return written;
-    const std::wstring file = dir + L"\\page-" + std::to_wstring(written + 1) + L".png";
+    const std::wstring file = dir + L"\\page-" + std::to_wstring(number) + L".png";
     ComPtr<IWICStream> stream;
     ComPtr<IWICBitmapEncoder> encoder;
     ComPtr<IWICBitmapFrameEncode> frame;
@@ -295,10 +307,13 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
         FAILED(gfx::WIC()->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
         FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
         FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
-        FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit()))
-      return written;
+        FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+      fail(L"couldn't be written");
+      continue;
+    }
     ++written;
   }
+  if (failed) *failed = lost;
   return written;
 }
 
