@@ -19,6 +19,7 @@ struct CommandEntry {
   std::wstring shortcut;  // "Ctrl+Shift+="
   bool enabled = true;
   bool checked = false;
+  std::wstring where;  // its place on the ribbon, "Home › Font" (R1); empty for none
 };
 
 // Command search (Alt+Q): a box over the toolbar that finds commands by the words of their names

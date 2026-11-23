@@ -481,7 +481,11 @@ void ColorPicker::Draw(Canvas& c) {
     ctl::DrawSubtle(c, rc, u, hv, pv);
     D2D1_RECT_F main = RectF(rc.left, rc.top, rc.right - chevW, rc.bottom);
     float cx = std::round((main.left + main.right) / 2), cy = std::round((rc.top + rc.bottom) / 2);
-    c.Icon(glyph, RectF(cx - 10 * u, cy - 12 * u, cx + 10 * u, cy + 6 * u), fg, 16 * u);
+    if (!text.empty()) {  // the glyph at the left, the label after it
+      cx = std::round(rc.left + 14 * u);
+      c.Text(text, RectF(cx + 14 * u, rc.top, main.right, rc.bottom), fg, textSize * u);
+    }
+    DrawGlyph(c, glyph, RectF(cx - 10 * u, cy - 12 * u, cx + 10 * u, cy + 6 * u), fg, 16 * u);
     D2D1_RECT_F bar = RectF(cx - 8 * u, cy + 6 * u, cx + 8 * u, cy + 6 * u + std::max(2.f, std::round(3 * u)));
     if (shown.a > 0) c.Fill(bar, enabled ? shown : Alpha(shown, 0.4f));
     else c.Stroke(bar, Alpha(fg, 0.5f), 1);
@@ -692,7 +696,7 @@ void SplitButton::Draw(Canvas& c) {
     c.Fill(RectF(arrow.left, rc.top + 6 * u, arrow.left + 1, rc.bottom - 6 * u), Alpha(p.textSecondary, 0.3f * std::max(any, popup_.open ? 1.f : 0.f)));
 
   const D2D1_COLOR_F fg = enabled ? p.text : p.textDisabled;
-  float textW = text.empty() ? 0 : c.MeasureText(text, 13 * u);
+  float textW = text.empty() ? 0 : c.MeasureText(text, textSize * u);
   float glyphW = glyph ? 16 * u : 0, gap = (glyph && !text.empty()) ? 6 * u : 0;
   float x = std::round((main.left + main.right - glyphW - gap - textW) / 2);
   float cy = std::round((rc.top + rc.bottom) / 2);
@@ -706,7 +710,7 @@ void SplitButton::Draw(Canvas& c) {
     }
     x += glyphW + gap;
   }
-  if (!text.empty()) c.Text(text, RectF(x, rc.top, x + textW + 2, rc.bottom), fg, 13 * u);
+  if (!text.empty()) c.Text(text, RectF(x, rc.top, x + textW + 2, rc.bottom), fg, textSize * u);
   if (arrow.left < rc.right) ctl::DrawChevron(c, arrow, enabled ? p.textSecondary : p.textDisabled, u);
   if (FocusVisible()) ctl::DrawFocusRing(c, rc, u);
 }

@@ -3,6 +3,7 @@
 # Merge, Chart and Insert boxes replaced by the commands they held, and the commands in its
 # Data, Conditional, Number format and Page setup lists. ribboncheck:<this file> checks each is
 # reachable from the ribbon, the File page, the right-click menu or Alt+Q.
+# Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
 reach 100 Open
 reach 102 Save as…
 reach 103 Print
@@ -20,11 +21,11 @@ reach 143 Make Featherweight the default PDF app
 reach 144 About Featherweight
 reach 157 Undo
 reach 158 Redo
-reach 701 
-reach 702 
-reach 720 
-reach 721 
-reach 722 
+reach 701 New document
+reach 702 New workbook
+reach 720 New from template 1
+reach 721 New from template 2
+reach 722 New from template 3
 reach 1000 Bold
 reach 1001 Italic
 reach 1002 Underline
@@ -33,8 +34,8 @@ reach 1015 Format painter: copy these cells' formats to the cells you select nex
 reach 1018 Align left
 reach 1019 Center
 reach 1020 Align right
-reach 1042 
-reach 1043 
+reach 1042 Font box
+reach 1043 Font size box
 reach 1250 Page setup
 reach 1400 Export PDF…
 reach 1500 Print preview
@@ -82,7 +83,7 @@ reach 2948 No scaling
 reach 2949 Fit sheet on one page
 reach 2950 Fit all columns on one page
 reach 2951 Fit all rows on one page
-reach 3036 
+reach 3036 More templates (user templates folder)
 reach 3040 Refresh PivotTable
 reach 3041 Refresh all PivotTables
 reach 3042 PivotTable…

@@ -50,6 +50,9 @@ class Settings {
   bool autoCorrect = true;  // Word documents: AutoCorrect as you type
   bool ruler = false;       // Word documents: the rulers shown
   std::wstring reviewer;    // Word documents: the name changes and comments are made with (empty: Windows')
+  // The editors' ribbon: -1 as the screen suits (only its tabs on a small screen), 0 shown, 1 only its
+  // tabs (Ctrl+F1).
+  int ribbon = -1;
   bool autoUpdate = true;
   int64_t lastUpdateCheck = 0;
   std::wstring skippedVersion;
