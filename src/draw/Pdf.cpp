@@ -656,10 +656,14 @@ class PdfPainter : public Painter {
   Matrix CurrentTransform() const override { return states_.back().ctm; }
   void ClipRect(const Rect& r) override {
     last_.face = nullptr;
+    states_.back().clip = std::make_shared<const std::pair<Path, Matrix>>(Path::FromRect(r), states_.back().ctm);
+    states_.back().clipDepth = states_.size();
     Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re W n\n";
   }
   void ClipPath(const Path& p) override {
     last_.face = nullptr;
+    states_.back().clip = std::make_shared<const std::pair<Path, Matrix>>(p, states_.back().ctm);
+    states_.back().clipDepth = states_.size();
     if (p.Empty()) {
       Out() += "0 0 0 0 re W n\n";
       return;
@@ -751,6 +755,9 @@ class PdfPainter : public Painter {
     bool group = false;  // Restore ends a group
     int groupOpacity = 1000;
     Matrix groupBase;
+    // The latest clip and the depth it was set at: a picture in a shadow casts its clip's shape.
+    std::shared_ptr<const std::pair<Path, Matrix>> clip;
+    size_t clipDepth = 0;
   };
   struct Level {
     std::string ops;
@@ -1043,7 +1050,13 @@ bool PdfPainter::AppendSpaces(Point origin, const GlyphRun& run, const Brush&, P
 
 void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) {
   if (dest.Width() == 0 || dest.Height() == 0 || bitmap.Width() <= 0 || bitmap.Height() <= 0) return;
-  Cast(Path::FromRect(dest), states_.back().ctm, opacity);
+  // A picture clipped inside its shadow (an ellipse crop) casts the clip's shape, as Direct2D's
+  // shadow of what it drew does (our-dynamic-sun: round pictures, not blurred squares).
+  const State& now = states_.back();
+  if (now.clip && !captures_.empty() && now.clipDepth >= captures_.back().depth)
+    Cast(now.clip->first, now.clip->second, opacity);
+  else
+    Cast(Path::FromRect(dest), now.ctm, opacity);
   const int a = std::clamp(static_cast<int>(std::lround(opacity * 1000)), 0, 1000);
   if (a == 0) return;
   Save();
