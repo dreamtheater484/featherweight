@@ -464,7 +464,7 @@ void PresentationView::CopySlide(bool text, bool picture) {
       dc->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
       {
         draw::D2DPainter painter(dc.Get());
-        painter.UsePdfLikeText();
+        painter.UsePdfLikeDrawing();
         deck_->Paint(current_, painter);
       }
       if (SUCCEEDED(dc->EndDraw())) {
