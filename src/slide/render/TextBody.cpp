@@ -303,13 +303,14 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       chars += t.size();
       RunProps props = r.props;
       const fw::slide::Hyperlink* link = r.props.click ? &r.props.click : nullptr;
-      if (link && !LinkKeepsTextColor(r.node)) {
+      if (link && !LinkKeepsTextColor(r.node))
         if (std::optional<draw::Color> c = draw::SchemeColor("hlink", extras.colors)) {
           props.color = *c;
           props.noFill = false;
         }
-        if (props.underline == fw::slide::Underline::None) props.underline = fw::slide::Underline::Single;
-      }
+      // Underlined even when it keeps its text's color (govau workshop 3's references).
+      if (link && props.underline == fw::slide::Underline::None && !getenv("FWOLDLINK"))
+        props.underline = fw::slide::Underline::Single;
       add(t, props, link);
     }
 
@@ -378,13 +379,18 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
       if (size <= 0) size = emptySize(line);
       const float natural = 1.2f * size;
-      const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
+      const float pitch = pp.lineSpacing.percent ? natural * lineFactor
+                                                 : pp.lineSpacing.value * (getenv("FWOLDEXACT") ? fontScale : 1.f);
       const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
       // Spacing under single, stated or an autofit's reduction, comes off the line's top: the part
       // below the baseline stays as at single (cbs at 90 %: 28-pt text 0.72 pt and a 44-pt title
-      // 1.16 pt higher than shared out; govuk census shrunk 20 %: 1.0 pt). Wider spacing is shared
-      // out at the fonts' ascent share.
-      const float above = pitch < natural ? std::max(0.f, pitch - natural * (1 - share)) : pitch * share;
+      // 1.16 pt higher than shared out; govuk census shrunk 20 %: 1.0 pt). Wider spacing puts the
+      // baseline at the fonts' ascent share of the line, but no lower than three quarters of it
+      // (Calibri's share; era-systems' Trebuchet at 110 % and govau's Public Sans at 150 % sit there,
+      // stat-512's Courier New at its own .735).
+      const float above = pitch < natural                                   ? std::max(0.f, pitch - natural * (1 - share))
+                          : pitch > natural * 1.001f && !getenv("FWOLDWIDE") ? pitch * (getenv("FWWIDE75") ? 0.75f : std::min(share, 0.75f))
+                                                                             : pitch * share;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
