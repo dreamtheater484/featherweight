@@ -115,6 +115,8 @@ ToolItem Greyed(ToolKind kind, int cmd) {
 
 void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   if (!Ready()) return;  // loading, or the password card: the toolbar
+  SyncPicturePanel();  // the Picture and Shape panels follow the selection
+  SyncShapePanels();
   Builder b(m, [this](int cmd) { return QueryCommand(cmd); });
   const bool editing = Editing();
   auto width = [](ToolItem t, float w) {

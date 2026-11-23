@@ -48,8 +48,6 @@ class DocTable {
   static std::vector<int> CommandIds();
   CommandState Query(int cmd);
   void Execute(int cmd);
-  // The table button, after the formatting groups.
-  void AddToolbar(ToolbarModel& m);
   // In a table: Insert, Delete, Merge, Split and Table properties.
   void FillContextMenu(HMENU m);
   // The ribbon's: Insert > Table's grid (the toolbar's control), and Table Design's Shading and

@@ -220,17 +220,6 @@ uint32_t RgbOf(D2D1_COLOR_F c) {
 
 bool SameRange(const edit::Range& a, const edit::Range& b) { return a.from == b.from && a.to == b.to; }
 
-wchar_t AlignGlyph(std::optional<Justification> jc) {
-  if (!jc) return icon::AlignLeft;
-  switch (*jc) {
-    case Justification::Center: return icon::AlignCenter;
-    case Justification::End: return icon::AlignRight;
-    case Justification::Both:
-    case Justification::Distribute: return icon::AlignJustify;
-    default: return icon::AlignLeft;
-  }
-}
-
 }  // namespace
 
 DocFormat::DocFormat(edit::Editor& editor, std::function<Target()> target, std::function<void(const Done&)> done)
@@ -711,128 +700,6 @@ void DocFormat::InsertDateTime(size_t index) {
   done_(d);
 }
 
-void DocFormat::AddToolbar(ToolbarModel& m) {
-  const bool on = target_().any && Editable();
-  const edit::FormatState& st = State();
-  auto button = [&](int cmd, wchar_t glyph) {
-    CommandState q = Query(cmd);
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.checked = q.checked;
-    return t;
-  };
-  auto toggleButton = [&](int cmd, wchar_t glyph) {
-    ToolItem t = button(cmd, glyph);
-    t.toggle = true;
-    return t;
-  };
-
-  // Priorities: what goes first when the window is narrow (Toolbar.h). Bold, italic and underline stay.
-  auto with = [](ToolItem t, int priority) {
-    t.priority = priority;
-    return t;
-  };
-  // Styles, font and size.
-  ToolItem style = StyleBox();
-  style.width = 116;
-  style.priority = 6;
-  style.sepBefore = true;
-  for (const auto& [label, run] : styleMore) style.choices.push_back(label);
-  m.left.push_back(style);
-  ToolItem font = FontBox();
-  font.width = 116;
-  font.priority = 6;
-  m.left.push_back(font);
-  ToolItem size = SizeBox();
-  size.width = 56;
-  size.priority = 6;
-  m.left.push_back(size);
-
-  m.left.push_back(toggleButton(CmdBold, icon::Bold));
-  m.left.push_back(toggleButton(CmdItalic, icon::Italic));
-  m.left.push_back(toggleButton(CmdUnderline, icon::Underline));
-
-  m.left.push_back(with(ColorButton(false), 5));
-  m.left.push_back(with(ColorButton(true), 4));
-  ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
-  painter.enabled = on;
-  m.left.push_back(painter);
-  ToolItem caseBox;
-  caseBox.kind = ToolKind::Dropdown;
-  caseBox.cmd = CmdCaseBox;
-  caseBox.width = 44;
-  caseBox.priority = 2;
-  caseBox.text = L"Aa";
-  caseBox.tooltip = L"Change case (Shift+F3)";
-  caseBox.enabled = on;
-  for (int c = CmdCaseSentence; c <= CmdCaseToggle; ++c) caseBox.choices.push_back(NameOf(c)->label);
-  caseBox.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index <= CmdCaseToggle - CmdCaseSentence) Execute(CmdCaseSentence + v.index);
-  };
-  m.left.push_back(caseBox);
-
-  // Paragraphs and lists.
-  ToolItem alignBox;
-  alignBox.kind = ToolKind::Dropdown;
-  alignBox.cmd = CmdAlignBox;
-  alignBox.width = 52;
-  alignBox.priority = 5;
-  alignBox.glyph = AlignGlyph(st.jc);
-  alignBox.tooltip = L"Paragraph: alignment, line spacing, borders and shading";
-  alignBox.enabled = on;
-  alignBox.sepBefore = true;
-  static constexpr int kParagraph[] = {CmdAlignLeft,  CmdAlignCenter,  CmdAlignRight, CmdAlignJustify, CmdSpacing1,
-                                       CmdSpacing115, CmdSpacing15,    CmdSpacing2,   CmdBorderBox,    CmdBorderBottom,
-                                       CmdBorderNone, CmdShading,      CmdShadingNone};
-  for (int cmd : kParagraph) {
-    const Named* n = NameOf(cmd);
-    alignBox.choices.push_back(*n->keys ? std::wstring(n->label) + L" (" + n->keys + L")" : std::wstring(n->label));
-  }
-  alignBox.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kParagraph))) Execute(kParagraph[v.index]);
-  };
-  m.left.push_back(alignBox);
-  m.left.push_back(with(toggleButton(CmdBullets, icon::BulletedList), 7));
-  ToolItem numbering = with(button(CmdNumbering, icon::NumberedList), 6);
-  numbering.kind = ToolKind::SplitButton;
-  numbering.width = 52;
-  numbering.choices = {L"Numbering 1. a. i.", L"Multilevel list 1. 1.1. 1.1.1.", L"Restart numbering at 1", L"Continue numbering"};
-  numbering.onChange = [this](const ToolValue& v) {
-    static constexpr int kCmds[] = {CmdNumbering, CmdMultilevel, CmdRestartNumbering, CmdContinueNumbering};
-    if (v.index >= 0 && v.index < 4) Execute(kCmds[v.index]);
-  };
-  m.left.push_back(numbering);
-  m.left.push_back(with(button(CmdOutdent, icon::DecreaseIndent), 2));
-  m.left.push_back(with(button(CmdIndent, icon::IncreaseIndent), 2));
-
-  // Insert: date and time, for now.
-  ToolItem insert;
-  insert.kind = ToolKind::Dropdown;
-  insert.cmd = CmdInsertBox;
-  insert.width = 104;
-  insert.priority = 4;  // after change case, the indents, ¶, the painter and Highlight (friction review)
-  insert.maxRows = 24;
-  insert.glyph = icon::Add;
-  insert.text = insert.menuLabel = L"Insert";
-  insert.tooltip = L"Insert a picture, a break, the date or the time";
-  insert.enabled = on;
-  insert.sepBefore = true;
-  insert.choices = {L"Picture…"};
-  for (const auto& [label, run] : insertMore) insert.choices.push_back(label);
-  const ToolItem dates = DateBox();
-  insert.choices.insert(insert.choices.end(), dates.choices.begin(), dates.choices.end());
-  insert.onChange = [this](const ToolValue& v) {
-    const int more = static_cast<int>(insertMore.size());
-    if (v.index == 0 && insertPicture) insertPicture();
-    else if (v.index > 0 && v.index <= more) insertMore[static_cast<size_t>(v.index - 1)].second();
-    else if (v.index > more) InsertDateTime(static_cast<size_t>(v.index - 1 - more));
-  };
-  m.left.push_back(insert);
-}
-
 ToolItem DocFormat::StyleBox() {
   const edit::FormatState& st = State();
   ToolItem style;
@@ -852,8 +719,6 @@ ToolItem DocFormat::StyleBox() {
     const int n = static_cast<int>(g.size());
     if (v.index >= 0 && v.index < n)
       ApplyStyle(W(std::string_view(g[v.index].id.empty() ? g[v.index].name : g[v.index].id)));
-    else if (v.index >= n && v.index < n + static_cast<int>(styleMore.size()))
-      styleMore[static_cast<size_t>(v.index - n)].second();
   };
   return style;
 }

@@ -853,67 +853,6 @@ void DocView::SyncPicturePanel() {
   }
 }
 
-void DocView::AddPictureToolbar(ToolbarModel& m) {
-  const uint32_t d = SelectedPicture();
-  if (d == kNone || !Movable(d)) return;
-  const bool picture = PictureInfoOf(d).picture;  // else a shape (DocShapes.cpp)
-  const edit::Wrap w = picture ? PictureInfoOf(d).wrap : ShapeInfoOf(d).wrap;
-  ToolItem wrap;
-  wrap.kind = ToolKind::Dropdown;
-  wrap.cmd = CmdPictureWrapBox;
-  wrap.width = 176;
-  wrap.priority = 9;
-  wrap.glyph = icon::Picture;
-  wrap.tooltip = picture ? L"Wrap text: how text flows around the picture" : L"Wrap text: how text flows around the shape";
-  wrap.sepBefore = true;
-  static constexpr int kWraps[] = {CmdPictureInline, CmdPictureSquare, CmdPictureTight, CmdPictureTopBottom, CmdPictureBehind, CmdPictureInFront};
-  wrap.choices = {L"In line with text", L"Square", L"Tight", L"Top and bottom", L"Behind text", L"In front of text"};
-  wrap.choice = static_cast<int>(w);
-  wrap.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 6) Execute(kWraps[v.index]);
-  };
-  m.left.push_back(wrap);
-  if (!picture) {
-    ToolItem rotate;
-    rotate.cmd = CmdPictureRotate;
-    rotate.glyph = icon::Rotate;
-    rotate.priority = 8;
-    rotate.tooltip = L"Rotate 90°";
-    m.left.push_back(rotate);
-    ToolItem panel;
-    panel.cmd = CmdShapePanel;
-    panel.glyph = icon::Settings;
-    panel.toggle = true;
-    panel.checked = QueryShape(CmdShapePanel)->checked;
-    panel.priority = 8;
-    panel.tooltip = L"Shape: wrap, size, fill and outline";
-    m.left.push_back(panel);
-    return;
-  }
-  ToolItem crop;
-  crop.cmd = CmdPictureCrop;
-  crop.glyph = icon::Crop;
-  crop.toggle = true;
-  crop.checked = cropMode_;
-  crop.priority = 9;
-  crop.tooltip = L"Crop: drag the picture's edges (Esc when done)";
-  m.left.push_back(crop);
-  ToolItem rotate;
-  rotate.cmd = CmdPictureRotate;
-  rotate.glyph = icon::Rotate;
-  rotate.priority = 8;
-  rotate.tooltip = L"Rotate 90°";
-  m.left.push_back(rotate);
-  ToolItem panel;
-  panel.cmd = CmdPicturePanel;
-  panel.glyph = icon::Settings;
-  panel.toggle = true;
-  panel.checked = picturePanel_ && host_.ViewShownPanel() == picturePanel_.get();
-  panel.priority = 8;
-  panel.tooltip = L"Picture: size, rotation and alt text";
-  m.left.push_back(panel);
-}
-
 void DocView::FillPictureMenu(HMENU m) {
   using menu::AppendItem;
   using menu::AppendSeparator;

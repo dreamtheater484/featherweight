@@ -59,12 +59,6 @@ const wchar_t* LabelOf(int cmd) {
   return L"";
 }
 
-// What the toolbar's Table menu lists, in order.
-constexpr int kMenu[] = {CmdTableInsertAbove,     CmdTableInsertBelow,    CmdTableInsertLeft,  CmdTableInsertRight,
-                         CmdTableDeleteRows,      CmdTableDeleteColumns,  CmdTableDeleteTable, CmdTableMerge,
-                         CmdTableSplit,           CmdTableSelectRow,      CmdTableSelectColumn, CmdTableSelectTable,
-                         CmdTableAutoFitContents, CmdTableAutoFitWindow,  CmdTableFixedWidth,  CmdTableDistributeColumns,
-                         CmdTableHeaderRow,       CmdTableToText,         CmdTableProperties};
 
 std::wstring W(std::string_view s) { return fw::Utf8ToWide(s); }
 
@@ -775,34 +769,6 @@ std::vector<int32_t> DocTable::ContentWidths(const Editor::CellInfo& at) const {
   if (sum > room)
     for (int32_t& w : widths) w = static_cast<int32_t>(static_cast<int64_t>(w) * room / sum);
   return widths;
-}
-
-void DocTable::AddToolbar(ToolbarModel& m) {
-  const auto cell = Cell();
-  if (!cell) {
-    ToolItem t = GridItem();
-    t.priority = 2;
-    m.left.push_back(t);
-    return;
-  }
-  ToolItem t;
-  t.kind = ToolKind::Dropdown;
-  t.cmd = CmdTableBox;
-  t.glyph = icon::Table;
-  t.text = L"Table";
-  t.width = 96;
-  t.priority = 6;
-  t.tooltip = L"Table: rows, columns, cells and properties";
-  t.enabled = editor_.CanEdit();
-  for (int cmd : kMenu) {
-    std::wstring label = LabelOf(cmd);
-    if (cmd == CmdTableHeaderRow && Query(cmd).checked) label = L"✓ " + label;
-    t.choices.push_back(label);
-  }
-  t.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kMenu))) Execute(kMenu[v.index]);
-  };
-  m.left.push_back(t);
 }
 
 void DocTable::FillContextMenu(HMENU m) {

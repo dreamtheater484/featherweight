@@ -59,13 +59,9 @@ class DocPage {
   static std::vector<int> CommandIds();
   // Ctrl+Enter and Ctrl+Shift+Enter (breaks), Ctrl+- and Ctrl+Shift+- (hyphens), or 0.
   static int Shortcut(UINT vk, UINT mods);
-  // The breaks Insert ▾ offers, after Picture….
-  static const std::vector<int>& InsertCommands();
 
   CommandState Query(int cmd);
   void Execute(int cmd);
-  // The Layout menu, after the formatting groups.
-  void AddToolbar(ToolbarModel& m);
   // The ribbon's Layout tab: Size ▾ (the paper sizes, the current one checked, then More paper
   // sizes…), and Paragraph's boxes (CmdIndentLeftBox... CmdSpaceAfterBox) for the selection's
   // paragraphs, showing the first one's.
