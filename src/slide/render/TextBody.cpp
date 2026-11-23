@@ -6,6 +6,7 @@
 #include <deque>
 
 #include "core/Strings.h"
+#include "doc/layout/Math.h"
 #include "draw/Shapes.h"
 #include "draw/Xml.h"
 #include "text/Fonts.h"
@@ -103,6 +104,8 @@ struct TextBlock::Impl {
     std::vector<draw::Point> origins;           // per line: where column coordinates' 0 is, and the baseline
     std::vector<std::pair<float, float>> rows;  // per line: top and bottom
     std::shared_ptr<const draw::Image> picture;  // a picture bullet, at its U+FFFC
+    // Per run: Office math (a14:m) laid out, drawn at the run's U+FFFC.
+    std::vector<std::shared_ptr<const doc::layout::math::Equation>> math;
     bool empty = true;
     bool bullet = false;  // the first run is the bullet and its tab
   };
@@ -296,7 +299,56 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         para.bullet = true;
       }
     }
+    std::optional<text::Alignment> mathAlign;  // a display equation's m:jc
+    // An equation alone in its paragraph (blank runs aside) is set in display style, as PowerPoint
+    // does; one among text, inline.
+    size_t mathRuns = 0, textRuns = 0;
     for (const fw::slide::TextRun& r : src.runs) {
+      if (r.kind == fw::slide::TextRun::Kind::Math) ++mathRuns;
+      else if (r.kind == fw::slide::TextRun::Kind::Break || r.text.find_first_not_of(L" 	 ") != std::wstring::npos) ++textRuns;
+    }
+    const bool mathAlone = mathRuns == 1 && textRuns == 0;
+    for (const fw::slide::TextRun& r : src.runs) {
+      if (r.kind == fw::slide::TextRun::Kind::Math) {
+        // Office math: laid out by the equation typesetter (Cambria Math's MATH table), at the run's
+        // size, in its color; an inline object in the line.
+        if (chars >= kMaxChars) continue;
+        std::string xml;
+        struct Sink : pugi::xml_writer {
+          std::string& out;
+          explicit Sink(std::string& o) : out(o) {}
+          void write(const void* data, size_t size) override { out.append(static_cast<const char*>(data), size); }
+        } sink(xml);
+        const bool mathPara = LocalNameOf(r.node) == "oMathPara", display = mathPara || mathAlone;
+        // The typesetter takes a display equation's m:oMath elements, an inline one's content.
+        if (display && !mathPara) r.node.print(sink, "", pugi::format_raw);
+        else
+          for (pugi::xml_node c = r.node.first_child(); c; c = c.next_sibling()) c.print(sink, "", pugi::format_raw);
+        const float size = styleOf(r.props).size;
+        std::shared_ptr<const doc::layout::math::Equation> laid = doc::layout::math::LayOut(fonts, xml, size, display);
+        auto eq = std::make_shared<doc::layout::math::Equation>(*laid);
+        if (!r.props.noFill) {
+          const auto c255 = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.f, 1.f) * 255 + 0.5f); };
+          const uint32_t rgb = (c255(r.props.color.r) << 16) | (c255(r.props.color.g) << 8) | c255(r.props.color.b);
+          for (auto& g : eq->glyphs)
+            if (g.color == 0) g.color = rgb;
+          for (auto& rule : eq->rules)
+            if (rule.color == 0) rule.color = rgb;
+        }
+        add(L"\uFFFC", r.props, nullptr);
+        text::TextStyle& st = para.styles.back();
+        st.objectWidth = eq->width;
+        st.objectAscent = eq->ascent;
+        st.objectDescent = eq->descent;
+        para.math.resize(para.runs.size());
+        para.math.back() = std::move(eq);
+        if (mathPara) {
+          using J = doc::layout::math::Equation::Justify;
+          mathAlign = laid->justify == J::Left ? text::Alignment::Start : laid->justify == J::Right ? text::Alignment::End : text::Alignment::Center;
+        }
+        chars += 1;
+        continue;
+      }
       std::wstring t = r.kind == fw::slide::TextRun::Kind::Break ? std::wstring(L"\u000B") : r.text;
       // Line feeds in a run break lines as a:br does; other control characters show as spaces.
       for (wchar_t& c : t)
@@ -345,6 +397,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
                                                                                      : Alignment::Start;
     // DrawingML's alignment is visual (left, right); fwtext's logical.
     if (pp.rtl && (a == Alignment::Start || a == Alignment::End)) a = a == Alignment::Start ? Alignment::End : Alignment::Start;
+    if (mathAlign) a = *mathAlign;
     f.rightToLeft = pp.rtl;
     f.alignment = box.wrap ? a : (pp.rtl ? Alignment::End : Alignment::Start);
     // Spaces before a break or the paragraph's end don't count when centering (anyone-out-there's titles).
@@ -395,10 +448,20 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       float size = 0;
       for (const text::GlyphPiece& g : line.pieces)
         if (counts(g.run)) size = std::max(size, g.emSize);
+      // An equation counts as its run's font size, and the line is at least as high as the equation
+      // (PowerPoint's PDFs: cs-444's lines of subscripted math at 1.2 times their size).
+      float mathExtent = 0;
       for (const text::InlineObject& o : line.objects)
-        if (counts(o.run)) size = std::max(size, o.ascent + o.descent);
+        if (counts(o.run)) {
+          if (o.run < para.math.size() && para.math[o.run]) {
+            size = std::max(size, para.styles[o.run].size);
+            mathExtent = std::max(mathExtent, o.ascent + o.descent);
+          } else {
+            size = std::max(size, o.ascent + o.descent);
+          }
+        }
       if (size <= 0) size = emptySize(line);
-      const float natural = 1.2f * size;
+      const float natural = std::max(1.2f * size, mathExtent);
       // Exact spacing stays as stated when autofit shrinks the text (govuk annual-deaths 7: 28 pt).
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value;
       const float share = line.ascent + line.descent > 0 ? line.ascent / (line.ascent + line.descent) : 0;
@@ -547,6 +610,10 @@ void TextBlock::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const
           if (rd.strike == 2) p.FillRect({o.x + g.x, top - 2 * rd.stThick, o.x + g.x + g.width, top - rd.stThick}, brush);
         }
       }
+      if (!para.math.empty())
+        for (const text::InlineObject& obj : line.objects)
+          if (obj.run < para.math.size() && para.math[obj.run])
+            doc::layout::math::Paint(p, *para.math[obj.run], o.x + obj.x, o.y - obj.rise);
       if (para.picture && para.bullet)
         for (const text::InlineObject& obj : line.objects) {
           if (obj.run != 0) continue;
