@@ -33,13 +33,9 @@ std::wstring EnglishName(IDWriteLocalizedStrings* names) {
 }
 
 struct FontFile {
-  std::wstring family;  // the folder it's in: the family Word asked for
+  std::wstring family;  // the folder it's in: the family Office downloaded
   std::wstring path;
 };
-
-bool SameName(const std::wstring& a, const std::wstring& b) {
-  return CompareStringOrdinal(a.c_str(), static_cast<int>(a.size()), b.c_str(), static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
-}
 
 // The font files under the folder's family folders.
 std::vector<FontFile> FontFiles() {
@@ -102,11 +98,11 @@ const Cloud& Get() {
         ComPtr<IDWriteLocalizedStrings> names;
         BOOL exists = FALSE;
         if (FAILED(faces->GetPropertyValues(i, DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, &exists, &names)) || !exists) continue;
-        // Word finds them by the family it downloaded, the folder's name: "Open Sans Light" (a
-        // weight of Open Sans with a family name of its own) is drawn in a substitute, as
-        // a missing family (measured on the corpus: Calibri).
+        // Every face in the folder, under its own family name too: "Open Sans Light", a weight
+        // of Open Sans with a family name of its own, is drawn in it, as PowerPoint and Word draw
+        // it once Office has downloaded it. (The corpus PDFs that showed it in Calibri were
+        // exported in the second Office downloaded the face, before it arrived.)
         const std::wstring family = EnglishName(names.Get());
-        if (!SameName(family, f.family)) continue;
         // A family the PC has stays its own.
         UINT32 index = 0;
         BOOL has = FALSE;

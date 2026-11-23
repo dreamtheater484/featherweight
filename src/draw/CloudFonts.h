@@ -16,8 +16,8 @@ namespace draw {
 IDWriteFontSet* CloudFontSet();
 IDWriteFontCollection1* CloudFontCollection();
 // Whether the cloud fonts have the family `name`, in any of its languages ("MS Mincho" or its
-// Japanese name). Only the families Word downloaded (a folder each), not other names their fonts
-// have ("Open Sans Light"), which Word substitutes.
+// Japanese name): a family Office downloaded (a folder each) or the family name of one of its
+// faces ("Open Sans Light", in the Open Sans folder), which Office draws as it is.
 bool CloudFontsHave(std::wstring_view name);
 
 }  // namespace draw
