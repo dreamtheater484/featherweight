@@ -42,7 +42,7 @@ bool TextSession::Start(const TextFrame& frame, const render::TextExtras& extras
   doc_ = std::make_unique<TextDoc>(
       model_.Body(target_), [model, target](pugi::xml_node body) { return model->Resolve(target, body); },
       target_.Cell() ? "a:txBody" : "p:txBody");
-  frame_ = frame;
+  TakeFrame(frame);
   extras_ = extras;
   const bool shrink = frame.box.autofit == draw::TextBox::Autofit::ShrinkText;
   fontScale_ = shrink ? frame.box.fontScale : 1;
@@ -53,8 +53,19 @@ bool TextSession::Start(const TextFrame& frame, const render::TextExtras& extras
 }
 
 void TextSession::SetFrame(const TextFrame& frame) {
-  frame_ = frame;
+  TakeFrame(frame);
   Relayout();
+}
+
+// The frame's box names its bodyPr and txBody in the slide part it was laid out from, and the first
+// edit replaces that part (the edit layer copies on write), so the session keeps its own copy of
+// the bodyPr for layout (spcFirstLastPara) and no txBody (it has the working copy).
+void TextSession::TakeFrame(const TextFrame& frame) {
+  frame_ = frame;
+  props_.reset();
+  if (frame.box.properties) props_.append_copy(frame.box.properties);
+  frame_.box.properties = props_.first_child();
+  frame_.box.content = {};
 }
 
 void TextSession::ModelChanged() {

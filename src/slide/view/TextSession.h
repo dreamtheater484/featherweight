@@ -119,6 +119,7 @@ class TextSession {
 
  private:
   void Relayout();
+  void TakeFrame(const TextFrame& frame);
   // After an edit: autofit, layout, the model. `coalesce` folds typing into one undo step.
   bool Commit(std::u16string_view step, bool coalesce);
   void Fit();                      // autofit after an edit (shrink text, or resize the shape)
@@ -132,6 +133,7 @@ class TextSession {
   text::Fonts& fonts_;
   std::unique_ptr<TextDoc> doc_;
   TextFrame frame_;
+  pugi::xml_document props_;  // frame_'s bodyPr, copied (frame_.box.properties points here)
   render::TextExtras extras_;
   render::TextBlock block_;
   float fontScale_ = 1, lineReduction_ = 0;  // autofit in effect (the file's until the text changes)

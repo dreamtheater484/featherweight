@@ -243,17 +243,34 @@ bool Near(uint32_t c, uint32_t want, int tolerance = 12) {
 // ---- Pictures ----
 
 TEST(Drawing_MathChoiceGivesWayToFallback) {
-  // Office math in a text box (a14:m) isn't laid out: the fallback, Office's picture of it, is drawn.
+  // Office math in a text box (a14:m) is laid out only in slides (the slide renderer's): elsewhere
+  // (a sheet's shape) the fallback, Office's picture of it, is drawn.
   const std::string a14 = R"( xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main")";
-  fw::pkg::XmlDom math = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
-                                  R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
-                                  "</mc:AlternateContent></p:spTree>");
+  const std::string xdr = R"( xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing")";
+  fw::pkg::XmlDom math = ParseXml("<xdr:wsDr" + kNs + a14 + xdr + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                  R"(<xdr:sp><a:p><a14:m/></a:p></xdr:sp></mc:Choice><mc:Fallback><xdr:pic/></mc:Fallback>)"
+                                  "</mc:AlternateContent></xdr:wsDr>");
   std::vector<std::string> seen;
   draw::xml::ForEachChild(math.Root(), [&](pugi::xml_node n) {
     seen.emplace_back(n.name());
     return true;
   });
-  CHECK(seen == std::vector<std::string>{"p:pic"});
+  CHECK(seen == std::vector<std::string>{"xdr:pic"});
+  // A slide's shape keeps its math when the slide renderer lays it out (FW_SLIDE_MATH, off for now).
+  fw::pkg::XmlDom slide = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
+                                   "</mc:AlternateContent></p:spTree>");
+  const int was = draw::xml::SlideMathSetting();
+  for (int on : {0, 1}) {
+    draw::xml::SlideMathSetting() = on;
+    seen.clear();
+    draw::xml::ForEachChild(slide.Root(), [&](pugi::xml_node n) {
+      seen.emplace_back(n.name());
+      return true;
+    });
+    CHECK(seen == std::vector<std::string>{on ? "p:sp" : "p:pic"});
+  }
+  draw::xml::SlideMathSetting() = was;
   fw::pkg::XmlDom plain = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
                                    R"(<p:sp/></mc:Choice><mc:Fallback><p:pic/></mc:Fallback></mc:AlternateContent></p:spTree>)");
   seen.clear();
@@ -1023,6 +1040,32 @@ TEST(DrawingML_GroupInAScaledGroup) {
     found = true;
   }
   CHECK(found);
+}
+
+TEST(DrawingML_CameraTurnedAboutItsViewTurnsTheShapeBack) {
+  // A shape at rot 7.6° under a straight-on camera (lat and lon 0) turned by rev 6° shows at 1.6°,
+  // as PowerPoint draws letters-home 52's photo; a light rig's rev and a camera that isn't
+  // straight on leave the rotation alone.
+  auto angleOf = [](const std::string& scene) {
+    TestResources res;
+    fw::pkg::XmlDom dom;
+    auto d = WordDrawing(WordAnchor(40, 20, kWpsUri,
+                                    Wsp(Xfrm(0, 0, 40, 20, R"( rot="456000")") + R"(<a:prstGeom prst="rect"/>)" + scene)),
+                         res, dom);
+    if (!d || d->Parts().empty()) return -1000.f;
+    const Matrix& m = d->Parts()[0].transform;
+    return static_cast<float>(std::atan2(m.m12, m.m11) * 180 / 3.14159265358979);
+  };
+  CHECK_NEAR(angleOf(""), 7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"><a:rot lat="0" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             1.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"/>)"
+                     R"(<a:lightRig rig="threePt" dir="t"><a:rot lat="0" lon="0" rev="1200000"/></a:lightRig></a:scene3d>)"),
+             7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="perspectiveFront"><a:rot lat="600000" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             7.6, 0.01);
 }
 
 TEST(DrawingML_LinesAndArrows) {
