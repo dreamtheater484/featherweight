@@ -119,3 +119,17 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - `backgrounds.pptx` slide 6, `shapes-groups.pptx` slide 1.
     - Every slide of `cpb-presentatie` (−0.08 to −0.13).
   - So the fwtool number overstates what the slide view shows.
+- **2026-11-23: the gate's display measure** (coordinator).
+  - The gate number stays the fwtool path: Featherweight's PDF and PowerPoint's PDF, both rasterized by pdfium. It compares like with like, and the reference is PowerPoint's PDF, not its screen.
+  - Added to the gate: the app draws what its own PDF draws. The slide view (`pagepngs`, 100 dpi) is compared with Featherweight's own PDF (pdfium) on the 20-deck sample and the public set. Every slide differing by more than 0.05 SSIM is a slide-view bug, fixed or explained before the gate. A uniform rasterizer and antialiasing offset under that is accepted and recorded with its size.
+  - A full `-Through app` corpus run only if that check finds more than a few root causes.
+  - First check, on `0317ed79` (`FeatherweightNotes\p1\corpus-analysis\app-vs-own-pdf.ps1`):
+    - Public set: median SSIM 0.9966, 3 slides under 0.95.
+    - Corpus sample: median 0.972, 30 of 233 slides under 0.95.
+    - Root causes:
+      - Text in an embedded font isn't drawn in the slide view (`cpb-presentatie` slide 5, 0.796).
+      - Pattern fills at a different pitch (`backgrounds.pptx` slide 7, 0.123; `shapes-groups.pptx` slide 1, 0.899).
+      - Tiled picture fills at a different tile size and offset (`backgrounds.pptx` slide 6, 0.783).
+      - A picture drawn darker (`overheid-migratieketen` slide 3, 0.915).
+      - Pictures with an ellipse shape or soft edges drawn differently (`usgov-our-dynamic-sun-2025` slide 12, 0.927).
+    - Text antialiasing: dense text slides drop to about 0.935 with nothing else different (`un-ccsa` slide 12), more than the accepted 0.05.
