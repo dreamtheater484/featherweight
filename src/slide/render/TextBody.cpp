@@ -303,7 +303,19 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       if (!t.empty()) {
         // No hanging indent (the bullet at or past where the text starts): the text follows the
         // bullet straight on, no tab between (PowerPoint's PDFs: marL 0, indent 0 draws "•text").
-        add(pp.indent >= 0 ? t : t + L'\t', bp, nullptr);
+        // Nor when the bullet is as wide as the hanging indent or wider: the text starts where the
+        // bullet ends, not at the next default tab stop (PowerPoint's PDFs: overheid workshop's 28 pt
+        // "•" in 13.5 points, datamillnorth's Wingdings arrow in 18).
+        bool tab = pp.indent < 0;
+        if (tab && b.kind != Bullet::Kind::Picture) {
+          const text::TextStyle bs = styleOf(bp);
+          if (const text::Face* face = fonts.FaceFor(bs.family, bs.bold, bs.italic)) {
+            float width = 0;
+            for (wchar_t c : t) width += c >= 0xD800 && c < 0xE000 ? 0 : face->Advance(c, bs.size);
+            tab = width < -pp.indent - 0.01f;
+          }
+        }
+        add(tab ? t + L'\t' : t, bp, nullptr);
         para.bullet = true;
       }
     }
