@@ -434,6 +434,45 @@ TEST(SlideRender_TextReflectionIsDrawnUnderTheText) {
   CHECK(darkest > 90);  // stA 48 %: never as dark as the text
 }
 
+TEST(SlideRender_EachLineIsReflectedUnderItself) {
+  // A two-line title with a:reflection: PowerPoint mirrors each line under its own baseline
+  // (morocco 2), not only the last.
+  auto render = [](bool reflect) -> std::shared_ptr<const draw::Bitmap> {
+    const std::string effects = reflect ? "<a:effectLst><a:reflection blurRad=\"12700\" stA=\"48000\" endA=\"300\" endPos=\"55000\" "
+                                          "dir=\"5400000\" sy=\"-90000\" algn=\"bl\" rotWithShape=\"0\"/></a:effectLst>"
+                                        : "";
+    const std::string rPr = "<a:rPr sz=\"3000\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>" + effects + "</a:rPr>";
+    auto deck = Modified(Slide1(PhShape(2, "<p:ph type=\"title\"/>",
+                                            "<a:p><a:pPr><a:lnSpc><a:spcPct val=\"150000\"/></a:lnSpc></a:pPr><a:r>" + rPr +
+                                                "<a:t>HHHH</a:t></a:r><a:br>" + rPr + "</a:br><a:r>" + rPr + "<a:t>HHHH</a:t></a:r></a:p>")));
+    if (!deck) return nullptr;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    return Render(*slide, 480, 360);
+  };
+  auto plain = render(false), reflected = render(true);
+  REQUIRE(plain != nullptr && reflected != nullptr);
+  auto dark = [](uint32_t c) { return ((c >> 16) & 0xFF) < 250; };
+  // The plain text's inked rows: the first line's last, the second line's first.
+  std::vector<bool> inked(plain->Height());
+  for (int y = 0; y < plain->Height(); ++y)
+    for (int x = 0; x < plain->Width() && !inked[y]; ++x) inked[y] = dark(Pixel(*plain, x, y));
+  int firstEnd = -1, secondTop = -1;
+  for (int y = 1; y < plain->Height(); ++y) {
+    if (firstEnd < 0 && inked[y - 1] && !inked[y]) firstEnd = y - 1;
+    else if (firstEnd >= 0 && !inked[y - 1] && inked[y]) {
+      secondTop = y;
+      break;
+    }
+  }
+  REQUIRE(firstEnd > 0 && secondTop > firstEnd + 4);
+  // Between the lines: the first line's reflection.
+  int between = 0;
+  for (int y = firstEnd + 2; y < secondTop - 1; ++y)
+    for (int x = 0; x < reflected->Width(); ++x) between += dark(Pixel(*reflected, x, y)) && !dark(Pixel(*plain, x, y));
+  CHECK(between > 20);
+}
+
 TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
   // normAutofit at 50 %: 12 pt before a paragraph stays 12 pt (cpb deck: PowerPoint's paragraph
   // gaps are the stated points, not shrunk with the text).
