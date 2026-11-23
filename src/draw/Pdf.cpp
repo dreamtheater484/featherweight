@@ -399,7 +399,7 @@ bool SameColor(const Color& a, const Color& b) { return a.r == b.r && a.g == b.g
 
 struct PdfDocument::Impl {
   Writer w;
-  bool picturesUp = false;  // PlacePicturesAsPowerPoint
+  bool picturesUp = false;  // PicturesAsPowerPoint
   uint32_t pagesObject = 0;
   struct PageRecord {
     uint32_t object = 0, contents = 0, resources = 0;
@@ -740,6 +740,8 @@ class PdfPainter : public Painter {
   void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) override;
   void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) override;
   void DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) override {
+    if (doc_.picturesUp)
+      if (std::shared_ptr<const Bitmap> gdi = RasterizeEmfWithGdi(image)) return DrawBitmap(*gdi, dest, nullptr, opacity);
     // At 300 dpi (plan §4.6, decision 9).
     const Matrix m = CurrentTransform();
     const float f = 300.f / 72;
@@ -1624,7 +1626,7 @@ void PdfDocument::AddOutline(int level, const std::u16string& title, size_t page
   impl_->outline.push_back({level, title, page, y});
 }
 
-void PdfDocument::PlacePicturesAsPowerPoint() { impl_->picturesUp = true; }
+void PdfDocument::PicturesAsPowerPoint() { impl_->picturesUp = true; }
 
 void PdfDocument::SetInfo(const std::u16string& title, const std::u16string& author) {
   impl_->title = title;

@@ -1,4 +1,5 @@
 #include "draw/D2DPainter.h"
+#include "draw/Images.h"
 
 #include <d2d1_3.h>
 #include <d2d1effects.h>
@@ -499,6 +500,8 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
 }
 
 void D2DPainter::DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) {
+  if (picturesUp_)
+    if (std::shared_ptr<const Bitmap> gdi = RasterizeEmfWithGdi(image)) return DrawBitmap(*gdi, dest, nullptr, opacity);
   IUnknown* object = cache_->Get(dc_, image);
   if (!object || dest.Width() == 0 || dest.Height() == 0) return;
   ComPtr<ID2D1GdiMetafile> metafile;

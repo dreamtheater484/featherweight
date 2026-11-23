@@ -34,9 +34,10 @@ class PdfDocument {
   // The outline (bookmarks), in document order: `level` 0 is the top.
   void AddOutline(int level, const std::u16string& title, size_t page, float y);
   void SetInfo(const std::u16string& title, const std::u16string& author);
-  // Pictures placed as PowerPoint's PDFs place them, a hair higher (slides), so a PDF viewer resamples
-  // them as it does PowerPoint's.
-  void PlacePicturesAsPowerPoint();
+  // Pictures as PowerPoint's PDFs have them (slides): placed a hair higher, so a PDF viewer resamples
+  // them as it does PowerPoint's; an EMF holding a bitmap drawn by GDI at its own pixel size
+  // (RasterizeEmfWithGdi).
+  void PicturesAsPowerPoint();
   // The file; nothing can be added after it.
   std::vector<uint8_t> Finish();
 
