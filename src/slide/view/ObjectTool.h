@@ -84,9 +84,8 @@ class ObjectTool {
   bool Query(int cmd, CommandState& s);
   bool Execute(int cmd);
   std::vector<int> Commands() const;
-  void AddTools(ToolbarModel& m);
-  // The control for one of the objects' commands, as the ribbon and toolbar show it: the Insert
-  // dropdowns (shapes, table, chart), Arrange, fill and outline colors, Weight, Crop.
+  // The control for one of the objects' commands, as the ribbon shows it: the Insert dropdowns
+  // (shapes, table, chart), fill and outline colors, Weight, Crop.
   ToolItem Tool(int cmd);
   // What's selected, by kind (the ribbon's contextual tabs: Shape Format, Picture Format, Table Layout).
   struct Kinds {

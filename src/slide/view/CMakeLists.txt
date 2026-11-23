@@ -23,7 +23,7 @@ target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:
 
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp
   ObjectTool.cpp PresentationObjects.cpp  # p2-objects
-  PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp NotesEdit.cpp  # P2, p2-slides
+  PresentationSlides.cpp PresentationDesign.cpp NotesEdit.cpp  # P2, p2-slides
   PresentationFile.cpp PresentationSave.cpp  # p2-model: saving and recovery
   PresentationText.cpp  # P2, p2-text
   PresentationRibbon.cpp)  # R1, r1-slide
@@ -31,7 +31,7 @@ target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CM
 target_link_libraries(fwslideview PUBLIC fwslideviewcore fwslideobjects)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 # Commands, menus and printing run once per click: compiled for size.
-set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp SlideGallery.cpp NotesEdit.cpp PresentationFile.cpp PresentationSave.cpp
+set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp NotesEdit.cpp PresentationFile.cpp PresentationSave.cpp
   PresentationText.cpp PresentationRibbon.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 

@@ -20,7 +20,6 @@
 #include "slide/view/NotesEdit.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
-#include "slide/view/SlideGallery.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -48,7 +47,7 @@ struct SlideCommandName {
 
 constexpr SlideCommandName kSlideNames[] = {
     {CmdSlideNew, L"New slide", L"Ctrl+M"},
-    {CmdSlideNewMenu, L"New slide with a layout", L""},
+    {CmdSlideNewMenu, L"New slide", L"Ctrl+M"},  // the ribbon's New Slide ▾
     {CmdSlideDuplicate, L"Duplicate slide", L"Ctrl+D"},
     {CmdSlideDelete, L"Delete slide", L"Delete"},
     {CmdSlideHide, L"Hide slide", L""},
@@ -276,14 +275,12 @@ bool PresentationView::SlideCommandState(int cmd, CommandState& s) {
 bool PresentationView::SlideCommand(int cmd) {
   const size_t n = SlideCount();
   switch (cmd) {
-    case CmdSlideNew: {
+    case CmdSlideNew:
+    case CmdSlideNewMenu: {  // the ribbon's New Slide ▾: its main part as Ctrl+M, its arrow the layouts
       // After the current slide, on the layout PowerPoint picks (NewSlideLayout).
       InsertSlide(n ? current_ + 1 : 0, -1);
       return true;
     }
-    case CmdSlideNewMenu:
-      if (newSlideGallery_) newSlideGallery_->SetOpen(true);
-      return true;
     case CmdSlideDuplicate: DuplicateSlides(SelectedSlides()); return true;
     case CmdCut:
     case CmdCopy:
@@ -299,9 +296,6 @@ bool PresentationView::SlideCommand(int cmd) {
     case CmdSlideDelete: DeleteSlides(SelectedSlides()); return true;
     case CmdSlideHide:
       if (n) HideSlides(SelectedSlides(), !deck_->Hidden(current_));
-      return true;
-    case CmdSlideLayoutMenu:
-      if (layoutGallery_) layoutGallery_->SetOpen(true);
       return true;
     case CmdSlideMoveUp:
     case CmdSlideMoveDown:
@@ -362,50 +356,7 @@ void PresentationView::SlideContextMenu(HMENU m, int thumb) {
 }
 
 // ---------------------------------------------------------------------------
-// The toolbar: ＋ Slide ▾ and Layout ▾ with the layout gallery
-
-void PresentationView::PrepareGalleries() {
-  if (!newSlideGallery_) {
-    newSlideGallery_ = std::make_unique<SlideGallery>();
-    newSlideGallery_->glyph = icon::Add;
-    newSlideGallery_->text = L"Slide";
-    newSlideGallery_->split = true;
-    newSlideGallery_->tooltip = L"New slide (Ctrl+M); the arrow picks its layout";
-    newSlideGallery_->label = L"New slide";
-    newSlideGallery_->onInvoke = [this] { Execute(CmdSlideNew); };
-    newSlideGallery_->onPick = [this](int i) {
-      if (i >= 0 && static_cast<size_t>(i) < galleryLayouts_.size())
-        InsertSlide(SlideCount() ? current_ + 1 : 0, static_cast<int>(galleryLayouts_[static_cast<size_t>(i)].index));
-    };
-  }
-  if (!layoutGallery_) {
-    layoutGallery_ = std::make_unique<SlideGallery>();
-    layoutGallery_->text = L"Layout";
-    layoutGallery_->tooltip = L"The selected slides' layout";
-    layoutGallery_->label = L"Slide layout";
-    layoutGallery_->onPick = [this](int i) {
-      if (i >= 0 && static_cast<size_t>(i) < galleryLayouts_.size())
-        SetSlidesLayout(SelectedSlides(), static_cast<int>(galleryLayouts_[static_cast<size_t>(i)].index));
-    };
-  }
-  galleryLayouts_ = deck_ ? deck_->LayoutsFor(current_) : std::vector<Deck::LayoutChoice>();
-  std::vector<std::wstring> names;
-  for (const Deck::LayoutChoice& l : galleryLayouts_) names.push_back(l.name);
-  const draw::Size size = deck_ ? deck_->SlideSize() : draw::Size{960, 540};
-  const int now = deck_ && SlideCount() ? deck_->LayoutOf(current_) : -1;
-  int currentItem = -1;
-  for (size_t k = 0; k < galleryLayouts_.size(); ++k)
-    if (static_cast<int>(galleryLayouts_[k].index) == now) currentItem = static_cast<int>(k);
-  for (SlideGallery* g : {newSlideGallery_.get(), layoutGallery_.get()}) {
-    if (!g->IsOpen()) g->items = names;  // an open gallery keeps what it shows
-    g->aspect = size.height > 0 ? size.width / size.height : 16.0f / 9.0f;
-    g->paint = [this](Canvas& c, int i, const D2D1_RECT_F& r) {
-      if (i >= 0 && static_cast<size_t>(i) < galleryLayouts_.size()) PaintLayoutPicture(c, galleryLayouts_[static_cast<size_t>(i)].index, r);
-    };
-  }
-  layoutGallery_->current = currentItem;
-  newSlideGallery_->current = -1;
-}
+// The layouts' pictures, for the ribbon's New Slide and Layout galleries
 
 void PresentationView::PaintLayoutPicture(Canvas& c, size_t layout, const D2D1_RECT_F& r) {
   const UINT w = static_cast<UINT>(std::lround(Width(r))), h = static_cast<UINT>(std::lround(Height(r)));
@@ -423,50 +374,6 @@ void PresentationView::PaintLayoutPicture(Canvas& c, size_t layout, const D2D1_R
     pic = RenderBitmapWith(c.DC(), w, h, [&](draw::Painter& p) { deck_->PaintLayout(layout, p); });
   if (pic) c.DC()->DrawBitmap(pic.Get(), r, 1, D2D1_INTERPOLATION_MODE_LINEAR);
   else host_.ViewInvalidate();
-}
-
-void PresentationView::AddSlideTools(ToolbarModel& m) {
-  PrepareGalleries();
-  const bool ready = Ready();
-  ToolItem add;
-  add.kind = ToolKind::Custom;
-  add.control = newSlideGallery_.get();
-  add.cmd = CmdSlideNewMenu;
-  add.width = 84;
-  add.priority = 8;
-  add.tooltip = newSlideGallery_->tooltip;
-  add.menuLabel = L"New slide";
-  add.enabled = ready;
-  newSlideGallery_->enabled = ready;
-  ToolItem layout;
-  layout.kind = ToolKind::Custom;
-  layout.control = layoutGallery_.get();
-  layout.cmd = CmdSlideLayoutMenu;
-  layout.width = 84;
-  layout.priority = 6;
-  layout.tooltip = layoutGallery_->tooltip;
-  layout.menuLabel = L"Slide layout";
-  layout.enabled = ready && SlideCount() > 0 && !galleryLayouts_.empty();
-  layoutGallery_->enabled = layout.enabled;
-  ToolItem design;
-  design.cmd = CmdDesignPanel;
-  design.glyph = icon::Color;
-  design.tooltip = L"Design: themes, theme colors, background, slide size";
-  design.toggle = true;
-  design.checked = QueryCommand(CmdDesignPanel).checked;
-  design.enabled = ready;
-  design.priority = 5;
-  ToolItem hf;
-  hf.cmd = CmdHeaderFooter;
-  hf.glyph = icon::Page;
-  hf.tooltip = L"Header & footer: slide numbers, footer and date";
-  hf.menuLabel = L"Header & footer";
-  hf.toggle = true;
-  hf.checked = QueryCommand(CmdHeaderFooter).checked;
-  hf.enabled = ready && SlideCount() > 0;
-  hf.priority = 4;
-  m.left.insert(m.left.begin(), {add, layout, design, hf});
-  m.left[4].sepBefore = true;  // P1's print items after a separator
 }
 
 // ---------------------------------------------------------------------------
