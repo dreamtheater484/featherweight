@@ -232,6 +232,9 @@ struct Label {
 class Builder {
  public:
   Builder(draw::Size size, std::wstring font) : font_(std::move(font)) { art_.size = size; }
+  // The font's ascent over Calibri's on a slide (1 elsewhere): PowerPoint gives labels, keys and
+  // the gaps around them room by the font's height, and the constants here are Calibri's.
+  float tall = 1;
 
   void Add(Path p, std::optional<Color> fill, std::optional<Color> line, float width, const Matrix& t = {}) {
     if (p.Empty()) return;
@@ -606,8 +609,8 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   }
   // With a line among them, every key is a line's length: 1.92 text sizes, at most 19.2 points, and
   // the gap after it at most 2 (Excel's PDFs at 10 points, PowerPoint's at 18).
-  const float box = kKey * ts, keyW = lines ? std::min(1.92f * ts, 19.2f) : box,
-              lead = keyW + (lines ? std::min(0.212f * ts, 2.0f) : 0.245f * ts);
+  const float box = kKey * ts * b.tall, keyW = lines ? std::min(1.92f * ts, 19.2f) : box,
+              lead = keyW + (lines ? std::min(0.212f * ts, 2.0f) : 0.245f * ts * b.tall);
   const auto key = [&](const Entry& e, float x, float cy) {
     if (e.line) {
       if (e.stroke) {
@@ -656,7 +659,7 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
       before += own;
       if (cy < r.top || cy > r.bottom) continue;
       key(entries[i], x, cy);
-      for (size_t k = 0; k < names[i].size(); ++k) b.Place(names[i][k], x + lead, cy - own / 2 + k * lp + kMiddle * ts, 0, text);
+      for (size_t k = 0; k < names[i].size(); ++k) b.Place(names[i][k], x + lead, cy - own / 2 + k * lp + kMiddle * ts * b.tall, 0, text);
     }
     if (!overlay) (pos == LegendPos::Right ? r.right : r.left) = pos == LegendPos::Right ? x - 11.2f : x + w + 11.2f;
     return r;
@@ -665,7 +668,7 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   // (Excel), a row as tall as its tallest entry.
   // Entries in a row 0.976 text sizes apart (from the ink), less past 10 points (PowerPoint's PDFs:
   // 15.8 points with 18-point text).
-  const float gap = 0.976f * std::min(ts, 10.0f) + 0.75f * std::max(0.0f, ts - 10);
+  const float gap = (0.976f * std::min(ts, 10.0f) + 0.75f * std::max(0.0f, ts - 10)) * b.tall;
   const float avail = r.right - r.left;
   wrap(0.9f * (avail + 2 * kPad) - lead, (r.bottom - r.top) / 2);
   std::vector<std::vector<size_t>> rows(1);
@@ -701,7 +704,7 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     // Centred, a little right of the middle past 10-point text (PowerPoint's PDFs: 3 points with 18).
     float x = (r.left + r.right) / 2 - total / 2 + 0.38f * beyond;
     for (size_t i : rows[k]) {
-      key(entries[i], x, baseline - kMiddle * ts + (names[i].size() - 1) * lp / 2);
+      key(entries[i], x, baseline - kMiddle * ts * b.tall + (names[i].size() - 1) * lp / 2);
       for (size_t j = 0; j < names[i].size(); ++j) b.Place(names[i][j], x + lead, baseline + j * lp, 0, text);
       x += lead + wide[i] + gap;
     }
@@ -1197,11 +1200,13 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   // 0 to 10 by 5 on a 280-point plot of 18-point labels, 0 to 5 by 1 on 396 points; Excel's agree).
   // On a slide a little closer: 0 to 10 by 2 on a 312-point plot of 18-point labels (poi bar chart), by 5 on 280.
   const float acrossPitch = ch.presentation ? 3.3f : kAcross;
+  // Labels beside an axis, their baseline below their tick, by the font's height (Builder::tall).
+  const float valueGap = kValueGap * ts * b.tall, middle = kMiddle * ts * b.tall;
   const auto acrossMost = [&](float side) { return static_cast<int>((r.right - r.left - side) / (acrossPitch * ts)); };
   float catW = 0;  // bars: the widest category name up the side
   if (bar)
     for (size_t i = 0; i < std::min<size_t>(names.size(), 64); ++i) catW = std::max(catW, b.Measure(names[i], ts).width);
-  const int most = bar ? acrossMost(std::min(catW, (r.right - r.left) * 0.4f) + kValueGap * ts)
+  const int most = bar ? acrossMost(std::min(catW, (r.right - r.left) * 0.4f) + valueGap)
                        : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook || ch.presentation ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
@@ -1219,7 +1224,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     for (double v : vticks) vlabels.push_back(b.Fit(FormatNumber(v, vformat), ts, bar ? W : sideRoom)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
     for (double v : sticks) slabels.push_back(b.Fit(FormatNumber(v, ch.secondary.format), ts, sideRoom)), sw = std::max(sw, slabels.back().width);
-  const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true, acrossMost(std::min(vw, sideRoom) + kValueGap * ts));
+  const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true, acrossMost(std::min(vw, sideRoom) + valueGap));
   const std::vector<double> xticks = scatter ? Ticks(xscale) : std::vector<double>();
   if (ch.category.shown) {
     if (scatter)
@@ -1269,11 +1274,11 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const float rightSide = beside && ch.legend == LegendPos::Right ? margin : side;
   const float sideW = bar ? cw : vw;  // labels up the left side
   const bool across = bar ? !vlabels.empty() : !clabels.empty();  // labels across the bottom
-  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : leftSide);
-  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : rightSide);
+  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + valueGap : leftSide);
+  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + valueGap : rightSide);
   // At the top too, unless value labels up a side, centred on the top gridline, need more.
-  p.r.top = r.top + ((!vlabels.empty() && !bar) || !slabels.empty() ? margin : side);
-  p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts : margin);
+  p.r.top = r.top + ((!vlabels.empty() && !bar) || !slabels.empty() ? margin * b.tall : side);
+  p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts * b.tall : margin);
   // Labels centred on the plot's left and right edges (values across the bottom, categories on the
   // tick marks) stay inside the room.
   const std::vector<Label>& bottom = bar ? vlabels : clabels;
@@ -1350,14 +1355,14 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   DrawPending(b, labels, ts, text, W, H);
 
   // Axis labels.
-  const float below = P.bottom + kLabelGap * ts + kAscent * ts;  // the baseline of labels below the plot
+  const float below = P.bottom + (kLabelGap + kAscent) * ts * b.tall;  // the baseline of labels below the plot
   for (size_t i = 0; i < vlabels.size(); ++i) {
     const Point at = p.At(0, vs.At(vticks[i]));
     if (bar) b.Place(vlabels[i], at.x, below, 1, text);
-    else b.Place(vlabels[i], P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
+    else b.Place(vlabels[i], P.left - valueGap, at.y + middle, 2, text);
   }
   for (size_t i = 0; i < slabels.size(); ++i)
-    b.Place(slabels[i], P.right + kValueGap * ts, p.At(0, ss.At(sticks[i])).y + kMiddle * ts, 0, text);
+    b.Place(slabels[i], P.right + valueGap, p.At(0, ss.At(sticks[i])).y + middle, 0, text);
   if (scatter) {
     for (size_t i = 0; i < clabels.size(); ++i)
       b.Place(clabels[i], static_cast<float>(P.left + xscale.At(xticks[i]) * (P.right - P.left)), below, 1, text);
@@ -1369,7 +1374,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
       const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Fit(catName(i), ts, catRoom) : clabels[i];
-      if (bar) b.Place(l, P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
+      if (bar) b.Place(l, P.left - valueGap, at.y + middle, 2, text);
       else b.Place(l, at.x, below, 1, text);
     }
   }
@@ -1482,6 +1487,12 @@ bool ReadChart(pugi::xml_node space, draw::Size extent, draw::ReadContext& ctx, 
 draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& colors, const std::wstring& font) {
   Builder b(size, font);
   const float W = size.width, H = size.height;
+  // On a slide the labels' room follows the font's ascent (PowerPoint's PDFs: Segoe UI's 1.08 em
+  // against Calibri's .95 moves the axis labels and the plot's edges by its 13 %); Excel's is Calibri's.
+  if (ch.presentation) {
+    const float calibri = draw::TextAscent(L"Calibri", false, false), own = draw::TextAscent(font, false, false);
+    if (calibri > 0 && own > 0) b.tall = std::clamp(own / calibri, 0.8f, 1.5f);
+  }
   if (!(W >= 1 && H >= 1 && W < 20000 && H < 20000) || ch.groups.empty()) return b.Take();
   const Color text = ch.textColor.value_or(kText);
   const float ts = std::clamp(ch.textSize, 1.0f, 72.0f), tts = std::clamp(ch.titleSize, 1.0f, 96.0f);
