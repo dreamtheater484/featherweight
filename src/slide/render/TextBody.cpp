@@ -354,6 +354,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     f.endIndent = pp.marginRight;
     // The first line never starts before the text area (marL 0 with a hanging indent: PowerPoint's PDFs).
     f.firstLineIndent = std::max(pp.indent, -pp.marginLeft);
+    // Its text then starts at -indent, the first line as if shifted to start at the edge, while the
+    // lines after it stay at marL (rlf-webinar-i 5: 36 and 33 points; business bodies 10's marL 0).
+    if (pp.marginLeft + pp.indent < 0) f.hangingStop = -pp.indent;
     for (const fw::slide::TabStop& t : pp.tabs) {
       text::TabStop ts;
       ts.position = t.position;

@@ -739,8 +739,9 @@ TabInfo LineBreaker::Impl::NextTab(float x, bool first) const {
     }
   }
   // A hanging indent is a tab stop on the first line, for list numbers.
-  if (first && f.firstLineIndent < 0 && f.startIndent > x + kEpsilon && (!found || f.startIndent < best.stop)) {
-    best = {f.startIndent, TabAlign::Start, TabLeader::None, false};
+  const float hang = f.hangingStop >= 0 ? f.hangingStop : f.startIndent;
+  if (first && (f.firstLineIndent < 0 || f.hangingStop >= 0) && hang > x + kEpsilon && (!found || hang < best.stop)) {
+    best = {hang, TabAlign::Start, TabLeader::None, false};
     found = true;
   }
   if (found) return best;
