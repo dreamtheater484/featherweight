@@ -717,6 +717,29 @@ TEST(Text_CapsSuperscriptSpacing) {
   CHECK(Lay(L"abcd abcd", spaced, width - 3).size() == 2);
 }
 
+TEST(Text_ShiftThatKeepsItsLine) {
+  // PowerPoint's a:rPr baseline moves its run's text without making the line taller (usgov-anyone
+  // 13: a title's f with a subscript c); a w:position shift makes room for it.
+  TextStyle s = Style();
+  TextStyle low = s;
+  low.size = 8;
+  low.baselineShift = -6;
+  const std::wstring text = L"ab c";
+  Paragraph p = Para(text, s);
+  p.runs = {{3, &s}, {1, &low}};
+  const float plain = Lay(L"ab ", s, 400)[0].descent;
+  auto word = Layout(TestFonts(), p, 400);
+  CHECK(word.size() == 1u);
+  if (word.size() != 1u) return;
+  CHECK(word[0].descent > plain + 1);
+  low.shiftKeepsLine = true;
+  auto slide = Layout(TestFonts(), p, 400);
+  CHECK(slide.size() == 1u);
+  if (slide.size() != 1u) return;
+  CHECK_NEAR(slide[0].descent, plain, 0.01);
+  CHECK(!slide[0].pieces.empty() && slide[0].pieces.back().rise == -6);  // drawn as low as before
+}
+
 TEST(Text_InlineObjects) {
   TextStyle s = Style();
   TextStyle picture = s;

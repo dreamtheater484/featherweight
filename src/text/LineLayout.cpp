@@ -524,8 +524,9 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.rise = rise;
     seg.level = level[pos];
     FontMetrics m = face->Metrics(seg.emSize, style.directWriteMetrics);
-    seg.ascent = m.ascent + rise;
-    seg.descent = m.descent - rise;
+    const float lineRise = style.shiftKeepsLine ? rise - style.baselineShift : rise;
+    seg.ascent = m.ascent + lineRise;
+    seg.descent = m.descent - lineRise;
     seg.lineGap = m.lineGap;
     if (style.verticalAlign != VerticalAlign::Baseline) {
       // Superscript and subscript text sizes its line as the run's text would on the baseline, at

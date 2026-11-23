@@ -167,6 +167,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     float size = fontScale < 1 ? std::max(1.f, std::round(r.size * fontScale)) : r.size;
     if (r.baseline != 0) {
       s.baselineShift = r.baseline * size;
+      s.shiftKeepsLine = true;
       size *= 2.f / 3;
     }
     s.size = std::max(0.5f, size);
