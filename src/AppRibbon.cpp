@@ -551,11 +551,10 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
         }
       }
     // Each tab: its groups fit, its KeyTips are unique.
-    // (The names are copied first: Layout replaces the ribbon's model.)
     const std::wstring was = ribbon_.Selected();
-    std::vector<std::wstring> names;
-    for (const RibbonTab& t : ribbon_.Model().tabs) names.push_back(t.name);
-    for (const std::wstring& name : names) {
+    std::vector<std::wstring> tabNames;  // Layout replaces the model: its tabs can't be walked across it
+    for (const RibbonTab& t : ribbon_.Model().tabs) tabNames.push_back(t.name);
+    for (const std::wstring& name : tabNames) {
       ribbon_.Select(name);
       Layout();
       for (const std::wstring& p : ribbon_.Problems()) problems.push_back(name + L": " + p);
