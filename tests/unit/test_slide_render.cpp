@@ -249,6 +249,34 @@ TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   CHECK_NEAR(width("marL=\"0\" indent=\"0\"", "&#8226;&#8226;"), glued, 0.01f);
 }
 
+TEST(SlideRender_BulletCharacterIsRegularInItsOwnOrTheTextsFont) {
+  // A bullet character is set regular and upright whatever the first run's bold or italic, as
+  // PowerPoint draws it (ArialMT bullets before Arial-BoldMT text); a bullet font the PC doesn't have
+  // gives way to the text's font (15-213's Noto Sans Symbols squares in the text's Calibri).
+  fw::text::Fonts probe;
+  if (!probe.Installed(L"Times New Roman")) return;
+  const auto width = [](const char* bullet, const char* rPr) {
+    const std::string pPr = bullet ? std::string("<a:pPr marL=\"0\" indent=\"0\"><a:buFont typeface=\"") + bullet +
+                                         "\"/><a:buChar char=\"a\"/></a:pPr>"
+                                   : std::string("<a:pPr marL=\"0\" indent=\"0\"><a:buNone/></a:pPr>");
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                        "<a:p>" + pPr + "<a:r><a:rPr sz=\"3600\" " + rPr +
+                                            "><a:latin typeface=\"Times New Roman\"/></a:rPr><a:t>x</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const auto bulletWidth = [&](const char* bullet, const char* rPr) { return width(bullet, rPr) - width(nullptr, rPr); };
+  const float regular = bulletWidth("Times New Roman", "b=\"0\" i=\"0\"");
+  REQUIRE(regular > 5);
+  CHECK_NEAR(bulletWidth("Times New Roman", "b=\"1\" i=\"0\""), regular, 0.05f);
+  CHECK_NEAR(bulletWidth("Times New Roman", "b=\"0\" i=\"1\""), regular, 0.05f);
+  CHECK_NEAR(bulletWidth("No Such Bullet Font", "b=\"0\" i=\"0\""), regular, 0.05f);
+}
+
 TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
   // "Adobe Garamond Pro", not installed, is drawn in Garamond (PowerPoint's PDF), not Calibri.
   fw::text::Fonts probe;

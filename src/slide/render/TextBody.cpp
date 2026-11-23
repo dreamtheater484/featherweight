@@ -283,7 +283,15 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       bp.highlight.reset();
       std::wstring t;
       if (b.kind == Bullet::Kind::Char) {
-        if (!b.font.empty()) bp.latin = bp.eastAsian = bp.complexScript = b.font;
+        // A bullet character is set upright and regular, whatever the first run's bold or italic
+        // (PowerPoint's PDFs: ArialMT bullets before Arial-BoldMT text, cybersprinters and globale;
+        // Wingdings 2 before italic, cs-2110 graphs); numbers keep them (ilo's 1. in Arial-BoldMT).
+        bp.bold = bp.italic = false;
+        // A bullet font the PC doesn't have gives way to the text's, as for numbers: 15-213's
+        // Noto Sans Symbols squares drawn in the text's Calibri (or, where it lacks the character,
+        // the usual fallback), not in Segoe UI.
+        if (!b.font.empty() && (IsSymbolFont(b.font) || fonts.Installed(b.font)))
+          bp.latin = bp.eastAsian = bp.complexScript = b.font;
         // Only the first character ("••" draws one, PowerPoint's PDF of a SmartArt list).
         t = b.character.substr(0, b.character.size() > 1 && b.character[0] >= 0xD800 && b.character[0] < 0xDC00 ? 2 : 1);
         if (IsSymbolFont(bp.latin))
