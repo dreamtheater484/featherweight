@@ -446,6 +446,20 @@ TEST(Chart_PlacedDoughnutPullsItsSlicesOut) {
   CHECK_NEAR(right.top, 100 - R, 0.5);
 }
 
+TEST(Chart_EmptyChartInADeckDrawsNothing) {
+  // A doughnut without a series: in a deck, nothing (PowerPoint's PDF of goettingen 2), not the
+  // placeholder; in a workbook or document still the placeholder (Read says no).
+  const std::string xml = std::string("<c:chartSpace") + kNs +
+                          "><c:chart><c:plotArea><c:layout/><c:doughnutChart><c:varyColors val=\"1\"/><c:holeSize val=\"50\"/>"
+                          "</c:doughnutChart></c:plotArea></c:chart><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>";
+  Parsed p(xml);
+  Chart c;
+  CHECK(!Read(p.Root(), Colors(), c));
+  REQUIRE(Read(p.Root(), Colors(), c, nullptr, true));
+  CHECK(c.groups.empty());
+  CHECK(Draw(c, {200, 100}, Colors(), L"Calibri").marks.empty());
+}
+
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
   // A chart without c:spPr or c:txPr: 10-point text and a gray border. Office 2010's look
   // (c14:style, which LibreOffice and Office 2010 and later write) draws the gridlines, axis lines
