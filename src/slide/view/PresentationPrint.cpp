@@ -262,7 +262,6 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
     for (size_t i = 0; i < slides.size(); ++i) slides[i] = i;
   }
   const std::vector<PrintPage> pages = LayoutPages(slides, deck_->SlideSize(), deck_->SlideSize(), deck_->NotesSize(), print_);
-  const float scale = dpi / 72;
   int written = 0, lost = 0, number = 0;
   // A page that can't be drawn or written is reported and skipped; the rest still come out, each
   // named by its page number.
@@ -272,10 +271,14 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
   };
   for (const PrintPage& page : pages) {
     ++number;
-    // As big as the PDF compare renders a page (pdf-compare: rounded), the page stretched to it, so
-    // the two line up to the pixel (a widescreen slide at 100 dpi: 1333 pixels, not 1334).
-    const UINT w = std::max(1u, static_cast<UINT>(std::lround(page.size.width * scale)));
-    const UINT h = std::max(1u, static_cast<UINT>(std::lround(page.size.height * scale)));
+    // As big as the PDF compare renders the exported page: its box in whole 600-dpi pixels as the PDF
+    // has it, read back as a float and rounded (pdf-compare), the page stretched to it, so the two
+    // line up to the pixel (goettingen's 960.125-point slides: 960.12, 1333 pixels at 100 dpi, not 1334).
+    const auto pixels = [&](float side) {
+      const float box = static_cast<float>(draw::PdfDocument::PowerPointBox(side));
+      return std::max(1u, static_cast<UINT>(std::lround(box * static_cast<double>(dpi) / 72)));
+    };
+    const UINT w = pixels(page.size.width), h = pixels(page.size.height);
     ComPtr<IWICBitmap> bitmap;
     ComPtr<ID2D1RenderTarget> target;
     ComPtr<ID2D1DeviceContext> dc;
