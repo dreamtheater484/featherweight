@@ -293,6 +293,18 @@ TEST(SlideRender_ShapesOwnStyleBeatsTheLayoutsNoFill) {
   CHECK_EQ(Pixel(*bmp, 250, 250), 0xFFFFFFu);  // below it
 }
 
+TEST(SlideRender_DirectWriteMetricsAgreeWithGdisForCalibri) {
+  // Slide text takes DirectWrite's line metrics (a font's typo metrics when its USE_TYPO_METRICS
+  // bit asks, as PowerPoint does: embedded Public Sans); for Calibri both say the same, so slides
+  // in it don't move.
+  fw::text::Fonts fonts;
+  const fw::text::Face* calibri = fonts.Get(L"Calibri", DWRITE_FONT_WEIGHT_NORMAL, false);
+  if (!calibri) return;
+  const fw::text::FontMetrics gdi = calibri->Metrics(18), dw = calibri->Metrics(18, true);
+  CHECK_NEAR(dw.ascent, gdi.ascent, 0.01f);
+  CHECK_NEAR(dw.descent, gdi.descent, 0.01f);
+}
+
 TEST(SlideRender_KernsOnlyByTheKernTable) {
   // kern="1200": Arial (a 'kern' table) is kerned, Georgia (OpenType pairs only) isn't, as in
   // PowerPoint's PDFs.
