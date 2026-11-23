@@ -482,8 +482,10 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
   Levels lv = Defaults(c);
   // Placeholders start from the master's text styles alone; only text boxes and shapes start from
   // the presentation's default text style (PowerPoint 2021: corpus decks whose default style is
-  // bold italic show regular placeholder text).
-  if (!shape.placeholder) ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
+  // bold italic show regular placeholder text). SmartArt's text (a dsp:sp's) doesn't either: rlf
+  // webinar iv's bold default style leaves its SmartArt regular in PowerPoint's PDF.
+  const bool smartArt = NamespaceOf(shape.node) == kDsp;
+  if (!shape.placeholder && !smartArt) ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
   // The master's text style for this kind of text.
   if (const Master* m = MasterOf(owner)) {
     pugi::xml_node style;
