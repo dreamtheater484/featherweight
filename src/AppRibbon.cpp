@@ -593,8 +593,12 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     // The whole window's frame after a switch is reported too (the page is the tab's, not the
     // ribbon's; with --gpu as on screen). Each tab and width counts its best of five rounds, and
     // the thread's own CPU time is measured beside the clock (its cycles, at the rate the best of a
-    // few short spins shows): while other programs keep every core busy (parallel builds, ctest -j)
-    // the clock runs on as this thread waits, so a run fails only when both pass 16 ms.
+    // few short spins shows). `ribbonbench` is the budget on a quiet PC (r1-ribbonbench.ps1 in a
+    // quiet window): the clock within 16 ms. `ribbonbench:<ms>` is ctest's sanity check while other
+    // sessions build (r1-plan decision): it fails only when both the clock and the CPU time pass <ms>.
+    int limit = 16;
+    const bool loose = !arg.empty() && fw::ParseInt(arg, limit) && limit > 0;
+    if (!loose) limit = 16;
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
     auto now = [] {
@@ -678,9 +682,12 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     const Time sw = worst(switches), lw = worst(layouts), fw = worst(frames);
     fwprintf(stderr,
              L"ribbonbench: %d tabs, switch worst %.2f ms (CPU %.2f), relayout worst %.2f ms (CPU %.2f) (the whole frame "
-             L"after a switch: %.2f ms; best of %d rounds each, slowest single round %.2f ms)\n",
-             static_cast<int>(names.size()), sw.wall, sw.cpu, lw.wall, lw.cpu, fw.wall, kRounds, slowest);
-    if ((sw.wall > 16 && sw.cpu > 16) || (lw.wall > 16 && lw.cpu > 16)) scriptFailed_ = true;
+             L"after a switch: %.2f ms; best of %d rounds each, slowest single round %.2f ms); limit %d ms%s\n",
+             static_cast<int>(names.size()), sw.wall, sw.cpu, lw.wall, lw.cpu, fw.wall, kRounds, slowest, limit,
+             loose ? L" (clock and CPU)" : L"");
+    const bool over = loose ? (sw.wall > limit && sw.cpu > limit) || (lw.wall > limit && lw.cpu > limit)
+                            : sw.wall > limit || lw.wall > limit;
+    if (over) scriptFailed_ = true;
     return true;
   }
 #endif

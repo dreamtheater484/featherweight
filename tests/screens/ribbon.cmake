@@ -5,8 +5,9 @@
 # screens: off-screen snapshots of the widget gallery's demo ribbon and of the three editors at
 #   1366, 1024 and 800 px, light and dark, with `ribboncheck` (every item runs a named command,
 #   every group fits the window, KeyTips are unique) on the gallery; KeyTips, the File page, a
-#   collapsed ribbon, a gallery's grid and a contextual tab; and `ribbonbench` (switching tabs and
-#   laying out again within 16 ms).
+#   collapsed ribbon, a gallery's grid and a contextual tab; and `ribbonbench:100` (switching tabs
+#   and laying out again: a sanity limit while other sessions build; the 16-ms budget is measured on
+#   a quiet PC by FeatherweightNotes\r1\r1-ribbonbench.ps1, r1-plan decision).
 # word, sheet, slide: an editor's coverage check, `ribboncheck:<baseline>`: the same checks on its
 #   ribbon, and every command its toolbar and ⋯ menu reached before R1 (tests/ribbon/*.txt, made
 #   with `dumpreach`) reachable from the ribbon, the File page, a right-click menu or Alt+Q. The
@@ -53,7 +54,7 @@ if(MODE STREQUAL "screens")
   run(gallery-grid 1366x768 light "galleryribbon:on;keytips:HL" --widget-gallery)
   run(gallery-contextual 1024x700 dark "galleryribbon:table;ribbon:Table Design;ribboncheck" --widget-gallery)
   run(gallery-folded 560x600 light "galleryribbon:on;ribboncheck" --widget-gallery)
-  run(gallery-bench 1366x768 light "galleryribbon:table;ribbonbench" --widget-gallery)
+  run(gallery-bench 1366x768 light "galleryribbon:table;ribbonbench:100" --widget-gallery)  # 16 ms: r1-ribbonbench.ps1, quiet PC
   run(gallery-icons-light 1366x900 light "galleryicons:on" --widget-gallery)
   run(gallery-icons-dark 1366x900 dark "galleryicons:on" --widget-gallery)
   message(STATUS "ribbon screens: ${OUT}")
