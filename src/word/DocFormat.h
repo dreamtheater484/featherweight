@@ -45,6 +45,14 @@ class DocFormat {
   void Execute(int cmd);
   // The toolbar's editing groups, after Save and Print.
   void AddToolbar(ToolbarModel& m);
+  // The boxes and color buttons the toolbar and the ribbon show, filled from the selection: the
+  // styles (with the style box's last items), the font, the size, the font or highlight color,
+  // and Insert date and time (today in the region's formats).
+  ToolItem StyleBox();
+  ToolItem FontBox();
+  ToolItem SizeBox();
+  ToolItem ColorButton(bool highlight);
+  ToolItem DateBox();
   // Insert ▾'s first item, Picture… (the tab opens its file dialog).
   std::function<void()> insertPicture;
   // More of Insert ▾, after Picture…: page layout's breaks (DocPage), each its label and action.

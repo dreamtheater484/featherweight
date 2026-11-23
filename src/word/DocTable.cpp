@@ -358,31 +358,13 @@ class DocTable::Panel : public PanelContent {
     drop(borders_, L"Borders", kBorders);
     borders_.placeholder = L"Choose borders";
     borders_.onChange = [this](int i) {
-      static constexpr Editor::CellBorders kWhich[] = {Editor::CellBorders::All,    Editor::CellBorders::Outside,
-                                                       Editor::CellBorders::Inside, Editor::CellBorders::None,
-                                                       Editor::CellBorders::Top,    Editor::CellBorders::Bottom,
-                                                       Editor::CellBorders::Left,   Editor::CellBorders::Right};
       borders_.selected = -1;
-      if (i < 0 || i >= 8) return;
-      auto [a, f] = t_.host_.selection();
-      t_.Keep(t_.editor_.SetCellBorders(a, f, kWhich[i]));
+      t_.BorderCells(i);
     };
     shading_.label = shading_.tooltip = L"Shading";
     shading_.automaticLabel = L"No color";
     shading_.automatic = true;
-    shading_.onChange = [this](D2D1_COLOR_F c, bool automatic) {
-      auto [a, f] = t_.host_.selection();
-      edit::PropEdit e;
-      if (automatic) {
-        e.Remove("shd");
-      } else {
-        wchar_t hex[8];
-        swprintf_s(hex, L"%02X%02X%02X", static_cast<int>(std::lround(c.r * 255)), static_cast<int>(std::lround(c.g * 255)),
-                   static_cast<int>(std::lround(c.b * 255)));
-        e.Set("shd", {{"val", "clear"}, {"color", "auto"}, {"fill", fw::WideToUtf8(hex)}});
-      }
-      t_.Keep(t_.editor_.SetCellProps(a, f, e));
-    };
+    shading_.onChange = [this](D2D1_COLOR_F c, bool automatic) { t_.ShadeCells(c, automatic); };
     drop(split_, L"Split cells", kSplit);
     split_.placeholder = L"Choose";
     split_.onChange = [this](int i) {
@@ -531,7 +513,9 @@ DocTable::DocTable(Editor& editor, Host host) : editor_(editor), host_(std::move
 
 DocTable::~DocTable() = default;
 
-bool DocTable::Owns(int cmd) { return cmd >= CmdTableGrid && cmd <= CmdTableProperties; }
+bool DocTable::Owns(int cmd) {
+  return (cmd >= CmdTableGrid && cmd <= CmdTableProperties) || cmd == CmdCellShading || cmd == CmdCellBorders;
+}
 
 std::vector<int> DocTable::CommandIds() {
   std::vector<int> ids;
@@ -565,6 +549,11 @@ CommandState DocTable::Query(int cmd) {
     case CmdTableHeaderRow:
       s.enabled = can && cell.has_value();
       s.checked = cell && Doc().ResolvedRow(cell->tr).header;
+      break;
+    case CmdCellShading:
+    case CmdCellBorders:
+      s.label = cmd == CmdCellShading ? L"Shading" : L"Borders";
+      s.enabled = can && cell.has_value();
       break;
     default: s.enabled = can && cell.has_value(); break;
   }
@@ -624,7 +613,76 @@ void DocTable::Execute(int cmd) {
       Keep(editor_.SetRowProps(a, f, e));
       return;
     }
+    case CmdCellShading: ShadeCells(shading_, noShading_); return;
+    case CmdCellBorders: BorderCells(borders_); return;
   }
+}
+
+void DocTable::ShadeCells(D2D1_COLOR_F c, bool automatic) {
+  auto [a, f] = host_.selection();
+  edit::PropEdit e;
+  if (automatic) {
+    e.Remove("shd");
+  } else {
+    wchar_t hex[8];
+    swprintf_s(hex, L"%02X%02X%02X", static_cast<int>(std::lround(c.r * 255)), static_cast<int>(std::lround(c.g * 255)),
+               static_cast<int>(std::lround(c.b * 255)));
+    e.Set("shd", {{"val", "clear"}, {"color", "auto"}, {"fill", fw::WideToUtf8(hex)}});
+  }
+  Keep(editor_.SetCellProps(a, f, e));
+}
+
+void DocTable::BorderCells(int which) {
+  static constexpr Editor::CellBorders kWhich[] = {Editor::CellBorders::All,    Editor::CellBorders::Outside,
+                                                   Editor::CellBorders::Inside, Editor::CellBorders::None,
+                                                   Editor::CellBorders::Top,    Editor::CellBorders::Bottom,
+                                                   Editor::CellBorders::Left,   Editor::CellBorders::Right};
+  if (which < 0 || which >= static_cast<int>(std::size(kWhich))) return;
+  auto [a, f] = host_.selection();
+  Keep(editor_.SetCellBorders(a, f, kWhich[which]));
+}
+
+ToolItem DocTable::GridItem() {
+  ToolItem t;
+  t.kind = ToolKind::Custom;
+  t.control = grid_.get();
+  t.cmd = CmdTableGrid;
+  t.width = 52;
+  t.tooltip = L"Insert table";
+  t.enabled = editor_.CanEdit();
+  return t;
+}
+
+ToolItem DocTable::ShadingButton() {
+  ToolItem t;
+  t.kind = ToolKind::SplitButton;
+  t.cmd = CmdCellShading;
+  t.colors = true;
+  t.color = shading_;
+  t.automatic = noShading_;
+  t.automaticLabel = L"No color";
+  t.enabled = Query(CmdCellShading).enabled;
+  t.onChange = [this](const ToolValue& v) {
+    shading_ = v.color;
+    noShading_ = v.automatic;
+    ShadeCells(v.color, v.automatic);
+  };
+  return t;
+}
+
+ToolItem DocTable::BordersButton() {
+  ToolItem t;
+  t.kind = ToolKind::SplitButton;
+  t.cmd = CmdCellBorders;
+  t.choices = kBorders;
+  t.choice = borders_;
+  t.enabled = Query(CmdCellBorders).enabled;
+  t.onChange = [this](const ToolValue& v) {
+    if (v.index < 0 || v.index >= static_cast<int>(kBorders.size())) return;
+    borders_ = v.index;
+    BorderCells(v.index);
+  };
+  return t;
 }
 
 void DocTable::Insert(uint32_t rows, uint32_t cols) {
@@ -678,14 +736,8 @@ std::vector<int32_t> DocTable::ContentWidths(const Editor::CellInfo& at) const {
 void DocTable::AddToolbar(ToolbarModel& m) {
   const auto cell = Cell();
   if (!cell) {
-    ToolItem t;
-    t.kind = ToolKind::Custom;
-    t.control = grid_.get();
-    t.cmd = CmdTableGrid;
-    t.width = 52;
+    ToolItem t = GridItem();
     t.priority = 2;
-    t.tooltip = L"Insert table";
-    t.enabled = editor_.CanEdit();
     m.left.push_back(t);
     return;
   }
