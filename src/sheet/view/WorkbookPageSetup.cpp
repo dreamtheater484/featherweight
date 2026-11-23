@@ -913,26 +913,19 @@ bool WorkbookView::PageSetupCommand(int cmd) {
   return true;
 }
 
-// The toolbar's print group: Page setup, its arrow the scaling shortcuts of Excel's print screen, from
-// the sheet as from print preview (s4-corpus's W3: all columns on one page took two steps more).
-void WorkbookView::AddPageSetupToolbar(ToolbarModel& m) {
-  ToolItem t;
-  t.cmd = CmdPageSetup;
-  t.glyph = icon::Settings;
-  t.tooltip = L"Page setup";
-  t.enabled = Ready();
-  t.priority = 6;
-  if (Ready() && !ChartSheet()) {
-    t.kind = ToolKind::SplitButton;
-    t.width = 52;
-    t.tooltip = L"Page setup and scaling";
-    t.choices.assign(std::begin(kScalings), std::end(kScalings));
-    t.choice = ScalingOf(Current());
-    t.onChange = [this](const ToolValue& v) {
-      if (v.index >= 0 && v.index < static_cast<int>(std::size(kScalings))) PageSetupCommand(CmdNoScaling + v.index);
-    };
+int WorkbookView::ScalingNow() const { return Ready() && !ChartSheet() ? ScalingOf(Current()) : -1; }
+
+int WorkbookView::MarginsNow() const {
+  if (!Ready()) return -1;
+  const PageMargins& p = Current().Page().margins;
+  auto same = [](double a, double b) { return std::abs(a - b) < 0.005; };
+  for (int i = 0; i < static_cast<int>(std::size(kMargins)); ++i) {
+    const MarginPreset& m = kMargins[i];
+    if (same(p.top, m.top) && same(p.bottom, m.bottom) && same(p.left, m.left) && same(p.right, m.right) &&
+        same(p.header, m.header) && same(p.footer, m.footer))
+      return i;
   }
-  m.left.push_back(t);
+  return -1;
 }
 
 void WorkbookView::AddPageSetupTabItems(HMENU m) {

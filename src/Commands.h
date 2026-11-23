@@ -445,10 +445,54 @@ enum Cmd : int {
   // The ribbon (R1, r1-control): 3600-3649.
   CmdRibbonCollapse = 3600,  // Ctrl+F1: the ribbon shows only its tabs, or all of it again
   CmdFilePage,               // the File tab: the File page (New, Open, Save, Print, options)
+  // The document's ribbon (R1, r1-word): 3650-3699. Word's boxes and buttons for what Featherweight
+  // had only in a panel.
+  CmdIndentLeftBox = 3650,  // Layout > Paragraph: the selection's paragraphs' left indent
+  CmdIndentRightBox,
+  CmdSpaceBeforeBox,        // and their spacing before and after
+  CmdSpaceAfterBox,
+  CmdCellShading,           // Table Design > Shading: the selected cells' color (the last one picked)
+  CmdCellBorders,           // Table Design > Borders: the selected cells' borders (the last ones picked)
+  CmdObjectHeightBox,       // Picture and Shape Format > Size: the selected one's height and width
+  CmdObjectWidthBox,
+  CmdRowHeightBox,          // Table Layout > Cell Size: the selected rows' height, the columns' width
+  CmdColumnWidthBox,
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
   CmdPivotTable,           // Insert > PivotTable: its panel
+
+  // The workbook's ribbon (R1, r1-sheet): 3700-3749. What Excel's buttons do that Featherweight
+  // did only in Format Cells or the Page Setup panel, and the ribbon's menus (their lists come
+  // from WorkbookView::FillMenu or the item's `menu`).
+  CmdFormatCellsFont = 3700,  // Home > Font's launcher: Format Cells on its Font page
+  CmdFormatCellsAlignment,    // Home > Alignment's launcher
+  CmdAlignTop,                // the cells' vertical alignment (a second click: bottom again)
+  CmdAlignMiddle,
+  CmdAlignBottom,
+  CmdWrapText,                // on or off
+  CmdNumAccounting,           // Accounting Number Format
+  CmdCommaStyle,              // the Comma cell style
+  CmdViewNormal,              // View > Normal: page break preview and print preview off
+  CmdCellsFormatMenu = 3720,  // Home > Cells > Format ▾
+  CmdFillMenu,                // Home > Editing > Fill ▾
+  CmdClearMenu,               // Clear ▾
+  CmdSortFilterMenu,          // Sort & Filter ▾
+  CmdFindSelectMenu,          // Find & Select ▾
+  CmdShapesMenu,              // Insert > Shapes ▾
+  CmdColumnChartMenu,         // Insert > Charts: Column or Bar ▾, Line or Area ▾, Pie or Doughnut ▾
+  CmdLineChartMenu,
+  CmdPieChartMenu,
+  CmdMarginsMenu,             // Page Layout: Margins ▾, Orientation ▾, Print Area ▾, Breaks ▾
+  CmdOrientationMenu,
+  CmdPrintAreaMenu,
+  CmdBreaksMenu,
+  CmdScaleWidth,              // Scale to Fit: Width ▾ and Height ▾ (Automatic or 1 page)
+  CmdScaleHeight,
+  CmdNotesMenu,               // Review > Notes ▾
+  CmdFreezeMenu,              // View > Freeze Panes ▾
+  CmdPrintWhatMenu,           // Print Preview: what prints ▾, Scaling ▾
+  CmdScalingMenu,
 
   // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
   CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
@@ -461,7 +505,7 @@ enum Cmd : int {
   CmdCopySlidePicture,
   CmdCopyNotes,
   CmdOpenSlideLink,              // the link under the right-click
-  CmdPrintLayoutMenu,            // the toolbar's Print layout ▾
+  CmdPrintLayoutMenu,            // before R1, the toolbar's Print layout ▾ (now File › Print's settings)
   CmdPrintSlides,                // what Print and Export PDF lay out: slides,
   CmdPrintHandouts1,             // handouts with 1, 2, 3, 4, 6 or 9 slides a page (in that order),
   CmdPrintHandouts2,
@@ -476,7 +520,7 @@ enum Cmd : int {
   // Slides in the presentation tab (P2, p2-slides): 3420-3459. Cut, copy, paste, delete and select
   // all in the thumbnails use CmdCut, CmdCopy, CmdPaste, CmdSlideDelete and CmdSelectAll.
   CmdSlideNew = 3420,            // Ctrl+M: after the current slide, on the layout the gallery shows first
-  CmdSlideNewMenu,               // the toolbar's ＋ Slide ▾: the layout gallery
+  CmdSlideNewMenu,               // the ribbon's New Slide ▾: a new slide as Ctrl+M; its arrow the layouts
   CmdSlideDuplicate,             // Ctrl+D: the selected slides, after the last of them
   CmdSlideDelete,                // Delete in the thumbnails
   CmdSlideHide,                  // the selected slides skipped by the show, or shown again
@@ -534,4 +578,20 @@ enum Cmd : int {
   CmdTableMergeCells,            // the cells chosen in a table (text editing's) become one
   CmdTableSplitCell,             // a merged cell back into its cells
   CmdTableLayoutMenu,            // the toolbar's Layout dropdown with a table selected
+  // The presentation's ribbon (R1, r1-slide): 3750-3799.
+  CmdApplyTheme = 3750,          // Design > Themes: + index into BuiltInThemes() (up to 10), every slide
+  CmdApplyColors = 3760,         // Design > Variants > Colors: + index into ColorSchemes() (up to 25)
+  CmdSlideNoShadow = 3785,       // Shape Effects > No shadow (CmdObjectShadow puts one on)
+  // The ribbon's menu buttons (their menus list commands; the button itself runs none).
+  CmdSlideAlignMenu,             // Arrange > Align ▾
+  CmdSlideGroupMenu,             // Arrange > Group ▾
+  CmdSlideRotateMenu,            // Arrange > Rotate ▾
+  CmdSlideEffectsMenu,           // Shape Effects ▾, Picture Effects ▾
+  CmdSlideTableDeleteMenu,       // Table Layout > Delete ▾
+  CmdSlideSelectMenu,            // Home > Editing > Select ▾
+  CmdSlideSizeMenu,              // Design > Slide Size ▾
+  CmdSlideColorsMenu,            // Design > Variants > Colors ▾
+  CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
+  CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
+  CmdSlideZoomMenu,              // View > Zoom ▾
 };

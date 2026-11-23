@@ -79,6 +79,7 @@ class SheetObjects {
     bool chart = false;
     bool prints = true;  // false: set not to print (xdr:clientData fPrintsWithSheet="0")
     uint32_t id = 0;     // its shape id (the anchor's first cNvPr id), which edits name it by
+    bool picture = false;  // a picture (xdr:pic): the ribbon's Picture Format, not Shape Format
   };
   std::vector<Object> Objects() const;
 

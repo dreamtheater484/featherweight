@@ -14,6 +14,10 @@
 #include "ui/SidePanel.h"
 #include "ui/Toolbar.h"
 
+namespace fw::doc::edit {
+struct ParaFormat;
+}
+
 // Page layout in the Word tab (plan §6.2 "Page layout", milestone D3).
 //  - The Page setup panel (the side panel, from ⋯ or the Layout menu): paper size, orientation,
 //    margins, columns, how the section starts, for the sections the selection is in or the whole
@@ -55,13 +59,14 @@ class DocPage {
   static std::vector<int> CommandIds();
   // Ctrl+Enter and Ctrl+Shift+Enter (breaks), Ctrl+- and Ctrl+Shift+- (hyphens), or 0.
   static int Shortcut(UINT vk, UINT mods);
-  // The breaks Insert ▾ offers, after Picture….
-  static const std::vector<int>& InsertCommands();
 
   CommandState Query(int cmd);
   void Execute(int cmd);
-  // The Layout menu, after the formatting groups.
-  void AddToolbar(ToolbarModel& m);
+  // The ribbon's Layout tab: Size ▾ (the paper sizes, the current one checked, then More paper
+  // sizes…), and Paragraph's boxes (CmdIndentLeftBox... CmdSpaceAfterBox) for the selection's
+  // paragraphs, showing the first one's.
+  ToolItem SizeMenu();
+  ToolItem ParaSpin(int cmd);
   // Whether the side panel shows one of this one's (to close it when the tab goes).
   bool ShowsIn(const PanelContent* shown) const;
 
@@ -79,6 +84,9 @@ class DocPage {
   void SectionBreak(fw::doc::SectionStart start);
   void Break(bool column);
   void Hyphen(bool nonBreaking);  // Ctrl+- and Ctrl+Shift+-, over the selection
+  // Paragraph formatting for the selection's paragraphs, as one undo step (the Paragraph panel and
+  // the ribbon's boxes).
+  void FormatParas(const fw::doc::edit::ParaFormat& f);
 
   fw::doc::edit::Editor& editor_;
   Host host_;

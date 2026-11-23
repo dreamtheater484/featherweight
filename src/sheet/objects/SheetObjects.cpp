@@ -394,7 +394,7 @@ std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
     if (!(it.chart ? Empty(it.rect) : Flat(it.rect)) && !(it.drawing && it.drawing->IsHidden()))
-      out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id});
+      out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id, LocalNameOf(it.node) == "pic"});
   return out;
 }
 

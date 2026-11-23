@@ -127,13 +127,15 @@ struct RunProps {
 };
 
 struct TextRun {
-  enum class Kind : uint8_t { Text, Break, Field };
+  enum class Kind : uint8_t { Text, Break, Field, Math };
   Kind kind = Kind::Text;
-  std::wstring text;  // Text, Field (a field's text resolved where the model can: slide numbers)
-  RunProps props;
+  std::wstring text;  // Text, Field (a field's text resolved where the model can: slide numbers);
+                      // Math: its m:t texts, for search and plain text
+  RunProps props;     // Math: its first m:r's a:rPr on the paragraph's
   std::string fieldType;  // Field: "slidenum", "datetime1"…; its text is what the file stored,
                           // except slide numbers, which are the slide's
-  pugi::xml_node node;    // a:r, a:br or a:fld
+  pugi::xml_node node;    // a:r, a:br or a:fld; Math: the m:oMathPara (a display equation, a line of
+                          // its own) or m:oMath (inline) inside a14:m
 };
 
 struct Paragraph {

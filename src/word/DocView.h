@@ -95,6 +95,11 @@ class DocView : public PagedView {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
+  // Word's tabs and contextual tabs (DocRibbon.cpp).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
+  // ribbon:dump (the model, for checks) and ribbon:check (every item runs a command the tab knows,
+  // and every command the old toolbar and ⋯ menu reached is reachable again), on stderr.
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
 
   bool HasStatusBar() const override { return Ready(); }
@@ -300,7 +305,6 @@ class DocView : public PagedView {
   // The commands, toolbar items and context menu entries of D3.
   bool ExecuteD3(int cmd);
   std::optional<CommandState> QueryD3(int cmd);
-  void AddD3Toolbar(ToolbarModel& m);
   void FillD3Menu(HMENU m, int x, int y);
   // The commands, keys and context menu entries of D4: footnotes, endnotes, tables of contents
   // (DocNotes.cpp).
@@ -330,6 +334,13 @@ class DocView : public PagedView {
   std::vector<Heading> Headings() const;
   void GoTo(TextPos at, TextPos to);
   std::optional<HeaderEdit> hf_;
+  // The ribbon: the picture or shape just inserted, whose tab shows once; inserting one now; every
+  // contextual tab built, for ribbon:check.
+  uint32_t ribbonInserted_ = fw::doc::kNone;
+  // Picture and Shape Format > Size: the selected one's height or width (a picture keeps its shape).
+  ToolItem ObjectSizeBox(bool height);
+  bool inserting_ = false;
+  bool ribbonAll_ = false;
   TextPos bodyCaret_;  // where the caret was in the body before a header was edited
   bool marks_ = false;
   std::unique_ptr<LinkPanel> linkPanel_;
@@ -343,7 +354,6 @@ class DocView : public PagedView {
   enum class Markup : uint8_t { Simple, All, None, Original };  // Word's four views of changes
   bool ExecuteD4(int cmd);
   std::optional<CommandState> QueryD4(int cmd);
-  void AddD4Toolbar(ToolbarModel& m);
   void FillD4Menu(HMENU m);
   // The tracked change after (or before) the caret, selected: in its story, then the next story.
   bool GoToChange(bool back);
@@ -392,7 +402,7 @@ class DocView : public PagedView {
   friend class DocStyles;  // its panels' buttons
 
   // ---- Content controls and form fields (DocForms.cpp, D4)
-  static std::vector<int> FormCommands();  // Insert ▾'s content controls
+  static std::vector<int> FormCommands();  // the Developer tab's content controls
   std::optional<CommandState> QueryForms(int cmd);
   bool ExecuteForms(int cmd);
   // A plain click at `pos` (x, y in the window): a check box ticks, a placeholder is selected whole
@@ -452,7 +462,6 @@ class DocView : public PagedView {
   std::optional<CommandState> QueryPicture(int cmd);
   bool ExecutePicture(int cmd);
   void SetPictureWrap(fw::doc::edit::Wrap wrap);
-  void AddPictureToolbar(ToolbarModel& m);
   void FillPictureMenu(HMENU m);
   // The Picture panel shows the selected picture.
   void SyncPicturePanel();

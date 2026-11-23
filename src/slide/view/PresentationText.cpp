@@ -69,7 +69,7 @@ namespace {
 
 constexpr int kCommands[] = {CmdBold, CmdItalic, CmdUnderline, CmdStrike, CmdSubscript, CmdSuperscript, CmdGrowFont,
                              CmdShrinkFont, CmdGrowFontPoint, CmdShrinkFontPoint, CmdClearCharFormat, CmdFontColor,
-                             CmdHighlightColor, CmdCopyFormat, CmdPasteFormat, CmdAlignLeft, CmdAlignCenter, CmdAlignRight,
+                             CmdHighlightColor, CmdCopyFormat, CmdPasteFormat, CmdFormatPainter, CmdAlignLeft, CmdAlignCenter, CmdAlignRight,
                              CmdAlignJustify, CmdSpacing1, CmdSpacing15, CmdSpacing2, CmdBullets, CmdNumbering, CmdIndent,
                              CmdOutdent, CmdChangeCase, CmdRemoveLink, CmdCut, CmdCopy, CmdPaste, CmdPasteMerge,
                              CmdSelectAll, CmdSpellIgnore, CmdSpellAdd};
@@ -441,6 +441,25 @@ void TextEditing::MouseMove(draw::Point at) {
   host_.ViewStateChanged();
 }
 
+void TextEditing::MouseUp() {
+  if (!painter_ || !session_) return;
+  painter_ = false;  // the format painter's look onto what was clicked or selected (the word at a click)
+  format::ApplyLook(*session_, copiedLook_.first_child());
+  Changed();
+}
+
+bool TextEditing::Names(int cmd) {
+  return cmd == CmdFontBox || cmd == CmdSizeBox || cmd == CmdInsertLink ||
+         std::find(std::begin(kCommands), std::end(kCommands), cmd) != std::end(kCommands);
+}
+
+std::vector<int> TextEditing::CommandIds() {
+  std::vector<int> out(std::begin(kCommands), std::end(kCommands));
+  out.erase(std::remove_if(out.begin(), out.end(), [](int c) { return c == CmdSpellIgnore || c == CmdSpellAdd; }), out.end());
+  out.push_back(CmdInsertLink);
+  return out;
+}
+
 bool TextEditing::CellUnder(draw::Point at, int& row, int& column) const {
   if (!session_ || !deck_ || !session_->Target().Cell()) return false;
   render::SlideRender* r = deck_->Rendered(session_->Target().slide);
@@ -489,6 +508,10 @@ bool TextEditing::KeyDown(UINT vk, UINT mods) {
         s.Tab(shift);
         break;
       case VK_ESCAPE:
+        if (painter_) {  // Esc first puts the format painter down
+          painter_ = false;
+          break;
+        }
         // The text is left; the shape stays selected (the tab asks TakeLeft for it).
         left_ = s.Target().notes ? 0 : s.Target().shape;
         End();
@@ -687,9 +710,9 @@ CommandState TextEditing::Query(int cmd) {
     s.shortcut = L"F7";
     return s;
   }
-  if (!session_) return s;
-  const TextLook look = LookOf(*session_);
-  s.enabled = true;
+  // Without text being edited each command keeps its name, unavailable (the ribbon shows them).
+  const TextLook look = session_ ? LookOf(*session_) : TextLook{};
+  s.enabled = session_ != nullptr;
   auto label = [&](const wchar_t* l, const wchar_t* keys) {
     s.label = l;
     s.shortcut = keys;
@@ -710,6 +733,7 @@ CommandState TextEditing::Query(int cmd) {
     case CmdHighlightColor: label(L"Highlight", L""); break;
     case CmdCopyFormat: label(L"Copy formatting", L"Ctrl+Shift+C"); break;
     case CmdPasteFormat: label(L"Paste formatting", L"Ctrl+Shift+V"), s.enabled = !copiedLook_.first_child().empty(); break;
+    case CmdFormatPainter: label(L"Format painter", L""), s.checked = painter_; break;
     case CmdAlignLeft: label(L"Align left", L"Ctrl+L"), s.checked = look.align == TextAlign::Left; break;
     case CmdAlignCenter: label(L"Center", L"Ctrl+E"), s.checked = look.align == TextAlign::Center; break;
     case CmdAlignRight: label(L"Align right", L"Ctrl+R"), s.checked = look.align == TextAlign::Right; break;
@@ -724,11 +748,13 @@ CommandState TextEditing::Query(int cmd) {
     case CmdChangeCase: label(L"Change case", L"Shift+F3"); break;
     case CmdInsertLink: label(look.link ? L"Edit link" : L"Link", L"Ctrl+K"); break;
     case CmdRemoveLink: label(L"Remove link", L""), s.enabled = look.link; break;
-    case CmdCut: label(L"Cut", L"Ctrl+X"), s.enabled = session_->HasSelection(); break;
-    case CmdCopy: label(L"Copy", L"Ctrl+C"), s.enabled = session_->HasSelection(); break;
+    case CmdCut: label(L"Cut", L"Ctrl+X"), s.enabled = session_ && session_->HasSelection(); break;
+    case CmdCopy: label(L"Copy", L"Ctrl+C"), s.enabled = session_ && session_->HasSelection(); break;
     case CmdPaste: label(L"Paste", L"Ctrl+V"), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
     case CmdPasteMerge: label(L"Paste as text", L""), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
     case CmdSelectAll: label(L"Select all", L"Ctrl+A"); break;
+    case CmdFontBox: label(L"Font", L""); break;
+    case CmdSizeBox: label(L"Font size", L""); break;
     case CmdSpellIgnore: label(L"Ignore all", L""), s.enabled = menuWord_.has_value(); break;
     case CmdSpellAdd: label(L"Add to dictionary", L""), s.enabled = menuWord_.has_value(); break;
     default:
@@ -736,6 +762,7 @@ CommandState TextEditing::Query(int cmd) {
         s.label = suggestions_[cmd - CmdSpellSuggest];
       break;
   }
+  if (!session_) s.enabled = s.checked = false;
   return s;
 }
 
@@ -759,6 +786,10 @@ bool TextEditing::Execute(int cmd) {
     case CmdHighlightColor: format::Highlight(s, draw::Color{1, 1, 0, 1}); break;
     case CmdCopyFormat: format::CopyLook(s, copiedLook_); break;
     case CmdPasteFormat: format::ApplyLook(s, copiedLook_.first_child()); break;
+    case CmdFormatPainter:  // the look now; the next click or selection in text gets it (MouseUp)
+      if (!painter_) format::CopyLook(s, copiedLook_);
+      painter_ = !painter_ && !copiedLook_.first_child().empty();
+      break;
     case CmdAlignLeft: format::Align(s, TextAlign::Left); break;
     case CmdAlignCenter: format::Align(s, TextAlign::Center); break;
     case CmdAlignRight: format::Align(s, TextAlign::Right); break;
@@ -814,92 +845,101 @@ void TextEditing::Paste(bool textOnly) {
   fw::slide::view::Paste(*session_, *model_, html, rtf, util::GetClipboardText(), textOnly);
 }
 
-void TextEditing::AddToolbar(ToolbarModel& m) {
-  if (!session_) return;
-  const TextLook look = LookOf(*session_);
-  auto toggle = [&](int cmd, wchar_t glyph, int priority) {
-    const CommandState q = Query(cmd);
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.checked = q.checked;
-    t.toggle = true;
-    t.priority = priority;
-    return t;
-  };
-  if (DocFormat::FontsPending()) DocFormat::ReadFonts();
-  ToolItem font;
-  font.kind = ToolKind::ComboBox;
-  font.cmd = CmdFontBox;
-  font.width = 116;
-  font.priority = 6;
-  font.tooltip = L"Font";
-  font.sepBefore = true;
-  font.choices = DocFormat::FontNames();
-  font.text = look.font.value_or(L"");
-  font.onChange = [this](const ToolValue& v) {
-    if (session_ && !v.text.empty()) format::Font(*session_, v.text);
-    Changed();
-  };
-  m.left.push_back(font);
-  ToolItem size;
-  size.kind = ToolKind::ComboBox;
-  size.cmd = CmdSizeBox;
-  size.width = 56;
-  size.priority = 6;
-  size.tooltip = L"Font size";
-  for (int v : {8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96})
-    size.choices.push_back(std::to_wstring(v));
-  if (look.size) {
-    wchar_t buf[16];
-    swprintf(buf, 16, L"%g", std::round(*look.size * 10) / 10);
-    size.text = buf;
-  }
-  size.validate = [](std::wstring& text) {
-    wchar_t* end = nullptr;
-    const double v = std::wcstod(text.c_str(), &end);
-    return end != text.c_str() && v >= 1 && v <= 4000;
-  };
-  size.onChange = [this](const ToolValue& v) {
-    if (session_) format::Size(*session_, static_cast<float>(std::wcstod(v.text.c_str(), nullptr)));
-    Changed();
-  };
-  m.left.push_back(size);
-  m.left.push_back(toggle(CmdBold, icon::Bold, 9));
-  m.left.push_back(toggle(CmdItalic, icon::Italic, 9));
-  m.left.push_back(toggle(CmdUnderline, icon::Underline, 9));
-  ToolItem color = toggle(CmdFontColor, icon::FontColor, 5);
-  color.toggle = false;
-  color.kind = ToolKind::SplitButton;
-  color.width = 52;
-  color.colors = true;
-  const draw::Color last = FromHex(lastColorHex_);
-  color.color = {last.r, last.g, last.b, 1};
-  color.automaticLabel = L"Automatic";
-  color.automaticColor = {0, 0, 0, 1};
-  color.onChange = [this](const ToolValue& v) {
-    if (!session_) return;
-    if (v.automatic) {
-      format::Color(*session_, std::nullopt);
-    } else {
-      wchar_t buf[8];
-      swprintf(buf, 8, L"%02X%02X%02X", static_cast<unsigned>(std::lround(v.color.r * 255)),
-               static_cast<unsigned>(std::lround(v.color.g * 255)), static_cast<unsigned>(std::lround(v.color.b * 255)));
-      lastColorHex_ = buf;
-      format::Color(*session_, draw::Color{v.color.r, v.color.g, v.color.b, 1});
+ToolItem TextEditing::Tool(int cmd) {
+  // Without text being edited the items show, unavailable (the ribbon's Font and Paragraph groups).
+  const CommandState q = Query(cmd);
+  ToolItem t;
+  t.cmd = cmd;
+  t.tooltip = q.Tooltip();
+  t.enabled = session_ && q.enabled;
+  t.checked = q.checked;
+  const std::optional<TextLook> look = session_ ? std::optional<TextLook>(LookOf(*session_)) : std::nullopt;
+  switch (cmd) {
+    case CmdFontBox:
+      if (DocFormat::FontsPending()) DocFormat::ReadFonts();
+      t.kind = ToolKind::ComboBox;
+      t.width = 116;
+      t.tooltip = L"Font";
+      t.enabled = session_ != nullptr;
+      t.choices = DocFormat::FontNames();
+      t.text = look ? look->font.value_or(L"") : L"";
+      t.onChange = [this](const ToolValue& v) {
+        if (session_ && !v.text.empty()) format::Font(*session_, v.text);
+        Changed();
+      };
+      return t;
+    case CmdSizeBox:
+      t.kind = ToolKind::ComboBox;
+      t.width = 56;
+      t.tooltip = L"Font size";
+      t.enabled = session_ != nullptr;
+      for (int v : {8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96})
+        t.choices.push_back(std::to_wstring(v));
+      if (look && look->size) {
+        wchar_t buf[16];
+        swprintf(buf, 16, L"%g", std::round(*look->size * 10) / 10);
+        t.text = buf;
+      }
+      t.validate = [](std::wstring& text) {
+        wchar_t* end = nullptr;
+        const double v = std::wcstod(text.c_str(), &end);
+        return end != text.c_str() && v >= 1 && v <= 4000;
+      };
+      t.onChange = [this](const ToolValue& v) {
+        if (session_) format::Size(*session_, static_cast<float>(std::wcstod(v.text.c_str(), nullptr)));
+        Changed();
+      };
+      return t;
+    case CmdFontColor:
+    case CmdHighlightColor: {
+      const bool font = cmd == CmdFontColor;
+      t.kind = ToolKind::SplitButton;
+      t.glyph = font ? icon::FontColor : icon::Highlight;
+      t.width = 52;
+      t.colors = true;
+      const draw::Color last = font ? FromHex(lastColorHex_) : draw::Color{1, 1, 0, 1};
+      t.color = {last.r, last.g, last.b, 1};
+      t.automaticLabel = font ? L"Automatic" : L"No color";
+      t.automaticColor = font ? D2D1_COLOR_F{0, 0, 0, 1} : D2D1_COLOR_F{0, 0, 0, 0};
+      t.onChange = [this, font](const ToolValue& v) {
+        if (!session_) return;
+        std::optional<draw::Color> c;
+        if (!v.automatic) {
+          c = draw::Color{v.color.r, v.color.g, v.color.b, 1};
+          if (font) {
+            wchar_t buf[8];
+            swprintf(buf, 8, L"%02X%02X%02X", static_cast<unsigned>(std::lround(v.color.r * 255)),
+                     static_cast<unsigned>(std::lround(v.color.g * 255)), static_cast<unsigned>(std::lround(v.color.b * 255)));
+            lastColorHex_ = buf;
+          }
+        }
+        if (font) format::Color(*session_, c);
+        else format::Highlight(*session_, c);
+        Changed();
+      };
+      return t;
     }
-    Changed();
+    default: break;
+  }
+  struct Glyph {
+    int cmd;
+    wchar_t glyph;
+    bool toggle;
   };
-  m.left.push_back(color);
-  ToolItem left = toggle(CmdAlignLeft, icon::AlignLeft, 5);
-  left.sepBefore = true;
-  m.left.push_back(left);
-  m.left.push_back(toggle(CmdAlignCenter, icon::AlignCenter, 5));
-  m.left.push_back(toggle(CmdAlignRight, icon::AlignRight, 5));
-  m.left.push_back(toggle(CmdBullets, icon::BulletedList, 4));
-  m.left.push_back(toggle(CmdNumbering, icon::NumberedList, 4));
+  static constexpr Glyph kGlyphs[] = {
+      {CmdBold, icon::Bold, true},           {CmdItalic, icon::Italic, true},
+      {CmdUnderline, icon::Underline, true}, {CmdStrike, icon::Strikethrough, true},
+      {CmdGrowFont, 0xE8E8, false},          {CmdShrinkFont, 0xE8E7, false},  // FontIncrease, FontDecrease
+      {CmdClearCharFormat, icon::ClearFormatting, false}, {CmdChangeCase, icon::FontCase, false},
+      {CmdFormatPainter, icon::Brush, true}, {CmdAlignLeft, icon::AlignLeft, true},
+      {CmdAlignCenter, icon::AlignCenter, true}, {CmdAlignRight, icon::AlignRight, true},
+      {CmdAlignJustify, icon::AlignJustify, true}, {CmdBullets, icon::BulletedList, true},
+      {CmdNumbering, icon::NumberedList, true},  {CmdOutdent, icon::DecreaseIndent, false},
+      {CmdIndent, icon::IncreaseIndent, false},   {CmdInsertLink, icon::Link, false},
+  };
+  for (const Glyph& g : kGlyphs)
+    if (g.cmd == cmd) t.glyph = g.glyph, t.toggle = g.toggle;
+  return t;
 }
 
 void TextEditing::FillContextMenu(HMENU m, size_t slide, draw::Point at) {

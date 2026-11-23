@@ -27,6 +27,7 @@ struct Look {
   std::optional<draw::Color> fill, line;
   bool noFill = false, noLine = false;
   float lineWidth = -1;  // points; negative: the type's default
+  std::vector<float> dashes;  // the line's a:prstDash or a:custDash, multiples of its width; empty: solid
 };
 
 struct Series {
@@ -38,6 +39,7 @@ struct Series {
   Look look;
   std::vector<std::pair<uint32_t, Look>> points;  // c:dPt: a point's own look
   std::optional<bool> marker;  // line and scatter: c:marker (nullopt: as the group has it)
+  Look markerLook;             // c:marker/c:spPr: the markers' own fill and outline (unstated: the series')
   std::string symbol;          // c:marker/c:symbol ("circle", "diamond"...; empty: Office's choice)
   float markerSize = 7;        // c:marker/c:size, points (unstated: Office 2007's 7, PowerPoint's PDFs)
   bool smooth = false;         // line and scatter: c:smooth (Office smooths when it's missing)
@@ -47,6 +49,22 @@ struct Series {
   std::optional<std::wstring> separator;
   std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the group's
   std::string labelPos;     // c:dLbls/c:dLblPos ("outEnd", "ctr"...); empty: the group's
+  // c:dLbl: a point's own label (line charts): what it shows, its own text, where it's moved to
+  // (c:manualLayout x, y: fractions of the chart), its box's fill and its text's size and color.
+  struct PointLabel {
+    uint32_t index = 0;
+    bool deleted = false;
+    std::optional<bool> value, seriesName, category;
+    std::optional<std::wstring> text;  // c:tx/c:rich, series name fields filled in
+    float dx = 0, dy = 0;
+    std::optional<draw::Color> fill, color;
+    float size = -1;     // points; negative: the chart's
+    std::string format;  // its value's: its own c:numFmt, else its series' source format
+    float w = 0, h = 0;  // c15:layout: its box's size, fractions of the chart (0: as its text)
+    float insets[4] = {-1, -1, -1, -1};  // its text's a:bodyPr insets, points: left, top, right, bottom (negative: Office's)
+    std::string pos;  // c:dLblPos ("r", "t"...); empty: its series' or group's
+  };
+  std::vector<PointLabel> pointLabels;
   double explosion = 0;     // pie: c:explosion, percent of the radius
   std::vector<std::pair<uint32_t, double>> explosions;  // c:dPt/c:explosion: a slice's own
 };
@@ -85,6 +103,7 @@ struct Axis {
   std::wstring title;
   bool titleOverlay = false;  // the title drawn over the plot, which keeps its room
   int labelSkip = 0;          // categories: c:tickLblSkip, a label every so many (0: as many as fit)
+  bool labelsHigh = false;    // c:tickLblPos high: the labels at the far end of the crossing axis (values: the right)
 };
 
 enum class LegendPos : uint8_t { None, Right, Left, Top, Bottom };
@@ -97,6 +116,11 @@ struct Chart {
   // c:overlay: the title or legend drawn over the plot area, which keeps the room it would take.
   bool titleOverlay = false, legendOverlay = false;
   std::vector<uint32_t> hiddenEntries;  // c:legendEntry/c:delete: the legend's entries left out, by index
+  Look legendLook;  // c:legend/c:spPr: its box's fill and border (drawn when the chart places it)
+  // c:manualLayout (edge mode): the plot area's and the legend's boxes, as fractions of the chart's
+  // size; the plot area's is the plot itself (layoutTarget inner) or the plot with its axes' labels.
+  std::optional<draw::Rect> plotLayout, legendLayout;
+  bool plotInner = false;
   Look area, plot;  // the chart's and the plot area's c:spPr
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black

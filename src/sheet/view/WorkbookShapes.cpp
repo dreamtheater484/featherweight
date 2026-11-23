@@ -263,6 +263,7 @@ draw::Rect WorkbookView::NewObjectRect(double width, double height) const {
 
 void WorkbookView::SelectNewObject(uint32_t id) {
   object_ = id;
+  ribbonInserted_ = id;  // the ribbon shows its Format tab (R1)
   objectSheet_ = sheet_;
   host_.ViewInvalidate();
   host_.ViewStateChanged();
@@ -460,22 +461,6 @@ bool WorkbookView::ShapesCommand(int cmd) {
   else if (cmd >= CmdObjectRectangle && cmd <= CmdObjectTextBox) InsertShapeOf(kKinds[cmd - CmdObjectRectangle], "");
   else if (cmd == CmdFormatObject) ShowShapePanel();
   return true;
-}
-
-void WorkbookView::AddShapeTools(ToolbarModel& m) {
-  ToolItem insert;
-  insert.kind = ToolKind::Dropdown;
-  insert.cmd = CmdObjectsBox;
-  insert.width = 64;
-  insert.priority = 3;
-  insert.text = insert.menuLabel = L"Insert";
-  insert.fitText = true;
-  insert.tooltip = L"Insert a picture or a shape";
-  insert.choices = {L"Pictures…", L"Rectangle", L"Rounded rectangle", L"Oval", L"Line", L"Arrow", L"Text box", L"Format object…"};
-  insert.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 8) ShapesCommand(CmdObjectPicture + v.index);
-  };
-  m.left.push_back(insert);
 }
 
 bool WorkbookView::ShapesScriptOp(const std::wstring& arg) {

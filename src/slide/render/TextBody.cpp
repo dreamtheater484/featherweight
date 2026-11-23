@@ -437,11 +437,16 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     float start = 0, height = 0;
     for (Impl::Para& p : m.paras)
       for (size_t i = 0; i < p.rows.size(); ++i) {
-        // A line goes on to the next column once it would reach below this one's bottom; but a
-        // paragraph's last line that starts above the bottom stays with the lines before it, however
-        // far it reaches below (era-systems 41).
+        // A line goes on to the next column once both its line and its text (its top and its fonts'
+        // own ascent and descent) would reach below this one's bottom: ilo 24's 20-point Arial line
+        // ends 1.5 points below and stays, its text ending above; text-autofit 3's Calibri ends just
+        // above, its text 0.36 below, and stays; cbs 5's line at 80 % goes. A paragraph's last line
+        // that starts above the bottom stays with the lines before it, however far it reaches below
+        // (era-systems 41), and so does an empty paragraph, which would start the next column with a
+        // blank line (ilo 18).
         const bool lastOfSeveral = i > 0 && i + 1 == p.rows.size();
-        const bool below = lastOfSeveral ? p.rows[i].first - start >= room - 0.01f : p.rows[i].second - start > room + 0.01f;
+        const float reach = std::min(p.rows[i].second, p.rows[i].first + p.lines[i].ascent + p.lines[i].descent);
+        const bool below = lastOfSeveral || p.empty ? p.rows[i].first - start >= room - 0.01f : reach - start > room + 0.01f;
         if (column + 1 < columns && below && p.rows[i].first > start) {
           ++column;
           start = p.rows[i].first;

@@ -520,6 +520,45 @@ TEST(SlideRender_WideSpacingPutsTheBaselineAtThreeQuartersOfTheLine) {
   CHECK(std::abs(wide - single - 60) <= 3);  // 15.1 pt at 4 px per point
 }
 
+TEST(SlideRender_ColumnsBreakWhereTheTextWouldPassTheBottom) {
+  // Two columns in a box 100 points high, 20-point Arial lines 24 points apart. A line that starts
+  // 77 points down stays in the first column: its text (Arial's 22.35 points of ascent and descent)
+  // ends above the bottom, though its line passes it (ilo 24). An empty paragraph that starts above
+  // the bottom stays too, so the second column starts with the text after it (ilo 18).
+  auto columns = [](const std::vector<std::pair<std::string, int>>& paras) {
+    std::string xml;
+    for (const auto& [text, before] : paras)
+      xml += "<a:p><a:pPr><a:lnSpc><a:spcPts val=\"2400\"/></a:lnSpc><a:spcBef><a:spcPts val=\"" + std::to_string(before * 100) +
+             "\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft><a:buNone/></a:pPr>" +
+             (text.empty() ? std::string() : "<a:r><a:rPr sz=\"2000\"><a:latin typeface=\"Arial\"/></a:rPr><a:t>" + text + "</a:t></a:r>") +
+             "<a:endParaRPr sz=\"2000\"><a:latin typeface=\"Arial\"/></a:endParaRPr></a:p>";
+    const std::string shape =
+        "<p:sp><p:nvSpPr><p:cNvPr id=\"4\" name=\"T\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/>"
+        "<a:ext cx=\"" + std::to_string(400 * 12700) + "\" cy=\"" + std::to_string(100 * 12700) +
+        "\"/></a:xfrm><a:prstGeom prst=\"rect\"/></p:spPr><p:txBody><a:bodyPr wrap=\"square\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\""
+        " numCol=\"2\" spcCol=\"0\"><a:noAutofit/></a:bodyPr><a:lstStyle/>" + xml + "</p:txBody></p:sp>";
+    std::vector<draw::Rect> out;
+    auto deck = Modified(Slide1(shape, 2));
+    if (!deck) return out;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    out.resize(paras.size());
+    for (const ParagraphInfo& p : slide->Paragraphs())
+      if (p.shape == 4 && p.index >= 0 && static_cast<size_t>(p.index) < out.size()) out[p.index] = p.bounds;
+    return out;
+  };
+  // "Four" 77 points down: in the first column; "Five" after it, at the second's top.
+  std::vector<draw::Rect> b = columns({{"One", 0}, {"Two", 0}, {"Three", 0}, {"Four", 5}, {"Five", 0}});
+  REQUIRE(b.size() == 5u);
+  CHECK(b[3].left < 200 && b[4].left >= 200);
+  CHECK(b[4].top < 5);
+  // An empty paragraph 90 points down stays in the first column; "Next" starts the second.
+  b = columns({{"One", 0}, {"Two", 0}, {"Three", 0}, {"", 18}, {"Next", 0}});
+  REQUIRE(b.size() == 5u);
+  CHECK(b[2].left < 200 && b[4].left >= 200);
+  CHECK(b[4].top < 5);
+}
+
 TEST(SlideRender_BottomAnchorIgnoresWideSpacingBelow) {
   // Bottom-anchored text at 150 %: its last line ends where it would at single spacing (cpb's
   // title), the wider spacing's share below the line not counted.

@@ -20,7 +20,6 @@
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
-#include "slide/view/SlideGallery.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -616,6 +615,7 @@ void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
     notesHeight_ = std::min(notesHeight_, maxNotes);
   }
   if (drag_ == Drag::Slides || thumbPress_) ThumbsDragEnd(drag_ == Drag::Slides);
+  if (drag_ == Drag::Text) text_->MouseUp();  // r1-slide: the format painter
   drag_ = Drag::None;
 }
 

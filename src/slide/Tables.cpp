@@ -15,69 +15,55 @@ namespace {
 constexpr int kMaxRows = 4096, kMaxColumns = 1024;
 constexpr size_t kMaxCells = 200000;
 
-// The built-in styles decks most often name without defining them (python-pptx and other
-// generators write only the id): Medium Style 2 in its seven colors, and the two plain styles.
-// "@" stands for the style's color.
-constexpr const char* kMedium2 =
-    "<a:wholeTbl><a:tcTxStyle><a:fontRef idx=\"minor\"><a:prstClr val=\"black\"/></a:fontRef><a:schemeClr "
-    "val=\"dk1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr>"
-    "<a:left><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:left>"
-    "<a:right><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:right>"
-    "<a:top><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:top>"
-    "<a:bottom><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:bottom>"
-    "<a:insideH><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:insideH>"
-    "<a:insideV><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:insideV>"
-    "</a:tcBdr><a:fill><a:solidFill><a:schemeClr val=\"@\"><a:tint val=\"20000\"/></a:schemeClr></a:solidFill></a:fill>"
-    "</a:tcStyle></a:wholeTbl>"
-    "<a:band1H><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val=\"@\"><a:tint val=\"40000\"/></a:schemeClr>"
-    "</a:solidFill></a:fill></a:tcStyle></a:band1H><a:band2H><a:tcStyle><a:tcBdr/></a:tcStyle></a:band2H>"
-    "<a:band1V><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val=\"@\"><a:tint val=\"40000\"/></a:schemeClr>"
-    "</a:solidFill></a:fill></a:tcStyle></a:band1V><a:band2V><a:tcStyle><a:tcBdr/></a:tcStyle></a:band2V>"
-    "<a:lastCol><a:tcTxStyle b=\"on\"><a:fontRef idx=\"minor\"><a:prstClr val=\"black\"/></a:fontRef><a:schemeClr "
-    "val=\"lt1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val=\"@\"/></a:solidFill></a:fill>"
-    "</a:tcStyle></a:lastCol>"
-    "<a:firstCol><a:tcTxStyle b=\"on\"><a:fontRef idx=\"minor\"><a:prstClr val=\"black\"/></a:fontRef><a:schemeClr "
-    "val=\"lt1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val=\"@\"/></a:solidFill></a:fill>"
-    "</a:tcStyle></a:firstCol>"
-    "<a:lastRow><a:tcTxStyle b=\"on\"><a:fontRef idx=\"minor\"><a:prstClr val=\"black\"/></a:fontRef><a:schemeClr "
-    "val=\"lt1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:top><a:ln w=\"38100\" cmpd=\"sng\"><a:solidFill><a:schemeClr "
-    "val=\"lt1\"/></a:solidFill></a:ln></a:top></a:tcBdr><a:fill><a:solidFill><a:schemeClr val=\"@\"/></a:solidFill>"
-    "</a:fill></a:tcStyle></a:lastRow>"
-    "<a:firstRow><a:tcTxStyle b=\"on\"><a:fontRef idx=\"minor\"><a:prstClr val=\"black\"/></a:fontRef><a:schemeClr "
-    "val=\"lt1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:bottom><a:ln w=\"38100\" cmpd=\"sng\"><a:solidFill><a:schemeClr "
-    "val=\"lt1\"/></a:solidFill></a:ln></a:bottom></a:tcBdr><a:fill><a:solidFill><a:schemeClr val=\"@\"/></a:solidFill>"
-    "</a:fill></a:tcStyle></a:firstRow>";
-
-constexpr const char* kTableGrid =
-    "<a:wholeTbl><a:tcTxStyle><a:fontRef idx=\"minor\"><a:scrgbClr r=\"0\" g=\"0\" b=\"0\"/></a:fontRef><a:schemeClr "
-    "val=\"tx1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr>"
-    "<a:left><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:left>"
-    "<a:right><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:right>"
-    "<a:top><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:top>"
-    "<a:bottom><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:bottom>"
-    "<a:insideH><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:insideH>"
-    "<a:insideV><a:ln w=\"12700\" cmpd=\"sng\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill></a:ln></a:insideV>"
-    "</a:tcBdr><a:fill><a:noFill/></a:fill></a:tcStyle></a:wholeTbl>";
-
-constexpr const char* kNoGrid =
-    "<a:wholeTbl><a:tcTxStyle><a:fontRef idx=\"minor\"><a:scrgbClr r=\"0\" g=\"0\" b=\"0\"/></a:fontRef><a:schemeClr "
-    "val=\"tx1\"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:noFill/></a:fill></a:tcStyle></a:wholeTbl>";
-
-struct BuiltIn {
-  const char* id;
-  const char* body;
-  const char* color;
+// PowerPoint's built-in styles, which decks may name without defining them (python-pptx and other
+// generators write only the id).
+struct BuiltInStyle {
+  unsigned char id[16];
+  unsigned char text, color, color2;
 };
-constexpr BuiltIn kBuiltIns[] = {
-    {"{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}", kMedium2, "dk1"},
-    {"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}", kMedium2, "accent1"},
-    {"{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}", kMedium2, "accent3"},
-    {"{00A15C55-8517-42AA-B614-E9B94910E393}", kMedium2, "accent4"},
-    {"{7DF18680-E054-41AD-8BC1-D1AEF772440D}", kMedium2, "accent5"},
-    {"{93296810-A885-4BE3-A3E7-6D5BEEA58F35}", kMedium2, "accent6"},
-    {"{5940675A-B579-460E-94D1-54222C63F5DA}", kTableGrid, ""},
-    {"{2D5ABB26-0587-4C30-8999-92F81FD0307C}", kNoGrid, ""},
-};
+#include "slide/TableStylesData.inc"
+
+// The 16 bytes of a "{XXXXXXXX-XXXX-...}" id in the order written, or false.
+bool IdBytes(std::string_view id, unsigned char (&out)[16]) {
+  int n = 0;
+  for (char ch : id) {
+    int v = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+    if (v < 0) {
+      if (ch == '{' || ch == '}' || ch == '-' || std::isspace(static_cast<unsigned char>(ch))) continue;
+      return false;
+    }
+    if (n >= 32) return false;
+    out[n / 2] = static_cast<unsigned char>(n % 2 ? out[n / 2] | v : v << 4);
+    ++n;
+  }
+  return n == 32;
+}
+
+// A built-in style's a:tblStyle children: its template expanded, with its colors put in.
+std::string BuiltInBody(const BuiltInStyle& style) {
+  const unsigned char* at = kStyleText;
+  for (int i = 0; i < style.text; ++i) at += std::char_traits<char>::length(reinterpret_cast<const char*>(at)) + 1;
+  std::string out;
+  std::vector<unsigned char> stack;
+  for (; *at; ++at) {
+    stack.push_back(*at);
+    while (!stack.empty()) {
+      unsigned char c = stack.back();
+      stack.pop_back();
+      if (c < 128) {
+        if (c == '@' || c == '#') {
+          out += kStyleColors[c == '@' ? style.color : style.color2];
+        } else {
+          out += static_cast<char>(c);
+        }
+      } else {
+        stack.push_back(kStylePairs[c - 128][1]);
+        stack.push_back(kStylePairs[c - 128][0]);
+      }
+    }
+  }
+  return out;
+}
 
 bool SameId(std::string_view a, std::string_view b) {
   auto trim = [](std::string_view s) {
@@ -156,6 +142,35 @@ CellBorder ReadBorder(pugi::xml_node el, const draw::ColorContext& colors, const
   return b;
 }
 
+// A rectangle `w` x `h` points filled with `fill` (a copy), for fwdraw: what a cell's gradient,
+// picture or pattern fill draws.
+pugi::xml_node FillShape(pugi::xml_document& scratch, pugi::xml_node fill, float w, float h) {
+  pugi::xml_node sp = scratch.append_child("p:sp");
+  sp.append_attribute("xmlns:p") = std::string(kP).c_str();
+  sp.append_attribute("xmlns:a") = std::string(kA).c_str();
+  sp.append_attribute("xmlns:r") = std::string(kR).c_str();
+  pugi::xml_node nv = sp.append_child("p:nvSpPr");
+  pugi::xml_node c = nv.append_child("p:cNvPr");
+  c.append_attribute("id") = "0";
+  c.append_attribute("name") = "";
+  nv.append_child("p:cNvSpPr");
+  nv.append_child("p:nvPr");
+  pugi::xml_node spPr = sp.append_child("p:spPr");
+  pugi::xml_node xfrm = spPr.append_child("a:xfrm");
+  pugi::xml_node off = xfrm.append_child("a:off");
+  off.append_attribute("x") = "0";
+  off.append_attribute("y") = "0";
+  pugi::xml_node ext = xfrm.append_child("a:ext");
+  ext.append_attribute("cx") = static_cast<long long>(std::max(1.f, w) * 12700.0 + 0.5);
+  ext.append_attribute("cy") = static_cast<long long>(std::max(1.f, h) * 12700.0 + 0.5);
+  pugi::xml_node geom = spPr.append_child("a:prstGeom");
+  geom.append_attribute("prst") = "rect";
+  geom.append_child("a:avLst");
+  CopyInto(spPr, fill);
+  spPr.append_child("a:ln").append_child("a:noFill");
+  return sp;
+}
+
 }  // namespace
 
 const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn) {
@@ -168,6 +183,7 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
   if (!tbl) return nullptr;
   auto t = std::make_unique<Table>();
   t->node = tbl;
+  t->owner = shape.owner;
   const draw::Theme& theme = shownOn.theme ? *shownOn.theme : *draw::Theme::Default();
   t->colors.theme = &theme;
   t->colors.colorMap = &shownOn.colorMap;
@@ -212,17 +228,17 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
       // A built-in style the deck names without defining it. PowerPoint 2021 (probed 2026-11-20)
       // draws a table without a style, or with an id it doesn't know, as a black 1 pt grid with no
       // fills: Table Grid's look.
-      const BuiltIn* b = &kBuiltIns[std::size(kBuiltIns) - 2];
-      for (const BuiltIn& candidate : kBuiltIns) {
-        if (!id.empty() && SameId(candidate.id, id)) b = &candidate;
+      const BuiltInStyle* b = &kBuiltInStyles[kTableGridStyle];
+      unsigned char bytes[16];
+      if (IdBytes(id, bytes)) {
+        for (const BuiltInStyle& candidate : kBuiltInStyles) {
+          if (std::equal(std::begin(bytes), std::end(bytes), std::begin(candidate.id))) b = &candidate;
+        }
       }
-      if (!builtInStyles_) builtInStyles_ = std::make_unique<pugi::xml_document>();
-      std::string body = b->body;
-      for (size_t at = body.find('@'); at != std::string::npos; at = body.find('@', at)) body.replace(at, 1, b->color);
-      std::string xml =
-          std::string("<a:tblStyle xmlns:a=\"") + std::string(kA) + "\" styleId=\"" + b->id + "\">" + body + "</a:tblStyle>";
+      if (!tableScratch_) tableScratch_ = std::make_unique<pugi::xml_document>();
+      std::string xml = std::string("<a:tblStyle xmlns:a=\"") + std::string(kA) + "\">" + BuiltInBody(*b) + "</a:tblStyle>";
       pugi::xml_document doc;
-      if (doc.load_buffer(xml.data(), xml.size())) style = builtInStyles_->append_copy(doc.document_element());
+      if (doc.load_buffer(xml.data(), xml.size())) style = tableScratch_->append_copy(doc.document_element());
     }
   }
   t->background = ReadCellFill(FillChild(A(style, "tblBg")), t->colors, theme);
@@ -338,6 +354,22 @@ const Table* Presentation::GetTable(const Shape& shape, const SlideBase& shownOn
       cellTexts_.push_back(ResolvePlainText(*this, txBody, *shape.owner, shownOn, textStyles));
       cell.text = cellTexts_.back().get();
     }
+  }
+  // Gradient, picture and pattern fills as rectangles fwdraw draws, at the cells' sizes in the grid.
+  auto shapeFor = [&](CellFill& f, float w, float h) {
+    if (f.kind != CellFill::Kind::Other || !f.node) return;
+    if (!tableScratch_) tableScratch_ = std::make_unique<pugi::xml_document>();
+    f.shape = FillShape(*tableScratch_, f.node, w, h);
+  };
+  float width = 0, height = 0;
+  for (float w : t->columns) width += w;
+  for (float h : t->rows) height += h;
+  shapeFor(t->background, width, height);
+  for (TableCell& cell : t->cells) {
+    float w = 0, h = 0;
+    for (int c = cell.column; c < std::min(C, cell.column + cell.columnSpan); ++c) w += t->columns[c];
+    for (int r = cell.row; r < std::min(R, cell.row + cell.rowSpan); ++r) h += t->rows[r];
+    shapeFor(cell.fill, w, h);
   }
   slot = std::move(t);
   return slot.get();

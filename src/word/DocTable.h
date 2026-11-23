@@ -48,10 +48,16 @@ class DocTable {
   static std::vector<int> CommandIds();
   CommandState Query(int cmd);
   void Execute(int cmd);
-  // The table button, after the formatting groups.
-  void AddToolbar(ToolbarModel& m);
   // In a table: Insert, Delete, Merge, Split and Table properties.
   void FillContextMenu(HMENU m);
+  // The ribbon's: Insert > Table's grid (the toolbar's control), and Table Design's Shading and
+  // Borders (split buttons: the main part applies the color or the borders picked last).
+  ToolItem GridItem();
+  ToolItem ShadingButton();
+  ToolItem BordersButton();
+  // Table Layout > Cell Size: the selected rows' height (0: as the text needs) or columns' width.
+  ToolItem SizeBox(bool height);
+  bool InTable() const { return Cell().has_value(); }
 
   // Tab or Shift+Tab: the next or previous cell's text selected (a new row after the last cell).
   // False outside tables.
@@ -79,6 +85,10 @@ class DocTable {
   }
   void Insert(uint32_t rows, uint32_t cols);
   void Select(fw::doc::edit::Editor::Extent extent);
+  // The selected cells' shading (`automatic`: none) and borders (an index into kBorders), as one
+  // undo step each: the Table panel's and the ribbon's.
+  void ShadeCells(D2D1_COLOR_F color, bool automatic);
+  void BorderCells(int which);
   // A table style by name: the document's, or one of Word's basics added to it. One undo step.
   void ApplyStyle(const std::string& name);
   // Grid column widths for AutoFit to contents, measured roughly from the cells' text.
@@ -86,6 +96,9 @@ class DocTable {
 
   fw::doc::edit::Editor& editor_;
   Host host_;
+  D2D1_COLOR_F shading_{0.851f, 0.851f, 0.851f, 1};  // the last ones picked: Word's light gray,
+  bool noShading_ = false;
+  int borders_ = 0;                                  // all borders
   std::unique_ptr<GridPicker> grid_;
   std::unique_ptr<Panel> panel_;
 };

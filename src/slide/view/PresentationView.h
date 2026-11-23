@@ -29,13 +29,13 @@ struct Changes;
 struct Result;
 }
 class PresentationFile;
+struct ToolItem;
 
 namespace fw::slide::view {
 
 class TextEditing;
 class ObjectTool;
 class NotesEdit;
-class SlideGallery;
 
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
 // slide fitted to the window (or zoomed) in the middle, the speaker notes below it, and "Slide n
@@ -44,7 +44,7 @@ class SlideGallery;
 // Shift+F5 start the slide show (p1-show), and a .ppsx starts in it.
 //
 // Printing and Export PDF lay out slides, handouts (1, 2, 3, 4, 6 or 9 per page) or notes pages,
-// as chosen in the toolbar's Print layout menu, through the shared print dialog and PrintJob.
+// as chosen in File › Print's settings, through the shared print dialog and PrintJob.
 class PresentationView : public TabContent {
  public:
   PresentationView(ViewHost& host, std::wstring path);
@@ -91,7 +91,8 @@ class PresentationView : public TabContent {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
-  void FillMenu(int which, HMENU menu) override;
+  // PowerPoint's ribbon (R1, r1-slide: PresentationRibbon.cpp).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
   bool HasStatusBar() const override { return Ready(); }
   void BuildStatusBar(StatusBarModel& m) override;
@@ -174,6 +175,11 @@ class PresentationView : public TabContent {
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmapWith(ID2D1DeviceContext* dc, UINT w, UINT h,
                                                         const std::function<void(draw::Painter&)>& paint);
 
+  // ---- The ribbon (PresentationRibbon.cpp): a command's control (`glyph` when not 0), and the
+  // state of the ribbon's menu buttons (enabled while a command in the menu is).
+  ToolItem RibbonTool(int cmd, wchar_t glyph);
+  bool RibbonMenuState(int cmd, CommandState& s);
+
   // ---- Commands (PresentationCommands.cpp)
   void StartShow(bool fromCurrent);
   void CopySlide(bool text, bool picture);
@@ -201,7 +207,6 @@ class PresentationView : public TabContent {
   bool SlideCommandState(int cmd, CommandState& s);
   bool SlideCommand(int cmd);
   void SlideContextMenu(HMENU menu, int thumb);
-  void AddSlideTools(ToolbarModel& m);
   std::vector<size_t> SelectedSlides() const;
   // Edits through the edit layer (each one undo step). False, with a banner saying why, when the
   // deck can't be edited.
@@ -315,14 +320,13 @@ class PresentationView : public TabContent {
   size_t dropGap_ = SIZE_MAX;
   float dragY_ = 0;
   int pendingCollapse_ = -1;  // a plain click on a slide of a multi-selection: it alone, unless it drags
-  // ＋ Slide ▾ and Layout ▾ (their pictures: the deck's layouts as P1's renderer draws them, made
-  // when a gallery opens and kept while the deck and the picture size stay).
-  std::unique_ptr<SlideGallery> newSlideGallery_, layoutGallery_;
+  // The ribbon's New Slide and Layout galleries: the current slide's master's layouts, and their
+  // pictures as P1's renderer draws them (made when a gallery opens, kept while the deck and the
+  // picture size stay).
   std::vector<Deck::LayoutChoice> galleryLayouts_;
   std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> layoutPictures_;  // by the presentation's layout index
   UINT layoutPictureW_ = 0;
   void PaintLayoutPicture(gfx::Canvas& c, size_t layout, const D2D1_RECT_F& r);
-  void PrepareGalleries();
 
   // Mouse.
   enum class Drag { None, Splitter, ThumbBar, Pan, Text, Slides };

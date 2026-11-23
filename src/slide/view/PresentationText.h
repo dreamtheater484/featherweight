@@ -13,6 +13,7 @@
 #include "slide/view/TextSession.h"
 
 struct ToolbarModel;
+struct ToolItem;
 namespace gfx {
 class Canvas;
 }
@@ -81,6 +82,7 @@ class TextEditing {
   // A click on the slide: true when it went into text (the tab then drags with MouseMove).
   bool MouseDown(size_t slide, draw::Point at, bool doubleClick, UINT mods);
   void MouseMove(draw::Point at);
+  void MouseUp();  // the end of a click or drag in text: the format painter's look goes on
   bool OverText(size_t slide, draw::Point at);  // the I-beam
   bool KeyDown(UINT vk, UINT mods);
   bool Char(wchar_t ch, UINT mods);
@@ -103,9 +105,16 @@ class TextEditing {
   // ---- Commands ----
   int Shortcut(UINT vk, UINT mods) const;
   bool Owns(int cmd) const;
+  // The text commands command search offers (labeled while text is edited).
+  static std::vector<int> CommandIds();
+  // A command of the text's (CommandIds, the font and size boxes) whatever is edited: Query names
+  // it even with no text being edited.
+  static bool Names(int cmd);
   CommandState Query(int cmd);
   bool Execute(int cmd);
-  void AddToolbar(ToolbarModel& m);
+  // The control for one of the text commands, as the ribbon shows it: Font and size
+  // boxes, color split buttons, the buttons with their glyphs.
+  ToolItem Tool(int cmd);
   void FillContextMenu(HMENU menu, size_t slide, draw::Point at);
 
  private:
@@ -136,7 +145,8 @@ class TextEditing {
   wchar_t highSurrogate_ = 0;
   double lastDoubleClick_ = -1e9;
   draw::Point lastDoubleAt_;
-  pugi::xml_document copiedLook_;  // Ctrl+Shift+C
+  pugi::xml_document copiedLook_;  // Ctrl+Shift+C, and the format painter's
+  bool painter_ = false;           // the format painter is up: the next MouseUp applies copiedLook_
   std::unique_ptr<fw::text::SpellChecker> checker_;
   std::unique_ptr<SlideSpelling> spelling_;
   std::wstring lastColorHex_ = L"C00000";

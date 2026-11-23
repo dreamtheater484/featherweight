@@ -33,6 +33,28 @@ draw::TextBox BoxFor(const fw::slide::TableCell& c, const draw::Rect& r) {
   return box;
 }
 
+// What a cell's fill drawing needs: the slide's theme and colors, and the pictures of the part the
+// table is in.
+class FillResources : public draw::DrawingResources {
+ public:
+  FillResources(const TextExtras& extras, std::string part) : extras_(extras), part_(std::move(part)) {}
+  std::shared_ptr<const draw::Theme> GetTheme() override {
+    if (!extras_.colors.theme) return draw::Theme::Default();
+    return std::shared_ptr<const draw::Theme>(std::shared_ptr<const draw::Theme>(), extras_.colors.theme);
+  }
+  const draw::ColorMap& GetColorMap() override {
+    return extras_.colors.colorMap ? *extras_.colors.colorMap : draw::DrawingResources::GetColorMap();
+  }
+  std::shared_ptr<const draw::Image> GetImage(std::string_view rel) override {
+    return extras_.picture ? extras_.picture(part_, std::string(rel)) : nullptr;
+  }
+  bool InPresentation() override { return true; }
+
+ private:
+  TextExtras extras_;  // a copy: the builder's doesn't outlive the table
+  std::string part_;
+};
+
 }  // namespace
 
 TableRender::TableRender(const fw::slide::Table& t, text::Fonts& fonts, const TextExtras& extras) : table_(t) {
@@ -63,16 +85,28 @@ TableRender::TableRender(const fw::slide::Table& t, text::Fonts& fonts, const Te
     cell.rect = {l, rowY_[c.row], r, rowY_[std::min(rows, c.row + c.rowSpan)]};
     if (c.text) cell.text.Build(fonts, BoxFor(c, cell.rect), *c.text, extras);
   }
+  // Gradient, picture and pattern fills, drawn by fwdraw (their pictures are read now).
+  auto fillDrawing = [&](const fw::slide::CellFill& f) -> std::unique_ptr<draw::Drawing> {
+    if (!f.shape) return nullptr;
+    if (!resources_) resources_ = std::make_unique<FillResources>(extras, t.owner ? t.owner->part : std::string());
+    return draw::Drawing::FromShapeTree(f.shape, *resources_);
+  };
+  background_ = fillDrawing(t.background);
+  for (Cell& cell : cells_) cell.fill = fillDrawing(cell.cell->fill);
 }
 
 void TableRender::Draw(draw::Painter& p, DrawFilter* filter, uint32_t shape) const {
   const bool body = !filter || filter->ShapeBody(shape);
-  auto fill = [&](const fw::slide::CellFill& f, const draw::Rect& r) {
-    if (f.kind != fw::slide::CellFill::Kind::None) p.FillRect(r, draw::Brush::Solid(f.color));
+  auto fill = [&](const fw::slide::CellFill& f, const draw::Drawing* d, const draw::Rect& r) {
+    if (d) {
+      d->Draw(p, r);
+    } else if (f.kind == fw::slide::CellFill::Kind::Solid) {
+      p.FillRect(r, draw::Brush::Solid(f.color));
+    }
   };
   if (body) {
-    fill(table_.background, {0, 0, colX_.back(), rowY_.back()});
-    for (const Cell& c : cells_) fill(c.cell->fill, c.rect);
+    fill(table_.background, background_.get(), {0, 0, colX_.back(), rowY_.back()});
+    for (const Cell& c : cells_) fill(c.cell->fill, c.fill.get(), c.rect);
   }
   // Paragraphs are counted across the cells, in reading order.
   struct Counting : DrawFilter {

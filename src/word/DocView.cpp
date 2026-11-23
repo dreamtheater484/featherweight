@@ -406,19 +406,6 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
     page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
     shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
-    format_->insertPicture = [this] { Execute(CmdInsertPicture); };
-    // Insert ▾ after Picture: what's used most first, so it shows without scrolling in a small
-    // window (the friction review); the shapes, breaks and content controls further down.
-    auto more = [this](std::wstring label, int cmd) { format_->insertMore.push_back({std::move(label), [this, cmd] { Execute(cmd); }}); };
-    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc}) more(QueryNotes(cmd)->Tooltip(), cmd);
-    more(L"Text box", CmdInsertTextBox);
-    more(L"Watermark…", CmdWatermarkPanel);
-    for (int cmd : DocPage::InsertCommands()) more(page_->Query(cmd).Tooltip(), cmd);
-    static constexpr std::pair<int, const wchar_t*> kShapes[] = {
-        {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"}, {CmdInsertOval, L"Oval"},
-        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},                         {CmdInsertCallout, L"Callout"}};
-    for (const auto& [cmd, label] : kShapes) more(label, cmd);
-    for (int cmd : FormCommands()) more(QueryForms(cmd)->label, cmd);
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
@@ -426,8 +413,6 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
     sh.done = [this](const std::wstring& message) { AfterFormat({std::nullopt, message}); };
     sh.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
     styles_ = std::make_unique<DocStyles>(*editor_, std::move(sh));
-    for (int cmd : {CmdModifyStyle, CmdNewStyle})
-      format_->styleMore.push_back({styles_->Query(cmd).label, [this, cmd] { Execute(cmd); }});
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -1798,6 +1783,15 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSpelling:
     case CmdWordCount: s = {Ready(), false}; break;
     case CmdLanguage: s = {Editing(), false}; break;
+    case CmdReplace: s = {Editing(), false}; s.label = L"Replace…"; s.shortcut = L"Ctrl+H"; break;  // the ribbon's Replace
+    case CmdZoomMenu: s = {Ready(), false}; s.label = L"Zoom"; break;                               // and Zoom ▾
+    case CmdObjectHeightBox:
+    case CmdObjectWidthBox: {
+      const uint32_t d = SelectedPicture();
+      s = {Editing() && d != fw::doc::kNone && Movable(d), false};
+      s.label = cmd == CmdObjectHeightBox ? L"Height" : L"Width";
+      break;
+    }
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -1860,6 +1854,14 @@ std::vector<int> DocView::Commands() {
 }
 
 bool DocView::Execute(int cmd) {
+  if ((cmd == CmdInsertPicture || (cmd >= CmdInsertTextBox && cmd <= CmdInsertCallout)) && !inserting_) {
+    // An object inserted shows its ribbon tab once, as in Word (DocRibbon.cpp).
+    inserting_ = true;
+    const bool done = Execute(cmd);
+    inserting_ = false;
+    ribbonInserted_ = SelectedPicture();
+    return done;
+  }
   if (format_ && DocFormat::Owns(cmd)) {
     // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
     if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);
@@ -1890,6 +1892,11 @@ bool DocView::Execute(int cmd) {
     case CmdCut: Cut(); return true;
     case CmdPaste: Paste(); return true;
     case CmdPasteMerge: Paste(true, true); return true;
+    case CmdObjectHeightBox:  // a box's KeyTip or command search: the panel with the size
+    case CmdObjectWidthBox:
+      if (const uint32_t d = SelectedPicture(); d != fw::doc::kNone)
+        return Execute(PictureInfoOf(d).picture ? CmdPicturePanel : CmdShapePanel);
+      return true;
     case CmdUndo: Undo(); return true;
     case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;
@@ -1900,6 +1907,7 @@ bool DocView::Execute(int cmd) {
   return PagedView::Execute(cmd);
 }
 
+// A ready document shows its ribbon (DocRibbon.cpp); this toolbar is only what's left without one.
 void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   auto item = [](int cmd, wchar_t glyph, const wchar_t* tooltip = L"") {
     ToolItem t;
@@ -1917,30 +1925,6 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print);
   m.left = {save, saveAs, print};
-  if (Editing()) {
-    // Undo and redo, then formatting; the priorities say what a narrow window drops first (Toolbar.h).
-    auto query = [&](int cmd, wchar_t glyph, int priority) {
-      CommandState q = QueryCommand(cmd);
-      ToolItem t = item(cmd, glyph);
-      t.tooltip = q.Tooltip();
-      t.enabled = q.enabled;
-      t.priority = priority;
-      return t;
-    };
-    ToolItem undo = query(CmdUndo, icon::Undo, 8);
-    undo.sepBefore = true;
-    m.left.push_back(undo);
-    m.left.push_back(query(CmdRedo, icon::Redo, 7));
-    format_->AddToolbar(m);
-    AddD3Toolbar(m);
-    AddD4Toolbar(m);
-    table_->AddToolbar(m);
-    page_->AddToolbar(m);
-    AddPictureToolbar(m);
-  }
-  SyncPicturePanel();
-  SyncShapePanels();
-
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
   m.pageCount = PageCount();

@@ -1716,11 +1716,9 @@ bool App::FillWindowMenu(int which, HMENU m) {
     }
     AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
-    if (ready && v->Kind() == TabKind::Document && !v->Path().empty())
-      AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
-    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is with its Paragraph… below
+    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is on its ribbon (Layout)
       const CommandState setup = v->QueryCommand(CmdPageSetup);
       if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);
     }
@@ -1734,35 +1732,7 @@ bool App::FillWindowMenu(int which, HMENU m) {
     AppendItem(themeMenu, CmdThemeDark, L"Dark", true, settings_.theme == ThemeSetting::Dark, true);
     AppendSubmenu(m, themeMenu, L"App theme");
     AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
-    if (ready && v->Kind() == TabKind::Document) {
-      AppendItem(m, CmdToggleSpelling, L"Check spelling as you type", true, settings_.spelling);
-      AppendItem(m, CmdToggleAutoCorrect, L"AutoCorrect as you type", true, settings_.autoCorrect);
-      const CommandState setup = v->QueryCommand(CmdPageSetup), hyphens = v->QueryCommand(CmdHyphenation);
-      if (setup.visible && setup.enabled) {
-        AppendItem(m, CmdParagraph, L"Paragraph…");
-        AppendItem(m, CmdPageSetup, L"Page setup…");
-        AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
-      }
-      AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
-      // Review: Track Changes, the changes one at a time or all at once, the markup shown.
-      HMENU review = CreatePopupMenu();
-      auto add = [&](HMENU menu, int cmd, bool radio = false) {
-        const CommandState s = v->QueryCommand(cmd);
-        if (!s.visible) return;
-        AppendItem(menu, cmd, s.label + (s.shortcut.empty() ? L"" : L"\t" + s.shortcut), s.enabled, s.checked, radio);
-      };
-      add(review, CmdTrackChanges);
-      AppendSeparator(review);
-      for (int cmd : {CmdAcceptChange, CmdRejectChange, CmdAcceptAll, CmdRejectAll, CmdNextChange, CmdPrevChange})
-        add(review, cmd);
-      AppendSeparator(review);
-      for (int cmd : {CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone, CmdMarkupOriginal}) add(review, cmd, true);
-      AppendSeparator(review);
-      add(review, CmdNewComment);
-      add(review, CmdReviewPane);
-      add(review, CmdReviewerName);
-      AppendSubmenu(m, review, L"Review");
-    }
+    // A document's spelling, AutoCorrect, Paragraph, Page setup, Ruler and Review are on its ribbon.
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
     AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
