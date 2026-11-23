@@ -15,9 +15,12 @@ namespace draw {
 // The cloud fonts as a font set and as a collection; null when there are none. Thread-safe.
 IDWriteFontSet* CloudFontSet();
 IDWriteFontCollection1* CloudFontCollection();
+// Every face in the folders, under its own family name too: "Open Sans Light" in Open Sans's folder,
+// which PowerPoint draws as it is (worldbank's PDF), where Word substitutes it. Null when none.
+IDWriteFontSet* CloudFontSetAll();
 // Whether the cloud fonts have the family `name`, in any of its languages ("MS Mincho" or its
 // Japanese name). Only the families Word downloaded (a folder each), not other names their fonts
-// have ("Open Sans Light"), which Word substitutes.
-bool CloudFontsHave(std::wstring_view name);
+// have ("Open Sans Light"), which Word substitutes; `all`: those too (CloudFontSetAll).
+bool CloudFontsHave(std::wstring_view name, bool all = false);
 
 }  // namespace draw

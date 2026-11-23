@@ -485,6 +485,7 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool direct
   fonts.SetSubstitute([&fonts](std::wstring_view family) { return PresentationSubstitute(family, fonts); });
   fonts.SetGdiFamilies(true);
   fonts.SetPowerPointFallback(true);
+  fonts.SetAllCloudFaces(true);
 }
 
 }  // namespace fw::slide::render

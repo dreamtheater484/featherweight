@@ -294,7 +294,8 @@ bool Fonts::Installed(std::wstring_view family) {
 }
 
 bool Fonts::AddCloudFonts(const std::wstring& name) {
-  if (cloudAdded_ || !draw::CloudFontsHave(name)) return false;
+  const bool all = allCloudFaces_;
+  if (cloudAdded_ || !draw::CloudFontsHave(name, all)) return false;
   cloudAdded_ = true;
   // The collection with them, and the one without the document's own fonts (UseDocumentFonts) too.
   ComPtr<IDWriteFactory5> factory;
@@ -305,7 +306,7 @@ bool Fonts::AddCloudFonts(const std::wstring& name) {
     ComPtr<IDWriteFontSetBuilder1> builder;
     ComPtr<IDWriteFontCollection1> collection;
     if (c && SUCCEEDED(c.As(&c1)) && SUCCEEDED(c1->GetFontSet(&set)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder)) &&
-        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(draw::CloudFontSet())) &&
+        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(all ? draw::CloudFontSetAll() : draw::CloudFontSet())) &&
         SUCCEEDED(builder->CreateFontSet(&merged)) && SUCCEEDED(factory->CreateFontCollectionFromFontSet(merged.Get(), &collection)))
       c = collection;
   };
