@@ -325,6 +325,7 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool direct
   }
   if (!files.empty()) fonts.UseDocumentFonts(files, names);
   fonts.SetSubstitute([&fonts](std::wstring_view family) { return PresentationSubstitute(family, fonts); });
+  fonts.SetGdiFamilies(true);
 }
 
 }  // namespace fw::slide::render

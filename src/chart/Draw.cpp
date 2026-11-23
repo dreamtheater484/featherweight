@@ -436,7 +436,11 @@ void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, Colo
 
 struct Scale {
   double min = 0, max = 1, step = 0.2;
-  double At(double v) const { return (v - min) / (max - min); }
+  double base = 0;  // logarithmic (c:logBase): ticks at powers of it, `step` unused; 0: linear
+  double At(double v) const {
+    if (base > 0) return v > 0 ? (std::log(v) - std::log(min)) / (std::log(max) - std::log(min)) : 0;
+    return (v - min) / (max - min);
+  }
 };
 
 double Up(double v, double step) { return std::ceil(v / step - 1e-9); }
@@ -457,6 +461,18 @@ double NiceStep(double lo, double hi, int most) {
 // units; the axis's own minimum and maximum win. (Excel's PDFs: a scatter of 55..86 up to 100, of
 // 160..190 from 155; columns of 95..175 up to 200.)
 Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
+  if (axis.logBase >= 2) {
+    // From the power of the base at or below the smallest value to the one at or above the
+    // largest; the axis's own minimum and maximum win (15-213's 0.01 to 10^8 by tens).
+    Scale s;
+    s.base = axis.logBase;
+    const double b = std::log(s.base);
+    const double low = std::isfinite(lo) && lo > 0 ? lo : 1, high = std::isfinite(hi) && hi > 0 ? hi : low * s.base;
+    s.min = axis.min && *axis.min > 0 ? *axis.min : std::pow(s.base, std::floor(std::log(low) / b + 1e-9));
+    s.max = axis.max && *axis.max > s.min ? *axis.max : std::pow(s.base, std::ceil(std::log(std::max(high, s.min)) / b - 1e-9));
+    if (!(s.max > s.min)) s.max = s.min * s.base;
+    return s;
+  }
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
   const bool narrow = hi > lo;  // a band of values: its far side keeps its room, a single value doesn't
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
@@ -482,6 +498,10 @@ Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int
 
 std::vector<double> Ticks(const Scale& s) {
   std::vector<double> out;
+  if (s.base > 0) {
+    for (double v = s.min; v <= s.max * (1 + 1e-9) && out.size() <= 60; v *= s.base) out.push_back(v);
+    return out;
+  }
   for (int i = 0; i <= 60; ++i) {
     double v = s.min + i * s.step;
     if (v > s.max + s.step * 1e-6) break;

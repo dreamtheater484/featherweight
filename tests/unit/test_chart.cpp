@@ -147,6 +147,28 @@ TEST(Chart_LegendEntriesLeftOutAndALabelStep) {
   CHECK_EQ(Filled(art, second), 3u);  // three bars, no swatch
 }
 
+TEST(Chart_LogarithmicValueAxis) {
+  // c:logBase 10 with a minimum of 0.01: values a thousandfold apart, gridlines at each power of
+  // ten up to the one above the largest (15-213's memory gap chart).
+  std::string xml = ColumnChart();
+  const std::string from = "<c:axId val=\"2\"/><c:axPos val=\"l\"/>";
+  xml.replace(xml.find(from), from.size(),
+              "<c:axId val=\"2\"/><c:scaling><c:logBase val=\"10\"/><c:orientation val=\"minMax\"/><c:min val=\"0.01\"/></c:scaling>"
+              "<c:axPos val=\"l\"/>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK_EQ(c.value.logBase, 10.0);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  size_t marks = 0;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    CHECK(std::isfinite(b.left) && std::isfinite(b.top) && std::isfinite(b.right) && std::isfinite(b.bottom));
+    ++marks;
+  }
+  CHECK(marks > 0);
+}
+
 TEST(Chart_PieSlicesAndPercentLabels) {
   Parsed p(PieChart());
   Chart c;

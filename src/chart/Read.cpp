@@ -265,6 +265,10 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
   if (a.min && !(*a.min == *a.min)) a.min.reset();
   if (a.max && !(*a.max == *a.max)) a.max.reset();
   a.reversed = Val(C(scaling, "orientation")) == "maxMin";
+  if (pugi::xml_node b = C(scaling, "logBase")) {
+    const double base = Number(b, "val", 0.0);
+    if (base >= 2 && base <= 1000) a.logBase = base;
+  }
   if (pugi::xml_node cb = C(ax, "crossBetween")) a.between = Val(cb) != "midCat";
   if (pugi::xml_node s = C(ax, "tickLblSkip")) a.labelSkip = static_cast<int>(std::clamp(Number(s, "val", 0.0), 0.0, 1e6));
   if (pugi::xml_node t = C(ax, "title")) {

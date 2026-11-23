@@ -84,6 +84,9 @@ class Fonts {
   // The caller's choice from now on (a presentation's, once its deck is known); families already
   // resolved keep theirs.
   void SetSubstitute(SubstituteFn substitute) { substitute_ = std::move(substitute); }
+  // Families by their GDI names only, as PowerPoint finds them: DirectWrite's own families, made
+  // by taking weight words off a name ("Gill Sans" for Gill Sans Ultra Bold), don't count.
+  void SetGdiFamilies(bool on) { gdiFamilies_ = on; }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
@@ -155,6 +158,7 @@ class Fonts {
   bool FullName(const std::wstring& name, FaceName& out);
   std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
+  bool gdiFamilies_ = false;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
   std::vector<Substitution> substitutions_;

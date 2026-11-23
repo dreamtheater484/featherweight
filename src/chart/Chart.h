@@ -80,6 +80,7 @@ struct Axis {
   std::string format;     // c:numFmt formatCode; empty: General
   std::optional<double> min, max;
   bool reversed = false;  // c:scaling/c:orientation maxMin
+  double logBase = 0;     // c:scaling/c:logBase (2 to 1000); 0: linear
   bool between = true;    // categories between tick marks (c:crossBetween)
   std::wstring title;
   bool titleOverlay = false;  // the title drawn over the plot, which keeps its room

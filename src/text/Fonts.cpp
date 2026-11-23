@@ -264,7 +264,11 @@ bool Fonts::Installed(std::wstring_view family) {
   std::wstring name(family);
   UINT32 index = 0;
   BOOL exists = FALSE;
-  if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) return true;
+  if (gdiFamilies_) {
+    if (Win32Family(name)) return true;
+  } else if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) {
+    return true;
+  }
   // Not on the PC: one of Office's cloud fonts, which Word draws as installed ones.
   if (!AddCloudFonts(name)) return false;
   return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);

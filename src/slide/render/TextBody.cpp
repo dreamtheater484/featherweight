@@ -345,7 +345,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     f.rightToLeft = pp.rtl;
     f.alignment = box.wrap ? a : (pp.rtl ? Alignment::End : Alignment::Start);
     // Spaces before a break or the paragraph's end don't count when centering (anyone-out-there's titles).
-    f.alignTrailingSpaces = getenv("FWOLDTRAIL") != nullptr;
+    f.alignTrailingSpaces = false;
     f.startIndent = pp.marginLeft;
     f.endIndent = pp.marginRight;
     // The first line never starts before the text area (marL 0 with a hanging indent: PowerPoint's PDFs).
@@ -434,7 +434,12 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     float start = 0, height = 0;
     for (Impl::Para& p : m.paras)
       for (size_t i = 0; i < p.rows.size(); ++i) {
-        if (column + 1 < columns && p.rows[i].second - start > room + 0.01f && p.rows[i].first > start) {
+        // A line goes on to the next column once it would reach below this one's bottom; but a
+        // paragraph's last line that starts above the bottom stays with the lines before it, however
+        // far it reaches below (era-systems 41).
+        const bool lastOfSeveral = i > 0 && i + 1 == p.rows.size();
+        const bool below = lastOfSeveral ? p.rows[i].first - start >= room - 0.01f : p.rows[i].second - start > room + 0.01f;
+        if (column + 1 < columns && below && p.rows[i].first > start) {
           ++column;
           start = p.rows[i].first;
         }
