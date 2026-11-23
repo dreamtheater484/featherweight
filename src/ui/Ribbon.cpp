@@ -57,8 +57,24 @@ bool IsSplit(const RibbonItem& it, RibbonSize size) {
   return it.tool.kind == ToolKind::SplitButton && OwnDrawn(it, size);
 }
 
+// A split button or color picker the toolbar's control draws, at Medium size: its label between
+// the icon and the arrow (Excel's "Merge & Center ▾", "Shape Fill ▾").
+bool LabelledPicker(const RibbonItem& it, RibbonSize size) {
+  return size == RibbonSize::Medium && it.tool.glyph && !OwnDrawn(it, size) &&
+         (it.tool.kind == ToolKind::SplitButton || it.tool.kind == ToolKind::ColorPicker);
+}
+
+// A Medium box whose item has a label: the label in front ("Width: [Automatic ▾]").
+bool LabelledBox(const RibbonItem& it, RibbonSize size) {
+  return size == RibbonSize::Medium && !it.label.empty() && !OwnDrawn(it, size) &&
+         (it.tool.kind == ToolKind::Dropdown || it.tool.kind == ToolKind::ComboBox || it.tool.kind == ToolKind::SpinBox);
+}
+
+std::wstring BoxLabel(const RibbonItem& it) { return it.label.back() == L':' ? it.label : it.label + L":"; }
+
 // A large label's two lines: at "\n", or at the space that balances them.
-std::pair<std::wstring, std::wstring> SplitLabel(const std::wstring& s, const std::function<float(const std::wstring&)>& w) {
+template <class Width>
+std::pair<std::wstring, std::wstring> SplitLabel(const std::wstring& s, const Width& w) {
   if (const size_t nl = s.find(L'\n'); nl != std::wstring::npos) return {s.substr(0, nl), s.substr(nl + 1)};
   std::pair<std::wstring, std::wstring> best{s, L""};
   float bestW = 1e9f;
@@ -148,8 +164,13 @@ const RibbonItem* Ribbon::ItemAt(int g, int i) const { return const_cast<Ribbon*
 
 CommandState Ribbon::Query(int cmd) const { return query && cmd ? query(cmd) : CommandState{}; }
 
-std::wstring Ribbon::LabelOf(const RibbonItem& it) const {
-  if (!it.label.empty()) return it.label;
+std::wstring Ribbon::LabelOf(const RibbonItem& it, bool large) const {
+  if (!it.label.empty()) {
+    if (large) return it.label;  // a large label's "\n" says where its two lines break
+    std::wstring s = it.label;
+    std::replace(s.begin(), s.end(), L'\n', L' ');
+    return s;
+  }
   std::wstring s = Query(it.tool.cmd).label;
   if (s.size() > 1 && s.back() == L'…') s.pop_back();  // "Save as…" on a button: "Save as"
   if (s.empty()) s = uia::SplitShortcut(it.tool.tooltip).first;
@@ -203,9 +224,11 @@ float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumn
   const float u = ui_;
   if (galleryColumns > 0)
     return std::round((galleryColumns * it.gallery->choiceWidth + 2 + kGalleryScrollW) * u);
+  if (LabelledPicker(it, size)) return std::round((TextW(LabelOf(it), kItemFont) + 52) * u);
+  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + std::max(it.tool.width, 20.f)) * u);
   if (!OwnDrawn(it, size) && !it.gallery) return std::round(std::max(it.tool.width, 20.f) * u);
   const bool arrow = IsMenuButton(it) || IsSplit(it, size) || it.gallery.has_value();
-  const std::wstring label = LabelOf(it);
+  const std::wstring label = LabelOf(it, size == RibbonSize::Large);
   switch (size) {
     case RibbonSize::Large: {
       auto [a, b] = SplitLabel(label, [&](const std::wstring& s) { return TextW(s, kItemFont); });
@@ -375,9 +398,20 @@ float Ribbon::FlowGroup(int g, int stage, float x, float y, bool place, Layer la
             Control& ctl = Toolbar::ConfigureControl(controls_[it.tool.cmd], kinds_[it.tool.cmd], it.tool, [this](int cmd) {
               if (onCommand) onCommand(cmd);
             });
-            ctl.rc = r;
+            if (it.tool.kind == ToolKind::SplitButton || it.tool.kind == ToolKind::ColorPicker) {
+              const std::wstring text = LabelledPicker(it, cell.size) ? LabelOf(it) : L"";
+              if (auto* s = dynamic_cast<SplitButton*>(&ctl)) {
+                s->text = text;
+                s->textSize = kItemFont;
+              } else if (auto* cp = dynamic_cast<ColorPicker*>(&ctl)) {
+                cp->text = text;
+                cp->textSize = kItemFont;
+              }
+            }
+            // A labelled box: the label at the left (drawn with the part), the box after it.
+            ctl.rc = LabelledBox(it, cell.size) ? RectF(r.left + std::round((TextW(BoxLabel(it), kItemFont) + 6) * u), r.top, r.right, r.bottom) : r;
             ctl.visible = true;
-            Part p{PartKind::Control, r, g, cell.item};
+            Part p{PartKind::Control, ctl.rc, g, cell.item};
             p.size = cell.size;
             p.layer = layer;
             p.control = &ctl;
@@ -596,11 +630,26 @@ void Ribbon::Layout(const RECT& rc, float ui, RibbonModel m) {
     std::stable_sort(steps.begin(), steps.end(), [](const Step& a, const Step& b) {
       return a.round != b.round ? a.round < b.round : a.g != b.g ? a.g > b.g : a.s < b.s;
     });
+    struct Done {
+      int g, from, to;
+    };
+    std::vector<Done> done;
     for (const Step& st : steps) {
       if (total <= avail) break;
       if (stage_[st.g] < st.s && w[st.g][st.s] < w[st.g][stage_[st.g]] - 0.5f) {
         total -= w[st.g][stage_[st.g]] - w[st.g][st.s];
+        done.push_back({st.g, stage_[st.g], st.s});
         stage_[st.g] = st.s;
+      }
+    }
+    // A late step (a group folded) can free more room than it needed: earlier steps are taken
+    // back where they still fit, the latest first, so the most expanded set that fits shows.
+    for (auto d = done.rbegin(); d != done.rend(); ++d) {
+      if (stage_[d->g] != d->to) continue;
+      const float grow = w[d->g][d->from] - w[d->g][d->to];
+      if (total + grow <= avail) {
+        total += grow;
+        stage_[d->g] = d->from;
       }
     }
     const float bodyTop = rc.top + kTabsH * u;
@@ -824,7 +873,13 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
       break;
     }
     case PartKind::Control:
-      if (part.control) part.control->Draw(c);
+      if (!part.control) break;
+      if (const RibbonItem* it = ItemAt(part.group, part.item); it && LabelledBox(*it, part.size)) {
+        const std::wstring s = BoxLabel(*it);
+        c.Text(s, RectF(part.rc.left - std::round((TextW(s, kItemFont) + 6) * u), part.rc.top, part.rc.left, part.rc.bottom - 1 * u),
+               it->tool.enabled ? p.text : p.textDisabled, kItemFont * u);
+      }
+      part.control->Draw(c);
       break;
     case PartKind::GroupButton: {
       const RibbonGroup& grp = Tab()->groups[part.group];
@@ -928,7 +983,7 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
             c.StrokeRound(Inflate(part.rc, -0.5f, -0.5f), 3 * u, p.hover, 1);
       }
       subtle(part.rc, enabled, it.tool.checked && part.kind == PartKind::Item && (it.tool.glyph || part.size == RibbonSize::Large));
-      const std::wstring label = LabelOf(it);
+      const std::wstring label = LabelOf(it, part.size == RibbonSize::Large);
       const wchar_t glyph = it.tool.glyph;
       if (part.size == RibbonSize::Large) {
         const D2D1_RECT_F full = split ? RectF(part.rc.left, part.kind == PartKind::Item ? part.rc.top : part.rc.top - kLargeIconH * u,
@@ -1505,6 +1560,7 @@ void Ribbon::Describe(uia::Tree& t, int parent) {
   }
 }
 
+#if FW_TEST_SCREENS  // dumpribbon and ribboncheck (tests only)
 std::wstring Ribbon::Dump() {
   std::wstring out;
   auto num = [](float v) { return std::to_wstring(static_cast<int>(std::lround(v))); };
@@ -1572,6 +1628,7 @@ std::vector<std::wstring> Ribbon::Problems() const {
   check(items);
   return out;
 }
+#endif
 
 std::vector<std::pair<int, std::wstring>> Ribbon::Commands() const {
   std::vector<std::pair<int, std::wstring>> out;

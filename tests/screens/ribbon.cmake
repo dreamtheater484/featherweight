@@ -19,7 +19,8 @@ function(run name size theme script)
   set(args ${ARGN})
   execute_process(COMMAND "${EXE}" --snapshot "${OUT}/${name}.png" --size ${size} --theme ${theme} --script "${script}" ${args}
                   RESULT_VARIABLE code ERROR_VARIABLE err TIMEOUT 120)
-  string(REGEX MATCHALL "(ribboncheck|ribbonbench)[^\n]*" lines "${err}")
+  string(REPLACE ";" "," report "${err}")  # a CMake list would split the lines at their semicolons
+  string(REGEX MATCHALL "(ribboncheck|ribbonbench)[^\n]*" lines "${report}")
   foreach(line ${lines})
     message(STATUS "${name}: ${line}")
   endforeach()
@@ -53,6 +54,8 @@ if(MODE STREQUAL "screens")
   run(gallery-contextual 1024x700 dark "galleryribbon:table;ribbon:Table Design;ribboncheck" --widget-gallery)
   run(gallery-folded 560x600 light "galleryribbon:on;ribboncheck" --widget-gallery)
   run(gallery-bench 1366x768 light "galleryribbon:table;ribbonbench" --widget-gallery)
+  run(gallery-icons-light 1366x900 light "galleryicons:on" --widget-gallery)
+  run(gallery-icons-dark 1366x900 dark "galleryicons:on" --widget-gallery)
   message(STATUS "ribbon screens: ${OUT}")
 elseif(MODE STREQUAL "word")
   # r1-word: the coverage check as the document opens, and with every contextual tab built

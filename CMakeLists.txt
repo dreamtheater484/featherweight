@@ -49,6 +49,9 @@ add_executable(Featherweight WIN32
   src/resource.rc
   src/Featherweight.manifest
 )
+# The ribbon (R1) is UI code that runs once a frame at most: built for size.
+set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp
+                            PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
@@ -140,6 +143,9 @@ if(FW_BUILD_TESTS)
   # dark, KeyTips, the File page, tab switches within 16 ms), or an editor's coverage check (word,
   # sheet, slide), which r1-word, r1-sheet and r1-slide turn on once their ribbon shows.
   function(fw_ribbon_test name mode)
+    if(NOT FW_TEST_SCREENS)  # its script steps (ribboncheck, dumpreach, ribbonbench) are test-only
+      return()
+    endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
              "-DFILES=${_fw_office}/generated" "-DBASELINES=${CMAKE_SOURCE_DIR}/tests/ribbon"
              "-DOUT=${CMAKE_BINARY_DIR}/screens/${name}" -DMODE=${mode} -P "${CMAKE_SOURCE_DIR}/tests/screens/ribbon.cmake")

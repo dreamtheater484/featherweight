@@ -1,0 +1,46 @@
+# The commands the toolbar and the ⋯ menu reached in slide before R1 (dumpreach on tests/office/generated/simple.pptx).
+# ribboncheck:<this file> fails when one isn't reachable from the ribbon, the File page, the right-click menu
+# or Alt+Q. Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
+reach 100 Open
+reach 102 Save as…
+reach 103 Print
+reach 107 Find
+reach 133 Night reading: dark pages
+reach 134 Full screen
+reach 135 Present from the beginning
+reach 137 App theme: use Windows setting
+reach 138 App theme: light
+reach 139 App theme: dark
+reach 140 Highlight form fields
+reach 141 Update automatically
+reach 142 Check for updates now
+reach 143 Make Featherweight the default PDF app
+reach 144 About Featherweight
+reach 701 New document
+reach 702 New workbook
+reach 720 New from template 1
+reach 721 New from template 2
+reach 722 New from template 3
+reach 900 Insert picture
+reach 1152 Insert table
+reach 1400 Export PDF…
+reach 1460 Insert text box
+reach 2800 Insert chart
+reach 3036 More templates (user templates folder)
+reach 3240 Notes
+# 3245: Print layout ▾ is File › Print's settings since R1 (r1-slide): its choices instead
+reach 3246 Slides
+reach 3247 Handouts, 1 slide a page
+reach 3248 Handouts, 2 slides a page
+reach 3249 Handouts, 3 slides a page
+reach 3250 Handouts, 4 slides a page
+reach 3251 Handouts, 6 slides a page
+reach 3252 Handouts, 9 slides a page
+reach 3253 Notes pages
+reach 3254 Print hidden slides
+reach 3255 Frame slides
+reach 3421 New slide with a layout
+reach 3425 Slide layout
+reach 3433 Design: themes, colors, background, slide size
+reach 3436 Header & footer: slide numbers, footer and date
+reach 3500 Insert shape

@@ -407,6 +407,8 @@ class ColorPicker : public Control {
   ColorPicker();
 
   wchar_t glyph = 0;
+  std::wstring text;      // with a glyph: a label after it (the ribbon's "Shape Fill ▾")
+  float textSize = 13;
   D2D1_COLOR_F color{};
   bool automatic = false;
   std::wstring automaticLabel;
@@ -444,6 +446,7 @@ class SplitButton : public Control {
 
   wchar_t glyph = 0;
   std::wstring text;
+  float textSize = 13;
   bool showColor = false;  // a bar under the glyph in `color`
   D2D1_COLOR_F color{};
   // The arrow opens `items`, or a color palette when `colors` is set; with neither there's no
