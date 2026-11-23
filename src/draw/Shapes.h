@@ -150,6 +150,9 @@ struct Shape {
   OuterShadow shadow;
   std::shared_ptr<PictureFill> picture;  // Picture: what fills the geometry
   Rect childBounds;                       // Group: chOff and chExt, the children's coordinates
+  // SmartArt's drawing: its coordinates are the graphic frame's size as drawn (Office saves it at
+  // the size it shows, a frame in a scaled group's scaled), so its shapes map one to one.
+  bool childrenAsDrawn = false;
   std::vector<Shape> children;
   std::shared_ptr<TextBody> text;
   std::shared_ptr<TextPath> textPath;
@@ -159,8 +162,10 @@ struct Shape {
 // The shape's own coordinates ((0, 0) to its size) → its parent's: flips, then rotation, about
 // its center.
 Matrix ShapeTransform(const Shape& s);
-// A group child's bounds in the group's own coordinates.
+// A group child's bounds in the group's own coordinates: (0, 0) to the group's size as placed,
+// which for a group in a scaled group isn't its own xfrm's size.
 Rect ChildToGroup(const Shape& group, const Rect& child);
+Rect ChildToGroup(const Shape& group, const Rect& child, Size placed);
 // Draws a shape in its parent's coordinates.
 void DrawShape(Painter& p, const Shape& s);
 // The same through hooks; `textIndex` counts the text boxes, in CollectTextBoxes' order.

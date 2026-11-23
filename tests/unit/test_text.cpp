@@ -539,6 +539,33 @@ TEST(Text_FontSlotsAndFallback) {
   }
 }
 
+TEST(Text_PowerPointFallbackDrawsArabicInTahoma) {
+  // Arabic letters a font doesn't have: Tahoma for slides, as PowerPoint draws them (un-country
+  // morocco's PDF), not DirectWrite's own choice (Segoe UI), which documents keep. The spaces
+  // between the words too: PowerPoint draws the whole Arabic run in Tahoma (its 10-point spaces at
+  // 32 points, where Franklin Gothic's are 8).
+  Fonts slides;
+  if (!slides.Installed(L"Georgia") || !slides.Installed(L"Tahoma")) return;
+  slides.SetPowerPointFallback(true);
+  const TextStyle s = Style(L"Georgia", 20);
+  const std::wstring arabic = L"\x0645\x0631\x062D\x0628\x0627 \x0628\x0643\x0645";
+  const std::vector<Line> lines = Layout(slides, Para(arabic, s), 400);
+  CHECK(!lines.empty() && !lines[0].pieces.empty());
+  if (lines.empty() || lines[0].pieces.empty()) return;
+  for (const GlyphPiece& p : lines[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
+  // A font that isn't installed (morocco's Andalus) isn't substituted for Arabic: Tahoma too.
+  const TextStyle missing = Style(L"No Such Arabic Font", 20);
+  const std::vector<Line> unknown = Layout(slides, Para(arabic, missing), 400);
+  CHECK(!unknown.empty() && !unknown[0].pieces.empty());
+  if (unknown.empty() || unknown[0].pieces.empty()) return;
+  for (const GlyphPiece& p : unknown[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
+  Fonts documents;
+  const std::vector<Line> other = Layout(documents, Para(arabic, s), 400);
+  CHECK(!other.empty() && !other[0].pieces.empty());
+  if (other.empty() || other[0].pieces.empty()) return;
+  CHECK(FamilyOf(other[0].pieces[0]) != L"Tahoma");
+}
+
 TEST(Text_AFullFaceNameIsThatFace) {
   // "Times New Roman Bold" names a face, not a family: Word draws it bold, as GDI finds it, and
   // nothing is missing. A face name that isn't installed is still substituted.

@@ -393,6 +393,33 @@ void ReadParagraphs(pugi::xml_node txBody, const Levels& lv, const Ctx& c, TextB
     para.endProps = base;
     ForEachChild(p, [&](pugi::xml_node n) {
       std::string_view k = LocalNameOf(n);
+      // Office math (a14:m): an m:oMathPara or m:oMath, drawn by the renderer's math layout.
+      if (Is(n, draw::xml::kA14, "m")) {
+        pugi::xml_node math;
+        ForEachChild(n, [&](pugi::xml_node e) {
+          if (Is(e, kMath, "oMathPara") || Is(e, kMath, "oMath")) math = e;
+          return !math;
+        });
+        if (!math) return true;
+        TextRun run;
+        run.node = math;
+        run.kind = TextRun::Kind::Math;
+        run.props = base;
+        pugi::xml_node r = math.find_node([](pugi::xml_node e) { return Is(e, kMath, "r"); });
+        ApplyRPr(A(r, "rPr"), run.props, c);
+        struct Texts : pugi::xml_tree_walker {
+          std::string out;
+          bool for_each(pugi::xml_node& e) override {
+            if (Is(e, kMath, "t")) out += e.text().get();
+            return out.size() < 4096;
+          }
+        } texts;
+        math.traverse(texts);
+        run.text = fw::Utf8ToWide(texts.out);
+        para.runs.push_back(std::move(run));
+        ++runs;
+        return runs < kMaxRuns;
+      }
       if (NamespaceOf(n) != kA) return true;
       if (k == "r" || k == "fld" || k == "br") {
         TextRun run;

@@ -126,6 +126,20 @@ void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size
       if (auto c = draw::ReadColor(f, colors)) *color = c;
 }
 
+// A preset dash (a:prstDash) as dashes and gaps in multiples of the line's width; empty: solid.
+std::vector<float> PresetDashes(std::string_view v) {
+  if (v == "dot" || v == "sysDot") return {1, 1};
+  if (v == "dash") return {4, 3};
+  if (v == "lgDash") return {8, 3};
+  if (v == "dashDot") return {4, 3, 1, 3};
+  if (v == "lgDashDot") return {8, 3, 1, 3};
+  if (v == "lgDashDotDot") return {8, 3, 1, 3, 1, 3};
+  if (v == "sysDash") return {3, 1};
+  if (v == "sysDashDot") return {3, 1, 1, 1};
+  if (v == "sysDashDotDot") return {3, 1, 1, 1, 1, 1};
+  return {};
+}
+
 Look LookOf(pugi::xml_node spPr, const draw::ColorContext& colors) {
   Look l;
   if (!spPr) return l;
@@ -137,6 +151,14 @@ Look LookOf(pugi::xml_node spPr, const draw::ColorContext& colors) {
     if (A(ln, "noFill")) l.noLine = true;
     else if (pugi::xml_node f = A(ln, "solidFill")) l.line = draw::ReadColor(f, colors);
     if (ln.attribute("w")) l.lineWidth = std::clamp(EmuToPt(Number(ln, "w", 9525)), 0.0f, 50.0f);
+    if (pugi::xml_node d = A(ln, "prstDash")) l.dashes = PresetDashes(Val(d));
+    else if (pugi::xml_node c = A(ln, "custDash"))
+      ForEachChild(c, [&](pugi::xml_node ds) {
+        if (LocalNameOf(ds) != "ds") return true;
+        l.dashes.push_back(static_cast<float>(std::clamp(Number(ds, "d", 100000) / 100000, 0.01, 1000.0)));
+        l.dashes.push_back(static_cast<float>(std::clamp(Number(ds, "sp", 100000) / 100000, 0.01, 1000.0)));
+        return l.dashes.size() < 64;
+      });
   }
   return l;
 }
@@ -226,6 +248,7 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
     if (s.symbol.size() > 16) s.symbol.clear();
     if (pugi::xml_node c = C(m, "symbol")) s.marker = s.symbol != "none";
     s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 7), 2.0, 72.0));
+    s.markerLook = LookOf(C(m, "spPr"), colors);
   }
   s.smooth = (type == Type::Line || scatter) && On(ser, "smooth", true);
   const LabelParts l = LabelsOf(C(ser, "dLbls"));
@@ -233,6 +256,60 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   s.separator = l.separator;
   s.labelFormat = LabelFormat(C(ser, "dLbls"));
   s.labelPos = Val(C(C(ser, "dLbls"), "dLblPos"));
+  ForEachChild(C(ser, "dLbls"), [&](pugi::xml_node d) {
+    if (LocalNameOf(d) != "dLbl" || s.pointLabels.size() >= 256) return true;
+    Series::PointLabel pl;
+    pl.index = static_cast<uint32_t>(std::clamp(Number(C(d, "idx"), "val", 0.0), 0.0, 1e6));
+    pl.deleted = On(d, "delete", false);
+    const LabelParts own = LabelsOf(d);
+    pl.value = own.val, pl.seriesName = own.ser, pl.category = own.cat;
+    if (pugi::xml_node m = C(C(d, "layout"), "manualLayout")) {
+      pl.dx = static_cast<float>(std::clamp(Number(C(m, "x"), "val", 0.0), -2.0, 2.0));
+      pl.dy = static_cast<float>(std::clamp(Number(C(m, "y"), "val", 0.0), -2.0, 2.0));
+    }
+    const Look box = LookOf(C(d, "spPr"), colors);
+    if (!box.noFill) pl.fill = box.fill;
+    pl.format = LabelFormat(d);
+    if (pl.format.empty()) pl.format = C(CacheOf(C(ser, "val"), "numRef", "numCache", "numLit"), "formatCode").text().get();
+    // Office 2013's own box size (c15:layout in the label's extensions).
+    for (pugi::xml_node e = C(C(d, "extLst"), "ext"); e; e = e.next_sibling())
+      for (pugi::xml_node k = e.first_child(); k; k = k.next_sibling())
+        if (LocalNameOf(k) == "layout")
+          if (pugi::xml_node m = C(k, "manualLayout")) {
+            pl.w = static_cast<float>(std::clamp(Number(C(m, "w"), "val", 0.0), 0.0, 1.0));
+            pl.h = static_cast<float>(std::clamp(Number(C(m, "h"), "val", 0.0), 0.0, 1.0));
+          }
+    // Its text's insets: its own a:bodyPr's, else its series' labels'.
+    const auto insets = [&](pugi::xml_node body) {
+      static const char* const kNames[] = {"lIns", "tIns", "rIns", "bIns"};
+      for (int k = 0; k < 4; ++k)
+        if (pl.insets[k] < 0 && body.attribute(kNames[k])) pl.insets[k] = std::clamp(EmuToPt(Number(body, kNames[k], 0)), 0.0f, 100.0f);
+    };
+    insets(A(C(C(d, "tx"), "rich"), "bodyPr"));
+    insets(A(C(d, "txPr"), "bodyPr"));
+    insets(A(C(C(ser, "dLbls"), "txPr"), "bodyPr"));
+    pl.pos = Val(C(d, "dLblPos"));
+    if (pl.pos.size() > 8) pl.pos.clear();
+    TextLook(C(d, "txPr"), colors, &pl.size, &pl.color);
+    if (pugi::xml_node rich = C(C(d, "tx"), "rich")) {
+      TextLook(rich, colors, &pl.size, &pl.color);
+      std::wstring text;
+      ForEachChild(rich, [&](pugi::xml_node p) {
+        if (LocalNameOf(p) != "p") return true;
+        std::wstring line;
+        ForEachChild(p, [&](pugi::xml_node r) {
+          if (LocalNameOf(r) == "fld" && std::string_view(r.attribute("type").value()) == "SERIESNAME") line += s.name;
+          else if (LocalNameOf(r) == "r" || LocalNameOf(r) == "fld") line += Wide(A(r, "t").text().get());
+          return line.size() < 1000;
+        });
+        text += (text.empty() ? L"" : L"\n") + line;
+        return text.size() < 1000;
+      });
+      pl.text = text;
+    }
+    s.pointLabels.push_back(std::move(pl));
+    return true;
+  });
   if (pugi::xml_node e = C(ser, "explosion")) s.explosion = std::clamp(Number(e, "val", 0), 0.0, 400.0);
   return s;
 }
@@ -245,6 +322,18 @@ std::string SourceFormat(pugi::xml_node group, const char* tag, DataSource* sour
   std::string format;
   if (FromCells(C(C(C(group, "ser"), tag), "numRef"), source, texts, numbers, &format)) return format;
   return C(CacheOf(C(C(group, "ser"), tag), "numRef", "numCache", "numLit"), "formatCode").text().get();
+}
+
+// An element's c:layout/c:manualLayout in edge mode, as fractions of the chart (factor mode, an
+// offset from where the chart would put it, isn't followed); `inner`: layoutTarget inner.
+std::optional<draw::Rect> ManualLayout(pugi::xml_node owner, bool* inner = nullptr) {
+  pugi::xml_node m = C(C(owner, "layout"), "manualLayout");
+  if (!m || Val(C(m, "xMode")) != "edge" || Val(C(m, "yMode")) != "edge") return std::nullopt;
+  const double x = Number(C(m, "x"), "val", kNaN), y = Number(C(m, "y"), "val", kNaN);
+  const double w = Number(C(m, "w"), "val", kNaN), h = Number(C(m, "h"), "val", kNaN);
+  if (!(x >= -0.5 && x <= 1.5 && y >= -0.5 && y <= 1.5 && w > 0 && w <= 2 && h > 0 && h <= 2)) return std::nullopt;
+  if (inner) *inner = Val(C(m, "layoutTarget")) == "inner";
+  return draw::Rect{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + w), static_cast<float>(y + h)};
 }
 
 // An axis; `source` is the format its numbers take when they're linked to the data's.
@@ -270,6 +359,7 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
     if (base >= 2 && base <= 1000) a.logBase = base;
   }
   if (pugi::xml_node cb = C(ax, "crossBetween")) a.between = Val(cb) != "midCat";
+  a.labelsHigh = Val(C(ax, "tickLblPos")) == "high";
   if (pugi::xml_node s = C(ax, "tickLblSkip")) a.labelSkip = static_cast<int>(std::clamp(Number(s, "val", 0.0), 0.0, 1e6));
   if (pugi::xml_node t = C(ax, "title")) {
     a.title = TextOf(C(t, "tx"));
@@ -299,6 +389,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   pugi::xml_node chart = C(chartSpace, "chart");
   pugi::xml_node plot = C(chart, "plotArea");
   if (!plot) return false;
+  out.plotLayout = ManualLayout(plot, &out.plotInner);
   out.area = LookOf(C(chartSpace, "spPr"), colors);
   // In a workbook (where `data` comes from), Excel rounds the corners when the chart doesn't say,
   // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
@@ -467,6 +558,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const std::string_view pos = Val(C(legend, "legendPos"));
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
     out.legendOverlay = On(legend, "overlay", false);
+    out.legendLayout = ManualLayout(legend);
+    out.legendLook = LookOf(C(legend, "spPr"), colors);
     for (pugi::xml_node e = legend.first_child(); e; e = e.next_sibling())
       if (LocalNameOf(e) == "legendEntry" && On(e, "delete", false))
         out.hiddenEntries.push_back(static_cast<uint32_t>(std::max(0.0, Number(C(e, "idx"), "val", 0.0))));

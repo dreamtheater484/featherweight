@@ -188,6 +188,25 @@ Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : subst
   if (FAILED(factory_->CreateTextAnalyzer(&analyzer)) || FAILED(analyzer.As(&analyzer_))) analyzer_.Reset();
 }
 
+void Fonts::SetPowerPointFallback(bool on) {
+  if (on == powerPointFallback_ || !factory_) return;
+  ComPtr<IDWriteFontFallback> system, custom;
+  if (FAILED(factory_->GetSystemFontFallback(&system))) return;
+  if (on) {
+    ComPtr<IDWriteFontFallbackBuilder> builder;
+    static const DWRITE_UNICODE_RANGE kArabic[] = {
+        {0x0600, 0x06FF}, {0x0750, 0x077F}, {0x08A0, 0x08FF}, {0xFB50, 0xFDFF}, {0xFE70, 0xFEFF}};
+    const wchar_t* tahoma[] = {L"Tahoma"};
+    if (!Win32Family(L"Tahoma") || FAILED(factory_->CreateFontFallbackBuilder(&builder)) ||
+        FAILED(builder->AddMapping(kArabic, static_cast<UINT32>(std::size(kArabic)), tahoma, 1)) ||
+        FAILED(builder->AddMappings(system.Get())) || FAILED(builder->CreateFontFallback(&custom))) {
+      return;
+    }
+  }
+  fallback_ = on ? custom : system;
+  powerPointFallback_ = on;
+}
+
 Fonts::~Fonts() {
   if (memory_) factory_->UnregisterFontFileLoader(memory_.Get());
 }

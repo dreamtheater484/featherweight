@@ -493,6 +493,127 @@ TEST(SlideTableSpansAndOwnProperties) {
 
 namespace {
 
+// A one-row (header) table of two cells with `tblPr`'s style, and `cell` as the second cell's tcPr.
+std::unique_ptr<Presentation> TableDeck(const std::string& tblPr, const std::string& tcPr = "<a:tcPr/>") {
+  std::string frame =
+      "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/>"
+      "</p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"254000\" cy=\"127000\"/></p:xfrm><a:graphic>"
+      "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl>" + tblPr +
+      "<a:tblGrid><a:gridCol w=\"127000\"/><a:gridCol w=\"127000\"/></a:tblGrid><a:tr h=\"127000\">"
+      "<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>a</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"
+      "<a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody>" + tcPr + "</a:tc></a:tr></a:tbl></a:graphicData></a:graphic>"
+      "</p:graphicFrame>";
+  return Modified({{"ppt/slides/slide1.xml", SlideXml(frame)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+}
+
+draw::Color SchemeColor(const Table& t, const char* name) {
+  pugi::xml_document doc;
+  std::string xml = std::string("<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">"
+                                "<a:schemeClr val=\"") + name + "\"/></a:solidFill>";
+  doc.load_string(xml.c_str());
+  return draw::ReadColor(doc.document_element(), t.colors).value_or(draw::Color{});
+}
+
+}  // namespace
+
+TEST(SlideBuiltInTableStylesAsPowerPointDefinesThem) {
+  // PowerPoint 2021's own definitions (scripts/slide-table-styles.ps1): Light Style 2 - Accent 3's
+  // header is filled with accent3 and its text is bg1, bold; Dark Style 2 - Accent 1/Accent 2's
+  // header takes the second accent.
+  struct Case {
+    const char* id;
+    const char* header;
+  } cases[] = {{"{F2DE63D5-997A-4646-A377-4702673A728D}", "accent3"},
+               {"{f2de63d5-997a-4646-a377-4702673a728d}", "accent3"},
+               {"{0660B408-B3CF-4A94-85FC-2B1E0A45F4A2}", "accent2"},
+               {"{21E4AEA4-8DFA-4A89-87EB-49C32662AFE0}", "accent2"},  // Medium Style 2 - Accent 2
+               {"{9D7B26C5-4107-4FEC-AEDC-1716B250A1EF}", nullptr}};   // Light Style 1: no header fill
+  for (const Case& c : cases) {
+    auto deck = TableDeck(std::string("<a:tblPr firstRow=\"1\" bandRow=\"1\"><a:tableStyleId>") + c.id +
+                          "</a:tableStyleId></a:tblPr>");
+    CHECK(deck != nullptr);
+    if (!deck) continue;
+    const Slide* s = deck->GetSlide(0);
+    const Table* t = deck->GetTable(*s->FindShape(4), *s);
+    CHECK(t != nullptr);
+    if (!t) continue;
+    const TableCell* h = t->Cell(0, 0);
+    if (c.header) {
+      CHECK(h->fill.kind == CellFill::Kind::Solid);
+      const draw::Color want = SchemeColor(*t, c.header);
+      CHECK(Near(h->fill.color, want.r, want.g, want.b));
+    } else {
+      CHECK(h->fill.kind == CellFill::Kind::None);
+    }
+    CHECK(h->text && h->text->paragraphs[0].runs[0].props.bold);
+  }
+  // Every built-in style's template expands to a style the reader takes: an id it knows draws
+  // differently from Table Grid, the fallback.
+  auto grid = TableDeck("<a:tblPr firstRow=\"1\"><a:tableStyleId>{5940675A-B579-460E-94D1-54222C63F5DA}</a:tableStyleId></a:tblPr>");
+  const Slide* gs = grid->GetSlide(0);
+  const Table* gt = grid->GetTable(*gs->FindShape(4), *gs);
+  CHECK(gt && gt->Cell(0, 0)->fill.kind == CellFill::Kind::None && gt->Cell(0, 0)->borders[TableCell::Top].visible);
+}
+
+TEST(SlideMathRuns) {
+  // Office math in a paragraph (a14:m, PowerPoint's mc:Choice): a run of its own holding the
+  // m:oMathPara or m:oMath, with its first m:r's a:rPr, between the text runs around it.
+  std::string body =
+      "<a:bodyPr/><a:p><a:r><a:rPr sz=\"2000\"/><a:t>x is </a:t></a:r>"
+      "<a14:m xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\">"
+      "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSup><m:e><m:r>"
+      "<a:rPr sz=\"2400\" i=\"1\"><a:latin typeface=\"Cambria Math\"/></a:rPr><m:t>x</m:t></m:r></m:e><m:sup><m:r>"
+      "<m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath></a14:m><a:r><a:t>.</a:t></a:r></a:p>"
+      "<a:p><a14:m xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\">"
+      "<m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath><m:r><m:t>y</m:t>"
+      "</m:r></m:oMath></m:oMathPara></a14:m></a:p>";
+  std::string sp = "<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"M\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>" +
+                   body + "</p:txBody></p:sp>";
+  auto deck = Modified({{"ppt/slides/slide1.xml", SlideXml(sp)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const TextBody* t = TextOf(*deck, *s, 5);
+  CHECK(t && t->paragraphs.size() == 2);
+  if (!t || t->paragraphs.size() != 2) return;
+  const std::vector<TextRun>& runs = t->paragraphs[0].runs;
+  CHECK_EQ(runs.size(), size_t{3});
+  if (runs.size() != 3) return;
+  CHECK(runs[1].kind == TextRun::Kind::Math);
+  CHECK(std::string_view(runs[1].node.name()) == "m:oMath");
+  CHECK(runs[1].text == L"x2");
+  CHECK_NEAR(runs[1].props.size, 24.f, 0.01f);
+  CHECK(runs[1].props.italic && runs[1].props.latin == L"Cambria Math");
+  CHECK(runs[2].kind == TextRun::Kind::Text);
+  const std::vector<TextRun>& display = t->paragraphs[1].runs;
+  CHECK(display.size() == 1 && display[0].kind == TextRun::Kind::Math &&
+        std::string_view(display[0].node.name()) == "m:oMathPara");
+}
+
+TEST(SlideTableCellPictureFills) {
+  // PowerPoint's fallback for a table with equations: each cell filled with its part of a picture
+  // of the table. The model gives fwdraw a rectangle with that fill, the cell's size.
+  auto deck = TableDeck("<a:tblPr/>",
+                        "<a:tcPr><a:blipFill><a:blip r:embed=\"rId9\"/><a:stretch><a:fillRect l=\"-100000\"/></a:stretch>"
+                        "</a:blipFill></a:tcPr>");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const Table* t = deck->GetTable(*s->FindShape(4), *s);
+  CHECK(t != nullptr);
+  if (!t) return;
+  const CellFill& f = t->Cell(0, 1)->fill;
+  CHECK(f.kind == CellFill::Kind::Other && f.shape);
+  CHECK(std::string_view(f.shape.name()) == "p:sp");
+  pugi::xml_node blip = f.shape.child("p:spPr").child("a:blipFill").child("a:blip");
+  CHECK(std::string_view(blip.attribute("r:embed").value()) == "rId9");
+  CHECK(std::string_view(f.shape.child("p:spPr").child("a:xfrm").child("a:ext").attribute("cx").value()) == "127000");
+  CHECK(t->owner == s);
+  CHECK(!t->Cell(0, 0)->fill.shape);
+}
+
+namespace {
+
 std::string PartText(const char* deck, const char* part) {
   fw::pkg::Status st;
   auto pk = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(FileBytes(Generated() / deck)), fw::pkg::Limits::Default(), st);

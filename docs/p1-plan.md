@@ -146,3 +146,18 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - `fwtool slides --png` over all 152 corpus decks and the 18 public decks drew 2,652 pages: every deck its full slide count, no errors.
   - 17 pages are one flat colour, and all 17 score SSIM 1.0 against PowerPoint: empty slides in the decks (templates' spacer slides, LibreOffice transition tests, `layouts-placeholders.pptx` slide 7).
   - Script: `FeatherweightNotes\p1\corpus-analysis\png-sweep.py`.
+- **2026-11-23: corpus at 85.93 % on p1-int `bc26651a`** (about 20 render fixes since `9eb0c84d`).
+  - 2,162 of 2,516 slides pass; 90 % needs 102 more. The public set is at 92/97.
+  - Per kind: briefings 83.6 %, charts 80.7 %, features 88.0 %, lectures 87.5 %, photos 80.3 %, school 82.0 %, shows 92.0 %, statistics 72.7 %, templates 91.0 %, training 88.7 %.
+  - Of the 354 failing slides, 250 are near misses (0.90–0.95).
+  - Slide view against Featherweight's own PDF: no slide under 0.95. Sample median 0.989 (min 0.955), public 0.9987 (min 0.953). The view part of the gate holds; `govuk-cybersprinters` draws 22 of 22.
+  - Failing slides by what they contain (first match: chart, SmartArt, table, equation, picture, text, other; a proxy, not a proven cause):
+    - Slides with pictures: 133 failing, 37.6 % (86.9 % of those slides pass).
+    - Text only: 131, 37.0 % (87.5 % pass).
+    - Tables: 25, 7.1 % (75.5 % pass).
+    - Equations: 25, 7.1 % (80.8 % pass).
+    - Charts: 20, 5.6 % (16.7 % pass).
+    - SmartArt: 13, 3.7 % (66.7 % pass).
+    - Other: 7.
+    - Script: `FeatherweightNotes\p1\corpus-analysis\causes.py`.
+  - One regression: `un-country-presentation-morocco` fell from 2 to 0 of 15 (median 0.862).
