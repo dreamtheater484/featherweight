@@ -381,6 +381,35 @@ TEST(Chart_PieSlicesAndPercentLabels) {
   for (const auto& m : art.marks) CHECK(m.fill.kind != draw::Fill::Kind::Solid || m.line.fill.kind == draw::Fill::Kind::None || m.path.Bounds().right - m.path.Bounds().left > 290);
 }
 
+TEST(Chart_PlacedPieIsTheLargestCircleInItsBox) {
+  // A pie whose plot area the chart places (c:manualLayout, inner) is the largest circle in that
+  // box, centred in it (PowerPoint's PDFs, govuk business bodies' doughnuts): here 160 points
+  // across, centred at (260, 100) in a 400 x 200 chart.
+  std::string xml = PieChart();
+  xml.insert(xml.find("<c:plotArea>") + 12,
+             "<c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.4\"/>"
+             "<c:y val=\"0.1\"/><c:w val=\"0.5\"/><c:h val=\"0.8\"/></c:manualLayout></c:layout>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  draw::Rect pie{1e9f, 1e9f, -1e9f, -1e9f};
+  for (const char* accent : {"accent1", "accent2", "accent3", "accent4"}) {
+    draw::Color slice = *draw::SchemeColor(accent, Colors());
+    draw::ApplyColorTransform(slice, "shade", 76000);
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind != draw::Fill::Kind::Solid || !Same(m.fill.color, slice) || b.right - b.left < 20) continue;  // not swatches
+      pie = {std::min(pie.left, b.left), std::min(pie.top, b.top), std::max(pie.right, b.right), std::max(pie.bottom, b.bottom)};
+    }
+  }
+  // (The arcs' points, not the curves: within half a point of the circle's extremes.)
+  CHECK_NEAR(pie.left, 180, 0.5);
+  CHECK_NEAR(pie.right, 340, 0.5);
+  CHECK_NEAR(pie.top, 20, 0.5);
+  CHECK_NEAR(pie.bottom, 180, 0.5);
+}
+
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
   // A chart without c:spPr or c:txPr: 10-point text and a gray border. Office 2010's look
   // (c14:style, which LibreOffice and Office 2010 and later write) draws the gridlines, axis lines

@@ -938,9 +938,12 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
 // A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`;
 // `plain`: slices in the accents themselves (SliceColor).
 void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H,
-             bool plain) {
+             bool plain, std::optional<Rect> placed = std::nullopt) {
   const float m = std::min(kMargin * ts, kMargin * 10);  // as DrawAxes' sides (PowerPoint's PDFs)
   r = {r.left + m, r.top + m, r.right - m, r.bottom - m};
+  // A plot area the chart places (c:manualLayout): the pie is the largest circle in its box, centred
+  // (PowerPoint's PDFs, govuk business bodies' doughnuts).
+  if (placed) r = *placed;
   const bool doughnut = g.type == Type::Doughnut;
   const size_t rings = doughnut ? std::min<size_t>(g.series.size(), 16) : 1;
   bool labelled = g.labels || g.percent || g.categoryLabels || g.seriesNames;
@@ -953,7 +956,7 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
     pulled = g.series.front().explosion;
     for (const auto& [i, e] : g.series.front().explosions) pulled = std::max(pulled, e);
   }
-  const float R = static_cast<float>((std::min(r.right - r.left, r.bottom - r.top) / 2 - (labelled && !doughnut ? 1.32f * ts : 0)) /
+  const float R = static_cast<float>((std::min(r.right - r.left, r.bottom - r.top) / 2 - (labelled && !doughnut && !placed ? 1.32f * ts : 0)) /
                                      (1 + pulled / 100));
   if (R < 2) return;
   const Point center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
@@ -1711,7 +1714,11 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   if (!entries.empty() && !legendBox && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
   if (r.right - r.left >= 10 && r.bottom - r.top >= 10) {
     const Group& g0 = ch.groups.front();
-    if (g0.type == Type::Pie || g0.type == Type::Doughnut) DrawPie(b, g0, r, ts, text, colors, W, H, ch.presentation);
+    if (g0.type == Type::Pie || g0.type == Type::Doughnut)
+      DrawPie(b, g0, r, ts, text, colors, W, H, ch.presentation,
+              ch.plotLayout
+                  ? std::optional<Rect>(Rect{ch.plotLayout->left * W, ch.plotLayout->top * H, ch.plotLayout->right * W, ch.plotLayout->bottom * H})
+                  : std::nullopt);
     else if (g0.type == Type::Radar) DrawRadar(b, ch, r, ts, text, colors);
     else DrawAxes(b, ch, r, ts, text, colors, W, H);
   }
