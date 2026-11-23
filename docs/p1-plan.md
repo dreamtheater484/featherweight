@@ -235,3 +235,13 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - Shipped exe at `fbbbfbaa` (`build-release`, FW_TEST_SCREENS off): 11,149,824 bytes. That's +611,328 (597 KB) over S4 final, within the 1.0 MB budget.
     - The quiet-PC timings committed as `f828277f` used `build-release`'s exe from 20 Nov (`abebf66`; that build wasn't redone), so its ledger line's size matches `abebf66`'s to the byte.
     - The timings need a rerun on a release build of the gate head.
+  - Slide view against its own PDF on `fbbbfbaa`: no slide under 0.95. Sample: 233 slides, median .989, lowest .955. Public: 97 slides, median .9986, lowest .954.
+- **On p1-int `ea3fe681`: corpus at 94.16 %** (`fbbbfbaa` plus p1-render's whole-point spacing `54c86f6c`, upright bullets `257e369b` and pagepngs at the PDF's box `0d454fb5`).
+  - 2,369 of 2,516 slides pass, +20 against `fbbbfbaa`, none lost:
+    - cs-2110 sorting +4, OOP +4 (37/37), graphs +3;
+    - overheid webinar +3 (25/25), overheid workshop +2;
+    - 1 each on cybersprinters-3, the unimuenster poster, anyone-out-there and 15-213 VM.
+  - The public set stays at 92/97.
+  - Slide view against its own PDF: no slide under 0.95 on the sample (median .989, lowest .955) or the public set (median .9986, lowest .954).
+    - goettingen, outside the sample: slides 1, 6 and 4 at .941, .942 and .947, more than 0.05 off, so they're slide-view bugs, still open with p1-render. Slide 3 at .872 is the explained JPEG one.
+  - Shipped exe at `ea3fe681`: 11,149,824 bytes, as at `fbbbfbaa`. The quiet-PC timings are armed on this build.
