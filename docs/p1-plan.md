@@ -161,3 +161,7 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - Other: 7.
     - Script: `FeatherweightNotes\p1\corpus-analysis\causes.py`.
   - One regression: `un-country-presentation-morocco` fell from 2 to 0 of 15 (median 0.862).
+- **2026-11-23: native Office math in slides** (coordinator, unparked). Slides lay out a14:m themselves, reusing fwdoclayout's typesetter (src/doc/layout/Math.cpp, already in the exe for Word: a few KB of glue), instead of Office's fallback picture.
+  - Conditions: it stays behind a switch that is off (`FW_SLIDE_MATH=1` turns it on; `draw::xml::SlideMathLaidOut`) until it measures better on the corpus's math slides as a set, and no slide that passes with the fallback drops below 0.90.
+  - p1-model owns the math path in `TextBody.cpp` (agreed with p1-render). Typesetter changes in src/doc/layout keep Word's math tests and the D-milestone checks green.
+  - First step (p1-model, measured on the 137 corpus slides with a14:m): fallback 111 pass, native 68. Display integrals now take PowerPoint's variant (glyph 3505 of Cambria Math, one past DisplayOperatorMinHeight); lines of math are 1.2 times their font size unless the equation is taller.
