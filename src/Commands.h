@@ -445,6 +445,14 @@ enum Cmd : int {
   // The ribbon (R1, r1-control): 3600-3649.
   CmdRibbonCollapse = 3600,  // Ctrl+F1: the ribbon shows only its tabs, or all of it again
   CmdFilePage,               // the File tab: the File page (New, Open, Save, Print, options)
+  // The document's ribbon (R1, r1-word): 3650-3699. Word's boxes and buttons for what Featherweight
+  // had only in a panel.
+  CmdIndentLeftBox = 3650,  // Layout > Paragraph: the selection's paragraphs' left indent
+  CmdIndentRightBox,
+  CmdSpaceBeforeBox,        // and their spacing before and after
+  CmdSpaceAfterBox,
+  CmdCellShading,           // Table Design > Shading: the selected cells' color (the last one picked)
+  CmdCellBorders,           // Table Design > Borders: the selected cells' borders (the last ones picked)
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
@@ -566,4 +574,20 @@ enum Cmd : int {
   CmdTableMergeCells,            // the cells chosen in a table (text editing's) become one
   CmdTableSplitCell,             // a merged cell back into its cells
   CmdTableLayoutMenu,            // the toolbar's Layout dropdown with a table selected
+  // The presentation's ribbon (R1, r1-slide): 3750-3799.
+  CmdApplyTheme = 3750,          // Design > Themes: + index into BuiltInThemes() (up to 10), every slide
+  CmdApplyColors = 3760,         // Design > Variants > Colors: + index into ColorSchemes() (up to 25)
+  CmdSlideNoShadow = 3785,       // Shape Effects > No shadow (CmdObjectShadow puts one on)
+  // The ribbon's menu buttons (their menus list commands; the button itself runs none).
+  CmdSlideAlignMenu,             // Arrange > Align ▾
+  CmdSlideGroupMenu,             // Arrange > Group ▾
+  CmdSlideRotateMenu,            // Arrange > Rotate ▾
+  CmdSlideEffectsMenu,           // Shape Effects ▾, Picture Effects ▾
+  CmdSlideTableDeleteMenu,       // Table Layout > Delete ▾
+  CmdSlideSelectMenu,            // Home > Editing > Select ▾
+  CmdSlideSizeMenu,              // Design > Slide Size ▾
+  CmdSlideColorsMenu,            // Design > Variants > Colors ▾
+  CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
+  CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
+  CmdSlideZoomMenu,              // View > Zoom ▾
 };

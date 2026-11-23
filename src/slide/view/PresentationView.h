@@ -29,6 +29,7 @@ struct Changes;
 struct Result;
 }
 class PresentationFile;
+struct ToolItem;
 
 namespace fw::slide::view {
 
@@ -91,6 +92,8 @@ class PresentationView : public TabContent {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
+  // PowerPoint's ribbon (R1, r1-slide: PresentationRibbon.cpp).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
   void FillMenu(int which, HMENU menu) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
   bool HasStatusBar() const override { return Ready(); }
@@ -173,6 +176,11 @@ class PresentationView : public TabContent {
   // Anything drawn in slide points into such a bitmap (P2: the layout gallery's pictures).
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmapWith(ID2D1DeviceContext* dc, UINT w, UINT h,
                                                         const std::function<void(draw::Painter&)>& paint);
+
+  // ---- The ribbon (PresentationRibbon.cpp): a command's control (`glyph` when not 0), and the
+  // state of the ribbon's menu buttons (enabled while a command in the menu is).
+  ToolItem RibbonTool(int cmd, wchar_t glyph);
+  bool RibbonMenuState(int cmd, CommandState& s);
 
   // ---- Commands (PresentationCommands.cpp)
   void StartShow(bool fromCurrent);

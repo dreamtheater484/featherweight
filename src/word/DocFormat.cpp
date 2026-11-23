@@ -729,89 +729,27 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     return t;
   };
   // Styles, font and size.
-  ToolItem style;
-  style.kind = ToolKind::Dropdown;
-  style.cmd = CmdStyleBox;
+  ToolItem style = StyleBox();
   style.width = 116;
   style.priority = 6;
-  style.tooltip = L"Styles";
-  style.enabled = on;
   style.sepBefore = true;
-  const auto& gallery = Gallery();
-  for (size_t i = 0; i < gallery.size(); ++i) {
-    style.choices.push_back(W(std::string_view(gallery[i].name)));
-    if (st.paraStyle && !gallery[i].id.empty() && gallery[i].id == *st.paraStyle) style.choice = static_cast<int>(i);
-  }
-  if (style.choice < 0 && st.paraStyle)
-    if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = W(std::string_view(edit::DisplayName(s->name)));
   for (const auto& [label, run] : styleMore) style.choices.push_back(label);
-  style.onChange = [this](const ToolValue& v) {
-    const auto& g = Gallery();
-    const int n = static_cast<int>(g.size());
-    if (v.index >= 0 && v.index < n)
-      ApplyStyle(W(std::string_view(g[v.index].id.empty() ? g[v.index].name : g[v.index].id)));
-    else if (v.index >= n && v.index < n + static_cast<int>(styleMore.size()))
-      styleMore[static_cast<size_t>(v.index - n)].second();
-  };
   m.left.push_back(style);
-
-  ToolItem font;
-  font.kind = ToolKind::ComboBox;
-  font.cmd = CmdFontBox;
+  ToolItem font = FontBox();
   font.width = 116;
   font.priority = 6;
-  font.tooltip = L"Font";
-  font.enabled = on;
-  font.choices = ThemeFontChoices(Doc());
-  font.choices.insert(font.choices.end(), Families().begin(), Families().end());
-  font.text = st.font ? W(std::string_view(*st.font)) : std::wstring();
-  font.onChange = [this](const ToolValue& v) { ApplyFont(v.text); };
   m.left.push_back(font);
-
-  ToolItem size;
-  size.kind = ToolKind::ComboBox;
-  size.cmd = CmdSizeBox;
+  ToolItem size = SizeBox();
   size.width = 56;
   size.priority = 6;
-  size.tooltip = L"Font size";
-  size.enabled = on;
-  size.choices = Sizes();
-  size.text = st.size ? PointsText(*st.size) : std::wstring();
-  size.validate = [](std::wstring& text) {
-    wchar_t* end = nullptr;
-    double v = std::wcstod(text.c_str(), &end);
-    if (end == text.c_str() || !(v >= 1 && v <= 1638)) return false;
-    text = PointsText(fw::HalfPoints(static_cast<int32_t>(std::lround(v * 2))));
-    return true;
-  };
-  size.onChange = [this](const ToolValue& v) { ApplySize(std::wcstod(v.text.c_str(), nullptr)); };
   m.left.push_back(size);
 
   m.left.push_back(toggleButton(CmdBold, icon::Bold));
   m.left.push_back(toggleButton(CmdItalic, icon::Italic));
   m.left.push_back(toggleButton(CmdUnderline, icon::Underline));
 
-  auto colorButton = [&](int cmd, wchar_t glyph, D2D1_COLOR_F color, const wchar_t* automaticLabel, bool highlight) {
-    ToolItem t = button(cmd, glyph);
-    t.kind = ToolKind::SplitButton;
-    t.width = 52;
-    t.colors = true;
-    t.color = color;
-    t.automaticLabel = automaticLabel;
-    t.onChange = [this, highlight](const ToolValue& v) {
-      if (!v.automatic) (highlight ? highlight_ : fontColor_) = v.color;
-      ApplyColor(v.color, v.automatic, highlight);
-    };
-    return t;
-  };
-  if (!themeRead_) {
-    themeColors_ = ThemeColors(Doc());
-    themeRead_ = true;
-  }
-  ToolItem fontColor = with(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false), 5);
-  fontColor.theme = themeColors_;
-  m.left.push_back(fontColor);
-  m.left.push_back(with(colorButton(CmdHighlightColor, icon::Highlight, highlight_, L"No color", true), 4));
+  m.left.push_back(with(ColorButton(false), 5));
+  m.left.push_back(with(ColorButton(true), 4));
   ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
   painter.enabled = on;
   m.left.push_back(painter);
@@ -875,12 +813,10 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   insert.tooltip = L"Insert a picture, a break, the date or the time";
   insert.enabled = on;
   insert.sepBefore = true;
-  std::vector<std::wstring> pictures;
   insert.choices = {L"Picture…"};
   for (const auto& [label, run] : insertMore) insert.choices.push_back(label);
-  std::vector<std::wstring> dates;
-  DateFormats(pictures, dates);
-  insert.choices.insert(insert.choices.end(), dates.begin(), dates.end());
+  const ToolItem dates = DateBox();
+  insert.choices.insert(insert.choices.end(), dates.choices.begin(), dates.choices.end());
   insert.onChange = [this](const ToolValue& v) {
     const int more = static_cast<int>(insertMore.size());
     if (v.index == 0 && insertPicture) insertPicture();
@@ -888,4 +824,105 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     else if (v.index > more) InsertDateTime(static_cast<size_t>(v.index - 1 - more));
   };
   m.left.push_back(insert);
+}
+
+ToolItem DocFormat::StyleBox() {
+  const edit::FormatState& st = State();
+  ToolItem style;
+  style.kind = ToolKind::Dropdown;
+  style.cmd = CmdStyleBox;
+  style.tooltip = L"Styles";
+  style.enabled = target_().any && Editable();
+  const auto& gallery = Gallery();
+  for (size_t i = 0; i < gallery.size(); ++i) {
+    style.choices.push_back(W(std::string_view(gallery[i].name)));
+    if (st.paraStyle && !gallery[i].id.empty() && gallery[i].id == *st.paraStyle) style.choice = static_cast<int>(i);
+  }
+  if (style.choice < 0 && st.paraStyle)
+    if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = W(std::string_view(edit::DisplayName(s->name)));
+  style.onChange = [this](const ToolValue& v) {
+    const auto& g = Gallery();
+    const int n = static_cast<int>(g.size());
+    if (v.index >= 0 && v.index < n)
+      ApplyStyle(W(std::string_view(g[v.index].id.empty() ? g[v.index].name : g[v.index].id)));
+    else if (v.index >= n && v.index < n + static_cast<int>(styleMore.size()))
+      styleMore[static_cast<size_t>(v.index - n)].second();
+  };
+  return style;
+}
+
+ToolItem DocFormat::FontBox() {
+  const edit::FormatState& st = State();
+  ToolItem font;
+  font.kind = ToolKind::ComboBox;
+  font.cmd = CmdFontBox;
+  font.tooltip = L"Font";
+  font.enabled = target_().any && Editable();
+  font.choices = ThemeFontChoices(Doc());
+  font.choices.insert(font.choices.end(), Families().begin(), Families().end());
+  font.text = st.font ? W(std::string_view(*st.font)) : std::wstring();
+  font.onChange = [this](const ToolValue& v) { ApplyFont(v.text); };
+  return font;
+}
+
+ToolItem DocFormat::SizeBox() {
+  const edit::FormatState& st = State();
+  ToolItem size;
+  size.kind = ToolKind::ComboBox;
+  size.cmd = CmdSizeBox;
+  size.tooltip = L"Font size";
+  size.enabled = target_().any && Editable();
+  size.choices = Sizes();
+  size.text = st.size ? PointsText(*st.size) : std::wstring();
+  size.validate = [](std::wstring& text) {
+    wchar_t* end = nullptr;
+    double v = std::wcstod(text.c_str(), &end);
+    if (end == text.c_str() || !(v >= 1 && v <= 1638)) return false;
+    text = PointsText(fw::HalfPoints(static_cast<int32_t>(std::lround(v * 2))));
+    return true;
+  };
+  size.onChange = [this](const ToolValue& v) { ApplySize(std::wcstod(v.text.c_str(), nullptr)); };
+  return size;
+}
+
+ToolItem DocFormat::ColorButton(bool highlight) {
+  const int cmd = highlight ? CmdHighlightColor : CmdFontColor;
+  const CommandState q = Query(cmd);
+  ToolItem t;
+  t.cmd = cmd;
+  t.glyph = highlight ? icon::Highlight : icon::FontColor;
+  t.tooltip = q.Tooltip();
+  t.enabled = q.enabled;
+  t.kind = ToolKind::SplitButton;
+  t.width = 52;
+  t.colors = true;
+  t.color = highlight ? highlight_ : fontColor_;
+  t.automaticLabel = highlight ? L"No color" : L"Automatic";
+  if (!highlight) {
+    if (!themeRead_) {
+      themeColors_ = ThemeColors(Doc());
+      themeRead_ = true;
+    }
+    t.theme = themeColors_;
+  }
+  t.onChange = [this, highlight](const ToolValue& v) {
+    if (!v.automatic) (highlight ? highlight_ : fontColor_) = v.color;
+    ApplyColor(v.color, v.automatic, highlight);
+  };
+  return t;
+}
+
+ToolItem DocFormat::DateBox() {
+  ToolItem t;
+  t.cmd = CmdInsertDate;
+  t.glyph = icon::Calendar;
+  t.dropdown = true;
+  t.tooltip = L"Date and time";
+  t.enabled = target_().any && Editable();
+  std::vector<std::wstring> pictures;
+  DateFormats(pictures, t.choices);
+  t.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0) InsertDateTime(static_cast<size_t>(v.index));
+  };
+  return t;
 }

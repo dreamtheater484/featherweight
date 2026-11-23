@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 #include "Commands.h"
 #include "Util.h"
@@ -278,20 +279,26 @@ PresentationView::DesignPanel::Hit PresentationView::DesignPanel::At(float x, fl
   return h;
 }
 
-IDWriteTextFormat* PresentationView::DesignPanel::FontFor(const char* family, float size) {
+namespace {
+
+// A theme's heading font for its preview, kept for the process (a few themes, a few sizes).
+IDWriteTextFormat* PreviewFont(const char* family, float size) {
+  static std::map<std::pair<std::string, int>, ComPtr<IDWriteTextFormat>> fonts;
   const auto key = std::make_pair(std::string(family), static_cast<int>(size * 4));
-  auto it = fonts_.find(key);
-  if (it != fonts_.end()) return it->second.Get();
+  auto it = fonts.find(key);
+  if (it != fonts.end()) return it->second.Get();
   ComPtr<IDWriteTextFormat> f;
   const std::wstring name(family, family + std::char_traits<char>::length(family));
   if (FAILED(DWrite()->CreateTextFormat(name.c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                         DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", &f)))
     return nullptr;
   f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-  return (fonts_[key] = f).Get();
+  return (fonts[key] = f).Get();
 }
 
-void PresentationView::DesignPanel::DrawTheme(Canvas& c, int i, const D2D1_RECT_F& r) {
+}  // namespace
+
+void DrawThemePreview(Canvas& c, int i, const D2D1_RECT_F& r) {
   const BuiltInTheme& t = BuiltInThemes()[static_cast<size_t>(i)];
   const ColorScheme& cs = ColorSchemes()[static_cast<size_t>(t.colors)];
   const uint32_t base = t.dark ? cs.colors[0] : cs.colors[1];
@@ -309,14 +316,27 @@ void PresentationView::DesignPanel::DrawTheme(Canvas& c, int i, const D2D1_RECT_
     case Background::Kind::Solid: c.Fill(r, Col(t.background.color)); break;
     default: c.Fill(r, Col(base)); break;
   }
+  // "Aa" in the heading font and the six accents, as big as the picture allows.
+  const float k = Height(r) / kThemeH;  // the panel's picture is kThemeH DIPs high
   const uint32_t text = t.dark ? cs.colors[1] : cs.colors[0];
-  if (IDWriteTextFormat* f = FontFor(t.major, 24 * ui_))
-    c.DC()->DrawText(L"Aa", 2, f, RectF(r.left + 10 * ui_, r.top + 8 * ui_, r.right, r.bottom), c.Brush(Col(text)));
-  const float w = 9 * ui_, h = 9 * ui_;
-  for (int k = 0; k < 6; ++k) {
-    const float x = r.left + 10 * ui_ + k * (w + 3 * ui_), y = r.bottom - h - 9 * ui_;
-    c.Fill(RectF(x, y, x + w, y + h), Col(cs.colors[4 + k]));
+  if (IDWriteTextFormat* f = PreviewFont(t.major, 24 * k))
+    c.DC()->DrawText(L"Aa", 2, f, RectF(r.left + 10 * k, r.top + 8 * k, r.right, r.bottom), c.Brush(Col(text)));
+  const float w = 9 * k, h = 9 * k;
+  for (int j = 0; j < 6; ++j) {
+    const float x = r.left + 10 * k + j * (w + 3 * k), y = r.bottom - h - 9 * k;
+    c.Fill(RectF(x, y, x + w, y + h), Col(cs.colors[4 + j]));
   }
+}
+
+void DrawColorsPreview(Canvas& c, int i, const D2D1_RECT_F& r, float ui) {
+  const ColorScheme& cs = ColorSchemes()[static_cast<size_t>(i)];
+  const int shown[8] = {2, 3, 4, 5, 6, 7, 8, 9};  // dark 2, light 2, accents
+  const float sw = 14 * ui;
+  for (int k = 0; k < 8; ++k) {
+    const float x = r.left + 6 * ui + k * (sw + 1 * ui), y = (r.top + r.bottom - sw) / 2;
+    c.Fill(RectF(x, y, x + sw, y + sw), Col(cs.colors[shown[k]]));
+  }
+  c.Text(cs.name, RectF(r.left + 6 * ui + 8 * (sw + ui) + 8 * ui, r.top, r.right, r.bottom), theme::P().text, 12 * ui);
 }
 
 void PresentationView::DesignPanel::Draw(Canvas& c) {
@@ -329,7 +349,7 @@ void PresentationView::DesignPanel::Draw(Canvas& c) {
     const D2D1_RECT_F r = ThemeRect(i);
     if (r.bottom + kThemeName * ui_ < area_.top || r.top > area_.bottom) continue;
     if (hover_.theme == i) c.FillRound(Inflate(RectF(r.left, r.top, r.right, r.bottom + kThemeName * ui_), 3 * ui_, 3 * ui_), 4 * ui_, p.hover);
-    DrawTheme(c, i, r);
+    DrawThemePreview(c, i, r);
     c.Stroke(r, Alpha(p.chromeBorder, 0.9f), std::max(1.f, ui_ * 0.75f));
     c.Text(BuiltInThemes()[static_cast<size_t>(i)].name, RectF(r.left, r.bottom + 2 * ui_, r.right, r.bottom + kThemeName * ui_), p.text, 12 * ui_);
   }
@@ -340,14 +360,7 @@ void PresentationView::DesignPanel::Draw(Canvas& c) {
     if (r.bottom < area_.top || r.top > area_.bottom) continue;
     if (hover_.colors == i) c.FillRound(r, 4 * ui_, p.hover);
     if (currentColors_ == i) c.StrokeRound(Inflate(r, -1, -1), 4 * ui_, p.accentText, 1.5f * ui_);
-    const ColorScheme& cs = ColorSchemes()[static_cast<size_t>(i)];
-    const int shown[8] = {2, 3, 4, 5, 6, 7, 8, 9};  // dark 2, light 2, accents
-    const float sw = 14 * ui_;
-    for (int k = 0; k < 8; ++k) {
-      const float x = r.left + 6 * ui_ + k * (sw + 1 * ui_), y = (r.top + r.bottom - sw) / 2;
-      c.Fill(RectF(x, y, x + sw, y + sw), Col(cs.colors[shown[k]]));
-    }
-    c.Text(cs.name, RectF(r.left + 6 * ui_ + 8 * (sw + ui_) + 8 * ui_, r.top, r.right, r.bottom), p.text, 12 * ui_);
+    DrawColorsPreview(c, i, r, ui_);
   }
   c.PopClip();
 }
@@ -537,8 +550,27 @@ bool PresentationView::DesignCommandState(int cmd, CommandState& s) {
       s.label = std::wstring(L"Slide size: ") + SlideSizes()[static_cast<size_t>(choice)].name;
       return true;
     }
-    default: return false;
+    default: break;
   }
+  // The ribbon's Themes gallery and Colors list (r1-slide): the current slide's theme checked.
+  const Slide* slide = any ? deck_->Model()->GetSlide(current_) : nullptr;
+  if (cmd >= CmdApplyTheme && cmd < CmdApplyTheme + 10) {
+    const size_t i = static_cast<size_t>(cmd - CmdApplyTheme);
+    if (i >= BuiltInThemes().size()) return false;
+    s.enabled = any;
+    s.label = std::wstring(L"Theme: ") + BuiltInThemes()[i].name;
+    s.checked = slide && slide->theme && Utf8ToWide(slide->theme->Name()) == BuiltInThemes()[i].name;
+    return true;
+  }
+  if (cmd >= CmdApplyColors && cmd < CmdApplyColors + 25) {
+    const size_t i = static_cast<size_t>(cmd - CmdApplyColors);
+    if (i >= ColorSchemes().size()) return false;
+    s.enabled = any;
+    s.label = std::wstring(L"Theme colors: ") + ColorSchemes()[i].name;
+    s.checked = slide && ColorSchemeOf(*slide) == static_cast<int>(i);
+    return true;
+  }
+  return false;
 }
 
 bool PresentationView::DesignCommand(int cmd) {
@@ -558,8 +590,12 @@ bool PresentationView::DesignCommand(int cmd) {
       return true;
     case CmdSlideSize169:
     case CmdSlideSize43: SetSlideSize(cmd == CmdSlideSize169 ? 0 : 1, static_cast<int>(ContentScale::EnsureFit)); return true;
-    default: return false;
+    default: break;
   }
+  const int theme = cmd - CmdApplyTheme, colors = cmd - CmdApplyColors;
+  if (theme >= 0 && theme < static_cast<int>(BuiltInThemes().size())) return ApplyTheme(theme, {}), true;
+  if (colors >= 0 && colors < static_cast<int>(ColorSchemes().size())) return ApplyColors(colors, {}), true;
+  return false;  // an open Design panel follows through DesignChanged
 }
 
 // ---------------------------------------------------------------------------

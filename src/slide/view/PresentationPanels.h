@@ -44,8 +44,6 @@ class PresentationView::DesignPanel : public PanelContent {
   D2D1_RECT_F ThemeRect(int i) const;
   D2D1_RECT_F ColorsRect(int i) const;
   float ContentHeight() const;
-  void DrawTheme(gfx::Canvas& c, int i, const D2D1_RECT_F& r);
-  IDWriteTextFormat* FontFor(const char* family, float size);
   void ApplyBackground();
 
   PresentationView& v_;
@@ -67,8 +65,13 @@ class PresentationView::DesignPanel : public PanelContent {
   Hit hover_;
   int currentColors_ = -1;
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
-  std::map<std::pair<std::string, int>, Microsoft::WRL::ComPtr<IDWriteTextFormat>> fonts_;
 };
+
+// Built-in theme `i` as a small picture in `r` (its background, "Aa" in its heading font, its six
+// accents), and theme colors `i` as a row of swatches with the name: the Design panel's and the
+// ribbon's Design tab (r1-slide).
+void DrawThemePreview(gfx::Canvas& c, int i, const D2D1_RECT_F& r);
+void DrawColorsPreview(gfx::Canvas& c, int i, const D2D1_RECT_F& r, float ui);
 
 class PresentationView::HeaderFooterPanel : public PanelContent {
  public:
