@@ -473,6 +473,30 @@ TEST(SlideRender_EachLineIsReflectedUnderItself) {
   CHECK(between > 20);
 }
 
+TEST(SlideRender_FirstParagraphSpacingWithSpcFirstLastPara) {
+  // bodyPr spcFirstLastPara="1": the first paragraph's 12 pt before counts, as PowerPoint draws
+  // 15-213 virtual memory's bodies; without it the first paragraph starts at the top.
+  auto top = [](const char* attrs) -> float {
+    const std::string box =
+        std::string("<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"T\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm>"
+                    "<a:off x=\"635000\" y=\"635000\"/><a:ext cx=\"3810000\" cy=\"2540000\"/></a:xfrm><a:prstGeom prst=\"rect\"/></p:spPr>"
+                    "<p:txBody><a:bodyPr") +
+        attrs +
+        "/><a:lstStyle/><a:p><a:pPr><a:spcBef><a:spcPts val=\"1200\"/></a:spcBef></a:pPr><a:r><a:rPr sz=\"2000\"/>"
+        "<a:t>Text</a:t></a:r></a:p></p:txBody></p:sp>";
+    auto deck = Modified(Slide1(box));
+    if (!deck) return -1;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    for (const ParagraphInfo& p : slide->Paragraphs())
+      if (p.shape == 5 && p.index == 0) return p.bounds.top;
+    return -1;
+  };
+  const float plain = top(""), spaced = top(" spcFirstLastPara=\"1\"");
+  REQUIRE(plain > 0 && spaced > 0);
+  CHECK_NEAR(spaced - plain, 12, 0.05);
+}
+
 TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
   // normAutofit at 50 %: 12 pt before a paragraph stays 12 pt (cpb deck: PowerPoint's paragraph
   // gaps are the stated points, not shrunk with the text).
