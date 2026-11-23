@@ -33,14 +33,14 @@ std::shared_ptr<const draw::Bitmap> RenderBitmap(const SlideRender& slide, int w
   const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
       D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
   if (FAILED(factory->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc))) return nullptr;
-  dc->BeginDraw();
-  dc->Clear(D2D1::ColorF(1, 1, 1, 1));
-  {
-    draw::D2DPainter p(dc.Get());
-    p.UsePdfLikeDrawing();
-    slide.Draw(p, {0, 0, static_cast<float>(width), static_cast<float>(height)}, filter);
-  }
-  if (FAILED(dc->EndDraw())) return nullptr;
+  if (FAILED(draw::DrawFrame(dc.Get(), [&](bool fallback) {
+        dc->Clear(D2D1::ColorF(1, 1, 1, 1));
+        draw::D2DPainter p(dc.Get());
+        p.UsePdfLikeDrawing();
+        p.SetNoShadows(fallback);
+        slide.Draw(p, {0, 0, static_cast<float>(width), static_cast<float>(height)}, filter);
+      })))
+    return nullptr;
   WICRect all{0, 0, width, height};
   ComPtr<IWICBitmapLock> lock;
   if (FAILED(bitmap->Lock(&all, WICBitmapLockRead, &lock))) return nullptr;

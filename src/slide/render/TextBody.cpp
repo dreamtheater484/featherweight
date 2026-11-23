@@ -125,36 +125,18 @@ TextBlock& TextBlock::operator=(TextBlock&&) noexcept = default;
 
 namespace {
 
-// How the face drawn for `family` kerns as PowerPoint does, by its legacy 'kern' table: not at all
-// without one; by DirectWrite when its GPOS kerns too (Calibri: the same pairs); otherwise by the
-// table itself, which DirectWrite's shaping skips (Franklin Gothic: rlf-webinar decks).
-enum class KernBy { None, DirectWrite, Table };
-KernBy KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
+// Whether the face drawn for `family` has a legacy 'kern' table, the only kerning PowerPoint uses.
+bool KernTable(text::Fonts& fonts, const std::wstring& family, bool bold, bool italic) {
   const text::Face* face = fonts.FaceFor(family, bold, italic);
-  if (!face) return KernBy::None;
-  IDWriteFontFace* f = face->Get();
+  if (!face) return false;
   const void* data = nullptr;
   UINT32 size = 0;
   void* context = nullptr;
   BOOL exists = FALSE;
-  if (FAILED(f->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
-    return KernBy::None;
-  f->ReleaseFontTable(context);
-  if (size <= 4) return KernBy::None;
-  // A GPOS 'kern' feature: its FeatureList's records.
-  bool gposKerns = false;
-  if (SUCCEEDED(f->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('G', 'P', 'O', 'S'), &data, &size, &context, &exists)) && exists) {
-    const auto* b = static_cast<const uint8_t*>(data);
-    auto u16 = [&](size_t at) { return at + 2 <= size ? static_cast<size_t>(b[at] << 8 | b[at + 1]) : size_t{0}; };
-    const size_t list = u16(6);
-    const size_t n = list ? u16(list) : 0;
-    for (size_t i = 0; i < n && !gposKerns; ++i) {
-      const size_t at = list + 2 + 6 * i;
-      gposKerns = at + 4 <= size && memcmp(b + at, "kern", 4) == 0;
-    }
-    f->ReleaseFontTable(context);
-  }
-  return gposKerns ? KernBy::DirectWrite : KernBy::Table;
+  if (FAILED(face->Get()->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('k', 'e', 'r', 'n'), &data, &size, &context, &exists)) || !exists)
+    return false;
+  face->Get()->ReleaseFontTable(context);
+  return size > 4;
 }
 
 }  // namespace
@@ -194,12 +176,13 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.caps = r.caps == fw::slide::Caps::All ? text::Caps::All : r.caps == fw::slide::Caps::Small ? text::Caps::Small : text::Caps::None;
     s.letterSpacing = r.spacing;
     // PowerPoint kerns only by a font's 'kern' table, not by its OpenType (GPOS) pairs: Public Sans
-    // (GPOS only) isn't kerned in its PDFs.
-    if (r.kern > 0)
-      if (const KernBy by = KernTable(fonts, s.family, s.bold, s.italic); by != KernBy::None) {
-        s.kerningMinSize = r.kern;
-        s.kernTable = by == KernBy::Table;
-      }
+    // (GPOS only) isn't kerned in its PDFs; Franklin Gothic (no GPOS pairs) is, and Segoe UI by the
+    // table's pairs with the space too (unisaarland). DirectWrite's shaping skips the table, so its
+    // pairs are applied as they are (TextStyle::kernTable).
+    if (r.kern > 0 && KernTable(fonts, s.family, s.bold, s.italic)) {
+      s.kerningMinSize = r.kern;
+      s.kernTable = true;
+    }
     s.simulatedBoldKeepsAdvances = true;  // PowerPoint's (cbs deck: Calibri Light bold, 6 % narrower than DirectWrite's)
     if (!r.lang.empty()) s.language = Utf8ToWide(r.lang);
     return s;

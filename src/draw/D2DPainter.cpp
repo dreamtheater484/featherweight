@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
@@ -176,6 +177,24 @@ void D2DPainter::UsePdfLikeDrawing() {
   if (params) dc_->SetTextRenderingParams(params.Get());
 }
 
+HRESULT DrawFrame(ID2D1DeviceContext* dc, const std::function<void(bool fallback)>& paint) {
+  HRESULT hr = E_FAIL;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    dc->BeginDraw();
+    paint(attempt > 0);
+    hr = dc->EndDraw();
+    if (SUCCEEDED(hr) || hr == D2DERR_RECREATE_TARGET) break;
+    static bool noted = false;
+    if (!noted) {
+      noted = true;
+      OutputDebugStringW((L"Featherweight: a frame failed to draw (HRESULT " + std::to_wstring(static_cast<unsigned long>(hr)) +
+                          L"); drawn again without shadows\n")
+                             .c_str());
+    }
+  }
+  return hr;
+}
+
 void D2DPainter::Save() { saved_.push_back({current_, pushed_.size()}); }
 
 void D2DPainter::Restore() {
@@ -194,6 +213,10 @@ void D2DPainter::Restore() {
 }
 
 void D2DPainter::BeginShadow(const Shadow& shadow) {
+  if (noShadows_) {
+    Save();
+    return;
+  }
   ComPtr<ID2D1Device> device;
   ComPtr<ID2D1DeviceContext> recorder;
   ComPtr<ID2D1CommandList> recording;

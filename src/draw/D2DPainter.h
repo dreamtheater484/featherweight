@@ -3,6 +3,7 @@
 #include <d2d1_1.h>
 #include <wrl/client.h>
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -63,6 +64,8 @@ class D2DPainter : public Painter {
   void BeginShadow(const Shadow& shadow) override;
   // Restore draws only the shadow: PDF export draws shadows as pictures under the vectors.
   void SetShadowsOnly(bool on) { shadowsOnly_ = on; }
+  // Shadows left out: what's shadowed is drawn plainly (DrawFrame's second try).
+  void SetNoShadows(bool on) { noShadows_ = on; }
   // Text as a PDF viewer draws it (pdfium): grayscale, the glyphs' outlines unhinted, gamma 1; and
   // pictures placed a hair higher, as PdfDocument::PlacePicturesAsPowerPoint does. The slides' view,
   // show and pictures use it, so they show what their PDF does; the context's own text settings
@@ -105,6 +108,13 @@ class D2DPainter : public Painter {
   Microsoft::WRL::ComPtr<ID2D1StrokeStyle> stroke_;
   std::vector<D2D1_RECT_F> rects_;  // FillPath's rectangles (a chart series' bars), reused
   bool shadowsOnly_ = false;
+  bool noShadows_ = false;
 };
+
+// One frame on `dc`: `paint(false)` between BeginDraw and EndDraw. When Direct2D fails the frame
+// at EndDraw (D2DERR_BAD_NUMBER: a shadow batched badly blanked whole slides), it is drawn once
+// more with `paint(true)`, for drawing without shadows (SetNoShadows), so the rest still shows; the
+// first such failure is noted in the debugger's log. Returns the last EndDraw's result.
+HRESULT DrawFrame(ID2D1DeviceContext* dc, const std::function<void(bool fallback)>& paint);
 
 }  // namespace draw

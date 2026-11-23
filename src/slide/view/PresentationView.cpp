@@ -222,17 +222,18 @@ ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmap(ID2D1DeviceContext* dc, size
       D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
   if (FAILED(ctx->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &bmp))) return nullptr;
   ctx->SetTarget(bmp.Get());
-  ctx->BeginDraw();
-  ctx->Clear(D2D1::ColorF(1, 1, 1, 1));
-  {
-    const draw::Size s = deck_->SlideSize();
-    ctx->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
-    draw::D2DPainter painter(ctx);
-    painter.UsePdfLikeDrawing();
-    deck_->Paint(slide, painter);
-  }
-  ctx->SetTransform(D2D1::Matrix3x2F::Identity());
-  const HRESULT hr = ctx->EndDraw();
+  const HRESULT hr = draw::DrawFrame(ctx, [&](bool fallback) {
+    ctx->Clear(D2D1::ColorF(1, 1, 1, 1));
+    {
+      const draw::Size s = deck_->SlideSize();
+      ctx->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
+      draw::D2DPainter painter(ctx);
+      painter.UsePdfLikeDrawing();
+      painter.SetNoShadows(fallback);
+      deck_->Paint(slide, painter);
+    }
+    ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+  });
   ctx->SetTarget(nullptr);
   return SUCCEEDED(hr) ? bmp : nullptr;
 }
