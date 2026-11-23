@@ -268,6 +268,54 @@ TEST(SlideEditDeletingASlideDropsLinksToIt) {
   CHECK(PartText(ed, ed.SlidePart(0)) == before);
 }
 
+// viewProps' outline list names slides by relationship (p2-corpus's PowerPoint check, the TUM deck):
+// deleting one drops its p:sld, never leaving r:id="" (PowerPoint repairs the deck).
+TEST(SlideEditDeletingASlideDropsItsOutlineEntry) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  CHECK(deck->SlideCount() >= 2);
+  const std::string view = "/ppt/viewProps.xml";
+  const std::string slideRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+  std::string xml = PartText(ed, view);
+  CHECK(xml.find("<p:notesTextViewPr>") != std::string::npos);
+  CHECK(ed.Run(u"Test", [&] {
+    const std::string first = ed.AddRelationship(view, slideRel, ed.SlidePart(0));
+    const std::string second = ed.AddRelationship(view, slideRel, ed.SlidePart(1));
+    if (first.empty() || second.empty()) return Result::Fail(u"rels");
+    xml.insert(xml.find("<p:notesTextViewPr>"),
+               "<p:outlineViewPr><p:cViewPr><p:scale><a:sx n=\"33\" d=\"100\"/><a:sy n=\"33\" d=\"100\"/></p:scale>"
+               "<p:origin x=\"0\" y=\"0\"/></p:cViewPr><p:sldLst><p:sld r:id=\"" + first + "\" collapse=\"1\"/><p:sld r:id=\"" +
+                   second + "\" collapse=\"1\"/></p:sldLst></p:outlineViewPr>");
+    return ed.WritePart(view, std::vector<uint8_t>(xml.begin(), xml.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  const std::string before = PartText(ed, view);
+  auto entries = [](const std::string& s) {
+    size_t n = 0;
+    for (size_t i = s.find("<p:sld "); i != std::string::npos; i = s.find("<p:sld ", i + 1)) ++n;
+    return n;
+  };
+  CHECK(entries(before) == 2);
+  CHECK(ed.DeleteSlides({1}));
+  std::string after = PartText(ed, view);
+  CHECK(entries(after) == 1);
+  CHECK(after.find("r:id=\"\"") == std::string::npos);
+  // Saved and read again: one entry, its relationship there.
+  std::vector<uint8_t> bytes;
+  CHECK(SaveToBytes(ed, bytes).Ok());
+  auto again = OpenBytes(bytes);
+  CHECK(again != nullptr);
+  if (again) {
+    Editor ed2(*again);
+    after = PartText(ed2, view);
+    CHECK(entries(after) == 1);
+    CHECK(after.find("r:id=\"\"") == std::string::npos);
+  }
+  // Undone: both entries again.
+  CHECK(ed.Undo());
+  CHECK(PartText(ed, view) == before);
+}
+
 TEST(SlideEditTypingCoalescesAndFormats) {
   auto deck = Open("simple.pptx");
   CHECK(deck != nullptr);
