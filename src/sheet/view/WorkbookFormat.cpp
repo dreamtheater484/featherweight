@@ -1113,6 +1113,8 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdFormatPainter: return set(L"Format painter: copy these cells' formats to the cells you select next", L"",
                                       painter_.has_value());
     // Excel's Home tab (R1, r1-sheet).
+    case CmdFontBox: return set(L"Font", L"");
+    case CmdSizeBox: return set(L"Font size", L"");
     case CmdFormatCellsFont: return set(L"Format cells: font…", L"");
     case CmdFormatCellsAlignment: return set(L"Format cells: alignment…", L"");
     case CmdAlignTop: return set(L"Top align", L"", x && x->alignment.vertical == VAlign::Top);

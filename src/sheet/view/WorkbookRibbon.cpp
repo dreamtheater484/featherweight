@@ -41,10 +41,12 @@ enum : uint8_t {
   kSameRow = 8,     // in the previous item's row
   kNewColumn = 16,  // starts a column
   kTool = 32,       // a box, color button or dropdown of its own (RibbonTool)
+  kKeepLarge = 64,  // a large item that stays large as the window narrows (Paste)
 };
 
-// One line of a tab's table: a group (cmd 0: its ↘ launcher, collapsed glyph, rows in `size`,
-// KeyTip and name), or an item of the group above it. Kept small: about 160 of them.
+// One line of a tab's table: a group (cmd 0: its ↘ launcher, collapsed glyph, rows in `size`, how
+// early it shrinks in `flags`, KeyTip and name), or an item of the group above it. Kept small:
+// about 160 of them.
 struct Spec {
   uint16_t cmd;
   uint16_t launcher;
@@ -56,8 +58,8 @@ struct Spec {
 };
 
 constexpr Spec kHome[] = {
-    {0, 0, g::Paste, 3, 0, "ZL", "Clipboard"},
-    {CmdPaste, 0, g::Paste, L, kSplit, "V", "Paste"},
+    {0, 0, g::Paste, 3, 1, "ZL", "Clipboard"},  // flags: shrinks first, as Excel's (Cut, Copy, Format Painter lose their labels)
+    {CmdPaste, 0, g::Paste, L, kSplit | kKeepLarge, "V", "Paste"},
     {CmdCut, 0, g::Cut, M, 0, "X", "Cut"},
     {CmdCopy, 0, icon::Copy, M, 0, "C", "Copy"},
     {CmdFormatPainter, 0, icon::Brush, M, kToggle, "FP", "Format Painter"},
@@ -368,6 +370,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         group.glyph = s.glyph;
         group.rows = s.size;
         group.launcher = s.launcher;
+        group.shrinkFirst = s.flags;  // a group's flags: how early it shrinks
         continue;
       }
       RibbonItem& it = tab.groups.back().items.emplace_back();
@@ -387,7 +390,8 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
       }
       if (s.glyph) t.glyph = s.glyph;
       it.size = static_cast<RibbonSize>(s.size);
-      it.smallest = s.size == L ? RibbonSize::Large : RibbonSize::Small;
+      // Large items go to medium before their group folds, as Excel's Cells and Styles; others to small.
+      it.smallest = s.flags & kKeepLarge ? RibbonSize::Large : s.size == L ? RibbonSize::Medium : RibbonSize::Small;
       if (it.label.empty()) it.label = Utf8ToWide(s.label);
       it.keyTip = Utf8ToWide(s.key);
       it.sameRow = (s.flags & kSameRow) != 0;
