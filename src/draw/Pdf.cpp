@@ -435,8 +435,8 @@ struct PdfDocument::Impl {
     }
     return slot;
   }
-  // The image for a bitmap: its name and object.
-  std::pair<std::string, uint32_t> ImageFor(const Bitmap& bitmap, bool smooth);
+  // The image for a bitmap: its name and object; `jpeg`, when given, is its pixels as a JPEG file.
+  std::pair<std::string, uint32_t> ImageFor(const Bitmap& bitmap, bool smooth, const std::vector<uint8_t>* jpeg = nullptr);
   void WriteFonts();
   std::vector<uint8_t> Finish();
 };
@@ -493,15 +493,18 @@ PdfFont* PdfDocument::Impl::FontFor(IDWriteFontFace* face) {
   return raw;
 }
 
-std::pair<std::string, uint32_t> PdfDocument::Impl::ImageFor(const Bitmap& bitmap, bool smooth) {
+std::pair<std::string, uint32_t> PdfDocument::Impl::ImageFor(const Bitmap& bitmap, bool smooth,
+                                                             const std::vector<uint8_t>* jpeg) {
   auto& slot = images[{bitmap.Id(), smooth}];
   if (slot.second) return slot;
   slot = {Name('I'), w.Reserve()};
   const std::string interpolate = smooth ? "/Interpolate true" : "";
   // A JPEG as it is: baseline or progressive, 8 bits, gray or color (CMYK files are decoded).
-  if (std::shared_ptr<const Image> source = bitmap.Jpeg()) {
+  std::shared_ptr<const Image> source = jpeg ? nullptr : bitmap.Jpeg();
+  if (jpeg || source) {
     std::vector<uint8_t> file;
-    if (source->Encoded(file) && file.size() > 4 && file[0] == 0xFF && file[1] == 0xD8) {
+    if (jpeg) file = *jpeg;
+    if ((jpeg || source->Encoded(file)) && file.size() > 4 && file[0] == 0xFF && file[1] == 0xD8) {
       int width = 0, height = 0, components = 0;
       for (size_t p = 2; p + 4 <= file.size();) {
         if (file[p] != 0xFF) break;
@@ -911,8 +914,8 @@ class PdfPainter : public Painter {
   }
 
   // The bitmap's pixels [0,w]x[0,h] (row 0 at the top) in the current coordinates.
-  void DrawImage(const Bitmap& bitmap, const Rect& r, bool smooth) {
-    const auto image = doc_.ImageFor(bitmap, smooth);
+  void DrawImage(const Bitmap& bitmap, const Rect& r, bool smooth, const std::vector<uint8_t>* jpeg = nullptr) {
+    const auto image = doc_.ImageFor(bitmap, smooth, jpeg);
     Res().xobjects[image.first] = image.second;
     Out() += "q " + N(r.Width()) + " 0 0 " + N(-r.Height()) + " " + N(r.left) + " " + N(r.bottom) + " cm /" + image.first +
              " Do Q\n";
@@ -1065,6 +1068,32 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   Save();
   if (a < 1000) SetAlpha(a, states_.back().strokeAlpha);
   Rect at = dest;
+  // PowerPoint's PDFs hold a cropped picture's kept pixels, whole ones: from the nearest pixel edge,
+  // as many as the crop keeps, rounded (unisaarland's photos); a PDF viewer then fits them to the
+  // shape as it does PowerPoint's.
+  std::shared_ptr<const Bitmap> kept;
+  const std::shared_ptr<const Image> jpeg = bitmap.Jpeg();
+  if (doc_.picturesUp && src && src->Width() > 0 && src->Height() > 0) {
+    // A JPEG decoded smaller (a big picture) is cropped in its own pixels, as it is embedded.
+    const Bitmap* from = &bitmap;
+    std::shared_ptr<const Bitmap> full;
+    if (jpeg && (jpeg->Width() != bitmap.Width() || jpeg->Height() != bitmap.Height()) && (full = jpeg->Pixels()) &&
+        full->Width() == jpeg->Width() && full->Height() == jpeg->Height())
+      from = full.get();
+    const float kx = static_cast<float>(from->Width()) / bitmap.Width(), ky = static_cast<float>(from->Height()) / bitmap.Height();
+    const long l = std::lround(src->left * kx), t = std::lround(src->top * ky);
+    const long w = std::lround(src->Width() * kx), h = std::lround(src->Height() * ky);
+    if (l == 0 && t == 0 && w == from->Width() && h == from->Height()) {
+      src = nullptr;  // all of it
+    } else if (l >= 0 && t >= 0 && w > 0 && h > 0 && l + w <= from->Width() && t + h <= from->Height()) {
+      std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+      for (long y = 0; y < h; ++y)
+        std::memcpy(px.data() + static_cast<size_t>(y) * w * 4,
+                    from->Pixels() + (static_cast<size_t>(t + y) * from->Width() + l) * 4, static_cast<size_t>(w) * 4);
+      kept = std::make_shared<const Bitmap>(static_cast<int>(w), static_cast<int>(h), std::move(px));
+      src = nullptr;
+    }
+  }
   if (src && src->Width() > 0 && src->Height() > 0) {
     // The whole picture placed so `src` lands on `dest`, clipped to it.
     const float sx = dest.Width() / src->Width(), sy = dest.Height() / src->Height();
@@ -1081,7 +1110,13 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
     at.top += up;
     at.bottom += up;
   }
-  DrawImage(bitmap, at, true);
+  if (kept && jpeg) {
+    // A JPEG's kept pixels as a JPEG again, as PowerPoint writes them (its quality).
+    const std::vector<uint8_t> file = EncodeJpeg(*kept, 0.75f);
+    DrawImage(*kept, at, true, file.empty() ? nullptr : &file);
+  } else {
+    DrawImage(kept ? *kept : bitmap, at, true);
+  }
   Restore();
 }
 

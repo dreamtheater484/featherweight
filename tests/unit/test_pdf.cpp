@@ -299,6 +299,32 @@ TEST(Pdf_JpegGoesInAsItIs) {
   CHECK(s.find(std::string(reinterpret_cast<const char*>(jpeg.data()), jpeg.size())) != std::string::npos);
 }
 
+TEST(Pdf_CroppedPictureKeepsWholePixelsAsPowerPoint) {
+  // PowerPoint's PDFs hold a cropped picture's kept pixels: from the nearest pixel edge, as many
+  // as the crop keeps (rounded), a JPEG's again as a JPEG; the whole picture otherwise.
+  const std::vector<uint8_t> jpeg = GrayJpeg();
+  const std::shared_ptr<Image> image = Image::Open(jpeg);
+  CHECK(image != nullptr);
+  if (!image) return;
+  const std::shared_ptr<const Bitmap> pixels = image->Pixels();
+  CHECK(pixels != nullptr && pixels->Width() == 8);
+  if (!pixels || pixels->Width() != 8) return;
+  const Rect crop{1.4f, 0, 6.6f, 8};  // 5.2 pixels wide from 1.4: pixels 1 to 5
+  PdfDocument pdf;
+  pdf.PicturesAsPowerPoint();
+  pdf.AddPage(100, 100, [&](Painter& p) { p.DrawBitmap(*pixels, {10, 10, 60, 90}, &crop); });
+  const std::vector<uint8_t> bytes = pdf.Finish();
+  const std::string s(bytes.begin(), bytes.end());
+  CHECK(XrefPointsAtObjects(s));
+  CHECK(s.find("/Width 5/Height 8") != std::string::npos);
+  CHECK(s.find("/DCTDecode") != std::string::npos);
+  CHECK(Streams(s).find(" re W n") == std::string::npos);  // not clipped: the kept pixels fill the place
+  PdfDocument plain;
+  plain.AddPage(100, 100, [&](Painter& p) { p.DrawBitmap(*pixels, {10, 10, 60, 90}, &crop); });
+  const std::vector<uint8_t> whole = plain.Finish();
+  CHECK(std::string(whole.begin(), whole.end()).find("/Width 8/Height 8") != std::string::npos);
+}
+
 TEST(Pdf_SpacesGoWithTheirWords) {
   // "a b" as three runs, the space alone, with something drawn after each word (an underline):
   // the space goes into a text object with a word, so readers find it.

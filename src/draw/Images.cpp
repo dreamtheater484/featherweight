@@ -657,6 +657,50 @@ std::shared_ptr<const Bitmap> RasterizeEmfWithGdi(const VectorImage& image) {
   return remember(std::make_shared<const Bitmap>(w, h, std::move(px)));
 }
 
+std::vector<uint8_t> EncodeJpeg(const Bitmap& bitmap, float quality) {
+  std::vector<uint8_t> out;
+  const int w = bitmap.Width(), h = bitmap.Height();
+  if (w <= 0 || h <= 0 || w > 65500 || h > 65500) return out;
+  ComScope com;
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)))
+    return out;
+  PROPBAG2 name{};
+  name.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+  VARIANT value;
+  VariantInit(&value);
+  value.vt = VT_R4;
+  value.fltVal = std::clamp(quality, 0.f, 1.f);
+  options->Write(1, &name, &value);
+  WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+  if (FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(w, h)) || FAILED(frame->SetPixelFormat(&format)) ||
+      format != GUID_WICPixelFormat24bppBGR)
+    return out;
+  const UINT stride = static_cast<UINT>(w) * 3;
+  std::vector<uint8_t> rows(static_cast<size_t>(stride) * h);
+  const uint8_t* from = bitmap.Pixels();
+  for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) std::memcpy(&rows[i * 3], from + i * 4, 3);
+  if (FAILED(frame->WritePixels(h, stride, static_cast<UINT>(rows.size()), rows.data())) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()))
+    return out;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)) || FAILED(GetHGlobalFromStream(stream.Get(), &global))) return out;
+  if (const void* bytes = GlobalLock(global)) {
+    out.assign(static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + stat.cbSize.QuadPart);
+    GlobalUnlock(global);
+  }
+  return out;
+}
+
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height) {
   if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return nullptr;
   ComScope com;
