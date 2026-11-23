@@ -1798,6 +1798,13 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSpelling:
     case CmdWordCount: s = {Ready(), false}; break;
     case CmdLanguage: s = {Editing(), false}; break;
+    case CmdObjectHeightBox:
+    case CmdObjectWidthBox: {
+      const uint32_t d = SelectedPicture();
+      s = {Editing() && d != fw::doc::kNone && Movable(d), false};
+      s.label = cmd == CmdObjectHeightBox ? L"Height" : L"Width";
+      break;
+    }
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -1860,6 +1867,14 @@ std::vector<int> DocView::Commands() {
 }
 
 bool DocView::Execute(int cmd) {
+  if ((cmd == CmdInsertPicture || (cmd >= CmdInsertTextBox && cmd <= CmdInsertCallout)) && !inserting_) {
+    // An object inserted shows its ribbon tab once, as in Word (DocRibbon.cpp).
+    inserting_ = true;
+    const bool done = Execute(cmd);
+    inserting_ = false;
+    ribbonInserted_ = SelectedPicture();
+    return done;
+  }
   if (format_ && DocFormat::Owns(cmd)) {
     // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
     if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);
@@ -1890,6 +1905,11 @@ bool DocView::Execute(int cmd) {
     case CmdCut: Cut(); return true;
     case CmdPaste: Paste(); return true;
     case CmdPasteMerge: Paste(true, true); return true;
+    case CmdObjectHeightBox:  // a box's KeyTip or command search: the panel with the size
+    case CmdObjectWidthBox:
+      if (const uint32_t d = SelectedPicture(); d != fw::doc::kNone)
+        return Execute(PictureInfoOf(d).picture ? CmdPicturePanel : CmdShapePanel);
+      return true;
     case CmdUndo: Undo(); return true;
     case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;

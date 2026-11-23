@@ -674,6 +674,12 @@ CommandState DocPage::Query(int cmd) {
     s.shortcut = n->keys;
   }
   const bool can = editor_.CanEdit();
+  if (cmd >= CmdIndentLeftBox && cmd <= CmdSpaceAfterBox) {
+    static constexpr const wchar_t* kBoxes[] = {L"Indent left", L"Indent right", L"Spacing before", L"Spacing after"};
+    s.label = kBoxes[cmd - CmdIndentLeftBox];
+    s.enabled = can;
+    return s;
+  }
   const auto [first, last] = Sections();
   const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
   // Breaks go into the main text, where the caret is (not in a header or footer).

@@ -97,6 +97,9 @@ class DocView : public PagedView {
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
   // Word's tabs and contextual tabs (DocRibbon.cpp).
   void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
+  // ribbon:dump (the model, for checks) and ribbon:check (every item runs a command the tab knows,
+  // and every command the old toolbar and ⋯ menu reached is reachable again), on stderr.
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
 
   bool HasStatusBar() const override { return Ready(); }
@@ -332,6 +335,13 @@ class DocView : public PagedView {
   std::vector<Heading> Headings() const;
   void GoTo(TextPos at, TextPos to);
   std::optional<HeaderEdit> hf_;
+  // The ribbon: the picture or shape just inserted, whose tab shows once; inserting one now; every
+  // contextual tab built, for ribbon:check.
+  uint32_t ribbonInserted_ = fw::doc::kNone;
+  // Picture and Shape Format > Size: the selected one's height or width (a picture keeps its shape).
+  ToolItem ObjectSizeBox(bool height);
+  bool inserting_ = false;
+  bool ribbonAll_ = false;
   TextPos bodyCaret_;  // where the caret was in the body before a header was edited
   bool marks_ = false;
   std::unique_ptr<LinkPanel> linkPanel_;

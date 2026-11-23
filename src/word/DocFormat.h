@@ -53,6 +53,9 @@ class DocFormat {
   ToolItem SizeBox();
   ToolItem ColorButton(bool highlight);
   ToolItem DateBox();
+  // The ribbon's Styles gallery: StyleBox's choice `index` as Word previews it, "AaBbCcDd" in the
+  // style's size, weight and color, its name below.
+  void StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui);
   // Insert ▾'s first item, Picture… (the tab opens its file dialog).
   std::function<void()> insertPicture;
   // More of Insert ▾, after Picture…: page layout's breaks (DocPage), each its label and action.

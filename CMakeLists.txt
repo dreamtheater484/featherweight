@@ -154,6 +154,10 @@ if(FW_BUILD_TESTS)
     fw_ribbon_test(ribbon_screens screens)
     fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
   endif()
+  # R1 (r1-word): the document's ribbon reaches every command its toolbar and ⋯ menu did.
+  add_test(NAME document_ribbon COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DDOCS=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/document-ribbon"
+           -P "${PROJECT_SOURCE_DIR}/tests/screens/document-ribbon.cmake")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.
