@@ -1,0 +1,46 @@
+# R1: the ribbon — work plan
+
+R1 replaces the editors' single toolbar and long ⋯ menus with a ribbon placed as in Office. The design is in IMPLEMENTATION_PLAN.md §5.6, the done-when in §5.6's milestone table, and the reasoning in decision 27. R1 started on 2026-11-23, alongside P1's fidelity work. It lands in `main` after P1 and P2 are merged and Roy has checked them, and before P3.
+
+## Integration
+
+- Branch `claude/r1-int`, started from `claude/p2-int` 4a89ffc9, which has all of P1 and P2. The coordinator merges P1's and P2's later fixes in regularly.
+- Each session works on its own branch and pushes ready heads. The coordinator merges a head into `claude/r1-int` only after a Release build and a 100 % ctest pass.
+- The PDF reader keeps its slim toolbar. Only the document, workbook and presentation tabs get the ribbon.
+
+## Pieces
+
+| Piece | Owns | Command ids | Size budget |
+|---|---|---|---|
+| **r1-control** | `src/ui/Ribbon*`, `src/ui/RibbonModel.h`, the File page (`src/ui/FilePage*`), quick access in `src/ui/TitleBar.cpp`, the shell integration in `src/App*.cpp`, `src/TabContent.h` (`BuildRibbon`), custom icons in `src/ui/Icons.h`, the coverage test framework, ribbon snapshot tests | 3600–3649 | 160 KB |
+| **r1-word** | Word's tabs, contextual tabs and File-page entries in `src/word/` (`BuildRibbon`); retires Word's toolbar model and ⋯ items | 3650–3699 | 30 KB |
+| **r1-sheet** | Excel's tabs in `src/sheet/view/`; retires the workbook toolbar model and ⋯ items | 3700–3749 | 30 KB |
+| **r1-slide** | PowerPoint's tabs in `src/slide/view/`; retires the presentation toolbar model and ⋯ items | 3750–3799 | 30 KB |
+| **coordinator** | merges, P1 and P2 merged in, the final gate, the friction review summary, the checklist section | — | — |
+
+The ids are for new commands only, such as Ctrl+F1 or a group's dialog launcher where no command exists yet. Existing commands keep their ids. In `src/Commands.h`, each piece adds its ids in its own block, under a comment naming the piece.
+
+## Order
+
+1. **r1-control first defines `RibbonModel.h`**, in its first push. It's the data the editors fill in: tabs, groups, items (large or small, KeyTip, label, the existing `ToolItem` for kind and state), galleries, dialog launchers, contextual tabs. It also adds `TabContent::BuildRibbon`. Until that lands, the module pieces write their tab layouts as tables in their state notes: each Office tab, group and button mapped to the existing command it runs, or "not in Featherweight" (left out).
+2. The module pieces fill `BuildRibbon`, while r1-control builds the control, the File page, KeyTips, shrinking groups, collapsing, quick access and the theme.
+3. Once a module's ribbon works end to end, that piece retires its toolbar model and the ⋯ items the ribbon or File page now covers. Right-click menus stay.
+
+## Rules
+
+- **Placement as in Office** (Word, Excel and PowerPoint 2021/365, classic ribbon): tab names, group order, and button order and size within groups. A button appears only for a command Featherweight has; nothing is greyed out for missing features.
+- **Icons** come from Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10), so they cost no exe size. Where the font has no fitting glyph, draw one with `Painter` in `src/ui/Icons.h` (r1-control) instead of using an unrelated glyph. Never copy Office's icon artwork.
+- **Shortcuts, right-click menus, side panels and Alt+Q don't change.** Command search lists ribbon commands under their tab and group names.
+- **Lightweight:** the size budgets above, with R1 at most 250 KB in total. Launch time and memory after launch no worse. Switching ribbon tabs and relayout on resize within one frame (16 ms). No CPU use when idle. Measure sizes with the map build (`$env:LINK='/MAP'` from PowerShell, see the link-map memory) and add a ledger line to `tests/budgets/ledger.json`.
+- **Tests:**
+  - Each module adds a coverage test: every ribbon item runs an existing command, and every command the old toolbar and ⋯ menu reached is reachable again from the ribbon, the File page, a right-click menu or Alt+Q.
+  - Snapshot tests at 1366, 1024 and 800 px, in light and dark.
+  - Full `fw_tests` and ctest before every push.
+- **Never close Roy's Featherweight.** Run your own instances only, for example with `--snapshot`.
+- **Usage:** run to 100 % of the windows (Roy, 2026-11-23). Push after every working step (WIP ok) and keep a "Resume here" block at the top of your state note.
+- **Questions:** decide for yourself or ask the coordinator, not Roy.
+- **State notes:** `D:\Documents\Codex\FeatherweightNotes\r1\<piece>-state.md`.
+
+## Decisions during R1
+
+(Each piece adds its decisions here.)
