@@ -501,7 +501,7 @@ enum Cmd : int {
   CmdCopySlidePicture,
   CmdCopyNotes,
   CmdOpenSlideLink,              // the link under the right-click
-  CmdPrintLayoutMenu,            // the toolbar's Print layout ▾
+  CmdPrintLayoutMenu,            // before R1, the toolbar's Print layout ▾ (now File › Print's settings)
   CmdPrintSlides,                // what Print and Export PDF lay out: slides,
   CmdPrintHandouts1,             // handouts with 1, 2, 3, 4, 6 or 9 slides a page (in that order),
   CmdPrintHandouts2,
@@ -516,7 +516,7 @@ enum Cmd : int {
   // Slides in the presentation tab (P2, p2-slides): 3420-3459. Cut, copy, paste, delete and select
   // all in the thumbnails use CmdCut, CmdCopy, CmdPaste, CmdSlideDelete and CmdSelectAll.
   CmdSlideNew = 3420,            // Ctrl+M: after the current slide, on the layout the gallery shows first
-  CmdSlideNewMenu,               // the toolbar's ＋ Slide ▾: the layout gallery
+  CmdSlideNewMenu,               // the ribbon's New Slide ▾: a new slide as Ctrl+M; its arrow the layouts
   CmdSlideDuplicate,             // Ctrl+D: the selected slides, after the last of them
   CmdSlideDelete,                // Delete in the thumbnails
   CmdSlideHide,                  // the selected slides skipped by the show, or shown again
