@@ -442,6 +442,9 @@ enum Cmd : int {
   CmdCreateNames,         // Ctrl+Shift+F3
   CmdPasteNames,          // F3
 
+  // The ribbon (R1, r1-control): 3600-3649.
+  CmdRibbonCollapse = 3600,  // Ctrl+F1: the ribbon shows only its tabs, or all of it again
+  CmdFilePage,               // the File tab: the File page (New, Open, Save, Print, options)
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
