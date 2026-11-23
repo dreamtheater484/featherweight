@@ -171,6 +171,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       size *= 2.f / 3;
     }
     s.size = std::max(0.5f, size);
+    // Advances as GDI's in PowerPoint's master units, 576 an inch, each a whole number of them (its
+    // PDFs: physik's Arial, letters-home's Georgia, rlf-webinar-ii's Garamond wrap as they do there).
+    s.gdiPixelsPerPoint = 576.f / 72;
     s.directWriteMetrics = true;  // a font's typo metrics when it asks (embedded Public Sans, govau decks)
     s.bold = s.complexBold = r.bold;
     s.italic = s.complexItalic = r.italic;

@@ -740,6 +740,28 @@ TEST(Text_ShiftThatKeepsItsLine) {
   CHECK(!slide[0].pieces.empty() && slide[0].pieces.back().rise == -6);  // drawn as low as before
 }
 
+TEST(Text_GdiAdvancesInWholePixels) {
+  // PowerPoint lays text out as GDI does in its master units (576 a inch, 8 a point): each glyph's
+  // advance a whole number of them (physik's Arial, annual-deaths', letters-home's Georgia).
+  TextStyle s = Style();
+  s.size = 13.3f;
+  s.gdiPixelsPerPoint = 8;
+  auto lines = Lay(L"Typography wraps lines", s, 400);
+  CHECK(!lines.empty() && !lines[0].pieces.empty());
+  if (lines.empty() || lines[0].pieces.empty()) return;
+  bool whole = true;
+  for (const auto& piece : lines[0].pieces)
+    for (float a : piece.advances) whole = whole && std::fabs(a * 8 - std::round(a * 8)) < 0.001f;
+  CHECK(whole);
+  // DirectWrite's own advances at that size aren't, all of them.
+  s.gdiPixelsPerPoint = 0;
+  auto ideal = Lay(L"Typography wraps lines", s, 400);
+  bool any = false;
+  for (const auto& piece : ideal[0].pieces)
+    for (float a : piece.advances) any = any || std::fabs(a * 8 - std::round(a * 8)) > 0.01f;
+  CHECK(any);
+}
+
 TEST(Text_InlineObjects) {
   TextStyle s = Style();
   TextStyle picture = s;
