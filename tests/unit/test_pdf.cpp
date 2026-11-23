@@ -325,6 +325,41 @@ TEST(Pdf_CroppedPictureKeepsWholePixelsAsPowerPoint) {
   CHECK(std::string(whole.begin(), whole.end()).find("/Width 8/Height 8") != std::string::npos);
 }
 
+TEST(Pdf_SlidePicturesAsPowerPointWritesThem) {
+  // PowerPoint's PDFs of slides: the page to 5 significant digits (960.125 -> 960.12); a picture's
+  // place in page coordinates to 5 significant digits from its bottom (goettingen 3's photo: 960.12
+  // by 465.4, its bottom 0.4411 up, a hair higher); a JPEG encoded again (its quality 75), not as
+  // the file has it.
+  const std::vector<uint8_t> jpeg = GrayJpeg();
+  const std::shared_ptr<Image> image = Image::Open(jpeg);
+  CHECK(image != nullptr);
+  if (!image) return;
+  const std::shared_ptr<const Bitmap> pixels = image->Pixels();
+  CHECK(pixels != nullptr);
+  if (!pixels) return;
+  PdfDocument pdf;
+  pdf.PicturesAsPowerPoint();
+  pdf.AddPage(960.125f, 540, [&](Painter& p) { p.DrawBitmap(*pixels, {1.22567f, 74.163467f, 961.35057f, 539.558901f}); });
+  const std::vector<uint8_t> bytes = pdf.Finish();
+  const std::string s(bytes.begin(), bytes.end());
+  CHECK(XrefPointsAtObjects(s));
+  CHECK(s.find("/MediaBox[0 0 960.12 540]") != std::string::npos);
+  // From the page's top: its bottom at 540 - 0.4411 - 0.00006, 465.4 high.
+  const std::string streams = Streams(s);
+  const size_t at = streams.find(" cm /I");
+  CHECK(at != std::string::npos);
+  if (at == std::string::npos) return;
+  const size_t from = streams.rfind("q ", at);
+  double w = 0, b = 0, c = 0, h = 0, x = 0, y = 0;
+  CHECK(std::sscanf(streams.c_str() + from, "q %lf %lf %lf %lf %lf %lf cm", &w, &b, &c, &h, &x, &y) == 6);
+  CHECK_NEAR(w, 960.12, 0.0002);
+  CHECK_NEAR(h, -465.4, 0.0002);
+  CHECK_NEAR(x, 1.2257, 0.00002);
+  CHECK_NEAR(y, 539.55884, 0.0002);
+  CHECK(s.find("/DCTDecode") != std::string::npos);
+  CHECK(s.find(std::string(reinterpret_cast<const char*>(jpeg.data()), jpeg.size())) == std::string::npos);
+}
+
 TEST(Pdf_SpacesGoWithTheirWords) {
   // "a b" as three runs, the space alone, with something drawn after each word (an underline):
   // the space goes into a text object with a word, so readers find it.

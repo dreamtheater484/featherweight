@@ -408,7 +408,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   // The chart groups, and the axes by id.
   std::map<std::string, pugi::xml_node> axes;
   std::vector<std::pair<pugi::xml_node, std::vector<std::string>>> groups;  // a group and its axis ids
-  bool unknown = false;
+  bool unknown = false, known = false;
   size_t budget = kMaxAllPoints, seriesCount = 0;
   ForEachChild(plot, [&](pugi::xml_node c) {
     if (NamespaceOf(c) != kChart) return true;
@@ -431,6 +431,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       unknown = true;  // stock, surface…
       return false;
     }
+    known = true;
     if (out.groups.size() >= 16) return true;
     const std::string_view grouping = Val(C(c, "grouping"));
     g.grouping = grouping == "stacked" ? Grouping::Stacked : grouping == "percentStacked" ? Grouping::Percent : Grouping::Clustered;
@@ -476,7 +477,10 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     }
     return true;
   });
-  if (unknown || out.groups.empty()) return false;
+  if (unknown) return false;
+  // A chart of a kind Featherweight draws but without a series: nothing to draw, as PowerPoint draws
+  // it (goettingen 2's empty doughnut), rather than a placeholder; elsewhere, the placeholder.
+  if (out.groups.empty()) return presentation && known;
 
   // Axes: the first group's category and value axes; a group on another value axis is secondary.
   const auto axis = [&](const std::string& id) { auto it = axes.find(id); return it == axes.end() ? pugi::xml_node() : it->second; };
