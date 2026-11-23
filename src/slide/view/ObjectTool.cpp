@@ -295,6 +295,11 @@ struct NamedCommand {
 };
 constexpr NamedCommand kOther[] = {
     {CmdInsertShape, L"Insert shape", L""},
+    {CmdInsertPicture, L"Insert pictures", L""},
+    {CmdInsertTextBox, L"Insert a text box", L""},
+    {CmdInsertTable, L"Insert a table", L""},
+    {CmdInsertChart, L"Insert a chart", L""},
+    {CmdPictureCrop, L"Crop", L""},
     {CmdObjectFill, L"Shape fill", L""},
     {CmdObjectOutline, L"Shape outline", L""},
     {CmdObjectOutlineWeight, L"Outline weight", L""},
@@ -1861,7 +1866,7 @@ std::vector<int> ObjectTool::Commands() const {
   std::vector<int> out;
   for (const ArrangeItem& a : kArrange) out.push_back(a.cmd);
   for (const NamedCommand& n : kOther)
-    if (n.cmd != CmdArrangeMenu && n.cmd != CmdInsertShape) out.push_back(n.cmd);
+    if (n.cmd != CmdArrangeMenu && n.cmd != CmdInsertShape && n.cmd != CmdInsertTable) out.push_back(n.cmd);
   return out;
 }
 
@@ -1931,6 +1936,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
     case CmdInsertShape:
     case CmdInsertTextBox:
     case CmdInsertPicture:
+    case CmdInsertTable:
     case CmdInsertChart:
     case CmdChartColumn:
     case CmdChartBar:
@@ -2091,11 +2097,11 @@ ToolItem ObjectTool::Tool(int cmd) {
     case CmdInsertTextBox:
       // Inserting also ends text editing, as the toolbar always let it.
       t.enabled = Editable(false);
-      t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::FontCase;
+      t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::TextBox;
       t.tooltip = cmd == CmdInsertPicture ? L"Insert pictures" : L"Insert a text box";
       break;
     case CmdInsertShape:
-      dropdown(L"Shapes", 0, L"Insert a shape");
+      dropdown(L"Shapes", icon::Shapes, L"Insert a shape");
       t.enabled = Editable(false);
       t.width = 70;
       t.maxRows = 16;
@@ -2116,31 +2122,6 @@ ToolItem ObjectTool::Tool(int cmd) {
       for (const wchar_t* n : kChartNames) t.choices.push_back(n);
       t.onChange = [this](const ToolValue& v) {
         if (v.index >= 0 && v.index < 4) InsertChart(v.index);
-      };
-      break;
-    case CmdTableLayoutMenu:  // PowerPoint's Layout tab: rows, columns, merge and split
-      dropdown(L"Table layout", icon::Table, L"Insert and delete rows and columns, merge and split cells");
-      t.width = 96;
-      for (int c : kTableCmds) {
-        CommandState s;
-        Query(c, s);
-        t.choices.push_back(s.label);
-      }
-      t.onChange = [this](const ToolValue& v) {
-        if (v.index >= 0 && v.index < static_cast<int>(std::size(kTableCmds))) Execute(kTableCmds[v.index]);
-      };
-      break;
-    case CmdArrangeMenu:
-      dropdown(L"Arrange", 0, L"Order, group, align and turn the selected objects");
-      t.width = 72;
-      t.maxRows = 20;
-      for (const ArrangeItem& a : kArrange) {
-        std::wstring label = (a.cmd == CmdAlignToSlide && alignToSlide_ ? L"✓ " : L"") + std::wstring(a.label);
-        if (*a.keys) label += std::wstring(L"\t") + a.keys;
-        t.choices.push_back(label);
-      }
-      t.onChange = [this](const ToolValue& v) {
-        if (v.index >= 0 && v.index < static_cast<int>(std::size(kArrange))) Execute(kArrange[v.index].cmd);
       };
       break;
     case CmdObjectFill:
@@ -2216,35 +2197,6 @@ bool ObjectTool::IsPicture(uint32_t id) {
   return o && o->kind == ob::ObjectKind::Picture;
 }
 
-void ObjectTool::AddTools(ToolbarModel& m) {
-  if (!Editable(false)) return;
-  Map();
-  auto add = [&](int cmd, int priority, bool sep = false) {
-    ToolItem t = Tool(cmd);
-    t.priority = priority;
-    t.sepBefore = sep;
-    m.left.push_back(std::move(t));
-  };
-  add(CmdInsertPicture, 7, true);
-  add(CmdInsertShape, 6);
-  add(CmdInsertTextBox, 5);
-  add(CmdInsertTable, 5);
-  add(CmdInsertChart, 5);
-  // A table selected, or a cell of it being edited: its rows, columns and cells (PowerPoint's
-  // Layout tab), at the cells chosen.
-  if (SelectedTable()) add(CmdTableLayoutMenu, 6, true);
-  if (selection_.empty() || textEditing_) return;
-  // The selection's tools.
-  add(CmdArrangeMenu, 7, true);
-  add(CmdObjectFill, 6);
-  add(CmdObjectOutline, 6);
-  add(CmdObjectOutlineWeight, 4);
-  size_t pictures = 0;
-  for (uint32_t id : selection_)
-    if (const ob::ObjectInfo* o = map_.Find(id)) pictures += o->kind == ob::ObjectKind::Picture;
-  if (selection_.size() == 1 && pictures == 1) add(CmdPictureCrop, 6);
-}
-
 namespace {
 
 // "x,y,w,h" in points.
@@ -2315,7 +2267,11 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
     if (!ParseBox(rest, r)) return fail(L"textbox|x,y,w,h");
     return InsertTextBox(r) ? true : fail(L"not done");
   }
-  return fail(L"insert:table, chart, shape or textbox");
+  if (what == L"picture") {  // insert:picture|<file>, centred (r1-slide: the ribbon's Picture Format)
+    const draw::Size s = host_.deck()->SlideSize();
+    return InsertPictures({rest}, {s.width / 2, s.height / 2}, true) ? true : fail(L"not done");
+  }
+  return fail(L"insert:table, chart, shape, textbox or picture");
 }
 
 std::vector<std::wstring> PickPictureFiles(HWND owner, bool several) {

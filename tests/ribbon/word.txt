@@ -25,12 +25,12 @@ reach 143 Make Featherweight the default PDF app
 reach 144 About Featherweight
 reach 157 Undo
 reach 158 Redo
-reach 162 
-reach 701 
-reach 702 
-reach 720 
-reach 721 
-reach 722 
+reach 162 Restore original
+reach 701 New document
+reach 702 New workbook
+reach 720 New from template 1
+reach 721 New from template 2
+reach 722 New from template 3
 reach 803 Check spelling as you type
 reach 804 AutoCorrect as you type
 reach 900 Insert picture…
@@ -164,4 +164,4 @@ reach 1465 Insert arrow
 reach 1466 Insert callout
 reach 1469 Shape wrap, size, fill and outline…
 reach 1470 Watermark…
-reach 3036 
+reach 3036 More templates (user templates folder)

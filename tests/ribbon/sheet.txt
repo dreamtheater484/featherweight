@@ -1,6 +1,9 @@
-# The commands the toolbar and the ⋯ menu reached in sheet before R1 (dumpreach on tests/office/generated/simple.xlsx).
-# ribboncheck:<this file> fails when one isn't reachable from the ribbon, the File page, the right-click menu
-# or Alt+Q. Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
+# The workbook tab's coverage baseline (R1, r1-sheet): every command its toolbar and the ⋯ menu
+# reached before the ribbon (App's dumpreach on a workbook, 2026-11-23), with the toolbar's
+# Merge, Chart and Insert boxes replaced by the commands they held, and the commands in its
+# Data, Conditional, Number format and Page setup lists. ribboncheck:<this file> checks each is
+# reachable from the ribbon, the File page, the right-click menu or Alt+Q.
+# Only the number after "reach" counts; the name is for reading. Lines starting with # are notes.
 reach 100 Open
 reach 102 Save as…
 reach 103 Print
@@ -36,13 +39,51 @@ reach 1043 Font size box
 reach 1250 Page setup
 reach 1400 Export PDF…
 reach 1500 Print preview
+reach 2024 Merge & Center
+reach 2025 Merge across
+reach 2026 Merge cells
+reach 2027 Unmerge cells
 reach 2701 More number formats…
-reach 2704 Merge
+reach 2702 Increase decimal
+reach 2703 Decrease decimal
 reach 2705 Borders
 reach 2706 Fill color
 reach 2717 Cell styles
+reach 2718 Filter
 reach 2719 Custom sort…
-reach 2808 Chart
+reach 2720 Sort A to Z
+reach 2721 Sort Z to A
+reach 2722 Remove duplicates…
+reach 2801 Column chart
+reach 2802 Bar chart
+reach 2803 Line chart
+reach 2804 Pie chart
+reach 2805 Doughnut chart
+reach 2806 Area chart
+reach 2807 Scatter chart
+reach 2812 Combo chart
+reach 2850 Conditional formatting: new rule…
+reach 2851 Conditional formatting: manage rules…
+reach 2852 Conditional formatting: clear rules from selected cells
+reach 2853 Conditional formatting: clear rules from entire sheet
 reach 2854 Conditional formatting
-reach 2880 Insert
+reach 2855 Data validation…
+reach 2856 Circle invalid data
+reach 2857 Clear validation circles
+reach 2859 Table…
+reach 2881 Pictures
+reach 2882 Rectangle
+reach 2883 Rounded rectangle
+reach 2884 Oval
+reach 2885 Line
+reach 2886 Arrow
+reach 2887 Text box
+reach 2888 Format object…
+reach 2948 No scaling
+reach 2949 Fit sheet on one page
+reach 2950 Fit all columns on one page
+reach 2951 Fit all rows on one page
 reach 3036 More templates (user templates folder)
+reach 3040 Refresh PivotTable
+reach 3041 Refresh all PivotTables
+reach 3042 PivotTable…

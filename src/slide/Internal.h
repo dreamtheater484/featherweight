@@ -23,6 +23,7 @@ namespace fw::slide::detail {
 using namespace draw::xml;
 
 inline constexpr std::string_view kP14 = "http://schemas.microsoft.com/office/powerpoint/2010/main";
+inline constexpr std::string_view kMath = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 inline constexpr std::string_view kTableUri = "http://schemas.openxmlformats.org/drawingml/2006/table";
 inline constexpr std::string_view kChartUri = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 inline constexpr std::string_view kDiagramUri = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
@@ -48,6 +49,10 @@ inline float Emu(pugi::xml_node n, const char* attr, double def = 0) { return Em
 void ReadShapeTree(SlideBase& part, pugi::xml_node spTree, Presentation& deck);
 // The background in effect for `part`, as a shape filling `size`.
 void ResolveBackground(SlideBase& part, draw::Size size);
+// Namespace declarations in scope at `src` that `copy` (a copy of it elsewhere) lacks, added to it.
+void DeclareScope(pugi::xml_node copy, pugi::xml_node src);
+// A copy of `src` appended to `parent`, its prefixes meaning what they meant in its own part.
+pugi::xml_node CopyInto(pugi::xml_node parent, pugi::xml_node src);
 // Placeholder of a shape element (p:nvSpPr/p:nvPr/p:ph and the like).
 Placeholder ReadPlaceholder(pugi::xml_node shape);
 // A hyperlink element (a:hlinkClick, a:hlinkHover) resolved through the part's relationships.

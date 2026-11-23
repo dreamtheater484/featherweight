@@ -504,7 +504,7 @@ void DrawContent(Painter& p, const Shape& s, Size size, const Hooked& h, bool bo
   const Rect box{0, 0, size.width, size.height};
   switch (s.kind) {
     case Shape::Kind::Group:
-      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds), h);
+      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds, size), h);
       return;
     case Shape::Kind::Placeholder:
       if (body) DrawPlaceholder(p, s, box);
@@ -574,7 +574,7 @@ void PaintedBoundsAt(const Shape& s, const Rect& bounds, const Matrix& toParent,
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toParent;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) PaintedBoundsAt(c, ChildToGroup(s, c.bounds), m, r, any);
+    for (const Shape& c : s.children) PaintedBoundsAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, r, any);
     return;
   }
   // The box's corners, grown by the line and its arrowheads, then the shadow.
@@ -612,7 +612,7 @@ void OutlinesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, std
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toDrawing;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) OutlinesAt(c, ChildToGroup(s, c.bounds), m, out);
+    for (const Shape& c : s.children) OutlinesAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
     return;
   }
   for (const Geometry::Figure& f : OutlineOf(s, {bounds.Width(), bounds.Height()}).figures) {
@@ -627,7 +627,7 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toDrawing;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) TextBoxesAt(c, ChildToGroup(s, c.bounds), m, out);
+    for (const Shape& c : s.children) TextBoxesAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
     return;
   }
   if (!s.text) return;
@@ -661,17 +661,19 @@ void PartsAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, std::v
   const Matrix m = Place(s, bounds) * toDrawing;
   out.push_back({s.id, {bounds.Width(), bounds.Height()}, m, s.kind == Shape::Kind::Group});
   if (s.kind == Shape::Kind::Group)
-    for (const Shape& c : s.children) PartsAt(c, ChildToGroup(s, c.bounds), m, out);
+    for (const Shape& c : s.children) PartsAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
 }
 
 }  // namespace
 
 Matrix ShapeTransform(const Shape& s) { return Place(s, s.bounds); }
 
-Rect ChildToGroup(const Shape& g, const Rect& c) {
-  const Rect& ch = g.childBounds;
-  const float sx = std::abs(ch.Width()) > 1e-6f ? g.bounds.Width() / ch.Width() : 1;
-  const float sy = std::abs(ch.Height()) > 1e-6f ? g.bounds.Height() / ch.Height() : 1;
+Rect ChildToGroup(const Shape& g, const Rect& c) { return ChildToGroup(g, c, {g.bounds.Width(), g.bounds.Height()}); }
+
+Rect ChildToGroup(const Shape& g, const Rect& c, Size placed) {
+  const Rect ch = g.childrenAsDrawn ? Rect{0, 0, placed.width, placed.height} : g.childBounds;
+  const float sx = std::abs(ch.Width()) > 1e-6f ? placed.width / ch.Width() : 1;
+  const float sy = std::abs(ch.Height()) > 1e-6f ? placed.height / ch.Height() : 1;
   return {(c.left - ch.left) * sx, (c.top - ch.top) * sy, (c.right - ch.left) * sx, (c.bottom - ch.top) * sy};
 }
 

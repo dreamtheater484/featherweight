@@ -254,6 +254,28 @@ bool WorkbookView::GridCommand(int cmd) {
   }
 }
 
+// The sheet tab's Tab color and Unhide submenus (also Home > Format's, R1).
+void WorkbookView::AppendTabColorMenu(HMENU m, const wchar_t* label) {
+  HMENU colors = CreatePopupMenu();
+  const Color current = Current().Props().tabColor;
+  menu::AppendItem(colors, CmdTabColor, L"No color", true, !current.IsSet(), true);
+  for (size_t i = 0; i < std::size(kTabColors); ++i)
+    menu::AppendItem(colors, CmdTabColor + 1 + static_cast<UINT>(i), kTabColors[i].name, true,
+                     current.kind == Color::Kind::Rgb && (current.value & 0xFFFFFF) == kTabColors[i].rgb, true);
+  menu::AppendSubmenu(m, colors, label);
+}
+
+void WorkbookView::AppendUnhideSheetMenu(HMENU m, const wchar_t* label) {
+  HMENU hidden = CreatePopupMenu();
+  bool any = false;
+  for (size_t i = 0; i < book_->SheetCount() && CmdUnhideSheet + static_cast<int>(i) <= CmdUnhideSheetLast; ++i)
+    if (book_->GetSheet(i).State() == SheetState::Hidden) {
+      menu::AppendItem(hidden, CmdUnhideSheet + static_cast<UINT>(i), Utf8ToWide(book_->GetSheet(i).Name()));
+      any = true;
+    }
+  menu::AppendSubmenu(m, hidden, label, any);
+}
+
 void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
@@ -271,22 +293,9 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(m, CmdRenameSheet, L"Rename");
     item(m, CmdMoveSheetLeft, L"Move left");
     item(m, CmdMoveSheetRight, L"Move right");
-    HMENU colors = CreatePopupMenu();
-    const Color current = Current().Props().tabColor;
-    AppendItem(colors, CmdTabColor, L"No color", true, !current.IsSet(), true);
-    for (size_t i = 0; i < std::size(kTabColors); ++i)
-      AppendItem(colors, CmdTabColor + 1 + static_cast<UINT>(i), kTabColors[i].name, true,
-                 current.kind == Color::Kind::Rgb && (current.value & 0xFFFFFF) == kTabColors[i].rgb, true);
-    AppendSubmenu(m, colors, L"Tab color");
+    AppendTabColorMenu(m, L"Tab color");
     item(m, CmdHideSheet, L"Hide");
-    HMENU hidden = CreatePopupMenu();
-    bool anyHidden = false;
-    for (size_t i = 0; i < book_->SheetCount() && CmdUnhideSheet + static_cast<int>(i) <= CmdUnhideSheetLast; ++i)
-      if (book_->GetSheet(i).State() == SheetState::Hidden) {
-        AppendItem(hidden, CmdUnhideSheet + static_cast<UINT>(i), Utf8ToWide(book_->GetSheet(i).Name()));
-        anyHidden = true;
-      }
-    AppendSubmenu(m, hidden, L"Unhide", anyHidden);
+    AppendUnhideSheetMenu(m, L"Unhide");
     AddReviewTabItems(m);
     AddPageSetupTabItems(m);  // s3-print
     AppendSeparator(m);

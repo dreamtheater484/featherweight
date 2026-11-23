@@ -66,6 +66,10 @@ pugi::xml_node NonVisual(pugi::xml_node el) {
   return found;
 }
 
+}  // namespace
+
+namespace detail {
+
 // Namespace declarations in scope at `src` that `copy` (a copy of it elsewhere) lacks, added to it,
 // so the copy's prefixes mean what they meant in its own part.
 void DeclareScope(pugi::xml_node copy, pugi::xml_node src) {
@@ -83,6 +87,10 @@ pugi::xml_node CopyInto(pugi::xml_node parent, pugi::xml_node src) {
   DeclareScope(c, src);
   return c;
 }
+
+}  // namespace detail
+
+namespace {
 
 bool IsFill(std::string_view k) {
   return k == "noFill" || k == "solidFill" || k == "gradFill" || k == "blipFill" || k == "pattFill" || k == "grpFill";

@@ -448,6 +448,11 @@ void TextEditing::MouseUp() {
   Changed();
 }
 
+bool TextEditing::Names(int cmd) {
+  return cmd == CmdFontBox || cmd == CmdSizeBox || cmd == CmdInsertLink ||
+         std::find(std::begin(kCommands), std::end(kCommands), cmd) != std::end(kCommands);
+}
+
 std::vector<int> TextEditing::CommandIds() {
   std::vector<int> out(std::begin(kCommands), std::end(kCommands));
   out.erase(std::remove_if(out.begin(), out.end(), [](int c) { return c == CmdSpellIgnore || c == CmdSpellAdd; }), out.end());
@@ -705,9 +710,9 @@ CommandState TextEditing::Query(int cmd) {
     s.shortcut = L"F7";
     return s;
   }
-  if (!session_) return s;
-  const TextLook look = LookOf(*session_);
-  s.enabled = true;
+  // Without text being edited each command keeps its name, unavailable (the ribbon shows them).
+  const TextLook look = session_ ? LookOf(*session_) : TextLook{};
+  s.enabled = session_ != nullptr;
   auto label = [&](const wchar_t* l, const wchar_t* keys) {
     s.label = l;
     s.shortcut = keys;
@@ -743,11 +748,13 @@ CommandState TextEditing::Query(int cmd) {
     case CmdChangeCase: label(L"Change case", L"Shift+F3"); break;
     case CmdInsertLink: label(look.link ? L"Edit link" : L"Link", L"Ctrl+K"); break;
     case CmdRemoveLink: label(L"Remove link", L""), s.enabled = look.link; break;
-    case CmdCut: label(L"Cut", L"Ctrl+X"), s.enabled = session_->HasSelection(); break;
-    case CmdCopy: label(L"Copy", L"Ctrl+C"), s.enabled = session_->HasSelection(); break;
+    case CmdCut: label(L"Cut", L"Ctrl+X"), s.enabled = session_ && session_->HasSelection(); break;
+    case CmdCopy: label(L"Copy", L"Ctrl+C"), s.enabled = session_ && session_->HasSelection(); break;
     case CmdPaste: label(L"Paste", L"Ctrl+V"), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
     case CmdPasteMerge: label(L"Paste as text", L""), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
     case CmdSelectAll: label(L"Select all", L"Ctrl+A"); break;
+    case CmdFontBox: label(L"Font", L""); break;
+    case CmdSizeBox: label(L"Font size", L""); break;
     case CmdSpellIgnore: label(L"Ignore all", L""), s.enabled = menuWord_.has_value(); break;
     case CmdSpellAdd: label(L"Add to dictionary", L""), s.enabled = menuWord_.has_value(); break;
     default:
@@ -755,6 +762,7 @@ CommandState TextEditing::Query(int cmd) {
         s.label = suggestions_[cmd - CmdSpellSuggest];
       break;
   }
+  if (!session_) s.enabled = s.checked = false;
   return s;
 }
 
@@ -920,9 +928,9 @@ ToolItem TextEditing::Tool(int cmd) {
   };
   static constexpr Glyph kGlyphs[] = {
       {CmdBold, icon::Bold, true},           {CmdItalic, icon::Italic, true},
-      {CmdUnderline, icon::Underline, true}, {CmdStrike, 0, true},
+      {CmdUnderline, icon::Underline, true}, {CmdStrike, icon::Strikethrough, true},
       {CmdGrowFont, 0xE8E8, false},          {CmdShrinkFont, 0xE8E7, false},  // FontIncrease, FontDecrease
-      {CmdClearCharFormat, 0, false},        {CmdChangeCase, icon::FontCase, false},
+      {CmdClearCharFormat, icon::ClearFormatting, false}, {CmdChangeCase, icon::FontCase, false},
       {CmdFormatPainter, icon::Brush, true}, {CmdAlignLeft, icon::AlignLeft, true},
       {CmdAlignCenter, icon::AlignCenter, true}, {CmdAlignRight, icon::AlignRight, true},
       {CmdAlignJustify, icon::AlignJustify, true}, {CmdBullets, icon::BulletedList, true},
@@ -932,25 +940,6 @@ ToolItem TextEditing::Tool(int cmd) {
   for (const Glyph& g : kGlyphs)
     if (g.cmd == cmd) t.glyph = g.glyph, t.toggle = g.toggle;
   return t;
-}
-
-void TextEditing::AddToolbar(ToolbarModel& m) {
-  if (!session_) return;
-  auto add = [&](int cmd, int priority, bool sep = false) {
-    ToolItem t = Tool(cmd);
-    t.priority = priority;
-    t.sepBefore = sep;
-    m.left.push_back(std::move(t));
-  };
-  add(CmdFontBox, 6, true);
-  add(CmdSizeBox, 6);
-  for (int cmd : {CmdBold, CmdItalic, CmdUnderline}) add(cmd, 9);
-  add(CmdFontColor, 5);
-  add(CmdAlignLeft, 5, true);
-  add(CmdAlignCenter, 5);
-  add(CmdAlignRight, 5);
-  add(CmdBullets, 4);
-  add(CmdNumbering, 4);
 }
 
 void TextEditing::FillContextMenu(HMENU m, size_t slide, draw::Point at) {

@@ -595,6 +595,7 @@ class Reader {
     s.kind = Shape::Kind::Group;
     s.name = "SmartArt";
     s.childBounds = {0, 0, extent.width, extent.height};
+    s.childrenAsDrawn = true;
     return true;
   }
 

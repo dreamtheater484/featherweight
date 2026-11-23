@@ -377,29 +377,13 @@ bool WorkbookView::ChartsCommand(int cmd) {
     const std::vector<SheetObjects::Object> all = objects->Objects();
     if (!all.empty()) {
       object_ = all.back().id;
+      ribbonInserted_ = object_;  // the ribbon shows Chart Design (R1)
       objectSheet_ = sheet_;
     }
   }
   host_.ViewInvalidate();
   host_.ViewStateChanged();
   return true;
-}
-
-void WorkbookView::AddChartTools(ToolbarModel& m) {
-  ToolItem chart;
-  chart.kind = ToolKind::Dropdown;
-  chart.cmd = CmdChartBox;
-  chart.width = 64;
-  chart.priority = 3;
-  chart.text = chart.menuLabel = L"Chart";
-  chart.fitText = true;
-  chart.tooltip = L"Insert a chart of the selected cells";
-  chart.choices = {L"Column (Alt+F1)", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
-  chart.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 7) ChartsCommand(CmdChartColumn + v.index);
-    if (v.index == 7) ChartsCommand(CmdChartCombo);
-  };
-  m.left.push_back(chart);
 }
 
 // ---- The chart panel (double-click a chart, Ctrl+1 on it): its type, colors, titles, legend,

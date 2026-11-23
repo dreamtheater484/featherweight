@@ -152,6 +152,8 @@ if(FW_BUILD_TESTS)
   endfunction()
   if(FW_TEST_SCREENS)
     fw_ribbon_test(ribbon_screens screens)
+    fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
+    fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
   fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
 endif()

@@ -462,6 +462,38 @@ enum Cmd : int {
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
   CmdPivotTable,           // Insert > PivotTable: its panel
 
+  // The workbook's ribbon (R1, r1-sheet): 3700-3749. What Excel's buttons do that Featherweight
+  // did only in Format Cells or the Page Setup panel, and the ribbon's menus (their lists come
+  // from WorkbookView::FillMenu or the item's `menu`).
+  CmdFormatCellsFont = 3700,  // Home > Font's launcher: Format Cells on its Font page
+  CmdFormatCellsAlignment,    // Home > Alignment's launcher
+  CmdAlignTop,                // the cells' vertical alignment (a second click: bottom again)
+  CmdAlignMiddle,
+  CmdAlignBottom,
+  CmdWrapText,                // on or off
+  CmdNumAccounting,           // Accounting Number Format
+  CmdCommaStyle,              // the Comma cell style
+  CmdViewNormal,              // View > Normal: page break preview and print preview off
+  CmdCellsFormatMenu = 3720,  // Home > Cells > Format ▾
+  CmdFillMenu,                // Home > Editing > Fill ▾
+  CmdClearMenu,               // Clear ▾
+  CmdSortFilterMenu,          // Sort & Filter ▾
+  CmdFindSelectMenu,          // Find & Select ▾
+  CmdShapesMenu,              // Insert > Shapes ▾
+  CmdColumnChartMenu,         // Insert > Charts: Column or Bar ▾, Line or Area ▾, Pie or Doughnut ▾
+  CmdLineChartMenu,
+  CmdPieChartMenu,
+  CmdMarginsMenu,             // Page Layout: Margins ▾, Orientation ▾, Print Area ▾, Breaks ▾
+  CmdOrientationMenu,
+  CmdPrintAreaMenu,
+  CmdBreaksMenu,
+  CmdScaleWidth,              // Scale to Fit: Width ▾ and Height ▾ (Automatic or 1 page)
+  CmdScaleHeight,
+  CmdNotesMenu,               // Review > Notes ▾
+  CmdFreezeMenu,              // View > Freeze Panes ▾
+  CmdPrintWhatMenu,           // Print Preview: what prints ▾, Scaling ▾
+  CmdScalingMenu,
+
   // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
   CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
 
@@ -473,7 +505,7 @@ enum Cmd : int {
   CmdCopySlidePicture,
   CmdCopyNotes,
   CmdOpenSlideLink,              // the link under the right-click
-  CmdPrintLayoutMenu,            // the toolbar's Print layout ▾
+  CmdPrintLayoutMenu,            // before R1, the toolbar's Print layout ▾ (now File › Print's settings)
   CmdPrintSlides,                // what Print and Export PDF lay out: slides,
   CmdPrintHandouts1,             // handouts with 1, 2, 3, 4, 6 or 9 slides a page (in that order),
   CmdPrintHandouts2,
@@ -488,7 +520,7 @@ enum Cmd : int {
   // Slides in the presentation tab (P2, p2-slides): 3420-3459. Cut, copy, paste, delete and select
   // all in the thumbnails use CmdCut, CmdCopy, CmdPaste, CmdSlideDelete and CmdSelectAll.
   CmdSlideNew = 3420,            // Ctrl+M: after the current slide, on the layout the gallery shows first
-  CmdSlideNewMenu,               // the toolbar's ＋ Slide ▾: the layout gallery
+  CmdSlideNewMenu,               // the ribbon's New Slide ▾: a new slide as Ctrl+M; its arrow the layouts
   CmdSlideDuplicate,             // Ctrl+D: the selected slides, after the last of them
   CmdSlideDelete,                // Delete in the thumbnails
   CmdSlideHide,                  // the selected slides skipped by the show, or shown again
