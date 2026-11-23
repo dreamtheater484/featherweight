@@ -90,7 +90,7 @@ int RunSlides(const Options& options) {
     std::printf("  %zu slides; read %.0f ms, first slide prepared %.0f ms, shown %.0f ms\n", deck->SlideCount(), read,
                 preparedMs, firstMs);
     draw::PdfDocument pdf;
-    pdf.PlacePicturesAsPowerPoint();
+    pdf.PicturesAsPowerPoint();
     for (size_t i = 0; i < deck->SlideCount(); ++i) {
       std::unique_ptr<fw::slide::render::SlideRender> s =
           i == 0 && first ? std::move(first) : fw::slide::render::SlideRender::Make(*deck, *deck->GetSlide(i), fonts);
