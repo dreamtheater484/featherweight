@@ -88,6 +88,15 @@ class ObjectTool {
   // The control for one of the objects' commands, as the ribbon and toolbar show it: the Insert
   // dropdowns (shapes, table, chart), Arrange, fill and outline colors, Weight, Crop.
   ToolItem Tool(int cmd);
+  // What's selected, by kind (the ribbon's contextual tabs: Shape Format, Picture Format, Table Layout).
+  struct Kinds {
+    int shapes = 0, pictures = 0, tables = 0, others = 0;
+  };
+  Kinds SelectionKinds();
+  // The object inserted last (a picture, shape or text box), once; 0 when none since: the ribbon
+  // then shows its Format tab, as PowerPoint does.
+  uint32_t TakeInserted();
+  bool IsPicture(uint32_t id);
   void ContextMenu(HMENU menu, float x, float y);
   // A table's items (insert and delete rows and columns, merge, split) when the selected object is
   // a table: the view adds them after text editing's own menu in a cell.
@@ -200,6 +209,7 @@ class ObjectTool {
   bool textEditing_ = false;
   uint32_t textShape_ = 0;      // selected for text editing
   bool cropMode_ = false;
+  uint32_t inserted_ = 0;  // TakeInserted's
   bool alignToSlide_ = false;   // Align > Align to Slide (always with one object)
   DragState drag_;
   std::vector<objects::Guide> guides_;

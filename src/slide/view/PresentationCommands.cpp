@@ -142,8 +142,15 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState PresentationView::QueryCommand(int cmd) {
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
-  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return s;  // p2-objects
+  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) {  // p2-objects
+    // The clipboard's names where the objects give none (the ribbon's Paste and Select menus).
+    const wchar_t* names[][3] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
+    const int k = cmd == CmdCut ? 0 : cmd == CmdCopy ? 1 : cmd == CmdPaste ? 2 : cmd == CmdSelectAll ? 3 : -1;
+    if (k >= 0 && s.label.empty()) s.label = names[k][0], s.shortcut = names[k][1];
+    return s;
+  }
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
+  if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
     case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp

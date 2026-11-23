@@ -299,6 +299,7 @@ constexpr NamedCommand kOther[] = {
     {CmdObjectOutline, L"Shape outline", L""},
     {CmdObjectOutlineWeight, L"Outline weight", L""},
     {CmdObjectShadow, L"Shadow", L""},
+    {CmdSlideNoShadow, L"No shadow", L""},
     {CmdTableRowAbove, L"Insert row above", L""},
     {CmdTableRowBelow, L"Insert row below", L""},
     {CmdTableColumnLeft, L"Insert column left", L""},
@@ -1499,6 +1500,7 @@ bool ObjectTool::InsertPictureBytes(std::vector<uint8_t> bytes, draw::Point at, 
   Map();
   selection_ = {id};
   level_ = 0;
+  inserted_ = id;
   return true;
 #else
   (void)bytes;
@@ -1546,6 +1548,7 @@ bool ObjectTool::InsertPreset(const std::string& preset, const draw::Rect& box) 
   Map();
   selection_ = {id};
   level_ = 0;
+  inserted_ = id;
   return true;
 #else
   (void)preset;
@@ -1574,6 +1577,7 @@ bool ObjectTool::InsertTextBox(const draw::Rect& r) {
   Map();
   selection_ = {id};
   level_ = 0;
+  inserted_ = id;
   if (host_.beginText) host_.beginText(id);  // the caret in it, as PowerPoint does
   return true;
 #else
@@ -1885,7 +1889,8 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
     case CmdObjectFill:
     case CmdObjectOutline:
     case CmdObjectOutlineWeight:
-    case CmdObjectShadow: s.enabled = editable && any; break;
+    case CmdObjectShadow:
+    case CmdSlideNoShadow: s.enabled = editable && any; break;
     case CmdObjAlignLeft:
     case CmdObjAlignCenter:
     case CmdObjAlignRight:
@@ -2001,6 +2006,7 @@ bool ObjectTool::Execute(int cmd) {
     case CmdFlipVertical: return Flip(false);
     case CmdPictureCrop: return ToggleCrop();
     case CmdObjectShadow: return SetShadow(true);
+    case CmdSlideNoShadow: return SetShadow(false);
     case CmdDuplicateObjects: return DuplicateSelection(18, 18);
     case CmdDeleteObject: return DeleteSelection();
     case CmdTableRowAbove:
@@ -2184,6 +2190,30 @@ ToolItem ObjectTool::Tool(int cmd) {
     default: break;
   }
   return t;
+}
+
+ObjectTool::Kinds ObjectTool::SelectionKinds() {
+  Map();
+  Kinds k;
+  for (uint32_t id : selection_)
+    if (const ob::ObjectInfo* o = map_.Find(id)) {
+      if (o->kind == ob::ObjectKind::Picture) ++k.pictures;
+      else if (o->shape && o->shape->kind == fw::slide::Shape::Kind::Table) ++k.tables;
+      else if (o->kind == ob::ObjectKind::GraphicFrame) ++k.others;  // charts, diagrams
+      else ++k.shapes;
+    }
+  return k;
+}
+
+uint32_t ObjectTool::TakeInserted() {
+  const uint32_t id = inserted_;
+  inserted_ = 0;
+  return id;
+}
+
+bool ObjectTool::IsPicture(uint32_t id) {
+  const ob::ObjectInfo* o = Map().Find(id);
+  return o && o->kind == ob::ObjectKind::Picture;
 }
 
 void ObjectTool::AddTools(ToolbarModel& m) {

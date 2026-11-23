@@ -911,17 +911,6 @@ ToolItem TextEditing::Tool(int cmd) {
       };
       return t;
     }
-    case CmdSpacing1: {  // Line Spacing ▾: 1.0, 1.5, 2.0
-      t.kind = ToolKind::Dropdown;
-      t.tooltip = L"Line spacing";
-      t.choices = {L"1.0", L"1.5", L"2.0"};
-      t.choice = !look ? -1 : std::fabs(look->lineSpacing - 1) < 0.01f ? 0 : std::fabs(look->lineSpacing - 1.5f) < 0.01f ? 1
-                         : std::fabs(look->lineSpacing - 2) < 0.01f ? 2 : -1;
-      t.onChange = [this](const ToolValue& v) {
-        if (v.index >= 0 && v.index < 3) Execute(v.index == 0 ? CmdSpacing1 : v.index == 1 ? CmdSpacing15 : CmdSpacing2);
-      };
-      return t;
-    }
     default: break;
   }
   struct Glyph {
