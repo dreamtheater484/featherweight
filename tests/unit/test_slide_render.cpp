@@ -268,6 +268,29 @@ TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
   CHECK(std::fabs(width("Adobe Garamond Pro") - width("Calibri")) > 1);
 }
 
+TEST(SlideRender_PatternCellSpansWholePixels) {
+  // A 6-pt pattern cell at 100 dpi is 8.33 pixels; the slide view draws it at 9, as a PDF viewer
+  // (pdfium) draws the PDF's tiling pattern, so every row repeats every 9 pixels.
+  auto deck = Modified(Slide1(
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"P\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/>"
+      "<a:ext cx=\"9144000\" cy=\"6858000\"/></a:xfrm><a:prstGeom prst=\"rect\"/><a:pattFill prst=\"dkVert\"><a:fgClr>"
+      "<a:srgbClr val=\"000000\"/></a:fgClr><a:bgClr><a:srgbClr val=\"FFFFFF\"/></a:bgClr></a:pattFill><a:ln><a:noFill/></a:ln>"
+      "</p:spPr></p:sp>"));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  auto bmp = Render(*slide, 1000, 750);
+  REQUIRE(bmp != nullptr);
+  int apart9 = 0, apart8 = 0;
+  for (int x = 200; x < 600; ++x) {
+    const auto level = [&](int at) { return static_cast<int>(Pixel(*bmp, at, 375) & 0xFF); };
+    apart9 = std::max(apart9, std::abs(level(x) - level(x + 9)));
+    apart8 = std::max(apart8, std::abs(level(x) - level(x + 8)));
+  }
+  CHECK(apart9 <= 2);
+  CHECK(apart8 > 40);
+}
+
 TEST(SlideRender_ShapesOwnStyleBeatsTheLayoutsNoFill) {
   // The layout's title says noFill; the slide's title has an empty spPr and a p:style whose
   // fillRef is red: PowerPoint fills it red (poi customgeo deck).
