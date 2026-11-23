@@ -2,6 +2,8 @@
 
 #include <pugixml.hpp>
 
+#include <cstdlib>
+
 #include <charconv>
 #include <cstdint>
 #include <string_view>
@@ -43,13 +45,35 @@ inline const fw::pkg::mce::Understood& Understood() {
   return u;
 }
 
+// Whether slides lay Office math out themselves (P1, 2026-11-23: off until it measures better than
+// Office's fallback pictures on the corpus's math slides). -1: FW_SLIDE_MATH=1 in the environment
+// turns it on; tests set 0 or 1.
+inline int& SlideMathSetting() {
+  static int setting = -1;
+  return setting;
+}
+inline bool SlideMathLaidOut() {
+  int& s = SlideMathSetting();
+  if (s < 0) {
+    char* v = nullptr;
+    size_t n = 0;
+    s = _dupenv_s(&v, &n, "FW_SLIDE_MATH") == 0 && v && v[0] == '1' ? 1 : 0;
+    free(v);
+  }
+  return s == 1;
+}
+
 // The branch of mc:AlternateContent fwdraw draws: the one MCE chooses, except that a choice holding
-// Office math (a14:m, which fwdraw doesn't lay out) gives way to the fallback, Office's picture of it.
+// Office math (a14:m) gives way to the fallback, Office's picture of it, where nothing lays the math
+// out: everywhere but in slides (PresentationML's shapes), when the slide renderer draws math.
 inline pugi::xml_node DrawnBranch(pugi::xml_node alternateContent) {
   pugi::xml_node branch = fw::pkg::mce::SelectBranch(alternateContent, Understood());
   if (!branch || !IsElement(branch, fw::pkg::mce::kNamespace, "Choice") ||
       !branch.find_node([](pugi::xml_node n) { return IsElement(n, kA14, "m"); }))
     return branch;
+  if (SlideMathLaidOut())
+    for (pugi::xml_node c = branch.first_child(); c; c = c.next_sibling())
+      if (c.type() == pugi::node_element && NamespaceOf(c) == kP) return branch;
   for (pugi::xml_node b = alternateContent.first_child(); b; b = b.next_sibling()) {
     if (IsElement(b, fw::pkg::mce::kNamespace, "Fallback")) return b;
   }
