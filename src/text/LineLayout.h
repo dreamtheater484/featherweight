@@ -118,6 +118,9 @@ struct ParagraphFormat {
   // From the column's start and end edges; firstLineIndent is negative for a hanging indent,
   // whose position is then also a tab stop on the first line.
   float startIndent = 0, endIndent = 0, firstLineIndent = 0;
+  // The first line's hanging-indent stop when it isn't startIndent (PowerPoint: an indent hanging
+  // past the edge starts the first line at the edge and its text at -indent); negative: none.
+  float hangingStop = -1;
   std::vector<TabStop> tabs;  // custom stops, by position; bar tabs are drawn by the caller
   float defaultTabStop = 36;  // w:defaultTabStop; default stops start after the last custom stop
   HyphenationSettings hyphenation;

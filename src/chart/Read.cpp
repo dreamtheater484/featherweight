@@ -262,7 +262,8 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
     pl.index = static_cast<uint32_t>(std::clamp(Number(C(d, "idx"), "val", 0.0), 0.0, 1e6));
     pl.deleted = On(d, "delete", false);
     const LabelParts own = LabelsOf(d);
-    pl.value = own.val, pl.seriesName = own.ser, pl.category = own.cat;
+    pl.value = own.val, pl.seriesName = own.ser, pl.category = own.cat, pl.percent = own.pct;
+    pl.separator = own.separator;
     if (pugi::xml_node m = C(C(d, "layout"), "manualLayout")) {
       pl.dx = static_cast<float>(std::clamp(Number(C(m, "x"), "val", 0.0), -2.0, 2.0));
       pl.dy = static_cast<float>(std::clamp(Number(C(m, "y"), "val", 0.0), -2.0, 2.0));

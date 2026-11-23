@@ -237,8 +237,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
   int column = 0;
   bool first = true;
   // bodyPr spcFirstLastPara: the first paragraph's space before counts too, as PowerPoint draws
-  // it (15-213 virtual memory's Google Slides bodies, 4.8 pt lower).
+  // it (15-213 virtual memory's Google Slides bodies, 4.8 pt lower), and the last's space after.
   const bool firstLastSpacing = draw::xml::Bool(box.properties, "spcFirstLastPara", false);
+  float lastAfter = 0;
   for (const fw::slide::Paragraph& src : body.paragraphs) {
     const fw::slide::ParagraphProps& pp = src.props;
     Impl::Para& para = m.paras.emplace_back();
@@ -406,6 +407,9 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     f.endIndent = pp.marginRight;
     // The first line never starts before the text area (marL 0 with a hanging indent: PowerPoint's PDFs).
     f.firstLineIndent = std::max(pp.indent, -pp.marginLeft);
+    // Its text then starts at -indent, the first line as if shifted to start at the edge, while the
+    // lines after it stay at marL (rlf-webinar-i 5: 36 and 33 points; business bodies 10's marL 0).
+    if (pp.marginLeft + pp.indent < 0) f.hangingStop = -pp.indent;
     for (const fw::slide::TabStop& t : pp.tabs) {
       text::TabStop ts;
       ts.position = t.position;
@@ -488,11 +492,14 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       maxBottom = std::max(maxBottom, std::min(y + pitch, y + above + natural * (1 - share)));
       y += pitch;
     }
-    y += spacing(pp.spaceAfter);
+    lastAfter = spacing(pp.spaceAfter);
+    y += lastAfter;
     first = false;
   }
-  // The block's height: down to the last line (the last paragraph's space after doesn't count).
+  // The block's height: down to the last line; the last paragraph's space after counts only under
+  // spcFirstLastPara.
   m.height = maxBottom;
+  if (firstLastSpacing) m.height += lastAfter;
   // Columns: lines go down a column as far as the box, then on to the next; text too long for
   // them all is shared out evenly, as PowerPoint does.
   if (columns > 1 && maxBottom > 0) {
