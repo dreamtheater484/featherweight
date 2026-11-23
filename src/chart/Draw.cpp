@@ -1195,7 +1195,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels); one across the bottom for
   // a label every kAcross text sizes of the room the labels up the side leave (PowerPoint's PDFs:
   // 0 to 10 by 5 on a 280-point plot of 18-point labels, 0 to 5 by 1 on 396 points; Excel's agree).
-  const auto acrossMost = [&](float side) { return static_cast<int>((r.right - r.left - side) / (kAcross * ts)); };
+  // On a slide a little closer: 0 to 10 by 2 on a 312-point plot of 18-point labels (poi bar chart), by 5 on 280.
+  const float acrossPitch = ch.presentation ? 3.3f : kAcross;
+  const auto acrossMost = [&](float side) { return static_cast<int>((r.right - r.left - side) / (acrossPitch * ts)); };
   float catW = 0;  // bars: the widest category name up the side
   if (bar)
     for (size_t i = 0; i < std::min<size_t>(names.size(), 64); ++i) catW = std::max(catW, b.Measure(names[i], ts).width);
