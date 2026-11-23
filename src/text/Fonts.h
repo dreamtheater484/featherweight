@@ -91,6 +91,9 @@ class Fonts {
   // PowerPoint draws them (un-country morocco's PDF); off: DirectWrite's alone.
   void SetPowerPointFallback(bool on);
   bool PowerPointFallback() const { return powerPointFallback_; }
+  // Office's cloud fonts as PowerPoint finds them: every face by its own family name too ("Open Sans
+  // Light" in Open Sans's folder, worldbank's PDF); off: as Word, only the folders' families.
+  void SetAllCloudFaces(bool on) { allCloudFaces_ = on; }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
@@ -162,7 +165,7 @@ class Fonts {
   bool FullName(const std::wstring& name, FaceName& out);
   std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
-  bool gdiFamilies_ = false, powerPointFallback_ = false;
+  bool gdiFamilies_ = false, powerPointFallback_ = false, allCloudFaces_ = false;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
   std::vector<Substitution> substitutions_;

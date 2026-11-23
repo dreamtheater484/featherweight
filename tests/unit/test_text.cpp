@@ -630,6 +630,22 @@ TEST(Text_OfficeCloudFontsAreUsedAsWordUsesThem) {
   CHECK_EQ(fonts.Substitutions().size(), 1u);
 }
 
+TEST(Text_OfficeCloudFontsAreUsedAsPowerPointUsesThem) {
+  // PowerPoint finds every face in the cloud fonts by its own family name too: "Open Sans Light",
+  // in Open Sans's folder, is drawn as it is (worldbank's PDF). Never a family the PC has.
+  CHECK(!draw::CloudFontsHave(L"", true));
+  CHECK(!draw::CloudFontsHave(L"Calibri", true));
+  if (!draw::CloudFontsHave(L"Open Sans Light", true)) return;
+  CHECK(draw::CloudFontsHave(L"Open Sans", true));
+  Fonts fonts;
+  fonts.SetAllCloudFaces(true);
+  CHECK(fonts.Resolve(L"Open Sans Light") == L"Open Sans Light");
+  CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
+  CHECK(fonts.Substitutions().empty());
+  const Face* face = fonts.FaceFor(L"Open Sans Light", false, false);
+  CHECK(face != nullptr && face->Weight() == DWRITE_FONT_WEIGHT_LIGHT);  // the light face, not Open Sans made thin
+}
+
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
   Fonts fonts([](std::wstring_view family) { return family == L"House Font" ? std::wstring(kSans) : std::wstring(); });
   CHECK(fonts.Resolve(L"Courier New") == L"Courier New");
