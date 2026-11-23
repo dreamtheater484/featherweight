@@ -445,6 +445,14 @@ enum Cmd : int {
   // The ribbon (R1, r1-control): 3600-3649.
   CmdRibbonCollapse = 3600,  // Ctrl+F1: the ribbon shows only its tabs, or all of it again
   CmdFilePage,               // the File tab: the File page (New, Open, Save, Print, options)
+  // The document's ribbon (R1, r1-word): 3650-3699. Word's boxes and buttons for what Featherweight
+  // had only in a panel.
+  CmdIndentLeftBox = 3650,  // Layout > Paragraph: the selection's paragraphs' left indent
+  CmdIndentRightBox,
+  CmdSpaceBeforeBox,        // and their spacing before and after
+  CmdSpaceAfterBox,
+  CmdCellShading,           // Table Design > Shading: the selected cells' color (the last one picked)
+  CmdCellBorders,           // Table Design > Borders: the selected cells' borders (the last ones picked)
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
