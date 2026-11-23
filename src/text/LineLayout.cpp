@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <limits>
 
 #include "text/Analysis.h"
@@ -465,6 +466,23 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   const Face* base = fonts.FaceFor(*sf.family, sf.bold, sf.italic);
   if (!base) base = fonts.Get(fonts.Resolve(L""), DWRITE_FONT_WEIGHT_NORMAL, false);
   if (!base) return;
+  std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
+  detail::TextSource source(shape, rtl, locales, nullptr);
+  if (connected && fonts.PowerPointFallback()) {
+    // A connected script's run (Arabic) whose font hasn't its letters: PowerPoint draws all of it,
+    // its spaces too, in the font that has them (morocco: Tahoma's 10-point spaces at 32, not
+    // Franklin Gothic's 8).
+    uint32_t first = start;
+    while (first < end && std::iswspace(shape[first])) ++first;
+    UINT32 mapped = 0;
+    ComPtr<IDWriteFont> font;
+    FLOAT scale = 1;
+    if (first < end &&
+        SUCCEEDED(fonts.Fallback()->MapCharacters(&source, first, 1, fonts.Collection(), base->Family().c_str(), base->Weight(),
+                                                  base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) &&
+        font)
+      if (const Face* other = fonts.Get(font.Get()); other && _wcsicmp(other->Family().c_str(), base->Family().c_str()) != 0) base = other;
+  }
 
   float size = sf.size * (smallCaps[start] ? kSmallCapsScale : 1.0f);
   float rise = style.baselineShift;
@@ -478,8 +496,6 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   }
 
   // Font fallback, for characters the font doesn't have.
-  std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
-  detail::TextSource source(shape, rtl, locales, nullptr);
   // The base face as DirectWrite names it: "Calibri" at weight 300 for Word's "Calibri Light".
   for (uint32_t pos = start; pos < end;) {
     UINT32 mapped = 0;

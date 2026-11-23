@@ -90,6 +90,7 @@ class Fonts {
   // Arabic letters a font doesn't have in Tahoma, before DirectWrite's own fallback (Segoe UI), as
   // PowerPoint draws them (un-country morocco's PDF); off: DirectWrite's alone.
   void SetPowerPointFallback(bool on);
+  bool PowerPointFallback() const { return powerPointFallback_; }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
