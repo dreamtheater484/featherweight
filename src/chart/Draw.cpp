@@ -812,15 +812,26 @@ struct Pending {
 
 // What a data label says (Office's order: series, category, value, percentage), each part followed
 // by the separator but the last; empty when it shows nothing.
+// `own`: a point's own label (c:dLbl), whose flags and separator come first.
 std::vector<std::wstring> LabelParts(const Group& g, const Series& s, size_t i, const std::wstring& value,
-                                     const std::wstring& percent) {
+                                     const std::wstring& percent, const Series::PointLabel* own = nullptr) {
   std::vector<std::wstring> parts;
-  if (s.seriesNames.value_or(g.seriesNames) && !s.name.empty()) parts.push_back(s.name);
-  if (s.categoryLabels.value_or(g.categoryLabels) && i < s.categories.size() && !s.categories[i].empty())
+  const auto shows = [&](const std::optional<bool>* mine, const std::optional<bool>& series, bool group) {
+    return mine && mine->has_value() ? **mine : series.value_or(group);
+  };
+  if (shows(own ? &own->seriesName : nullptr, s.seriesNames, g.seriesNames) && !s.name.empty()) parts.push_back(s.name);
+  if (shows(own ? &own->category : nullptr, s.categoryLabels, g.categoryLabels) && i < s.categories.size() && !s.categories[i].empty())
     parts.push_back(s.categories[i]);
-  if (s.labels.value_or(g.labels) && !value.empty()) parts.push_back(value);
-  if (s.percent.value_or(g.percent) && !percent.empty()) parts.push_back(percent);
-  const std::wstring sep = s.separator ? *s.separator : g.separator ? *g.separator : std::wstring(1, g_list) + L" ";
+  if (shows(own ? &own->value : nullptr, s.labels, g.labels) && !value.empty()) parts.push_back(value);
+  if (shows(own ? &own->percent : nullptr, s.percent, g.percent) && !percent.empty()) parts.push_back(percent);
+  // Unstated: a pie's parts go on lines of their own (PowerPoint's PDFs, business bodies 10's
+  // "10-49 employees" over "8%"), other charts' are apart by the list separator and a space.
+  const bool pie = g.type == Type::Pie || g.type == Type::Doughnut;
+  const std::wstring sep = own && own->separator ? *own->separator
+                           : s.separator         ? *s.separator
+                           : g.separator         ? *g.separator
+                           : pie                 ? std::wstring(L"\n")
+                                                 : std::wstring(1, g_list) + L" ";
   for (size_t k = 0; k + 1 < parts.size(); ++k) parts[k] += sep;
   return parts;
 }
@@ -931,6 +942,11 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
       line.clear();
     }
     line += part;
+    // A part ending in a line break (the separator) ends its line.
+    if (!line.empty() && line.back() == L'\n') {
+      out += line;
+      line.clear();
+    }
   }
   return out + line;
 }
@@ -951,13 +967,19 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
     labelled |= s.labels.value_or(false) || s.percent.value_or(false) || s.categoryLabels.value_or(false) || s.seriesNames.value_or(false);
   // Labels round a pie take some of its room; so do slices pulled out of it (c:explosion, a part
   // of the radius), the pie shrunk to keep the farthest inside.
+  // A single ring's slices are pulled out as a pie's are (business bodies 10's doughnut).
+  const bool explodes = !doughnut || rings == 1;
   double pulled = 0;
-  if (!doughnut && !g.series.empty()) {
+  if (explodes && !g.series.empty()) {
     pulled = g.series.front().explosion;
     for (const auto& [i, e] : g.series.front().explosions) pulled = std::max(pulled, e);
   }
-  const float R = static_cast<float>((std::min(r.right - r.left, r.bottom - r.top) / 2 - (labelled && !doughnut && !placed ? 1.32f * ts : 0)) /
-                                     (1 + pulled / 100));
+  // In a box the chart places, only the series' own pull shrinks it; slices pulled further reach
+  // out of the box (business bodies 10: a doughnut at 5 % with slices at 10 and 14 %, its radius the
+  // box's half over 1.05).
+  const float half = std::min(r.right - r.left, r.bottom - r.top) / 2;
+  const float R = placed ? static_cast<float>(half / (1 + (explodes && !g.series.empty() ? g.series.front().explosion : 0) / 100))
+                         : static_cast<float>((half - (labelled && !doughnut ? 1.32f * ts : 0)) / (1 + pulled / 100));
   if (R < 2) return;
   const Point center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
   const float hole = doughnut ? static_cast<float>(R * g.hole / 100) : 0, ring = (R - hole) / rings;
@@ -981,15 +1003,37 @@ void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const dra
       const Color fill = g.varyColors ? SliceColor(i, colors, plain) : s.look.fill.value_or(SliceColor(j, colors, plain));
       const double mid = (a + sweep / 2) * kPi / 180;
       const Point dir{static_cast<float>(std::cos(mid)), static_cast<float>(std::sin(mid))};
-      double out = doughnut ? 0 : s.explosion;
-      if (!doughnut)
+      double out = doughnut && !explodes ? 0 : s.explosion;
+      if (!doughnut || explodes)
         for (const auto& [k, e] : s.explosions)
           if (k == i) out = e;
       const float shift = static_cast<float>(R * out / 100);
       const Point c{center.x + shift * dir.x, center.y + shift * dir.y};
       b.Mark(Slice(c, outer, inner, a, a + sweep), look ? *look : s.look, fill, std::nullopt, 0.75f);
-      std::vector<std::wstring> parts = LabelParts(g, s, i, FormatNumber(v, format), FormatNumber(v / total, "0%"));
-      if (!parts.empty()) {
+      const Series::PointLabel* own = nullptr;
+      for (const Series::PointLabel& pl : s.pointLabels)
+        if (pl.index == i) own = &pl;
+      if (own && own->deleted) {
+        a += sweep;
+        continue;
+      }
+      std::vector<std::wstring> parts =
+          own && own->text ? std::vector<std::wstring>{*own->text}
+                           : LabelParts(g, s, i, FormatNumber(v, own && !own->format.empty() ? own->format : format),
+                                        FormatNumber(v / total, "0%"), own);
+      if (own && !parts.empty()) {
+        // The point's own label (c:dLbl): centred where the slice's would go, then moved where the
+        // chart says, in its box and colors (business bodies 10's doughnut).
+        const float rad = doughnut ? (inner + outer) / 2 : 0.62f * R;
+        Pending l{Joined(parts), {c.x + rad * dir.x, c.y + rad * dir.y}, 1, std::nullopt};
+        l.anchored = true;
+        l.side = 'c';
+        l.offset = {own->dx * W, own->dy * H};
+        std::copy(std::begin(own->insets), std::end(own->insets), std::begin(l.insets));
+        l.fill = own->fill, l.color = own->color, l.size = own->size;
+        l.boxW = own->w * W, l.boxH = own->h * H;
+        labels.push_back(std::move(l));
+      } else if (!parts.empty()) {
         const std::optional<Color> k = key ? std::optional<Color>((look && look->fill) ? *look->fill : fill) : std::nullopt;
         if (doughnut) {
           const float rad = (inner + outer) / 2;

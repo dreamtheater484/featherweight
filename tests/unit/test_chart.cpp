@@ -410,6 +410,42 @@ TEST(Chart_PlacedPieIsTheLargestCircleInItsBox) {
   CHECK_NEAR(pie.bottom, 180, 0.5);
 }
 
+TEST(Chart_PlacedDoughnutPullsItsSlicesOut) {
+  // A placed doughnut whose series is pulled out 10 % and its second slice 20 %: the ring's radius
+  // is the box's half over 1.1, each slice moved out by its share of it, the second past the box
+  // (PowerPoint's PDFs, business bodies 10). Two halves: the first right, the second left.
+  const std::string xml =
+      std::string("<c:chartSpace") + kNs +
+      "><c:chart><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/>"
+      "<c:yMode val=\"edge\"/><c:x val=\"0.25\"/><c:y val=\"0\"/><c:w val=\"0.5\"/><c:h val=\"1\"/></c:manualLayout></c:layout>"
+      "<c:doughnutChart><c:varyColors val=\"1\"/>" +
+      [] {
+        std::string s = Ser(0, "Share", {"A", "B"}, {"1", "1"});
+        s.insert(s.find("</c:tx>") + 7, "<c:dPt><c:idx val=\"1\"/><c:bubble3D val=\"0\"/><c:explosion val=\"20\"/></c:dPt>");
+        s.insert(s.find("</c:ser>"), "<c:explosion val=\"10\"/>");
+        return s;
+      }() +
+      "<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart></c:plotArea></c:chart></c:chartSpace>";
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  std::vector<draw::Rect> slices;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    // (Not the chart area's own fill.)
+    if (m.fill.kind == draw::Fill::Kind::Solid && b.right - b.left > 20 && b.right - b.left < 300 && b.bottom - b.top > 100)
+      slices.push_back(b);
+  }
+  REQUIRE(slices.size() == 2u);
+  const float R = 100 / 1.1f;
+  const draw::Rect& right = slices[0].left > slices[1].left ? slices[0] : slices[1];
+  const draw::Rect& left = slices[0].left > slices[1].left ? slices[1] : slices[0];
+  CHECK_NEAR(right.right, 200 + R * 1.1f, 0.5);
+  CHECK_NEAR(left.left, 200 - R * 1.2f, 0.5);
+  CHECK_NEAR(right.top, 100 - R, 0.5);
+}
+
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
   // A chart without c:spPr or c:txPr: 10-point text and a gray border. Office 2010's look
   // (c14:style, which LibreOffice and Office 2010 and later write) draws the gridlines, axis lines
