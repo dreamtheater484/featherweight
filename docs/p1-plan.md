@@ -212,3 +212,22 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
     - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
   - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).
+- **On p1-int `fbbbfbaa`: corpus at 93.36 %, over the gate's 90 %** (crash fix `a2210fdf`, cloud faces by family name, p1-render's baseline shift, Proxima Nova → Tahoma, GDI advances at 576 dpi, charts, theme-font numbers and bullets, `a78d3c9e` page box, chart label text; p1-model's bullet overrun; the re-exported references).
+  - 2,349 of 2,516 slides pass. The gate needs 2,265, so there are 84 to spare. The public set is at 92/97.
+  - Against `cb26c73e` on the same references (2,225): +124. 47 decks gained 130 slides and 5 lost 6:
+    - psy-101 −2 (14 .957 → .935, 22 .950 → .925, 21 .960 → .949);
+    - 1 each at the threshold: cs-444-2 8, mis-3580 2, acuk dual-gaelic 16, who-health module-1-part-2 10 (.948–.950).
+  - Export matching apart from drawing, against a local build of `fbbbfbaa` with only `a78d3c9e` reverted:
+    - `a78d3c9e`'s page box: +6 net (unimuenster de +3, en +3, goettingen +1; who-health module 10 drops at exactly .950).
+    - With `7d70c42c`'s +11 (measured on `cb26c73e`), export matching adds about +17 in all.
+    - Drawing fixes this round: +118 (2,225 → 2,343).
+    - Without the export matching the corpus would be at about 2,332 (92.7 %), and also without the reference fix about 2,329 (92.6 %). Both are over 90 %.
+  - Every kind is over 90 %: briefings 93.6 %, charts 91.9 %, features 90.1 %, lectures 94.0 %, photos 91.8 %, school 94.0 %, shows 92.0 %, statistics 90.9 %, templates 95.7 %, training 93.0 %.
+  - Failing slides by content: pictures 62, text 59, equations 18, SmartArt 12, charts 7 (17 of 24 pass), tables 5, other 3. 127 of the 166 are near misses.
+  - The who-health crash is gone: none in 48 runs of `crash-repro.ps1` (8 at a time, `--png`), and none in the two corpus runs.
+  - `fwtool check` passes all 152 screened decks (warnings only).
+  - The Open XML SDK validator finds 141 of the 152 decks clean. The other 11 have schema errors in the downloaded originals: unexpected child elements, invalid or undeclared attributes, one part the SDK can't open. Mostly they're chart extension elements, in POI's chart decks, business bodies, goettingen and the uantwerpen templates. P1 never saves, so these are P2's baseline (no new errors).
+  - Opening never changed a deck: every one still has its screened hash (reference-renders checks each against `real-world.json`).
+  - Shipped exe at `fbbbfbaa` (`build-release`, FW_TEST_SCREENS off): 11,149,824 bytes. That's +611,328 (597 KB) over S4 final, within the 1.0 MB budget.
+    - The quiet-PC timings committed as `f828277f` used `build-release`'s exe from 20 Nov (`abebf66`; that build wasn't redone), so its ledger line's size matches `abebf66`'s to the byte.
+    - The timings need a rerun on a release build of the gate head.
