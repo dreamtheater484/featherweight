@@ -2,6 +2,7 @@
 
 #include <d2d1_3.h>
 #include <d2d1effects.h>
+#include <dwrite.h>
 #include <shlwapi.h>
 
 #include <algorithm>
@@ -149,6 +150,29 @@ D2DPainter::~D2DPainter() {
   while (!saved_.empty()) Restore();
   PopTo(0);
   dc_->SetTransform(initial_);
+  if (textSet_) {
+    dc_->SetTextAntialiasMode(oldAntialias_);
+    dc_->SetTextRenderingParams(oldText_.Get());
+  }
+}
+
+void D2DPainter::UsePdfLikeText() {
+  // Unhinted outlines at gamma 1 (un-ccsa's dense text slides: .935 -> .966 against their PDF).
+  static const ComPtr<IDWriteRenderingParams> params = [] {
+    ComPtr<IDWriteFactory> dw;
+    ComPtr<IDWriteRenderingParams> p;
+    if (SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                      reinterpret_cast<IUnknown**>(dw.GetAddressOf()))))
+      dw->CreateCustomRenderingParams(1.f, 0.f, 0.f, DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE_OUTLINE, &p);
+    return p;
+  }();
+  if (!textSet_) {
+    oldAntialias_ = dc_->GetTextAntialiasMode();
+    dc_->GetTextRenderingParams(&oldText_);
+    textSet_ = true;
+  }
+  dc_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+  if (params) dc_->SetTextRenderingParams(params.Get());
 }
 
 void D2DPainter::Save() { saved_.push_back({current_, pushed_.size()}); }
