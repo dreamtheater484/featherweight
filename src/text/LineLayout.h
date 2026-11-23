@@ -63,6 +63,9 @@ struct TextStyle {
   float scale = 1;           // w:w: the glyphs' width, 1 for as designed (1.03 for 103 %)
   float baselineShift = 0;   // w:position: raised (positive) or lowered
   float kerningMinSize = 0;  // w:kern: kern pairs from this size up; 0: no kerning
+  // Kerning by the font's legacy 'kern' table, which DirectWrite's shaping skips (PowerPoint's, for
+  // a font whose GPOS doesn't kern: Franklin Gothic).
+  bool kernTable = false;
   bool ligatures = false;    // w14:ligatures standard (or more): standard ligatures
   // A bold the font lacks, simulated, keeps the regular face's advances (PowerPoint's); otherwise
   // DirectWrite widens them, as Word's text is.

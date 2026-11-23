@@ -213,6 +213,7 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
     return false;
   }
   draw::PdfDocument pdf;
+  pdf.PlacePicturesAsPowerPoint();
   std::vector<int> pageOf(SlideCount(), -1);  // the page each slide is on, for links between slides
   for (size_t i = 0; i < pages.size(); ++i)
     for (const PageItem& it : pages[i].items)
@@ -264,8 +265,10 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
   const float scale = dpi / 72;
   int written = 0;
   for (const PrintPage& page : pages) {
-    const UINT w = std::max(1u, static_cast<UINT>(std::ceil(page.size.width * scale)));
-    const UINT h = std::max(1u, static_cast<UINT>(std::ceil(page.size.height * scale)));
+    // As big as the PDF compare renders a page (pdf-compare: rounded), the page stretched to it, so
+    // the two line up to the pixel (a widescreen slide at 100 dpi: 1333 pixels, not 1334).
+    const UINT w = std::max(1u, static_cast<UINT>(std::lround(page.size.width * scale)));
+    const UINT h = std::max(1u, static_cast<UINT>(std::lround(page.size.height * scale)));
     ComPtr<IWICBitmap> bitmap;
     ComPtr<ID2D1RenderTarget> target;
     ComPtr<ID2D1DeviceContext> dc;
@@ -279,8 +282,8 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
     dc->Clear(D2D1::ColorF(1, 1, 1, 1));
     {
       draw::D2DPainter painter(dc.Get());
-      painter.UsePdfLikeText();
-      painter.Transform(draw::Matrix::Scale(scale, scale));
+      painter.UsePdfLikeDrawing();
+      painter.Transform(draw::Matrix::Scale(w / page.size.width, h / page.size.height));
       PaintPage(*deck_, page, print_, PageFonts(), painter);
     }
     if (FAILED(dc->EndDraw())) return written;

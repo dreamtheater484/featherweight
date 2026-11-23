@@ -399,6 +399,7 @@ bool SameColor(const Color& a, const Color& b) { return a.r == b.r && a.g == b.g
 
 struct PdfDocument::Impl {
   Writer w;
+  bool picturesUp = false;  // PlacePicturesAsPowerPoint
   uint32_t pagesObject = 0;
   struct PageRecord {
     uint32_t object = 0, contents = 0, resources = 0;
@@ -1069,6 +1070,15 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
           dest.top + (bitmap.Height() - src->top) * sy};
     ClipRect(dest);
   }
+  // PowerPoint's PDFs place pictures a float rounding high (0.00006 to 0.00024 pt): a PDF viewer
+  // (pdfium) gives one whose top lies on a pixel row one row more above it, and resamples it so
+  // (era-systems' 10 % hash overlay over every slide). The smallest step written does the same.
+  const Matrix& m = now.ctm;
+  if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m22 != 0) {
+    const float up = m.m22 > 0 ? -0.001f : 0.001f;
+    at.top += up;
+    at.bottom += up;
+  }
   DrawImage(bitmap, at, true);
   Restore();
 }
@@ -1613,6 +1623,8 @@ void PdfDocument::AddLink(size_t page, const Rect& rect, size_t toPage, float to
 void PdfDocument::AddOutline(int level, const std::u16string& title, size_t page, float y) {
   impl_->outline.push_back({level, title, page, y});
 }
+
+void PdfDocument::PlacePicturesAsPowerPoint() { impl_->picturesUp = true; }
 
 void PdfDocument::SetInfo(const std::u16string& title, const std::u16string& author) {
   impl_->title = title;
