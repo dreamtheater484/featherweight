@@ -613,21 +613,21 @@ TEST(Text_AFullFaceNameIsThatFace) {
 }
 
 TEST(Text_OfficeCloudFontsAreUsedAsWordUsesThem) {
-  // Office's cloud fonts (%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts) count as installed,
-  // under the family Office downloaded (a folder each) and under their faces' own family names
-  // ("Open Sans Light"), as PowerPoint and Word draw them; never in place of one the PC has. On a
-  // PC without the folder, only the first checks apply.
+  // Word's cloud fonts (%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts) count as installed, under
+  // the family Word downloaded (a folder each), never in place of one the PC has. Another name
+  // their fonts carry ("Open Sans Light") is substituted, as Word does. On a PC without the
+  // folder, only the first checks apply.
   CHECK(!draw::CloudFontsHave(L""));
   CHECK(!draw::CloudFontsHave(L"Calibri"));  // the PC's own
+  CHECK(!draw::CloudFontsHave(L"Open Sans Light"));
   if (!draw::CloudFontsHave(L"Open Sans")) return;
   Fonts fonts;
   CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
   CHECK(fonts.Substitutions().empty());
   const Face* face = fonts.FaceFor(L"Open Sans", true, false);
   CHECK(face != nullptr && face->Family() == L"Open Sans");
-  if (!draw::CloudFontsHave(L"Open Sans Light")) return;  // a folder without the Light face
-  CHECK(fonts.Resolve(L"Open Sans Light") == L"Open Sans Light");
-  CHECK(fonts.Substitutions().empty());
+  CHECK(fonts.Resolve(L"Open Sans Light") != L"Open Sans Light");
+  CHECK_EQ(fonts.Substitutions().size(), 1u);
 }
 
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
