@@ -998,4 +998,14 @@ float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold,
   return w;
 }
 
+float TextAscent(const std::wstring& font, bool bold, bool italic) {
+  ComPtr<IDWriteFontFace> face;
+  std::vector<UINT16> glyphs;
+  std::vector<float> advances;
+  if (!Glyphs(L" ", font, bold, italic, 1, face, glyphs, advances)) return 0;
+  DWRITE_FONT_METRICS fm{};
+  face->GetMetrics(&fm);
+  return fm.designUnitsPerEm ? static_cast<float>(fm.ascent) / fm.designUnitsPerEm : 0;
+}
+
 }  // namespace draw
