@@ -5,6 +5,7 @@
 #include <wincodec.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "Commands.h"
@@ -141,8 +142,15 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState PresentationView::QueryCommand(int cmd) {
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
-  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return s;  // p2-objects
+  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) {  // p2-objects
+    // The clipboard's names where the objects give none (the ribbon's Paste and Select menus).
+    const wchar_t* names[][3] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
+    const int k = cmd == CmdCut ? 0 : cmd == CmdCopy ? 1 : cmd == CmdPaste ? 2 : cmd == CmdSelectAll ? 3 : -1;
+    if (k >= 0 && s.label.empty()) s.label = names[k][0], s.shortcut = names[k][1];
+    return s;
+  }
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
+  if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
     case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp
@@ -181,6 +189,12 @@ CommandState PresentationView::QueryCommand(int cmd) {
           s.enabled = ready;
           s.checked = LayoutIndex(print_) == static_cast<int>(&l - kLayouts);
         }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {  // r1-slide: View > Zoom
+        const double z = fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)];
+        s.enabled = ready;
+        s.checked = zoom_ > 0 && std::fabs(zoom_ - z) < 1e-6;
+        s.label = fw::FormatPercent(z);
+      }
       break;
   }
   for (const CommandName& n : kNames)
@@ -202,6 +216,11 @@ std::vector<int> PresentationView::Commands() {
                   CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
                   CmdHeaderFooter, CmdSlideSize169, CmdSlideSize43})
     out.push_back(cmd);
+  // r1-slide: the text commands (while text is edited) and the ribbon's themes and theme colors.
+  for (int cmd : TextEditing::CommandIds())
+    if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
+  for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
+  for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
   return out;
 }
 
@@ -273,6 +292,10 @@ bool PresentationView::Execute(int cmd) {
     default:
       if (cmd >= CmdSlideShowMonitor && cmd < CmdSlideShowMonitor + 16) {
         showMonitor_ = cmd - CmdSlideShowMonitor;
+        return true;
+      }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {
+        SetZoom(fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)]);
         return true;
       }
       for (const LayoutChoice& l : kLayouts)
