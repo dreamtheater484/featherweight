@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -364,6 +365,12 @@ TEST(Pdf_SlidePicturesAsPowerPointWritesThem) {
   wide.AddPage(961, 540, [](Painter&) {});
   const std::vector<uint8_t> other = wide.Finish();
   CHECK(std::string(other.begin(), other.end()).find("/MediaBox[0 0 960.96 540]") != std::string::npos);
+  // The same box for the slide view's page pictures (pagepngs): 960.12 read back as a float is 1333
+  // pixels at 100 dpi, as pdf-compare draws the PDF, not the 1334 of 960.125.
+  CHECK_NEAR(PdfDocument::PowerPointBox(960.125), 960.12, 1e-9);
+  CHECK_NEAR(PdfDocument::PowerPointBox(961), 960.96, 1e-9);
+  CHECK(std::lround(static_cast<float>(PdfDocument::PowerPointBox(960.125)) * 100.0 / 72) == 1333);
+  CHECK(std::lround(static_cast<float>(PdfDocument::PowerPointBox(720)) * 100.0 / 72) == 1000);
 }
 
 TEST(Pdf_SpacesGoWithTheirWords) {

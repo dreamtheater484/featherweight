@@ -249,6 +249,34 @@ TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   CHECK_NEAR(width("marL=\"0\" indent=\"0\"", "&#8226;&#8226;"), glued, 0.01f);
 }
 
+TEST(SlideRender_BulletCharacterIsRegularInItsOwnOrTheTextsFont) {
+  // A bullet character is set regular and upright whatever the first run's bold or italic, as
+  // PowerPoint draws it (ArialMT bullets before Arial-BoldMT text); a bullet font the PC doesn't have
+  // gives way to the text's font (15-213's Noto Sans Symbols squares in the text's Calibri).
+  fw::text::Fonts probe;
+  if (!probe.Installed(L"Times New Roman")) return;
+  const auto width = [](const char* bullet, const char* rPr) {
+    const std::string pPr = bullet ? std::string("<a:pPr marL=\"0\" indent=\"0\"><a:buFont typeface=\"") + bullet +
+                                         "\"/><a:buChar char=\"a\"/></a:pPr>"
+                                   : std::string("<a:pPr marL=\"0\" indent=\"0\"><a:buNone/></a:pPr>");
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
+                                        "<a:p>" + pPr + "<a:r><a:rPr sz=\"3600\" " + rPr +
+                                            "><a:latin typeface=\"Times New Roman\"/></a:rPr><a:t>x</a:t></a:r></a:p>"),
+                                2));
+    if (!deck) return -1.f;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    const std::vector<ParagraphInfo>& p = slide->Paragraphs();
+    return p.empty() ? -1.f : p[0].bounds.right - p[0].bounds.left;
+  };
+  const auto bulletWidth = [&](const char* bullet, const char* rPr) { return width(bullet, rPr) - width(nullptr, rPr); };
+  const float regular = bulletWidth("Times New Roman", "b=\"0\" i=\"0\"");
+  REQUIRE(regular > 5);
+  CHECK_NEAR(bulletWidth("Times New Roman", "b=\"1\" i=\"0\""), regular, 0.05f);
+  CHECK_NEAR(bulletWidth("Times New Roman", "b=\"0\" i=\"1\""), regular, 0.05f);
+  CHECK_NEAR(bulletWidth("No Such Bullet Font", "b=\"0\" i=\"0\""), regular, 0.05f);
+}
+
 TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
   // "Adobe Garamond Pro", not installed, is drawn in Garamond (PowerPoint's PDF), not Calibri.
   fw::text::Fonts probe;
@@ -517,6 +545,30 @@ TEST(SlideRender_ShrunkTextKeepsPointSpacing) {
   const std::vector<ParagraphInfo>& p = slide->Paragraphs();
   REQUIRE(p.size() == 2);
   CHECK(std::fabs(p[1].bounds.top - p[0].bounds.bottom - 12.f) < 0.05f);
+}
+
+TEST(SlideRender_PointSpacingInWholePoints) {
+  // Spacing in points is laid out in whole points, as PowerPoint draws it: 5.5 pt before as 6
+  // (cs-2110's bodies), 6.41 as 6, exact 26.2-pt lines as 26 (annual-deaths' contact lines).
+  auto tops = [](const char* pPr) {
+    const std::string para = std::string("<a:p><a:pPr>") + pPr + "<a:buNone/></a:pPr><a:r><a:t>Line</a:t></a:r></a:p>";
+    auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>", para + para), 2));
+    std::vector<float> out;
+    if (!deck) return out;
+    fw::text::Fonts fonts;
+    auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+    for (const ParagraphInfo& p : slide->Paragraphs()) out.push_back(p.bounds.top);
+    return out;
+  };
+  const std::vector<float> none = tops("<a:spcBef><a:spcPts val=\"0\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> half = tops("<a:spcBef><a:spcPts val=\"550\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> less = tops("<a:spcBef><a:spcPts val=\"641\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  const std::vector<float> exact = tops(
+      "<a:lnSpc><a:spcPts val=\"2620\"/></a:lnSpc><a:spcBef><a:spcPts val=\"0\"/></a:spcBef><a:spcAft><a:spcPts val=\"0\"/></a:spcAft>");
+  REQUIRE(none.size() == 2 && half.size() == 2 && less.size() == 2 && exact.size() == 2);
+  CHECK_NEAR((half[1] - half[0]) - (none[1] - none[0]), 6, 0.01);
+  CHECK_NEAR((less[1] - less[0]) - (none[1] - none[0]), 6, 0.01);
+  CHECK_NEAR(exact[1] - exact[0], 26, 0.01);
 }
 
 TEST(SlideRender_SimulatedBoldKeepsAdvances) {

@@ -1596,7 +1596,7 @@ std::vector<uint8_t> PdfDocument::Impl::Finish() {
     // A slide's page in whole 600-dpi pixels, as PowerPoint's (goettingen's 960.125-point slides are
     // 960.12 wide there, which a PDF viewer draws a pixel narrower at 100 dpi, its scale with it;
     // unimuenster's 961 are 960.96).
-    const auto box = [&](double v) { return picturesUp ? std::nearbyint(v * 600 / 72) * 72 / 600 : v; };
+    const auto box = [&](double v) { return picturesUp ? PdfDocument::PowerPointBox(v) : v; };
     w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(box(p.width)) + " " + N(box(p.height)) +
                            "]/Contents " + Ref(p.contents) + "/Resources " + Ref(p.resources) +
                            (annots.empty() ? "" : "/Annots[" + annots + "]") + ">>");
@@ -1717,6 +1717,8 @@ void PdfDocument::AddOutline(int level, const std::u16string& title, size_t page
 }
 
 void PdfDocument::PicturesAsPowerPoint() { impl_->picturesUp = true; }
+
+double PdfDocument::PowerPointBox(double points) { return std::nearbyint(points * 600 / 72) * 72 / 600; }
 
 void PdfDocument::SetInfo(const std::u16string& title, const std::u16string& author) {
   impl_->title = title;
