@@ -684,7 +684,7 @@ ToolItem DocTable::SizeBox(bool height) {
   ToolItem t;
   t.kind = ToolKind::SpinBox;
   t.cmd = height ? CmdRowHeightBox : CmdColumnWidthBox;
-  t.width = 84;
+  t.width = 100;  // "15,24 cm" beside the spin arrows
   t.minValue = height ? 0 : 0.1;
   t.maxValue = 22;
   t.step = 0.1;

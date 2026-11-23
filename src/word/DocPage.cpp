@@ -856,7 +856,7 @@ ToolItem DocPage::ParaSpin(int cmd) {
   ToolItem t;
   t.kind = ToolKind::SpinBox;
   t.cmd = cmd;
-  t.width = 84;
+  t.width = 100;  // "15,24 cm" beside the spin arrows
   const CommandState q = Query(cmd);
   t.tooltip = q.label;
   const bool indent = cmd == CmdIndentLeftBox || cmd == CmdIndentRightBox;
