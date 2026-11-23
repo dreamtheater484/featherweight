@@ -20,7 +20,6 @@
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
-#include "slide/view/SlideGallery.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"

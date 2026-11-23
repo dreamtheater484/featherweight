@@ -29,8 +29,11 @@ namespace fw::slide::view {
 namespace {
 
 // Segoe Fluent Icons (and MDL2 Assets) glyphs that ui/Icons.h doesn't name yet.
+// Some stand in for icons r1-control draws in ui/Icons.h later (the same ones r1-word uses).
 constexpr wchar_t kPaste = 0xE77F, kCut = 0xE8C6, kSelectAll = 0xE8B3, kZoom = 0xE71E, kTiles = 0xECA5,
-                  kFontIncrease = 0xE8E8, kFontDecrease = 0xE8E7;
+                  kFontIncrease = 0xE8E8, kFontDecrease = 0xE8E7, kReplace = 0xE8AB, kSpelling = 0xF87B,
+                  kTextBox = 0xE8AC, kShapes = 0xE8A9, kSpacing = 0xE14C, kFit = 0xE9A6, kLayers = 0xE81E,
+                  kPlay = 0xE768, kHide = 0xED1A, kPhoto = 0xEB9F, kSplit = 0xE89A;
 
 using S = RibbonSize;
 
@@ -166,12 +169,13 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     t.dropdown = !MenuOf(cmd).empty();
   }
   if (glyph) t.glyph = glyph;
+  if (cmd == CmdObjectOutlineWeight) t.width = 84;  // "Weight" in full beside its arrow
   return t;
 }
 
 void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   if (!Ready()) return;
-  PrepareGalleries();  // galleryLayouts_: the current slide's master's layouts
+  galleryLayouts_ = deck_->LayoutsFor(current_);  // New Slide and Layout show these
   Builder b{m};
   auto add = [&](int cmd, wchar_t glyph, S size, const wchar_t* label, const wchar_t* keyTip, S smallest = S::Small) -> RibbonItem& {
     RibbonItem& it = b.Add(RibbonTool(cmd, glyph), size, label, keyTip, smallest);
@@ -231,7 +235,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     it.gallery = std::move(g);
   };
   auto newSlide = [&] {
-    RibbonItem& it = split(CmdSlideNew, 0, S::Large, L"New\nSlide", L"I", {});
+    RibbonItem& it = split(CmdSlideNewMenu, icon::Add, S::Large, L"New\nSlide", L"I", {});
     it.smallest = S::Large;
     layouts(it, true);
     return &it;
@@ -268,14 +272,14 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdNumbering, 0, S::Small, L"Numbering", L"N").sameRow = true;
   add(CmdOutdent, 0, S::Small, L"Decrease List Level", L"AO").sameRow = true;
   add(CmdIndent, 0, S::Small, L"Increase List Level", L"AI").sameRow = true;
-  add(CmdSlideSpacingMenu, 0, S::Small, L"Line Spacing", L"K").sameRow = true;
+  add(CmdSlideSpacingMenu, kSpacing, S::Small, L"Line Spacing", L"K").sameRow = true;
   add(CmdAlignLeft, 0, S::Small, L"Align Left", L"AL");
   add(CmdAlignCenter, 0, S::Small, L"Center", L"AC").sameRow = true;
   add(CmdAlignRight, 0, S::Small, L"Align Right", L"AR").sameRow = true;
   add(CmdAlignJustify, 0, S::Small, L"Justify", L"AJ").sameRow = true;
   b.Group(L"Drawing");
-  shapes(add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH"));
-  add(CmdArrangeMenu, 0, S::Large, L"Arrange", L"G");
+  shapes(add(CmdInsertShape, kShapes, S::Large, L"Shapes", L"SH"));
+  add(CmdArrangeMenu, kLayers, S::Large, L"Arrange", L"G");
   add(CmdObjectFill, 0, S::Medium, L"Shape Fill", L"SF");
   add(CmdObjectOutline, 0, S::Medium, L"Shape Outline", L"SO");
   add(CmdSlideEffectsMenu, 0, S::Medium, L"Shape Effects", L"SE");
@@ -284,7 +288,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   RibbonItem& find = add(CmdFind, icon::Search, S::Medium, L"Find", L"FD");
   find.tool.enabled = true;
   find.tool.checked = ctx.searchOpen;
-  add(CmdReplace, 0, S::Medium, L"Replace", L"R").tool.enabled = CanReplace();
+  add(CmdReplace, kReplace, S::Medium, L"Replace", L"R").tool.enabled = CanReplace();
   add(CmdSlideSelectMenu, kSelectAll, S::Medium, L"Select", L"SL");
 
   // ---- Insert
@@ -296,12 +300,12 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Group(L"Images");
   add(CmdInsertPicture, 0, S::Large, L"Pictures", L"P");
   b.Group(L"Illustrations");
-  shapes(add(CmdInsertShape, 0, S::Large, L"Shapes", L"SH"));
+  shapes(add(CmdInsertShape, kShapes, S::Large, L"Shapes", L"SH"));
   add(CmdInsertChart, 0, S::Large, L"Chart", L"C");
   b.Group(L"Links");
   add(CmdInsertLink, 0, S::Large, L"Link", L"I");
   b.Group(L"Text");
-  add(CmdInsertTextBox, 0, S::Large, L"Text\nBox", L"X");
+  add(CmdInsertTextBox, kTextBox, S::Large, L"Text\nBox", L"X");
   add(CmdHeaderFooter, icon::Page, S::Large, L"Header\n& Footer", L"H");
   // Date & Time and Slide Number open Header & footer, as PowerPoint's open its dialog.
   add(CmdHeaderFooter, icon::Calendar, S::Medium, L"Date & Time", L"D").tool.checked = false;
@@ -353,16 +357,16 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     colors.gallery = std::move(g);
   }
   b.Group(L"Customize");
-  add(CmdSlideSizeMenu, 0, S::Large, L"Slide\nSize", L"S");
-  add(CmdFormatBackground, 0, S::Large, L"Format\nBackground", L"F");
+  add(CmdSlideSizeMenu, kFit, S::Large, L"Slide\nSize", L"S");
+  add(CmdFormatBackground, kPhoto, S::Large, L"Format\nBackground", L"F");
 
   // ---- Slide Show (Transitions and Animations come with P3's commands)
   b.Tab(L"Slide Show", L"S");
   b.Group(L"Start Slide Show");
   add(CmdSlideShowFromStart, icon::Slideshow, S::Large, L"From\nBeginning", L"B");
-  add(CmdSlideShowFromCurrent, 0, S::Large, L"From\nCurrent Slide", L"C");
+  add(CmdSlideShowFromCurrent, kPlay, S::Large, L"From\nCurrent Slide", L"C");
   b.Group(L"Set Up");
-  add(CmdSlideHide, 0, S::Large, L"Hide\nSlide", L"H");
+  add(CmdSlideHide, kHide, S::Large, L"Hide\nSlide", L"H");
   const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
   if (monitors.size() >= 2) {  // where the show goes
     b.Group(L"Monitors");
@@ -380,7 +384,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   // ---- Review
   b.Tab(L"Review", L"R");
   b.Group(L"Proofing");
-  add(CmdSpelling, 0, S::Large, L"Spelling", L"S");
+  add(CmdSpelling, kSpelling, S::Large, L"Spelling", L"S");
 
   // ---- View
   b.Tab(L"View", L"W");
@@ -388,7 +392,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdNotesPane, icon::TextDocument, S::Large, L"Notes", L"PN");
   b.Group(L"Zoom");
   add(CmdSlideZoomMenu, kZoom, S::Large, L"Zoom", L"Q");
-  add(CmdZoomFitPage, 0, S::Large, L"Fit to\nWindow", L"F");
+  add(CmdZoomFitPage, kFit, S::Large, L"Fit to\nWindow", L"F");
 
   // ---- Contextual tabs, while such objects are selected
   const ObjectTool::Kinds kinds = Objects().SelectionKinds();
@@ -403,8 +407,8 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   if (kinds.shapes > 0) {
     b.Tab(L"Shape Format", L"JD", true);
     b.Group(L"Insert Shapes");
-    shapes(add(CmdInsertShape, 0, S::Medium, L"Shapes", L"SH"));
-    add(CmdInsertTextBox, 0, S::Medium, L"Text Box", L"X");
+    shapes(add(CmdInsertShape, kShapes, S::Medium, L"Shapes", L"SH"));
+    add(CmdInsertTextBox, kTextBox, S::Medium, L"Text Box", L"X");
     b.Group(L"Shape Styles");
     add(CmdObjectFill, 0, S::Medium, L"Shape Fill", L"SF");
     add(CmdObjectOutline, 0, S::Medium, L"Shape Outline", L"SO");
@@ -426,14 +430,37 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Tab(L"Table Layout", L"JL", true);
     b.Group(L"Rows & Columns");
     add(CmdSlideTableDeleteMenu, icon::Delete, S::Large, L"Delete", L"D");
-    add(CmdTableRowAbove, 0, S::Large, L"Insert\nAbove", L"IA");  // "A" would cut off Arrange's AF, AE, AA, AY
+    add(CmdTableRowAbove, icon::Add, S::Large, L"Insert\nAbove", L"IA");  // "A" would cut off Arrange's AF, AE, AA, AY
     add(CmdTableRowBelow, 0, S::Medium, L"Insert Below", L"BE");
     add(CmdTableColumnLeft, 0, S::Medium, L"Insert Left", L"L");
     add(CmdTableColumnRight, 0, S::Medium, L"Insert Right", L"R");
     b.Group(L"Merge");
-    add(CmdTableMergeCells, 0, S::Large, L"Merge\nCells", L"M");
-    add(CmdTableSplitCell, 0, S::Large, L"Split\nCells", L"P");
+    add(CmdTableMergeCells, kShapes, S::Large, L"Merge\nCells", L"M");
+    add(CmdTableSplitCell, kSplit, S::Large, L"Split\nCells", L"P");
     arrange();
+  }
+  // File › Print's settings, as PowerPoint's: what Print and Export PDF lay out on each page.
+  struct PrintEntry {
+    int cmd;
+    const wchar_t* label;
+    bool setting;
+  };
+  constexpr PrintEntry kPrint[] = {
+      {CmdPrintSlides, L"Full Page Slides", false},    {CmdPrintNotes, L"Notes Pages", false},
+      {CmdPrintHandouts1, L"Handouts: 1 Slide", false}, {CmdPrintHandouts2, L"Handouts: 2 Slides", false},
+      {CmdPrintHandouts3, L"Handouts: 3 Slides", false}, {CmdPrintHandouts4, L"Handouts: 4 Slides", false},
+      {CmdPrintHandouts6, L"Handouts: 6 Slides", false}, {CmdPrintHandouts9, L"Handouts: 9 Slides", false},
+      {CmdPrintFrame, L"Frame Slides", true},           {CmdPrintHidden, L"Print Hidden Slides", true},
+  };
+  for (const PrintEntry& e : kPrint) {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Print;
+    f.cmd = e.cmd;
+    f.label = e.label;
+    f.setting = e.setting;
+    f.choice = !e.setting;
+    if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
+    m.file.push_back(std::move(f));
   }
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.
   if (const uint32_t id = Objects().TakeInserted()) m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";

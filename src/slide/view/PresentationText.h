@@ -107,10 +107,12 @@ class TextEditing {
   bool Owns(int cmd) const;
   // The text commands command search offers (labeled while text is edited).
   static std::vector<int> CommandIds();
+  // A command of the text's (CommandIds, the font and size boxes) whatever is edited: Query names
+  // it even with no text being edited.
+  static bool Names(int cmd);
   CommandState Query(int cmd);
   bool Execute(int cmd);
-  void AddToolbar(ToolbarModel& m);
-  // The control for one of the text commands, as the ribbon and toolbar show it: Font and size
+  // The control for one of the text commands, as the ribbon shows it: Font and size
   // boxes, color split buttons, the buttons with their glyphs.
   ToolItem Tool(int cmd);
   void FillContextMenu(HMENU menu, size_t slide, draw::Point at);

@@ -1,4 +1,5 @@
-// The presentation tab's keys, commands, toolbar and menus; find, copy, links and the slide show.
+// The presentation tab's keys, commands and menus; find, copy, links and the slide show. Its ribbon
+// is PresentationRibbon.cpp (R1), which took the toolbar's place.
 
 #include <windows.h>
 
@@ -23,7 +24,6 @@
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/StatusBar.h"
-#include "ui/Toolbar.h"
 
 using Microsoft::WRL::ComPtr;
 using menu::AppendItem;
@@ -57,7 +57,7 @@ constexpr CommandName kNames[] = {
     {CmdCopySlidePicture, L"Copy slide as picture", L""},
     {CmdCopyNotes, L"Copy speaker notes", L""},
     {CmdOpenSlideLink, L"Open link", L""},
-    {CmdPrintLayoutMenu, L"Print layout", L""},
+    {CmdReplace, L"Replace", L"Ctrl+H"},
     {CmdPrintSlides, L"Print and export: full page slides", L""},
     {CmdPrintHandouts1, L"Print and export: handouts, 1 slide per page", L""},
     {CmdPrintHandouts2, L"Print and export: handouts, 2 slides per page", L""},
@@ -70,22 +70,17 @@ constexpr CommandName kNames[] = {
     {CmdPrintFrame, L"Frame slides on handouts and notes pages", L""},
 };
 
-// The Print layout choices, in the order the dropdown lists them.
+// The print layouts (File › Print's choices).
 struct LayoutChoice {
   int cmd;
   PrintWhat what;
   int perPage;
-  const wchar_t* label;
 };
 constexpr LayoutChoice kLayouts[] = {
-    {CmdPrintSlides, PrintWhat::Slides, 0, L"Full page slides"},
-    {CmdPrintNotes, PrintWhat::Notes, 0, L"Notes pages"},
-    {CmdPrintHandouts1, PrintWhat::Handouts, 1, L"Handouts: 1 slide"},
-    {CmdPrintHandouts2, PrintWhat::Handouts, 2, L"Handouts: 2 slides"},
-    {CmdPrintHandouts3, PrintWhat::Handouts, 3, L"Handouts: 3 slides"},
-    {CmdPrintHandouts4, PrintWhat::Handouts, 4, L"Handouts: 4 slides"},
-    {CmdPrintHandouts6, PrintWhat::Handouts, 6, L"Handouts: 6 slides"},
-    {CmdPrintHandouts9, PrintWhat::Handouts, 9, L"Handouts: 9 slides"},
+    {CmdPrintSlides, PrintWhat::Slides, 0},       {CmdPrintNotes, PrintWhat::Notes, 0},
+    {CmdPrintHandouts1, PrintWhat::Handouts, 1}, {CmdPrintHandouts2, PrintWhat::Handouts, 2},
+    {CmdPrintHandouts3, PrintWhat::Handouts, 3}, {CmdPrintHandouts4, PrintWhat::Handouts, 4},
+    {CmdPrintHandouts6, PrintWhat::Handouts, 6}, {CmdPrintHandouts9, PrintWhat::Handouts, 9},
 };
 
 int LayoutIndex(const PrintSettings& s) {
@@ -142,15 +137,17 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState PresentationView::QueryCommand(int cmd) {
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
-  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) {  // p2-objects
-    // The clipboard's names where the objects give none (the ribbon's Paste and Select menus).
-    const wchar_t* names[][3] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
+  // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
+  auto clipboardName = [cmd](CommandState& st) {
+    const wchar_t* names[][2] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
     const int k = cmd == CmdCut ? 0 : cmd == CmdCopy ? 1 : cmd == CmdPaste ? 2 : cmd == CmdSelectAll ? 3 : -1;
-    if (k >= 0 && s.label.empty()) s.label = names[k][0], s.shortcut = names[k][1];
-    return s;
-  }
+    if (k >= 0 && st.label.empty()) st.label = names[k][0], st.shortcut = names[k][1];
+    return st;
+  };
+  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return clipboardName(s);  // p2-objects
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
   if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
+  if (TextEditing::Names(cmd) && cmd != CmdCopy) return clipboardName(s = text_->Query(cmd));  // named, unavailable
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
     case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp
@@ -174,7 +171,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
       break;
     case CmdCopyNotes: s.enabled = ready && !deck_->Notes(current_).empty(); break;
     case CmdOpenSlideLink: s.enabled = ready; break;
-    case CmdPrintLayoutMenu: s.enabled = ready; break;
+    case CmdReplace: s.enabled = CanReplace(); break;
     case CmdPrintHidden:
       s.enabled = ready;
       s.checked = print_.includeHidden;
@@ -209,7 +206,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
 std::vector<int> PresentationView::Commands() {
   std::vector<int> out;
   for (const CommandName& n : kNames)
-    if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
+    if (n.cmd != CmdOpenSlideLink) out.push_back(n.cmd);
   for (int c : Objects().Commands()) out.push_back(c);  // p2-objects
   // P2: the slides' commands.
   for (int cmd : {CmdSlideNew, CmdSlideDuplicate, CmdSlideDelete, CmdSlideHide, CmdSlideMoveUp, CmdSlideMoveDown,
@@ -286,7 +283,6 @@ bool PresentationView::Execute(int cmd) {
     case CmdOpenSlideLink:
       if (const SlideLink* link = LinkAt(downX_, downY_)) FollowLink(*link);
       return true;
-    case CmdPrintLayoutMenu: return false;  // the window shows FillMenu
     case CmdPrintHidden: print_.includeHidden = !print_.includeHidden; return true;
     case CmdPrintFrame: print_.frame = !print_.frame; return true;
     default:
@@ -309,74 +305,8 @@ bool PresentationView::Execute(int cmd) {
   }
 }
 
-void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
-  auto item = [](int cmd, wchar_t glyph, const std::wstring& tooltip = L"") {
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = tooltip;
-    return t;
-  };
-  ToolItem print = item(CmdPrint, icon::Print);
-  // What Print and Export PDF lay out, as PowerPoint's print settings choose it.
-  ToolItem layout;
-  layout.kind = ToolKind::Dropdown;
-  layout.cmd = CmdPrintLayoutMenu;
-  layout.tooltip = L"Print layout: what Print and Export PDF put on each page";
-  layout.width = 150;
-  layout.priority = 6;
-  for (const LayoutChoice& l : kLayouts) layout.choices.push_back(l.label);
-  layout.choice = LayoutIndex(print_);
-  layout.enabled = Ready() && SlideCount() > 0;
-  layout.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kLayouts))) Execute(kLayouts[v.index].cmd);
-  };
-  m.left = {print, layout};
-  AddSlideTools(m);  // P2: ＋ Slide ▾ and Layout ▾ first
-  text_->AddToolbar(m);  // the text being edited: font, size, emphasis, color, alignment, lists
-  if (Ready()) Objects().AddTools(m);  // p2-objects: insert, arrange, format
-
-  // ▶ Present ▾: from the beginning, or the list's choice.
-  ToolItem present;
-  present.kind = ToolKind::SplitButton;
-  present.cmd = CmdPresentation;
-  present.glyph = icon::Slideshow;
-  present.tooltip = L"Present from the beginning (F5)";
-  present.choices = {L"From the beginning\tF5", L"From the current slide\tShift+F5"};
-  // With two monitors or more, where the show goes (p1-show's Monitors()).
-  const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
-  if (monitors.size() >= 2)
-    for (size_t i = 0; i < monitors.size(); ++i)
-      present.choices.push_back((static_cast<int>(i) == showMonitor_ ? L"✓ Present on " : L"Present on ") + monitors[i]);
-  present.enabled = Ready() && SlideCount() > 0;
-  present.priority = 9;
-  present.sepBefore = true;
-  present.onChange = [this](const ToolValue& v) {
-    if (v.index == 0) StartShow(false);
-    else if (v.index == 1) StartShow(true);
-    else if (v.index >= 2) showMonitor_ = v.index - 2;
-  };
-  ToolItem notes = item(CmdNotesPane, icon::TextDocument, L"Speaker notes");
-  notes.toggle = true;
-  notes.checked = notesShown_;
-  notes.priority = 4;
-  ToolItem find = item(CmdFind, icon::Search);
-  find.checked = ctx.searchOpen;
-  find.toggle = true;
-  find.priority = 5;
-  find.sepBefore = true;
-  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
-  full.priority = 2;
-  m.right = {present, notes, find, full};
-}
-
-void PresentationView::FillMenu(int which, HMENU menu) {
-  if (which != CmdPrintLayoutMenu) return;
-  for (const LayoutChoice& l : kLayouts) AppendItem(menu, l.cmd, l.label, true, LayoutIndex(print_) == &l - kLayouts, true);
-  AppendSeparator(menu);
-  AppendItem(menu, CmdPrintHidden, L"Print hidden slides", true, print_.includeHidden);
-  AppendItem(menu, CmdPrintFrame, L"Frame slides", true, print_.frame);
-}
+// The ribbon (BuildRibbon) shows the tab's commands; the toolbar has none since R1.
+void PresentationView::BuildToolbar(ToolbarModel& /*m*/, const ToolbarContext& /*ctx*/) {}
 
 void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   if (!Ready()) return;
