@@ -935,6 +935,21 @@ void WorkbookView::AddPageSetupToolbar(ToolbarModel& m) {
   m.left.push_back(t);
 }
 
+int WorkbookView::ScalingNow() const { return Ready() && !ChartSheet() ? ScalingOf(Current()) : -1; }
+
+int WorkbookView::MarginsNow() const {
+  if (!Ready()) return -1;
+  const PageMargins& p = Current().Page().margins;
+  auto same = [](double a, double b) { return std::abs(a - b) < 0.005; };
+  for (int i = 0; i < static_cast<int>(std::size(kMargins)); ++i) {
+    const MarginPreset& m = kMargins[i];
+    if (same(p.top, m.top) && same(p.bottom, m.bottom) && same(p.left, m.left) && same(p.right, m.right) &&
+        same(p.header, m.header) && same(p.footer, m.footer))
+      return i;
+  }
+  return -1;
+}
+
 void WorkbookView::AddPageSetupTabItems(HMENU m) {
   for (int cmd : {CmdPageSetup, CmdPageBreakPreview}) {
     CommandState s;

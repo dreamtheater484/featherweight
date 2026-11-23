@@ -1112,6 +1112,19 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdCellStyles: return set(L"Cell styles", L"");
     case CmdFormatPainter: return set(L"Format painter: copy these cells' formats to the cells you select next", L"",
                                       painter_.has_value());
+    // Excel's Home tab (R1, r1-sheet).
+    case CmdFormatCellsFont: return set(L"Format cells: font…", L"");
+    case CmdFormatCellsAlignment: return set(L"Format cells: alignment…", L"");
+    case CmdAlignTop: return set(L"Top align", L"", x && x->alignment.vertical == VAlign::Top);
+    case CmdAlignMiddle: return set(L"Middle align", L"", x && x->alignment.vertical == VAlign::Center);
+    case CmdAlignBottom: return set(L"Bottom align", L"", x && x->alignment.vertical == VAlign::Bottom);
+    case CmdWrapText: return set(L"Wrap text", L"", x && x->alignment.wrap);
+    case CmdIndent: return set(L"Increase indent", L"");
+    case CmdOutdent: return set(L"Decrease indent", L"");
+    case CmdGrowFont: return set(L"Increase font size", L"");
+    case CmdShrinkFont: return set(L"Decrease font size", L"");
+    case CmdNumAccounting: return set(L"Accounting number format", L"");
+    case CmdCommaStyle: return set(L"Comma style", L"");
   }
   return false;
 }
@@ -1201,79 +1214,86 @@ bool WorkbookView::FormatCommand(int cmd) {
       else painter_ = Painter{&Current(), Selected()};
       host_.ViewStateChanged();
       break;
+    case CmdFormatCellsFont: ShowFormatPanel(FormatPanel::kFont); break;
+    case CmdFormatCellsAlignment: ShowFormatPanel(FormatPanel::kAlignment); break;
+    case CmdAlignTop:
+    case CmdAlignMiddle:
+    case CmdAlignBottom: {
+      // As Excel's buttons: a second click on the pressed one goes back to bottom.
+      const VAlign v = cmd == CmdAlignTop ? VAlign::Top : cmd == CmdAlignMiddle ? VAlign::Center : VAlign::Bottom;
+      const VAlign to = active.alignment.vertical == v ? VAlign::Bottom : v;
+      ChangeFormat(u"Alignment", [to](Xf& x) {
+        x.alignment.vertical = to;
+        x.applyAlignment = true;
+      });
+      break;
+    }
+    case CmdWrapText: {
+      const bool on = !active.alignment.wrap;
+      ChangeFormat(u"Wrap Text", [on](Xf& x) {
+        x.alignment.wrap = on;
+        x.applyAlignment = true;
+      });
+      break;
+    }
+    case CmdIndent:
+    case CmdOutdent: {
+      // Excel's: an indent needs left or right alignment (left unless the cell is right aligned);
+      // decreasing to 0 keeps the alignment.
+      const int step = cmd == CmdIndent ? 1 : -1;
+      if (step < 0 && active.alignment.indent == 0) break;
+      ChangeFormat(cmd == CmdIndent ? u"Increase Indent" : u"Decrease Indent", [step](Xf& x) {
+        Alignment& a = x.alignment;
+        a.indent = static_cast<uint16_t>(std::clamp(static_cast<int>(a.indent) + step, 0, 250));
+        if (a.horizontal != HAlign::Right && a.horizontal != HAlign::Distributed && a.indent > 0) a.horizontal = HAlign::Left;
+        x.applyAlignment = true;
+      });
+      break;
+    }
+    case CmdGrowFont:
+    case CmdShrinkFont: {
+      // The next size in the list (Excel's), past 72 by tens, below 8 by ones.
+      const double now = activeFont.size > 0 ? activeFont.size : st.DefaultFont().size;
+      double to = now;
+      if (cmd == CmdGrowFont) {
+        to = now >= 72 ? std::floor(now / 10) * 10 + 10 : 0;
+        for (const wchar_t* size : kSizes)
+          if (!to && _wtof(size) > now + 0.01) to = _wtof(size);
+      } else {
+        for (const wchar_t* size : kSizes)
+          if (_wtof(size) < now - 0.01) to = _wtof(size);
+        if (now <= 8.01) to = std::ceil(now) - 1;
+        if (now > 72) to = std::max(72.0, std::ceil(now / 10) * 10 - 10);
+      }
+      to = std::clamp(to, 1.0, 409.0);
+      if (to != now) ChangeFont(u"Font Size", [to](Font& f) { f.size = to; });
+      break;
+    }
+    case CmdNumAccounting: ApplyNumberCode(NumberChoiceCode(3, loc)); break;
+    case CmdCommaStyle: {
+      const auto& g = Gallery();
+      for (size_t i = 0; i < g.size(); ++i)
+        if (g[i].name == L"Comma") ApplyCellStyle(static_cast<int>(i));
+      break;
+    }
   }
   return true;
 }
 
-void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
-  if (!Ready() || preview_ || ChartSheet()) return;
+// The boxes and color buttons Excel's Home tab has (font, size, font and fill colors, borders, cell
+// styles, number format), made with the active cell's values, for the ribbon (and the toolbar).
+ToolItem WorkbookView::FormatTool(int cmd) {
+  ToolItem t;
+  t.cmd = cmd;
+  t.enabled = Ready() && !preview_ && !ChartSheet();  // the selected cells' (the boxes have no state of their own)
+  if (!t.enabled) return t;
   const Styles& st = book_->GetStyles();
   const Xf& x = st.CellXf(ActiveStyle());
   const Font& f = st.FontOf(x);
-  const NumLocale& loc = text_->Locale();
-  auto button = [&](int cmd, wchar_t glyph, int priority) {
-    CommandState q = QueryCommand(cmd);
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.checked = q.checked;
-    t.priority = priority;
-    return t;
-  };
-  auto toggle = [&](int cmd, wchar_t glyph, int priority) {
-    ToolItem t = button(cmd, glyph, priority);
-    t.toggle = true;
-    return t;
-  };
-  // Font and size.
-  if (DocFormat::FontsPending()) DocFormat::ReadFonts();
-  ToolItem font;
-  font.kind = ToolKind::ComboBox;
-  font.cmd = CmdFontBox;
-  font.width = 116;
-  font.priority = 6;
-  font.tooltip = L"Font";
-  font.sepBefore = true;
-  font.choices = DocFormat::FontNames();
-  font.text = Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name);
-  font.onChange = [this](const ToolValue& v) {
-    if (v.text.empty()) return;
-    const std::string name = WideToUtf8(v.text);
-    ChangeFont(u"Font", [&name](Font& fo) {
-      fo.name = name;
-      fo.scheme = FontScheme::None;
-    });
-  };
-  m.left.push_back(font);
-  ToolItem size;
-  size.kind = ToolKind::ComboBox;
-  size.cmd = CmdSizeBox;
-  size.width = 56;
-  size.priority = 6;
-  size.tooltip = L"Font size";
-  size.choices = List(kSizes, std::size(kSizes));
-  size.text = PointsText(f.size > 0 ? f.size : st.DefaultFont().size);
-  size.validate = [](std::wstring& text) {
-    wchar_t* end = nullptr;
-    const double v = std::wcstod(text.c_str(), &end);
-    if (end == text.c_str() || !(v >= 1 && v <= 409)) return false;
-    text = PointsText(std::round(v * 2) / 2);
-    return true;
-  };
-  size.onChange = [this](const ToolValue& v) {
-    const double s = std::wcstod(v.text.c_str(), nullptr);
-    if (s >= 1) ChangeFont(u"Font Size", [s](Font& fo) { fo.size = s; });
-  };
-  m.left.push_back(size);
-  m.left.push_back(toggle(CmdBold, icon::Bold, 9));
-  m.left.push_back(toggle(CmdItalic, icon::Italic, 9));
-  m.left.push_back(toggle(CmdUnderline, icon::Underline, 9));
   // Colors: the main part repeats the last one, the arrow picks another.
-  auto colors = [&](int cmd, wchar_t glyph, D2D1_COLOR_F& last, const wchar_t* automaticLabel, bool fill) {
-    ToolItem t = button(cmd, glyph, 5);
+  auto colors = [&](wchar_t glyph, D2D1_COLOR_F& last, const wchar_t* automaticLabel, bool fill) {
     t.kind = ToolKind::SplitButton;
+    t.glyph = glyph;
     t.width = 52;
     t.colors = true;
     t.color = last;
@@ -1296,24 +1316,125 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
         ChangeFont(u"Font Color", [c](Font& fo) { fo.color = c; });
       }
     };
+  };
+  switch (cmd) {
+    case CmdFontBox:
+      if (DocFormat::FontsPending()) DocFormat::ReadFonts();
+      t.kind = ToolKind::ComboBox;
+      t.width = 116;
+      t.tooltip = L"Font";
+      t.choices = DocFormat::FontNames();
+      t.text = Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name);
+      t.onChange = [this](const ToolValue& v) {
+        if (v.text.empty()) return;
+        const std::string name = WideToUtf8(v.text);
+        ChangeFont(u"Font", [&name](Font& fo) {
+          fo.name = name;
+          fo.scheme = FontScheme::None;
+        });
+      };
+      break;
+    case CmdSizeBox:
+      t.kind = ToolKind::ComboBox;
+      t.width = 56;
+      t.tooltip = L"Font size";
+      t.choices = List(kSizes, std::size(kSizes));
+      t.text = PointsText(f.size > 0 ? f.size : st.DefaultFont().size);
+      t.validate = [](std::wstring& text) {
+        wchar_t* end = nullptr;
+        const double v = std::wcstod(text.c_str(), &end);
+        if (end == text.c_str() || !(v >= 1 && v <= 409)) return false;
+        text = PointsText(std::round(v * 2) / 2);
+        return true;
+      };
+      t.onChange = [this](const ToolValue& v) {
+        const double s = std::wcstod(v.text.c_str(), nullptr);
+        if (s >= 1) ChangeFont(u"Font Size", [s](Font& fo) { fo.size = s; });
+      };
+      break;
+    case CmdFontColor: colors(icon::FontColor, lastFontColor_, L"Automatic", false); break;
+    case CmdFillColor: colors(icon::Color, lastFill_, L"No color", true); break;
+    case CmdBordersBox:
+      // The main part repeats the last choice.
+      t.kind = ToolKind::SplitButton;
+      t.glyph = icon::Table;
+      t.width = 52;
+      t.tooltip = std::wstring(L"Borders: ") + kBorderChoices[lastBorders_].name;
+      for (const BorderChoice& b : kBorderChoices) t.choices.push_back(b.name);
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index < 0 || v.index >= static_cast<int>(std::size(kBorderChoices))) return;
+        lastBorders_ = v.index;
+        BorderSide side;
+        side.style = kBorderChoices[v.index].style;
+        ApplyBorders(kBorderChoices[v.index].which, side);
+      };
+      break;
+    case CmdCellStyles:
+      t.kind = ToolKind::Dropdown;
+      t.width = 92;
+      t.maxRows = 20;
+      t.text = L"Styles";
+      t.fitText = true;
+      t.tooltip = L"Cell styles";
+      for (const BuiltinStyle& s : Gallery()) t.choices.push_back(s.name);
+      t.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
+      break;
+    case CmdNumberFormatBox: {
+      // Excel's list: the formats, then More Number Formats (the decimals are buttons beside it).
+      t.kind = ToolKind::Dropdown;
+      t.width = 116;
+      t.maxRows = 12;
+      t.tooltip = L"Number format";
+      t.text = kCategories[static_cast<int>(FormatChoiceOf(CodeOf(x.numFmt), text_->Locale()).category)];
+      t.choices = List(kNumberChoices, 11);
+      t.choices.push_back(kNumberChoices[13]);
+      t.onChange = [this](const ToolValue& v) {
+        if (v.index == 11) ShowFormatPanel(FormatPanel::kNumber);
+        else if (v.index >= 0 && v.index < 11) ApplyNumberCode(NumberChoiceCode(v.index, text_->Locale()));
+      };
+      break;
+    }
+  }
+  return t;
+}
+
+void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
+  if (!Ready() || preview_ || ChartSheet()) return;
+  const Styles& st = book_->GetStyles();
+  const Xf& x = st.CellXf(ActiveStyle());
+  const NumLocale& loc = text_->Locale();
+  auto button = [&](int cmd, wchar_t glyph, int priority) {
+    CommandState q = QueryCommand(cmd);
+    ToolItem t;
+    t.cmd = cmd;
+    t.glyph = glyph;
+    t.tooltip = q.Tooltip();
+    t.enabled = q.enabled;
+    t.checked = q.checked;
+    t.priority = priority;
     return t;
   };
-  m.left.push_back(colors(CmdFontColor, icon::FontColor, lastFontColor_, L"Automatic", false));
-  m.left.push_back(colors(CmdFillColor, icon::Color, lastFill_, L"No color", true));
-  // Borders: the main part repeats the last choice.
-  ToolItem borders = button(CmdBordersBox, icon::Table, 4);
-  borders.kind = ToolKind::SplitButton;
-  borders.width = 52;
-  borders.tooltip = std::wstring(L"Borders: ") + kBorderChoices[lastBorders_].name;
-  for (const BorderChoice& b : kBorderChoices) borders.choices.push_back(b.name);
-  borders.onChange = [this](const ToolValue& v) {
-    if (v.index < 0 || v.index >= static_cast<int>(std::size(kBorderChoices))) return;
-    lastBorders_ = v.index;
-    BorderSide side;
-    side.style = kBorderChoices[v.index].style;
-    ApplyBorders(kBorderChoices[v.index].which, side);
+  auto toggle = [&](int cmd, wchar_t glyph, int priority) {
+    ToolItem t = button(cmd, glyph, priority);
+    t.toggle = true;
+    return t;
   };
-  m.left.push_back(borders);
+  auto tool = [&](int cmd, int priority) {
+    ToolItem t = FormatTool(cmd);
+    t.priority = priority;
+    return t;
+  };
+  // Font and size.
+  ToolItem font = tool(CmdFontBox, 6);
+  font.sepBefore = true;
+  m.left.push_back(font);
+  m.left.push_back(tool(CmdSizeBox, 6));
+  m.left.push_back(toggle(CmdBold, icon::Bold, 9));
+  m.left.push_back(toggle(CmdItalic, icon::Italic, 9));
+  m.left.push_back(toggle(CmdUnderline, icon::Underline, 9));
+  m.left.push_back(tool(CmdFontColor, 5));
+  m.left.push_back(tool(CmdFillColor, 5));
+  m.left.push_back(tool(CmdBordersBox, 4));
   // Alignment and merging.
   ToolItem left = toggle(CmdAlignLeft, icon::AlignLeft, 5);
   left.sepBefore = true;
@@ -1334,18 +1455,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   };
   m.left.push_back(merge);
   // Cell styles and the format painter.
-  ToolItem styles;
-  styles.kind = ToolKind::Dropdown;
-  styles.cmd = CmdCellStyles;
-  styles.width = 92;
-  styles.priority = 2;
-  styles.maxRows = 20;
-  styles.text = L"Styles";
-  styles.fitText = true;
-  styles.tooltip = L"Cell styles";
-  for (const BuiltinStyle& s : Gallery()) styles.choices.push_back(s.name);
-  styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
-  m.left.push_back(styles);
+  m.left.push_back(tool(CmdCellStyles, 2));
   m.left.push_back(toggle(CmdFormatPainter, icon::Brush, 3));
   // Sort and filter.
   ToolItem data;
@@ -1414,6 +1524,7 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (op == L"object") return ShapesScriptOp(arg);  // WorkbookShapes.cpp
   if (op == L"name" || op == L"names") return NamesScriptOp(op, arg);  // s3-calc's (WorkbookNames.cpp)
   if (op == L"pagesetup") return PageScriptOp(arg);  // s3-print's (WorkbookPageSetup.cpp)
+  if (op == L"ribbon") return RibbonScriptOp(arg);  // R1 (WorkbookRibbon.cpp)
   if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
   const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));

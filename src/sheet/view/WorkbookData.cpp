@@ -805,7 +805,13 @@ bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
     case CmdCreateTable: s.label = L"Table…"; s.shortcut = L"Ctrl+T"; break;
     case CmdTableDesign: s.label = L"Table design…"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
     case CmdConvertToRange: s.label = L"Convert to range"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
-    case CmdTableTotalRow: s.label = L"Total row"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
+    case CmdTableTotalRow: {
+      const int t = cells ? TableIndexAt(active_) : -1;
+      s.label = L"Total row";
+      s.enabled = t >= 0;
+      s.checked = t >= 0 && Current().Tables()[static_cast<size_t>(t)].totalsRows > 0;  // the ribbon's check box
+      return true;
+    }
     default: return false;
   }
   s.enabled = cells;

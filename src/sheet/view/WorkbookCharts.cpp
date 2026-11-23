@@ -377,6 +377,7 @@ bool WorkbookView::ChartsCommand(int cmd) {
     const std::vector<SheetObjects::Object> all = objects->Objects();
     if (!all.empty()) {
       object_ = all.back().id;
+      ribbonInserted_ = object_;  // the ribbon shows Chart Design (R1)
       objectSheet_ = sheet_;
     }
   }

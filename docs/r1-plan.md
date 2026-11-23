@@ -44,3 +44,9 @@ The ids are for new commands only, such as Ctrl+F1 or a group's dialog launcher 
 ## Decisions during R1
 
 (Each piece adds its decisions here.)
+
+- **r1-sheet, Excel's layout:** read from Excel's own ribbon through UI Automation (Excel 365 build 20326 on the PC, full width): tab, group and button names, order, sizes and KeyTips. The table is in `FeatherweightNotes\r1\r1-sheet-state.md`.
+- **r1-sheet, buttons for what Featherweight already does:** where Excel's button is one click on something Featherweight did only in Format Cells or the Page Setup panel, it gets a command (ids 3700–3708): Wrap Text, Top/Middle/Bottom Align, Accounting Number Format, Comma Style, the Font and Alignment launchers, View › Normal. Existing ids are reused where the meaning is the same: `CmdGrowFont`/`CmdShrinkFont`, `CmdIndent`/`CmdOutdent`, `CmdPortrait`/`CmdLandscape`, `CmdMarginsNormal`/`Wide`/`Narrow`, `CmdObjectFill`/`CmdObjectOutline`. Menus are ids 3720–3739, filled by `WorkbookView::FillMenu` with Excel's words and mnemonics.
+- **r1-sheet, print preview:** a contextual tab, Print Preview, as Excel 2007 had (later Excel moved preview into File › Print; Featherweight's preview is a mode of the tab): Print, Page Setup, Print What, Scaling, Zoom, Next and Previous Page, Close Print Preview.
+- **r1-sheet, panels behind several buttons:** Chart Design's Add Chart Element, Change Colors, Select Data and Change Chart Type all open the chart panel, where Featherweight does each of them; Picture and Shape Format's launchers and Alt Text open the Format panel.
+- **r1-sheet, Review:** Excel 365's threaded layout (Comments, and Notes ▾), since Featherweight has both.
