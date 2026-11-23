@@ -83,6 +83,7 @@ struct Axis {
   bool between = true;    // categories between tick marks (c:crossBetween)
   std::wstring title;
   bool titleOverlay = false;  // the title drawn over the plot, which keeps its room
+  int labelSkip = 0;          // categories: c:tickLblSkip, a label every so many (0: as many as fit)
 };
 
 enum class LegendPos : uint8_t { None, Right, Left, Top, Bottom };
@@ -94,6 +95,7 @@ struct Chart {
   LegendPos legend = LegendPos::None;
   // c:overlay: the title or legend drawn over the plot area, which keeps the room it would take.
   bool titleOverlay = false, legendOverlay = false;
+  std::vector<uint32_t> hiddenEntries;  // c:legendEntry/c:delete: the legend's entries left out, by index
   Look area, plot;  // the chart's and the plot area's c:spPr
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black

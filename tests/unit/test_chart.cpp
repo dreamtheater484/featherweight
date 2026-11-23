@@ -129,6 +129,24 @@ TEST(Chart_DrawsABarForEachValueAndALegend) {
   }
 }
 
+TEST(Chart_LegendEntriesLeftOutAndALabelStep) {
+  // c:legendEntry/c:delete leaves a series out of the legend (its bars stay); c:tickLblSkip is
+  // the category labels' step, as Office shows them (govuk business bodies' charts).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"b\"/><c:legendEntry><c:idx val=\"1\"/><c:delete val=\"1\"/></c:legendEntry>");
+  xml.replace(xml.find("<c:crossAx val=\"2\"/></c:catAx>"), 29, "<c:crossAx val=\"2\"/><c:tickLblSkip val=\"2\"/></c:catAx>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK(c.hiddenEntries == std::vector<uint32_t>{1});
+  CHECK_EQ(c.category.labelSkip, 2);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
+  CHECK_EQ(Filled(art, first), 4u);   // three bars and the legend's swatch
+  CHECK_EQ(Filled(art, second), 3u);  // three bars, no swatch
+}
+
 TEST(Chart_PieSlicesAndPercentLabels) {
   Parsed p(PieChart());
   Chart c;

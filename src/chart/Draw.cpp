@@ -505,6 +505,11 @@ struct Entry {
   bool circle = false;  // a bubble's key: a circle
 };
 
+// A legend entry the chart leaves out (c:legendEntry/c:delete).
+bool Hidden(const Chart& ch, size_t index) {
+  return std::find(ch.hiddenEntries.begin(), ch.hiddenEntries.end(), index) != ch.hiddenEntries.end();
+}
+
 std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
   std::vector<Entry> out;
   const Group& g0 = ch.groups.front();
@@ -518,7 +523,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       Entry e;
       e.name = i < s.categories.size() ? s.categories[i] : std::to_wstring(i + 1);
       e.color = c;
-      out.push_back(std::move(e));
+      if (!Hidden(ch, i)) out.push_back(std::move(e));
     }
     return out;
   }
@@ -542,7 +547,7 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
         e.symbol = MarkerSymbol(s, scatter || g.marker, k);
         e.markerSize = s.markerSize;
       }
-      out.push_back(std::move(e));
+      if (!Hidden(ch, k)) out.push_back(std::move(e));
       if (++k >= 64) break;
     }
   // Horizontal bars list their series bottom up, as they're stacked in each category; so do
@@ -1370,7 +1375,10 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     // Every label when they fit, else every second, third…
     const double room = cats.Band() * (bar ? P.bottom - P.top : P.right - P.left);
     const double need = bar ? ts * 1.2 : cw + ts * 0.5;
-    const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
+    // A stated step (c:tickLblSkip) as it is, whether or not the labels fit.
+    const size_t every = ch.category.labelSkip > 0 ? static_cast<size_t>(ch.category.labelSkip)
+                         : room > 0              ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room)))
+                                                 : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
       const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Fit(catName(i), ts, catRoom) : clabels[i];
