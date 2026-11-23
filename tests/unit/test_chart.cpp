@@ -267,6 +267,35 @@ TEST(Chart_SlideTitleIsTheTextSizeTimesOnePointTwo) {
   CHECK_NEAR(book.titleSize, 28.f, 0.01f);
 }
 
+TEST(Chart_SlideLabelRoomFollowsTheFontsAscent) {
+  // Segoe UI's ascent (1.08 em) is 13 % over Calibri's (.95): on a slide the category labels below
+  // the plot take that much more room, so the bars end higher (PowerPoint's PDFs); in a workbook
+  // the room stays Calibri's.
+  CHECK_NEAR(draw::TextAscent(L"Calibri", false, false), 0.952f, 0.01f);
+  Parsed doc(ColumnChart());
+  const auto plotBottom = [](const draw::Art& art) {
+    float bottom = -1e9f;
+    for (const auto& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+      for (const draw::Path::Polygon& f : m.path.Flatten(0.25f)) {
+        float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f;
+        for (const draw::Point& pt : f.points) l = std::min(l, pt.x), t = std::min(t, pt.y), r = std::max(r, pt.x), b = std::max(b, pt.y);
+        if (r - l > 10 && b - t > 20 && r - l < 100) bottom = std::max(bottom, b);  // a bar
+      }
+    }
+    return bottom;
+  };
+  for (const bool slide : {true, false}) {
+    Chart c;
+    REQUIRE(Read(doc.Root(), Colors(), c, nullptr, slide));
+    const float calibri = plotBottom(Draw(c, {360, 216}, Colors(), L"Calibri"));
+    const float segoe = plotBottom(Draw(c, {360, 216}, Colors(), L"Segoe UI"));
+    CHECK(calibri > 100);
+    if (slide) CHECK(segoe < calibri - 1);
+    else CHECK_NEAR(segoe, calibri, 0.01f);
+  }
+}
+
 TEST(Chart_BubblesByArea) {
   // Bubbles at (x, y) sized by area: four times the size, twice as wide; the largest a quarter of
   // the plot's smaller side across (PowerPoint's PDFs). A series each, so each has its own color.
