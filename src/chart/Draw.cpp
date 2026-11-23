@@ -274,11 +274,18 @@ class Builder {
     std::optional<Color> l = look.noLine ? std::nullopt : look.line ? look.line : line;
     Add(std::move(p), f, l, look.lineWidth >= 0 ? look.lineWidth : width);
   }
-  // A series' line (and its legend key): round ends too.
-  void Stroke(Path p, Color line, float width) {
+  // A series' line (and its legend key): round ends too, and `dashes` (multiples of the width)
+  // shortened by them and their gaps lengthened, as PowerPoint's PDFs have them (sysDot at 2 points:
+  // dots 4 points apart).
+  void Stroke(Path p, Color line, float width, const std::vector<float>& dashes = {}) {
     const size_t n = art_.marks.size();
     Add(std::move(p), std::nullopt, line, width);
-    if (art_.marks.size() > n) art_.marks.back().line.cap = draw::LineCap::Round;
+    if (art_.marks.size() > n) {
+      draw::Line& l = art_.marks.back().line;
+      l.cap = draw::LineCap::Round;
+      for (size_t k = 0; k < dashes.size() && k < 64; ++k) l.dashes.push_back(k % 2 ? dashes[k] + 1 : std::max(0.0f, dashes[k] - 1));
+      if (l.dashes.size() % 2) l.dashes.push_back(l.dashes.back());
+    }
   }
   void Line(Point a, Point b, Color c, float width) {
     Path p;
@@ -390,7 +397,21 @@ std::string MarkerSymbol(const Series& s, bool on, size_t index) {
   return s.symbol;
 }
 
-void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, Color fill, Color line) {
+// A series' markers' fill and outline: their own c:spPr's, else the series' fill and `line`.
+struct MarkerLook {
+  std::optional<Color> fill, line;
+  float width = 0.75f;
+};
+MarkerLook MarkerLookOf(const Series& s, Color color, Color line) {
+  MarkerLook m;
+  if (!s.markerLook.noFill) m.fill = s.markerLook.fill.value_or(s.look.fill.value_or(color));
+  if (!s.markerLook.noLine) m.line = s.markerLook.line.value_or(line);
+  if (s.markerLook.lineWidth >= 0) m.width = s.markerLook.lineWidth;
+  return m;
+}
+
+void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, const MarkerLook& look) {
+  const std::optional<Color> fill = look.fill, line = look.line;
   if (symbol == "none" || symbol.empty()) return;
   const float h = size / 2;
   Path p;
@@ -410,7 +431,7 @@ void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, Colo
       p.MoveTo({c.x - w, c.y});
       p.LineTo({c.x + w, c.y});
     }
-    b.Add(std::move(p), std::nullopt, line, symbol == "dash" || symbol == "dot" ? std::max(0.75f, size / 4) : 0.75f);
+    b.Add(std::move(p), std::nullopt, line ? line : fill, symbol == "dash" || symbol == "dot" ? std::max(look.width, size / 4) : look.width);
     return;
   }
   if (symbol == "square") {
@@ -429,7 +450,7 @@ void DrawMarker(Builder& b, const std::string& symbol, Point c, float size, Colo
   } else {
     p = Path::Ellipse({c.x - h, c.y - h, c.x + h, c.y + h});  // circle, picture, anything else
   }
-  b.Add(std::move(p), fill, line, 0.75f);
+  b.Add(std::move(p), fill, line, look.width);
 }
 
 // ---- Scales
@@ -519,9 +540,10 @@ struct Entry {
   bool line = false;    // a line or scatter series: a stroke for its key
   bool stroke = true;   // with `line`: the stroke drawn (a markers-only scatter series has just its marker)
   float width = 2.25f;  // the line's
+  std::vector<float> dashes;    // and its dashes
   std::string symbol = "none";  // its markers'
   float markerSize = 5;
-  Color markerFill;
+  MarkerLook marker;  // its markers' fill and outline
   bool circle = false;  // a bubble's key: a circle
 };
 
@@ -556,7 +578,6 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       Entry e;
       e.name = s.name.empty() ? L"Series " + std::to_wstring(k + 1) : s.name;
       e.color = SeriesColor(k, colors);
-      e.markerFill = s.look.fill.value_or(e.color);
       if (line && s.look.line) e.color = *s.look.line;
       else if (!line && s.look.fill) e.color = *s.look.fill;
       e.line = line;
@@ -564,6 +585,8 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       e.circle = g.type == Type::Bubble;
       if (line) {
         e.width = s.look.lineWidth >= 0 ? s.look.lineWidth : scatter && !ch.presentation ? 1.5f : 2.25f;
+        e.dashes = s.look.dashes;
+        e.marker = MarkerLookOf(s, SeriesColor(k, colors), e.color);
         e.symbol = MarkerSymbol(s, scatter || g.marker, k);
         e.markerSize = s.markerSize;
       }
@@ -623,7 +646,9 @@ std::vector<Label> WrapLines(const Builder& b, std::wstring_view s, float size, 
 // The legend at its side of `r` (Excel's PDFs): entries a line and 6 points apart down a side, or in
 // centered rows, each key before its name. Returns the room left for the plot: all of `r` when the
 // legend overlays it.
-Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry>& entries, Rect r, float ts, Color text) {
+// `placed`: in a box of its own (c:manualLayout), `r`.
+Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry>& entries, Rect r, float ts, Color text,
+                bool placed = false) {
   std::vector<Label> labels;
   float widest = 0;
   bool lines = false;
@@ -642,9 +667,9 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
         Path p;
         p.MoveTo({x, cy});
         p.LineTo({x + keyW, cy});
-        b.Stroke(std::move(p), e.color, e.width);
+        b.Stroke(std::move(p), e.color, e.width, e.dashes);
       }
-      DrawMarker(b, e.symbol, {x + keyW / 2, cy}, e.markerSize, e.markerFill, e.color);
+      DrawMarker(b, e.symbol, {x + keyW / 2, cy}, e.markerSize, e.marker);
     } else if (e.circle) {
       b.Add(Path::Ellipse({x, cy - box / 2, x + keyW, cy + box / 2}), e.color, std::nullopt, 0);
     } else {
@@ -668,6 +693,27 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
       for (const Label& l : names[i]) wide[i] = std::max(wide[i], l.width);
     }
   };
+  if ((pos == LegendPos::Right || pos == LegendPos::Left) && placed) {
+    // In a box of its own: the keys 7.13 points in from its left, the entries spread evenly down it,
+    // each centred in its share, as wide as the box allows (PowerPoint's PDFs, 15-213's memory gap:
+    // six 12-point entries in a 91-point box). Too many for the box: a line apart, as many as fit.
+    const float x = r.left + 7.13f;
+    wrap(std::max(1.0f, r.right - kInset - x - lead), r.bottom - r.top);
+    size_t total = 0;
+    for (const auto& n : names) total += n.size();
+    const float share = (r.bottom - r.top) / static_cast<float>(std::max<size_t>(1, total)), step = std::max(share, 0.8f * lp);
+    float top = r.top;
+    for (size_t i = 0; i < entries.size(); ++i) {
+      const float h = names[i].size() * step;
+      if (i > 0 && top + h > r.bottom + 0.01f) break;
+      const float cy = top + h / 2;
+      key(entries[i], x, cy);
+      for (size_t k = 0; k < names[i].size(); ++k)
+        b.Place(names[i][k], x + lead, cy + (k - (names[i].size() - 1) / 2.0f) * lp + kMiddle * ts * b.tall, 0, text);
+      top += h;
+    }
+    return r;
+  }
   if (pos == LegendPos::Right || pos == LegendPos::Left) {
     const float w = std::min(lead + widest, (r.right - r.left) * 0.45f);
     wrap(w - lead, r.bottom - r.top);
@@ -752,6 +798,16 @@ struct Pending {
   Point at;           // x as `align` says; y the label's middle
   int align;          // 0 starts at x, 1 centers on it, 2 ends at it
   std::optional<Color> key;  // a legend key before the text
+  std::optional<Color> fill, color;  // a point's own label (c:dLbl): its box's fill, its text's color
+  float size = -1;                   // and its text size (negative: the chart's)
+  // A point's own label is anchored: `at` is its point, `side` where it goes beside it ('r', 'l',
+  // 't', 'b' or 'c'), `offset` how far it's moved from there; its box is its text's with `insets`
+  // (negative: Office's 3 and 1.5 points), or `boxW` by `boxH` with its text wrapped in it.
+  bool anchored = false;
+  char side = 'r';
+  Point offset{};
+  float insets[4] = {-1, -1, -1, -1};
+  float boxW = 0, boxH = 0;
 };
 
 // What a data label says (Office's order: series, category, value, percentage), each part followed
@@ -777,20 +833,45 @@ std::wstring Joined(const std::vector<std::wstring>& parts) {
 
 bool ShowsKey(const Group& g, const Series& s) { return s.keys.value_or(g.keys); }
 
-void DrawPending(Builder& b, const std::vector<Pending>& labels, float ts, Color text, float W, float H) {
-  const float box = kKey * ts, pitch = kLine * ts;
-  // As many lines as the chart is high, each no wider than the chart.
-  const size_t most = static_cast<size_t>(std::clamp((H - 5.7f) / pitch, 1.0f, 16.0f));
+void DrawPending(Builder& b, const std::vector<Pending>& labels, float chartSize, Color chartText, float W, float H) {
   for (const Pending& p : labels) {
+    const float ts = p.size > 0 ? p.size : chartSize;
+    const Color text = p.color.value_or(chartText);
+    const float box = kKey * ts, pitch = kLine * ts;
+    // As many lines as the chart is high, each no wider than the chart.
+    const size_t most = static_cast<size_t>(std::clamp((H - 5.7f) / pitch, 1.0f, 16.0f));
     std::vector<Label> lines;
     float wide = 0;
     const float room = std::max(1.0f, W - 5.7f - (p.key ? box + 0.506f * ts : 0));
     for (size_t at = 0; at <= p.text.size() && lines.size() < most;) {
       size_t end = p.text.find(L'\n', at);
       if (end == std::wstring::npos) end = p.text.size();
-      lines.push_back(b.Fit(p.text.substr(at, end - at), ts, room));
-      wide = std::max(wide, lines.back().width);
+      const float il = p.insets[0] >= 0 ? p.insets[0] : 3, ir = p.insets[2] >= 0 ? p.insets[2] : 3;
+      if (p.anchored && p.boxW > 0) {
+        for (Label& l : WrapLines(b, std::wstring_view(p.text).substr(at, end - at), ts, false, {}, std::max(1.0f, p.boxW - il - ir), most))
+          if (lines.size() < most) lines.push_back(std::move(l));
+      } else {
+        lines.push_back(b.Fit(p.text.substr(at, end - at), ts, room));
+      }
+      for (const Label& l : lines) wide = std::max(wide, l.width);
       at = end + 1;
+    }
+    if (p.anchored) {
+      // A point's own label (PowerPoint's PDFs, govuk business bodies' value boxes and panel names):
+      // its box first beside the point, 5.5 points off it, but inside the chart, then moved by its
+      // offset wherever that takes it; its lines centred in the box.
+      const float il = p.insets[0] >= 0 ? p.insets[0] : 3, it = p.insets[1] >= 0 ? p.insets[1] : 1.5f;
+      const float ir = p.insets[2] >= 0 ? p.insets[2] : 3, ib = p.insets[3] >= 0 ? p.insets[3] : 1.5f;
+      const float w = p.boxW > 0 ? p.boxW : wide + il + ir, h = p.boxH > 0 ? p.boxH : lines.size() * pitch + it + ib;
+      constexpr float kOff = 5.5f;
+      float left = p.side == 'r' ? p.at.x + kOff : p.side == 'l' ? p.at.x - kOff - w : p.at.x - w / 2;
+      float top = p.side == 't' ? p.at.y - kOff - h : p.side == 'b' ? p.at.y + kOff : p.at.y - h / 2;
+      left = std::max(0.0f, std::min(left, W - w)) + p.offset.x;
+      top = std::max(0.0f, std::min(top, H - h)) + p.offset.y;
+      if (p.fill) b.Add(Path::FromRect({left, top, left + w, top + h}), *p.fill, std::nullopt, 0);
+      const float x = left + il + (w - il - ir) / 2, firstMiddle = top + it + (h - it - ib) / 2 - (lines.size() - 1) * pitch / 2;
+      for (size_t k = 0; k < lines.size(); ++k) b.Place(lines[k], x, firstMiddle + k * pitch + kLabelMiddle * ts, 1, text);
+      continue;
     }
     const float lead = p.key ? box + 0.506f * ts : 0, total = lead + wide;
     float left = p.align == 1 ? p.at.x - total / 2 : p.align == 2 ? p.at.x - total : p.at.x;
@@ -799,6 +880,8 @@ void DrawPending(Builder& b, const std::vector<Pending>& labels, float ts, Color
     const float half = lines.size() * pitch / 2;
     const float middle = std::max(2.85f + half, std::min(p.at.y, H - 2.85f - half));
     const float firstMiddle = middle - (lines.size() - 1) * pitch / 2;
+    // A filled box fits the text, a little room at its sides (govuk business bodies' value boxes).
+    if (p.fill) b.Add(Path::FromRect({left - 0.15f * ts, middle - half, left + total + 0.15f * ts, middle + half}), *p.fill, std::nullopt, 0);
     if (p.key) b.Add(Path::FromRect({left, firstMiddle - box / 2, left + box, firstMiddle + box / 2}), *p.key, std::nullopt, 0);
     for (size_t k = 0; k < lines.size(); ++k)
       b.Place(lines[k], left + lead + (wide - lines[k].width) / 2, firstMiddle + k * pitch + kLabelMiddle * ts, 0, text);
@@ -1018,7 +1101,8 @@ bool ShowsLabels(const Group& g, const Series& s) {
 }
 
 void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Cats& c, const Scale& sc,
-               const std::string& format, const draw::ColorContext& colors, std::vector<Pending>& labels, float ts) {
+               const std::string& format, const draw::ColorContext& colors, std::vector<Pending>& labels, float ts,
+               float W, float H) {
   const size_t k = g.series.size();
   const bool stacked = g.grouping != Grouping::Clustered, percent = g.grouping == Grouping::Percent;
   const auto valueAt = [&](size_t j, size_t i, double& base) {
@@ -1112,12 +1196,48 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
       const Point pt = p.At(c.Center(i), Near01(sc.At(v)));
       runs.back().push_back(pt);
       points.push_back(pt);
-      if (ShowsLabels(g, s))
+      const Series::PointLabel* own = nullptr;
+      for (const Series::PointLabel& pl : s.pointLabels)
+        if (pl.index == i) own = &pl;
+      if (own) {
+        // The point's own label (c:dLbl): its text or its parts, moved where the chart says, in its
+        // box and colors (govuk business bodies' value boxes and panel names).
+        if (own->deleted) continue;
+        std::wstring t;
+        if (own->text) {
+          t = *own->text;
+        } else {
+          Series parts;
+          parts.name = s.name;
+          parts.values = s.values;
+          if (i < s.categories.size()) parts.categories.assign(i + 1, std::wstring()), parts.categories[i] = s.categories[i];
+          parts.labels = own->value.value_or(s.labels.value_or(g.labels));
+          parts.seriesNames = own->seriesName.value_or(s.seriesNames.value_or(g.seriesNames));
+          parts.categoryLabels = own->category.value_or(s.categoryLabels.value_or(g.categoryLabels));
+          parts.percent = false;
+          parts.separator = s.separator;
+          parts.labelFormat = own->format.empty() ? s.labelFormat : own->format;
+          t = text(parts, i);
+        }
+        if (!t.empty()) {
+          // Beside the point as it says, else as its series or group does (a line's: to the right).
+          const std::string& pos = !own->pos.empty() ? own->pos : !s.labelPos.empty() ? s.labelPos : g.labelPos;
+          Pending l{t, pt, 1, std::nullopt};
+          l.anchored = true;
+          l.side = pos == "l" ? 'l' : pos == "t" ? 't' : pos == "b" ? 'b' : pos == "ctr" ? 'c' : 'r';
+          l.offset = {own->dx * W, own->dy * H};
+          std::copy(std::begin(own->insets), std::end(own->insets), std::begin(l.insets));
+          l.fill = own->fill, l.color = own->color, l.size = own->size;
+          l.boxW = own->w * W, l.boxH = own->h * H;
+          labels.push_back(std::move(l));
+        }
+      } else if (ShowsLabels(g, s)) {
         labels.push_back({text(s, i), {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, ShowsKey(g, s) ? std::optional<Color>(color) : std::nullopt});
+      }
     }
-    if (!s.look.noLine) b.Stroke(Polyline(runs, s.smooth), color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
+    if (!s.look.noLine) b.Stroke(Polyline(runs, s.smooth), color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f, s.look.dashes);
     const std::string symbol = MarkerSymbol(s, g.marker, first + j);
-    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), color);
+    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, MarkerLookOf(s, color, color));
   }
 }
 
@@ -1145,9 +1265,9 @@ void DrawScatter(Builder& b, const Group& g, size_t first, const Rect& r, const 
                           {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, std::nullopt});
     }
     const Color line = s.look.line.value_or(color);
-    if (g.lines && !s.look.noLine) b.Stroke(Polyline(runs, s.smooth), line, s.look.lineWidth >= 0 ? s.look.lineWidth : width);
+    if (g.lines && !s.look.noLine) b.Stroke(Polyline(runs, s.smooth), line, s.look.lineWidth >= 0 ? s.look.lineWidth : width, s.look.dashes);
     const std::string symbol = MarkerSymbol(s, true, first + j);
-    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), line);
+    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, MarkerLookOf(s, color, line));
   }
 }
 
@@ -1297,10 +1417,13 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const bool beside = !ch.legendOverlay && (ch.legend == LegendPos::Right || ch.legend == LegendPos::Left);
   const float leftSide = beside && ch.legend == LegendPos::Left ? margin : side;
   const float rightSide = beside && ch.legend == LegendPos::Right ? margin : side;
-  const float sideW = bar ? cw : vw;  // labels up the left side
+  // Value labels up the right side when they're at the axes' high end (c:tickLblPos high).
+  const bool high = !bar && !scatter && ch.value.labelsHigh;
+  const float sideW = bar ? cw : high ? 0 : vw;  // labels up the left side
+  const float rightW = std::max(sw, high ? vw : 0.0f);  // and up the right
   const bool across = bar ? !vlabels.empty() : !clabels.empty();  // labels across the bottom
   p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + valueGap : leftSide);
-  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + valueGap : rightSide);
+  p.r.right = r.right - (rightW > 0 ? std::min(rightW, maxSide) + valueGap : rightSide);
   // At the top too, unless value labels up a side, centred on the top gridline, need more.
   p.r.top = r.top + ((!vlabels.empty() && !bar) || !slabels.empty() ? margin * b.tall : side);
   p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts * b.tall : margin);
@@ -1310,6 +1433,37 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   if (!bottom.empty() && (bar || scatter || !cats.between)) {
     p.r.left = std::max(p.r.left, r.left + std::min(bottom.front().width / 2, maxSide));
     if (sw <= 0) p.r.right = std::min(p.r.right, r.right - side - std::min(bottom.back().width / 2, maxSide));
+  }
+  // A plot area the chart places (c:manualLayout): the plot itself there, or the plot with its
+  // labels' room around it as worked out above.
+  if (ch.plotLayout) {
+    const Rect box{ch.plotLayout->left * W, ch.plotLayout->top * H, ch.plotLayout->right * W, ch.plotLayout->bottom * H};
+    p.r = ch.plotInner ? box
+                       : Rect{box.left + (p.r.left - r.left), box.top + (p.r.top - r.top), box.right - (r.right - p.r.right),
+                              box.bottom - (r.bottom - p.r.bottom)};
+    if (ch.plotInner && !bar && !scatter) {
+      // The labels round it stay inside the chart (PowerPoint's PDFs, govuk business bodies' panels):
+      // value labels 1.45 points from its sides, the first and last category labels 5.65. The plot
+      // moves over where there's room for them, else it's narrowed to just fit.
+      const float valueRoom = vw > 0 ? std::min(vw, maxSide) + valueGap : 0, secondRoom = sw > 0 ? std::min(sw, maxSide) + valueGap : 0;
+      const float leftNeed = 1.45f + (high ? 0 : valueRoom), rightNeed = 1.45f + std::max(secondRoom, high ? valueRoom : 0.0f);
+      float lo = leftNeed, hi = W - rightNeed;
+      if (!clabels.empty() && cats.n > 0) {
+        const size_t skip = ch.category.labelSkip > 0 ? static_cast<size_t>(ch.category.labelSkip) : 1;
+        const size_t last = std::min(clabels.size(), cats.n) - 1;
+        const float span = p.r.right - p.r.left;
+        lo = std::max(lo, 5.65f + clabels.front().width / 2 - static_cast<float>(cats.Center(0)) * span);
+        hi = std::min(hi, W - 5.65f - clabels[last / skip * skip].width / 2 + static_cast<float>(1 - cats.Center(last / skip * skip)) * span);
+      }
+      if (lo < hi) {
+        if (p.r.right - p.r.left <= hi - lo) {
+          const float shift = p.r.left < lo ? lo - p.r.left : p.r.right > hi ? hi - p.r.right : 0;
+          p.r.left += shift, p.r.right += shift;
+        } else {
+          p.r.left = lo, p.r.right = hi;
+        }
+      }
+    }
   }
   if (p.r.right - p.r.left < 8 || p.r.bottom - p.r.top < 8) return;
   const Rect& P = p.r;
@@ -1374,7 +1528,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   for (const Group& g : ch.groups) {
     if (g.type == Type::Scatter) DrawScatter(b, g, first, P, xscale, vs, colors, labels, ch.value.format, ts, ch.presentation ? 2.25f : 1.5f);
     else if (g.type == Type::Bubble) DrawBubbles(b, g, first, P, xscale, vs, colors, labels, ch.value.format);
-    else if (g.type != Type::Pie && g.type != Type::Doughnut) DrawGroup(b, g, first, p, cats, g.secondary ? ss : vs, g.secondary ? ch.secondary.format : vformat, colors, labels, ts);
+    else if (g.type != Type::Pie && g.type != Type::Doughnut) DrawGroup(b, g, first, p, cats, g.secondary ? ss : vs, g.secondary ? ch.secondary.format : vformat, colors, labels, ts, W, H);
     first += g.series.size();
   }
   DrawPending(b, labels, ts, text, W, H);
@@ -1384,6 +1538,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   for (size_t i = 0; i < vlabels.size(); ++i) {
     const Point at = p.At(0, vs.At(vticks[i]));
     if (bar) b.Place(vlabels[i], at.x, below, 1, text);
+    else if (high) b.Place(vlabels[i], P.right + valueGap, at.y + middle, 0, text);
     else b.Place(vlabels[i], P.left - valueGap, at.y + middle, 2, text);
   }
   for (size_t i = 0; i < slabels.size(); ++i)
@@ -1479,7 +1634,7 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
     if (g.filled) b.Mark(std::move(p), s.look, color, std::nullopt, 0.75f);
     else if (!s.look.noLine) b.Stroke(std::move(p), color, s.look.lineWidth >= 0 ? s.look.lineWidth : 2.25f);
     const std::string symbol = g.filled ? std::string("none") : MarkerSymbol(s, g.marker, j);
-    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, s.look.fill.value_or(color), color);
+    for (const Point& pt : points) DrawMarker(b, symbol, pt, s.markerSize, MarkerLookOf(s, color, color));
   }
   // The value labels up the first spoke, the category names past each spoke's end.
   if (ch.value.shown)
@@ -1549,7 +1704,12 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   };
   if (!ch.title.empty() && !ch.titleOverlay) r.top = title();
   const std::vector<Entry> entries = ch.legend != LegendPos::None ? Entries(ch, colors) : std::vector<Entry>();
-  if (!entries.empty() && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
+  // A legend the chart places (c:manualLayout) goes in its box, taking no room from the plot.
+  const std::optional<Rect> legendBox =
+      ch.legendLayout ? std::optional<Rect>(Rect{ch.legendLayout->left * W, ch.legendLayout->top * H, ch.legendLayout->right * W,
+                                                 ch.legendLayout->bottom * H})
+                      : std::nullopt;
+  if (!entries.empty() && !legendBox && !ch.legendOverlay) r = DrawLegend(b, ch.legend, false, entries, r, ts, text);
   if (r.right - r.left >= 10 && r.bottom - r.top >= 10) {
     const Group& g0 = ch.groups.front();
     if (g0.type == Type::Pie || g0.type == Type::Doughnut) DrawPie(b, g0, r, ts, text, colors, W, H, ch.presentation);
@@ -1557,7 +1717,14 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
     else DrawAxes(b, ch, r, ts, text, colors, W, H);
   }
   if (!ch.title.empty() && ch.titleOverlay) title();
-  if (!entries.empty() && ch.legendOverlay) DrawLegend(b, ch.legend, true, entries, ch.titleOverlay ? inner : Rect{inner.left, r.top, inner.right, inner.bottom}, ts, text);
+  if (!entries.empty() && legendBox) {
+    // Its box's fill and border, as the chart states them.
+    const std::optional<Color> fill = ch.legendLook.noFill ? std::nullopt : ch.legendLook.fill;
+    const std::optional<Color> border = ch.legendLook.noLine ? std::nullopt : ch.legendLook.line;
+    if (fill || border) b.Add(Path::FromRect(*legendBox), fill, border, ch.legendLook.lineWidth >= 0 ? ch.legendLook.lineWidth : 0.75f);
+    DrawLegend(b, ch.legend, true, entries, *legendBox, ts, text, true);
+  }
+  if (!entries.empty() && ch.legendOverlay && !legendBox) DrawLegend(b, ch.legend, true, entries, ch.titleOverlay ? inner : Rect{inner.left, r.top, inner.right, inner.bottom}, ts, text);
   return b.Take();
 }
 
