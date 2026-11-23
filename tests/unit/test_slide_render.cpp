@@ -230,9 +230,9 @@ TEST(SlideRender_FirstLineStaysInTheTextArea) {
 
 TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   // marL 0, indent 0: PowerPoint draws "•text", no tab between; a hanging indent keeps the tab.
-  const auto width = [](const char* pPr) {
+  const auto width = [](const char* pPr, const char* bullet = "&#8226;") {
     auto deck = Modified(Slide1(PhShape(3, "<p:ph idx=\"1\"/>",
-                                            std::string("<a:p><a:pPr ") + pPr + "><a:buFont typeface=\"Arial\"/><a:buChar char=\"&#8226;\"/></a:pPr>"
+                                            std::string("<a:p><a:pPr ") + pPr + "><a:buFont typeface=\"Arial\"/><a:buChar char=\"" + bullet + "\"/></a:pPr>"
                                             "<a:r><a:rPr sz=\"1800\"/><a:t>x</a:t></a:r></a:p>"),
                                 2));
     if (!deck) return -1.f;
@@ -244,6 +244,8 @@ TEST(SlideRender_BulletWithoutHangingIndentIsFollowedStraightOn) {
   const float glued = width("marL=\"0\" indent=\"0\""), hanging = width("marL=\"685800\" indent=\"-685800\"");
   CHECK(glued > 5 && glued < 25);
   CHECK(hanging > 54);
+  // Only a bullet's first character is drawn ("••" in a SmartArt list draws one).
+  CHECK_NEAR(width("marL=\"0\" indent=\"0\"", "&#8226;&#8226;"), glued, 0.01f);
 }
 
 TEST(SlideRender_MissingFontNamingAnInstalledFamilyUsesIt) {
