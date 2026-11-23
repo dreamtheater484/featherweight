@@ -928,9 +928,9 @@ ToolItem TextEditing::Tool(int cmd) {
   };
   static constexpr Glyph kGlyphs[] = {
       {CmdBold, icon::Bold, true},           {CmdItalic, icon::Italic, true},
-      {CmdUnderline, icon::Underline, true}, {CmdStrike, 0xEDE0, true},  // Strikethrough
+      {CmdUnderline, icon::Underline, true}, {CmdStrike, icon::Strikethrough, true},
       {CmdGrowFont, 0xE8E8, false},          {CmdShrinkFont, 0xE8E7, false},  // FontIncrease, FontDecrease
-      {CmdClearCharFormat, 0xE75C, false},   {CmdChangeCase, icon::FontCase, false},  // 0xEDE0, 0xE75C: stand-ins
+      {CmdClearCharFormat, icon::ClearFormatting, false}, {CmdChangeCase, icon::FontCase, false},
       {CmdFormatPainter, icon::Brush, true}, {CmdAlignLeft, icon::AlignLeft, true},
       {CmdAlignCenter, icon::AlignCenter, true}, {CmdAlignRight, icon::AlignRight, true},
       {CmdAlignJustify, icon::AlignJustify, true}, {CmdBullets, icon::BulletedList, true},
