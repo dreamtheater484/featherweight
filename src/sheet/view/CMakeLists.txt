@@ -29,3 +29,5 @@ if(TARGET fw_tests)
   # Sparklines (S4): the Excel-made fixture read and drawn.
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_sparklines.cpp")
 endif()
+# R1: the ribbon's tables and menus are read once per layout or click: built for size.
+set_source_files_properties(WorkbookRibbon.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
