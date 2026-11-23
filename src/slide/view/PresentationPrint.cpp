@@ -279,6 +279,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi) 
     dc->Clear(D2D1::ColorF(1, 1, 1, 1));
     {
       draw::D2DPainter painter(dc.Get());
+      painter.UsePdfLikeText();
       painter.Transform(draw::Matrix::Scale(scale, scale));
       PaintPage(*deck_, page, print_, PageFonts(), painter);
     }

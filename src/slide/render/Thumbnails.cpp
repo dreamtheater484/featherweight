@@ -37,6 +37,7 @@ std::shared_ptr<const draw::Bitmap> RenderBitmap(const SlideRender& slide, int w
   dc->Clear(D2D1::ColorF(1, 1, 1, 1));
   {
     draw::D2DPainter p(dc.Get());
+    p.UsePdfLikeText();
     slide.Draw(p, {0, 0, static_cast<float>(width), static_cast<float>(height)}, filter);
   }
   if (FAILED(dc->EndDraw())) return nullptr;

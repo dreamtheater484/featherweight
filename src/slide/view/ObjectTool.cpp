@@ -881,6 +881,7 @@ void ObjectTool::MakeLayers(ID2D1DeviceContext* dc) {
     ctx_->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
     {
       draw::D2DPainter painter(ctx_.Get());
+      painter.UsePdfLikeText();  // as the slide view draws it, so text doesn't change look while dragged
       deck->PaintFiltered(slide, painter, &filter);
     }
     ctx_->SetTransform(D2D1::Matrix3x2F::Identity());

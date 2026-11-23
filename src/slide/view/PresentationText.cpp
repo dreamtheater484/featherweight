@@ -541,6 +541,7 @@ void TextEditing::Draw(gfx::Canvas& c, ID2D1DeviceContext* dc, size_t slide, con
     // Transforms go through the painter (it keeps its own, from the device's when it's made): the
     // text block adds its own to the painter's.
     draw::D2DPainter painter(dc);
+    painter.UsePdfLikeText();  // as the slide view draws it, so text doesn't change look when editing starts
     // The text box's outline, dashed, as PowerPoint marks the text being edited.
     const render::SlideRender::TextFrame& f = session_->Frame();
     painter.Save();

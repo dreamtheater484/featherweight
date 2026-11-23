@@ -271,6 +271,7 @@ ComPtr<ID2D1Bitmap1> PresentationView::RenderBitmapWith(ID2D1DeviceContext* dc, 
     const draw::Size s = deck_->SlideSize();
     ctx->SetTransform(D2D1::Matrix3x2F::Scale(w / s.width, h / s.height));
     draw::D2DPainter painter(ctx);
+    painter.UsePdfLikeText();
     paint(painter);
   }
   ctx->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -380,6 +381,7 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
     dc->SetTransform(D2D1::Matrix3x2F::Scale(k, k) * D2D1::Matrix3x2F::Translation(rc.left, rc.top) * old);
     {
       draw::D2DPainter painter(dc);
+      painter.UsePdfLikeText();
       deck_->PaintFiltered(current_, painter, text_->Filter(current_));
       deck_->PaintPrompts(current_, painter, text_->EditingShape(current_));
     }
