@@ -271,6 +271,7 @@ class App : public PdfHost, public DropHost {
   float ui_ = 1.0f;
   bool windowActive_ = true;
   bool snapshot_ = false;
+  bool scriptFailed_ = false;  // a script step failed: the snapshot run exits with 6
   bool snapshotWindow_ = false;
   bool sandbox_ = false;
   int simulatedMods_ = -1;
