@@ -39,6 +39,7 @@ struct Series {
   Look look;
   std::vector<std::pair<uint32_t, Look>> points;  // c:dPt: a point's own look
   std::optional<bool> marker;  // line and scatter: c:marker (nullopt: as the group has it)
+  Look markerLook;             // c:marker/c:spPr: the markers' own fill and outline (unstated: the series')
   std::string symbol;          // c:marker/c:symbol ("circle", "diamond"...; empty: Office's choice)
   float markerSize = 7;        // c:marker/c:size, points (unstated: Office 2007's 7, PowerPoint's PDFs)
   bool smooth = false;         // line and scatter: c:smooth (Office smooths when it's missing)
@@ -115,6 +116,7 @@ struct Chart {
   // c:overlay: the title or legend drawn over the plot area, which keeps the room it would take.
   bool titleOverlay = false, legendOverlay = false;
   std::vector<uint32_t> hiddenEntries;  // c:legendEntry/c:delete: the legend's entries left out, by index
+  Look legendLook;  // c:legend/c:spPr: its box's fill and border (drawn when the chart places it)
   // c:manualLayout (edge mode): the plot area's and the legend's boxes, as fractions of the chart's
   // size; the plot area's is the plot itself (layoutTarget inner) or the plot with its axes' labels.
   std::optional<draw::Rect> plotLayout, legendLayout;

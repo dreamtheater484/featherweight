@@ -280,6 +280,41 @@ TEST(Chart_PlacedPlotKeepsItsLabelsInsideTheChart) {
   }
 }
 
+TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
+  // A legend at the side the chart places (c:manualLayout) fills its box: the keys 7.13 points in
+  // from its left, the entries spread evenly down it, its border as its c:spPr says (PowerPoint's
+  // PDFs, 15-213's memory gap: six 12-point entries in a 91-point box).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"r\"/><c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.7\"/>"
+              "<c:y val=\"0.2\"/><c:w val=\"0.3\"/><c:h val=\"0.4\"/></c:manualLayout></c:layout><c:overlay val=\"1\"/>"
+              "<c:spPr><a:noFill/><a:ln w=\"9525\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:ln></c:spPr>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  // The box: 280 to 400 across, 40 to 120 down; two entries, centred 60 and 100 down.
+  bool border = false;
+  for (const auto& m : art.marks)
+    if (m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, draw::Rgb(0xFF0000))) {
+      const draw::Rect b = m.path.Bounds();
+      border = std::fabs(b.left - 280) < 0.01 && std::fabs(b.top - 40) < 0.01 && std::fabs(b.right - 400) < 0.01 && std::fabs(b.bottom - 120) < 0.01;
+    }
+  CHECK(border);
+  const auto swatch = [&](const char* accent) {
+    const draw::Color color = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.left >= 280) return b;
+    }
+    return draw::Rect{};
+  };
+  const draw::Rect first = swatch("accent1"), second = swatch("accent2");
+  CHECK(std::fabs(first.left - 287.13f) < 0.01 && std::fabs(second.left - 287.13f) < 0.01);
+  CHECK(std::fabs((first.top + first.bottom) / 2 - 60) < 0.01);
+  CHECK(std::fabs((second.top + second.bottom) / 2 - 100) < 0.01);
+}
+
 TEST(Chart_LogarithmicValueAxis) {
   // c:logBase 10 with a minimum of 0.01: values a thousandfold apart, gridlines at each power of
   // ten up to the one above the largest (15-213's memory gap chart).

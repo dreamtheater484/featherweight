@@ -248,6 +248,7 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
     if (s.symbol.size() > 16) s.symbol.clear();
     if (pugi::xml_node c = C(m, "symbol")) s.marker = s.symbol != "none";
     s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 7), 2.0, 72.0));
+    s.markerLook = LookOf(C(m, "spPr"), colors);
   }
   s.smooth = (type == Type::Line || scatter) && On(ser, "smooth", true);
   const LabelParts l = LabelsOf(C(ser, "dLbls"));
@@ -558,6 +559,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
     out.legendOverlay = On(legend, "overlay", false);
     out.legendLayout = ManualLayout(legend);
+    out.legendLook = LookOf(C(legend, "spPr"), colors);
     for (pugi::xml_node e = legend.first_child(); e; e = e.next_sibling())
       if (LocalNameOf(e) == "legendEntry" && On(e, "delete", false))
         out.hiddenEntries.push_back(static_cast<uint32_t>(std::max(0.0, Number(C(e, "idx"), "val", 0.0))));
