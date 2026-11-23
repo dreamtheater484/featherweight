@@ -522,7 +522,6 @@ std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_n
   c.colors.theme = &c.theme;
   c.colors.colorMap = &shownOn.colorMap;
   Levels lv = Defaults(c);
-  ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
   // Table cells take the master's other style, but not its colors: their text is tx1 unless the
   // table style says otherwise (PowerPoint 2021, probed 2026-11-20).
   if (const Master* m = MasterOf(owner); m && m->kind == PartKind::Master) ApplyListStyle(m->otherStyle, lv, c, *m);
