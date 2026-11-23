@@ -84,6 +84,7 @@ constexpr BuiltIn kBuiltIn[] = {
     {L"Courier", {L"Courier New", nullptr, nullptr}},
     {L"Helvetica", {L"Arial", nullptr, nullptr}},
     {L"Helvetica Neue", {L"Arial", nullptr, nullptr}},
+    {L"Myriad Pro", {L"Segoe UI", nullptr, nullptr}},  // PowerPoint's choice (cs-6476's PDF)
     {L"Times", {L"Times New Roman", nullptr, nullptr}},
     {L"Times Roman", {L"Times New Roman", nullptr, nullptr}},
 };
