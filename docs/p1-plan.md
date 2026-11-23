@@ -107,3 +107,15 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - p1-render and p1-model work through the cause list, biggest first: font fallback (sans faces drawn in Times New Roman), text 1–2 px off, texture backgrounds, `defaultTextStyle` bold/italic applied to placeholders, layout `clrMapOvr`, then charts, SmartArt and WordArt.
   - p1-corpus re-measures on the newest p1-int after each round of fixes.
   - The criterion is revisited, as S4 did, only if real fixes plateau well below 90 %.
+- **2026-11-23: corpus at 75.44 % on p1-int `0317ed79`.**
+  - 1,898 of 2,516 slides pass, after 67.01 % on `af87058b` (references unchanged). The public set is at 92/97.
+  - Per kind: briefings 77.1 %, charts 72.6 %, features 72.5 %, lectures 81.8 %, photos 64.8 %, school 78.0 %, shows 80.0 %, statistics 66.4 %, templates 86.7 %, training 60.0 %.
+  - Near misses: 15.9 % of the slides score 0.90–0.95, 6.4 % 0.80–0.90, 2.3 % below 0.80.
+- **2026-11-23: cross-check of the slide view (`slide-pages -Through app`) against fwtool's PDF, same decks, same commit.**
+  - 20 corpus decks (two per kind, 233 slides): 100 pass in the app, 163 through fwtool. 64 slides pass only through fwtool, 1 only in the app. Mean SSIM is 0.018 lower in the app.
+  - Public set: 88/97 in the app, 92/97 through fwtool.
+  - Largest gaps:
+    - `backgrounds.pptx` slide 7: a pattern fill drawn at a coarser pitch, 0.127 against 0.810.
+    - `backgrounds.pptx` slide 6, `shapes-groups.pptx` slide 1.
+    - Every slide of `cpb-presentatie` (−0.08 to −0.13).
+  - So the fwtool number overstates what the slide view shows.
