@@ -18,7 +18,7 @@ struct TabInfo {
 // The custom title bar: app mark, tabs, new-tab button and the caption buttons.
 class TitleBar {
  public:
-  enum class Part { None, Caption, Tab, TabClose, NewTab, Minimize, Maximize, Close };
+  enum class Part { None, Caption, Tab, TabClose, NewTab, Minimize, Maximize, Close, Quick, QuickList };
   struct Hit {
     Part part = Part::None;
     int index = -1;
@@ -29,6 +29,19 @@ class TitleBar {
   };
 
   TitleBar();
+  // Quick access (R1): Save, Undo and Redo after the app mark while an editor's ribbon shows; none
+  // otherwise. Set before Layout. Part::Quick's index is the button's.
+  struct QuickButton {
+    int cmd = 0;
+    wchar_t glyph = 0;
+    std::wstring tooltip;
+    bool enabled = true;
+    bool list = false;  // a ▾ beside it opens a list (Undo's actions): Part::QuickList
+  };
+  void SetQuickAccess(const std::vector<QuickButton>& buttons);
+  int QuickCommand(int index) const { return index >= 0 && index < quickCount_ ? quickCmd_[index] : 0; }
+  const D2D1_RECT_F& QuickRect(int index) const { return quick_[index].rc; }
+  int QuickCount() const { return quickCount_; }
   void Layout(const RECT& rc, float ui, int tabCount);
   void Draw(gfx::Canvas& c, const std::vector<TabInfo>& tabs, int active, bool windowActive, bool maximized);
   Hit HitTest(int x, int y) const;
@@ -57,6 +70,10 @@ class TitleBar {
   int tabCount_ = 0;
   float tabsLeft_ = 0, tabW_ = 0;
   Button min_, max_, close_, newTab_;
+  static constexpr int kQuickMax = 3;
+  Button quick_[kQuickMax], quickList_[kQuickMax];
+  int quickCmd_[kQuickMax] = {};
+  int quickCount_ = 0;
   bool newTabMenu_ = false, newTabOpen_ = false;
   ButtonSet buttons_;
   std::vector<Anim> tabHover_;

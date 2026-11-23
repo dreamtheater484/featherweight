@@ -48,6 +48,8 @@ constexpr AppCommand kAppCommands[] = {
     {CmdMakeDefault, L"Make Featherweight the default PDF app", L""},
     {CmdAbout, L"About Featherweight", L""},
     {CmdExit, L"Exit", L"Alt+F4"},
+    {CmdRibbonCollapse, L"Collapse the ribbon", L"Ctrl+F1"},
+    {CmdFilePage, L"File (new, open, save, print, options)", L""},
 };
 
 const AppCommand* FindAppCommand(int cmd) {
@@ -111,6 +113,11 @@ CommandState App::QueryCommand(int cmd) {
     case CmdToggleAutoUpdate: s.checked = settings_.autoUpdate; break;
     case CmdClearRecent: s.enabled = !settings_.recent.empty(); break;
     case CmdMakeDefault: s.visible = !fileassoc::IsDefault(); break;
+    case CmdRibbonCollapse:
+      s.visible = ribbonShown_;
+      if (ribbon_.Collapsed()) s.label = L"Show the whole ribbon";
+      break;
+    case CmdFilePage: s.visible = ribbonShown_; break;
     default: break;
   }
   return s;
@@ -132,10 +139,33 @@ std::vector<CommandEntry> App::SearchableCommands() {
   if (v && v->Ready()) ids = v->Commands();
   for (const AppCommand& c : kAppCommands)
     if (std::find(ids.begin(), ids.end(), c.cmd) == ids.end()) ids.push_back(c.cmd);
+  // The ribbon's commands with their places, "Home › Font", and the File page's (R1).
+  std::vector<std::pair<int, std::wstring>> places;
+  if (ribbonShown_) {
+    places = ribbon_.Commands();
+    const ui::FilePage::Model fm = CurrentFilePage();
+    for (int sec = 0; sec < ui::FilePage::kSectionCount; ++sec) {
+      const std::wstring where = std::wstring(L"File \u203A ") + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(sec));
+      if (fm.run[sec]) places.push_back({fm.run[sec], L"File"});
+      for (const auto& e : fm.entries[sec])
+        if (e.cmd && (e.cmd < CmdRecent || e.cmd >= CmdRecent + Settings::kMaxRecent)) places.push_back({e.cmd, where});
+    }
+  }
+  for (const auto& [cmd, where] : places)
+    if (std::find(ids.begin(), ids.end(), cmd) == ids.end()) ids.push_back(cmd);
   std::vector<CommandEntry> out;
   for (int id : ids) {
     CommandState s = QueryCommand(id);
-    if (s.visible && !s.label.empty()) out.push_back({id, s.label, s.shortcut, s.enabled, s.checked});
+    if (!s.visible || s.label.empty()) continue;
+    CommandEntry e{id, s.label, s.shortcut};
+    e.enabled = s.enabled;
+    e.checked = s.checked;
+    for (const auto& [cmd, where] : places)
+      if (cmd == id) {
+        e.where = where;
+        break;
+      }
+    out.push_back(std::move(e));
   }
   return out;
 }
@@ -217,7 +247,9 @@ void App::LayoutShell() {
     KeyFocusMoved();
   }
   panel_.Layout(RECT{0, top, rc.right, rc.bottom - statusH}, ui_);
-  commands_.Layout(RECT{0, titleH, rc.right, titleH + ToolbarHeight()}, rc, ui_);
+  // Over the toolbar, or the top of the ribbon (as high as the toolbar was).
+  const int barH = ribbonShown_ ? static_cast<int>(std::lround(48 * ui_)) : ToolbarHeight();
+  commands_.Layout(RECT{0, titleH, rc.right, titleH + barH}, rc, ui_);
 }
 
 void App::DrawShell() {
@@ -256,6 +288,7 @@ bool App::MoveKeyTo(KeyArea area, bool forward, bool resume) {
   }
   FocusBox(nullptr);
   toolbar_.Blur();
+  ribbon_.Blur();
   KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
   return true;
@@ -408,6 +441,7 @@ void App::DescribeShell(uia::Tree& t) {
         const KeyArea from = CurrentKeyArea();
         FocusBox(nullptr);
         toolbar_.Blur();
+        ribbon_.Blur();
         if (area != KeyArea::Panel) panel_.Blur();
         if (area != KeyArea::Status) status_.Blur();
         f();

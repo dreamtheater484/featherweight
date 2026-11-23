@@ -60,6 +60,7 @@ void Settings::LoadFrom(const std::wstring& path) {
   autoCorrect = ini_.GetBool(kGeneral, L"AutoCorrect", true);
   ruler = ini_.GetBool(kGeneral, L"Ruler", false);
   reviewer = ini_.Get(kGeneral, L"Reviewer");
+  ribbon = ini_.GetInt(kGeneral, L"Ribbon", -1);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
@@ -108,6 +109,7 @@ bool Settings::Save() {
   if (!autoCorrect || ini_.Has(kGeneral, L"AutoCorrect")) ini_.SetBool(kGeneral, L"AutoCorrect", autoCorrect);
   if (ruler || ini_.Has(kGeneral, L"Ruler")) ini_.SetBool(kGeneral, L"Ruler", ruler);
   if (!reviewer.empty() || ini_.Has(kGeneral, L"Reviewer")) ini_.Set(kGeneral, L"Reviewer", reviewer);
+  if (ribbon >= 0) ini_.SetInt(kGeneral, L"Ribbon", ribbon);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);

@@ -134,6 +134,12 @@ class Toolbar {
   int OverflowChoice(int id);
   static constexpr int kOverflowFirst = 0xC000;  // the menu's own ids, from here (never commands)
 
+  // The control for an item that isn't a plain button (a dropdown, a box, a split button, a color
+  // picker, or the tab's own), made in `slot` or brought up to date there; the ribbon shares it.
+  // A split button's main part calls `invoke(cmd)`.
+  static Control& ConfigureControl(std::unique_ptr<Control>& slot, ToolKind& slotKind, const ToolItem& item,
+                                   const std::function<void(int)>& invoke);
+
   TextBox& PageBox() { return pageBox_; }
   bool HitPageBox(int x, int y) const { return pageBox_.rc.right > 0 && gfx::Contains(pageBox_.rc, (float)x, (float)y); }
   int Height() const { return rc_.bottom - rc_.top; }
