@@ -311,6 +311,21 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
       // Underlined even when it keeps its text's color (govau workshop 3's references).
       if (link && props.underline == fw::slide::Underline::None)
         props.underline = fw::slide::Underline::Single;
+      // Symbol characters (U+F020 to U+F0FF) in the run's a:sym font, the rest in its own
+      // (letters-home's Wingdings ticks, U+F0FC, among "(SP)" in Calibri).
+      const auto symbolic = [](wchar_t c) { return c >= 0xF020 && c <= 0xF0FF; };
+      if (!props.symbol.empty() && std::any_of(t.begin(), t.end(), symbolic)) {
+        RunProps sym = props;
+        sym.latin = sym.eastAsian = sym.complexScript = props.symbol;
+        for (size_t i = 0; i < t.size();) {
+          const bool s = symbolic(t[i]);
+          size_t j = i;
+          while (j < t.size() && symbolic(t[j]) == s) ++j;
+          add(t.substr(i, j - i), s ? sym : props, link);
+          i = j;
+        }
+        continue;
+      }
       add(t, props, link);
     }
 
@@ -329,6 +344,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     if (pp.rtl && (a == Alignment::Start || a == Alignment::End)) a = a == Alignment::Start ? Alignment::End : Alignment::Start;
     f.rightToLeft = pp.rtl;
     f.alignment = box.wrap ? a : (pp.rtl ? Alignment::End : Alignment::Start);
+    // Spaces before a break or the paragraph's end don't count when centering (anyone-out-there's titles).
+    f.alignTrailingSpaces = getenv("FWOLDTRAIL") != nullptr;
     f.startIndent = pp.marginLeft;
     f.endIndent = pp.marginRight;
     // The first line never starts before the text area (marL 0 with a hanging indent: PowerPoint's PDFs).

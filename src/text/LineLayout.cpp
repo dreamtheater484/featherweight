@@ -937,7 +937,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
   const uint32_t withSpaces = t;
   while (t > a && Hangs(kind[t - 1])) --t;
   // Word counts the spaces before a paragraph mark or line break when centering or right-aligning.
-  const bool countTrailing = (fit.ending == LineEnd::ParagraphEnd || fit.ending == LineEnd::LineBreak) &&
+  const bool countTrailing = f.alignTrailingSpaces && (fit.ending == LineEnd::ParagraphEnd || fit.ending == LineEnd::LineBreak) &&
                              (f.alignment == Alignment::Center || f.alignment == Alignment::End);
   const uint32_t alignEnd = countTrailing ? withSpaces : t;
 
