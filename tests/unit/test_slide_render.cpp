@@ -292,6 +292,30 @@ TEST(SlideRender_PatternCellSpansWholePixels) {
   CHECK(apart8 > 40);
 }
 
+TEST(SlideRender_TurnedShapesPatternStaysUpright) {
+  // A pattern doesn't turn with its shape (PowerPoint's PDFs: upright cells on the page's grid):
+  // vertical stripes in a shape turned 90 degrees stay vertical.
+  auto deck = Modified(Slide1(
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"P\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm rot=\"5400000\">"
+      "<a:off x=\"1143000\" y=\"1143000\"/><a:ext cx=\"4572000\" cy=\"4572000\"/></a:xfrm><a:prstGeom prst=\"rect\"/>"
+      "<a:pattFill prst=\"dkVert\"><a:fgClr><a:srgbClr val=\"000000\"/></a:fgClr><a:bgClr><a:srgbClr val=\"FFFFFF\"/></a:bgClr>"
+      "</a:pattFill><a:ln><a:noFill/></a:ln></p:spPr></p:sp>"));
+  REQUIRE(deck != nullptr);
+  fw::text::Fonts fonts;
+  auto slide = SlideRender::Make(*deck, *deck->GetSlide(0), fonts);
+  auto bmp = Render(*slide, 1000, 750);
+  REQUIRE(bmp != nullptr);
+  // Inside the shape (90 to 450 pt, 125 to 625 pixels): along a row the stripes alternate, down a column not.
+  int across = 0, down = 0;
+  for (int i = 300; i < 400; ++i) {
+    const auto level = [&](int x, int y) { return static_cast<int>(Pixel(*bmp, x, y) & 0xFF); };
+    across = std::max(across, std::abs(level(i, 350) - level(i + 1, 350)));
+    down = std::max(down, std::abs(level(350, i) - level(350, i + 1)));
+  }
+  CHECK(across > 40);
+  CHECK(down <= 2);
+}
+
 TEST(SlideRender_ShapesOwnStyleBeatsTheLayoutsNoFill) {
   // The layout's title says noFill; the slide's title has an empty spPr and a p:style whose
   // fillRef is red: PowerPoint fills it red (poi customgeo deck).
