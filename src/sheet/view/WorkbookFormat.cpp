@@ -1355,11 +1355,11 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       };
       break;
     case CmdFontColor: colors(icon::FontColor, lastFontColor_, L"Automatic", false); break;
-    case CmdFillColor: colors(icon::Color, lastFill_, L"No color", true); break;
+    case CmdFillColor: colors(icon::FillBucket, lastFill_, L"No color", true); break;
     case CmdBordersBox:
       // The main part repeats the last choice.
       t.kind = ToolKind::SplitButton;
-      t.glyph = icon::Table;
+      t.glyph = icon::BordersBottom;
       t.width = 52;
       t.tooltip = std::wstring(L"Borders: ") + kBorderChoices[lastBorders_].name;
       for (const BorderChoice& b : kBorderChoices) t.choices.push_back(b.name);
@@ -1398,124 +1398,6 @@ ToolItem WorkbookView::FormatTool(int cmd) {
     }
   }
   return t;
-}
-
-void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
-  if (!Ready() || preview_ || ChartSheet()) return;
-  const Styles& st = book_->GetStyles();
-  const Xf& x = st.CellXf(ActiveStyle());
-  const NumLocale& loc = text_->Locale();
-  auto button = [&](int cmd, wchar_t glyph, int priority) {
-    CommandState q = QueryCommand(cmd);
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.checked = q.checked;
-    t.priority = priority;
-    return t;
-  };
-  auto toggle = [&](int cmd, wchar_t glyph, int priority) {
-    ToolItem t = button(cmd, glyph, priority);
-    t.toggle = true;
-    return t;
-  };
-  auto tool = [&](int cmd, int priority) {
-    ToolItem t = FormatTool(cmd);
-    t.priority = priority;
-    return t;
-  };
-  // Font and size.
-  ToolItem font = tool(CmdFontBox, 6);
-  font.sepBefore = true;
-  m.left.push_back(font);
-  m.left.push_back(tool(CmdSizeBox, 6));
-  m.left.push_back(toggle(CmdBold, icon::Bold, 9));
-  m.left.push_back(toggle(CmdItalic, icon::Italic, 9));
-  m.left.push_back(toggle(CmdUnderline, icon::Underline, 9));
-  m.left.push_back(tool(CmdFontColor, 5));
-  m.left.push_back(tool(CmdFillColor, 5));
-  m.left.push_back(tool(CmdBordersBox, 4));
-  // Alignment and merging.
-  ToolItem left = toggle(CmdAlignLeft, icon::AlignLeft, 5);
-  left.sepBefore = true;
-  m.left.push_back(left);
-  m.left.push_back(toggle(CmdAlignCenter, icon::AlignCenter, 5));
-  m.left.push_back(toggle(CmdAlignRight, icon::AlignRight, 5));
-  ToolItem merge;
-  merge.kind = ToolKind::Dropdown;
-  merge.cmd = CmdMergeBox;
-  merge.width = 84;
-  merge.priority = 3;
-  merge.text = merge.menuLabel = L"Merge";
-  merge.fitText = true;
-  merge.tooltip = L"Merge and center, merge across, merge or unmerge cells";
-  merge.choices = {L"Merge and center", L"Merge across", L"Merge cells", L"Unmerge cells"};
-  merge.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 4) MergeCells(v.index);
-  };
-  m.left.push_back(merge);
-  // Cell styles and the format painter.
-  m.left.push_back(tool(CmdCellStyles, 2));
-  m.left.push_back(toggle(CmdFormatPainter, icon::Brush, 3));
-  // Sort and filter.
-  ToolItem data;
-  data.kind = ToolKind::Dropdown;
-  data.cmd = CmdDataBox;
-  data.width = 72;
-  data.priority = 2;
-  data.text = data.menuLabel = L"Data";
-  data.fitText = true;
-  data.tooltip = L"Sort, filter and remove duplicates";
-  data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
-                  L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",
-                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)",
-                  L"PivotTable…", L"Refresh PivotTable (Alt+F5)", L"Refresh all PivotTables"};
-  data.onChange = [this](const ToolValue& v) {
-    static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending,   CmdDataBox,       CmdFilter,
-                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable,
-                                    CmdPivotTable, CmdPivotRefresh, CmdPivotRefreshAll};
-    if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
-    else if (v.index >= 5 && v.index < 9) RulesCommand(kCmds[v.index]);
-    else if (v.index >= 9 && v.index < 12) PivotsCommand(kCmds[v.index]);  // s4-pivot
-  };
-  m.left.push_back(data);
-  // Conditional formatting (WorkbookData.cpp).
-  ToolItem rules;
-  rules.kind = ToolKind::Dropdown;
-  rules.cmd = CmdCondFormatBox;
-  rules.width = 104;
-  rules.priority = 3;
-  rules.text = L"Conditional";
-  rules.fitText = true;
-  rules.tooltip = L"Conditional formatting";
-  rules.choices = {L"New rule…", L"Manage rules…", L"Clear rules from selected cells", L"Clear rules from entire sheet"};
-  rules.onChange = [this](const ToolValue& v) {
-    static constexpr int kCmds[] = {CmdCondFormat, CmdCfManage, CmdCfClearSelection, CmdCfClearSheet};
-    if (v.index >= 0 && v.index < 4) RulesCommand(kCmds[v.index]);
-  };
-  m.left.push_back(rules);
-  AddChartTools(m);  // s3-charts: Insert Chart
-  AddShapeTools(m);  // pictures and shapes (WorkbookShapes.cpp)
-  // Number formats, with the decimals and the panel's Number page.
-  ToolItem number;
-  number.kind = ToolKind::Dropdown;
-  number.cmd = CmdNumberFormatBox;
-  number.width = 104;
-  number.priority = 4;
-  number.maxRows = 16;
-  number.sepBefore = true;
-  number.tooltip = L"Number format";
-  number.text = kCategories[static_cast<int>(FormatChoiceOf(CodeOf(x.numFmt), loc).category)];
-  number.choices = List(kNumberChoices, std::size(kNumberChoices));
-  number.onChange = [this](const ToolValue& v) {
-    if (v.index < 0) return;
-    if (v.index == 11 || v.index == 12) ChangeDecimals(v.index == 11 ? 1 : -1);
-    else if (v.index == 13) ShowFormatPanel(FormatPanel::kNumber);
-    else ApplyNumberCode(NumberChoiceCode(v.index, text_->Locale()));
-  };
-  m.left.push_back(number);
 }
 
 // ---------------------------------------------------------------------------

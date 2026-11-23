@@ -152,6 +152,7 @@ if(FW_BUILD_TESTS)
   endfunction()
   if(FW_TEST_SCREENS)
     fw_ribbon_test(ribbon_screens screens)
+    fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
 endif()
 
