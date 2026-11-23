@@ -1412,11 +1412,10 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   p.bar = bar;
   p.reversed = ch.category.reversed;
   // The margin at the sides stops growing with the text past 10 points (PowerPoint's PDFs: 4.6
-  // points with 18-point text), but on a legend's side (8.3 points there).
+  // points with 18-point text), on a legend's side too (poi line chart: 15.6 points from the plot
+  // to its legend's key).
   const float margin = kMargin * ts, side = std::min(margin, kMargin * 10), maxSide = (r.right - r.left) * 0.4f;
-  const bool beside = !ch.legendOverlay && (ch.legend == LegendPos::Right || ch.legend == LegendPos::Left);
-  const float leftSide = beside && ch.legend == LegendPos::Left ? margin : side;
-  const float rightSide = beside && ch.legend == LegendPos::Right ? margin : side;
+  const float leftSide = side, rightSide = side;
   // Value labels up the right side when they're at the axes' high end (c:tickLblPos high).
   const bool high = !bar && !scatter && ch.value.labelsHigh;
   const float sideW = bar ? cw : high ? 0 : vw;  // labels up the left side

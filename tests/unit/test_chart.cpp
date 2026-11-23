@@ -280,6 +280,34 @@ TEST(Chart_PlacedPlotKeepsItsLabelsInsideTheChart) {
   }
 }
 
+TEST(Chart_PlotKeepsTheSideMarginBesideALegend) {
+  // With 18-point text and the legend at the right, the plot ends 11.2 + 4.6 points before the
+  // legend's keys, the margin at the sides not growing past 10-point text on the legend's side
+  // either (PowerPoint's PDF of the poi line chart: 15.6 points).
+  std::string xml = PlacedLineChart("<c:spPr><a:ln><a:solidFill><a:srgbClr val=\"0000FF\"/></a:solidFill></a:ln></c:spPr>", 0, 1);
+  const size_t layout = xml.find("<c:layout>"), end = xml.find("</c:layout>") + 11;
+  xml.erase(layout, end - layout);
+  xml.replace(xml.find("</c:plotArea></c:chart>"), 23,
+              "</c:plotArea><c:legend><c:legendPos val=\"r\"/><c:overlay val=\"0\"/></c:legend></c:chart>"
+              "<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr></a:p></c:txPr>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {480, 320}, Colors(), L"Calibri");
+  float plotRight = -1, keyLeft = -1;
+  for (const auto& m : art.marks) {
+    if (m.line.fill.kind != draw::Fill::Kind::Solid) continue;
+    draw::Rect b = m.path.Bounds();
+    b = {b.left * m.transform.m11 + m.transform.dx, b.top + m.transform.dy, b.right * m.transform.m11 + m.transform.dx,
+         b.bottom + m.transform.dy};
+    if (b.bottom - b.top > 0.01f) continue;  // horizontal strokes only
+    if (Same(m.line.fill.color, draw::Rgb(0x0000FF)) && b.right - b.left < 25) keyLeft = b.left;
+    else if (b.right - b.left > 100) plotRight = std::max(plotRight, b.right);
+  }
+  REQUIRE(plotRight > 0 && keyLeft > 0);
+  CHECK_NEAR(keyLeft - plotRight, 11.2f + 4.6f, 0.05);
+}
+
 TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
   // A legend at the side the chart places (c:manualLayout) fills its box: the keys 7.13 points in
   // from its left, the entries spread evenly down it, its border as its c:spPr says (PowerPoint's
