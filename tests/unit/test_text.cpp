@@ -460,6 +460,15 @@ TEST(Text_CenterAndEnd) {
   // Spaces before the paragraph mark count when right-aligning, as in Word.
   auto spaces = Lay(L"abcd  ", s, 100, f);
   CHECK_NEAR(spaces[0].contentLeft, 100 - 6 * a, 0.01);
+  // PowerPoint leaves them out (alignTrailingSpaces false), before a line break too.
+  f.alignTrailingSpaces = false;
+  auto slide = Lay(L"abcd  ", s, 100, f);
+  CHECK_NEAR(slide[0].contentLeft, 100 - 4 * a, 0.01);
+  f.alignment = Alignment::Center;
+  auto broken = Lay(L"abcd \x000B" L"ab", s, 100, f);
+  CHECK(broken.size() == 2);
+  if (broken.size() == 2) CHECK_NEAR(broken[0].contentLeft, (100 - 4 * a) / 2, 0.01);
+  f.alignTrailingSpaces = true;
   // Indents.
   f.alignment = Alignment::Start;
   f.startIndent = 10;

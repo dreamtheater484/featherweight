@@ -122,6 +122,9 @@ struct ParagraphFormat {
   float defaultTabStop = 36;  // w:defaultTabStop; default stops start after the last custom stop
   HyphenationSettings hyphenation;
   bool expandLineBreaks = true;  // justify lines ending in a line break (false: w:doNotExpandShiftReturn)
+  // Spaces before a paragraph mark or line break count when centering or right-aligning, as in
+  // Word; PowerPoint leaves them out (false).
+  bool alignTrailingSpaces = true;
   // A justified line may shrink its spaces to keep a word that overflows it, as Word 2013 and
   // later do (compatibility mode 15); earlier modes don't.
   bool squeezeSpaces = true;
