@@ -714,7 +714,9 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 - [ ] PowerPoint's read-back of the torture's edited decks (`scripts\timing-readback-check.ps1 -Decks build\deck-torture\saved`): ___ of ___ decks where `fwtool timing` prints the same for Featherweight's file and PowerPoint's save of it, and PowerPoint's object model has the same transitions, effects, triggers, durations and delays (target all). Comments: PowerPoint reads the same threads, replies and authors (`scripts\powerpoint-readback.ps1`): ___ of ___.
 - [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): 2,344 of 2,577 slides at SSIM ≥ 0.95, 90.96 % (target ≥ 85 %). That's 154 decks on 4.0's final head (6fe39e23, 2026-11-24):
   - slide-pages drew 152 of them, 2,285 of 2,517 slides;
-  - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60. `.odp` corpus (`-Folders odp`): ___ of ___, ___ % (target ≥ 80 %). Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
+  - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60.
+
+  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn. Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
 - [ ] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). That's `scripts\picture-export-check.ps1` on the public set: 18 decks, every slide exported as PNG, 2026-11-24.
   - All 95 are at ≥ 0.95.
   - The six below 0.99 are bullets.pptx slide 3, one in shapes-groups.pptx, and text-autofit.pptx slides 1 to 4 (worst 0.954, its smallest text).
