@@ -318,6 +318,8 @@ bool MediaPlayer::Playing() const {
   return v.wanted && !v.notify->Failed() && !v.engine->IsEnded();
 }
 
+bool MediaPlayer::Shown() const { return impl_->started && !impl_->engine->IsEnded(); }
+
 bool MediaPlayer::IsVideo() const { return impl_->video; }
 
 ID2D1Bitmap1* MediaPlayer::Frame(ID2D1DeviceContext* dc, bool* changed) {

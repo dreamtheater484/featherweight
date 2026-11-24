@@ -601,4 +601,9 @@ enum Cmd : int {
   CmdUsePresenterView,      // Slide Show > Use Presenter View: F5 opens it on another monitor (on by default)
   CmdInsertVideo,           // Insert > Video: a video file, embedded, with its first frame as the poster
   CmdInsertAudio,           // Insert > Audio: an audio file, embedded, shown as a speaker
+  CmdMediaVolume,           // Playback > Volume ▾ (Low, Medium, High, Mute)
+  CmdMediaLoop,             // Playback > Loop until Stopped
+  CmdMediaHide,             // Playback > Hide While Not Playing (audio: Hide During Show)
+  CmdMediaFullScreen,       // Playback > Play Full Screen (video)
+  CmdMediaAcrossSlides,     // Playback > Play Across Slides (audio)
 };

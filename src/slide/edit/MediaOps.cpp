@@ -164,7 +164,72 @@ bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durati
   return static_cast<bool>(Put(list, WithNs(toggle)));
 }
 
+// The slide's p:video or p:audio node for shape `spid` (under the timing root), or null.
+pugi::xml_node MediaNodeOf(pugi::xml_node sld, uint32_t spid) {
+  pugi::xml_node root = P(P(P(P(sld, "timing"), "tnLst"), "par"), "cTn");
+  for (pugi::xml_node c = P(root, "childTnLst").first_child(); c; c = c.next_sibling()) {
+    const std::string_view k = LocalNameOf(c);
+    if (k != "video" && k != "audio") continue;
+    pugi::xml_node sp = P(P(P(c, "cMediaNode"), "tgtEl"), "spTgt");
+    if (sp && Number(sp, "spid", 0) == spid) return c;
+  }
+  return {};
+}
+
+// An attribute set to `value`, or gone when `value` is empty.
+void SetOrRemove(pugi::xml_node n, const char* name, const std::string& value) {
+  if (!n) return;
+  if (value.empty()) {
+    n.remove_attribute(name);
+    return;
+  }
+  pugi::xml_attribute a = n.attribute(name);
+  if (!a) a = n.append_attribute(name);
+  a.set_value(value.c_str());
+}
+
 }  // namespace
+
+bool Editor::GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, bool* video) const {
+  const Impl& m = *impl_;
+  const std::string part = m.SlidePart(slide);
+  pugi::xml_node node = part.empty() ? pugi::xml_node() : MediaNodeOf(m.Root(part), id);
+  if (!node || !out) return false;
+  pugi::xml_node c = P(node, "cMediaNode");
+  MediaPlayback p;
+  p.volume = std::clamp(Number(c, "vol", 50000) / 100000, 0.0, 1.0);  // the schema's default is 50 %
+  auto on = [](pugi::xml_node n, const char* name, bool def) {
+    const std::string_view v = n.attribute(name).value();
+    return v.empty() ? def : v == "1" || v == "true";
+  };
+  p.mute = on(c, "mute", false);
+  p.hideWhenStopped = !on(c, "showWhenStopped", true);
+  p.acrossSlides = Number(c, "numSld", 1) > 1;
+  p.loop = std::string_view(P(c, "cTn").attribute("repeatCount").value()) == "indefinite";
+  p.fullScreen = on(node, "fullScrn", false);
+  *out = p;
+  if (video) *video = LocalNameOf(node) == "video";
+  return true;
+}
+
+Result Editor::SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p) {
+  Call call(*this, u"Playback");
+  Impl& m = *impl_;
+  const std::string part = m.SlidePart(slide);
+  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (!MediaNodeOf(m.Root(part), id)) return call.End(Result::Fail(u"That isn't a video or audio the slide plays."));
+  pugi::xml_node node = MediaNodeOf(m.Edit(part), id);
+  pugi::xml_node c = P(node, "cMediaNode");
+  const bool video = LocalNameOf(node) == "video";
+  // As PowerPoint writes them: what's at its default is left out (vol always written).
+  SetOrRemove(c, "vol", std::to_string(std::lround(std::clamp(p.volume, 0.0, 1.0) * 100000)));
+  SetOrRemove(c, "mute", p.mute ? "1" : "");
+  SetOrRemove(c, "numSld", !video && p.acrossSlides ? "999" : "");
+  SetOrRemove(c, "showWhenStopped", p.hideWhenStopped ? "0" : "");
+  SetOrRemove(P(c, "cTn"), "repeatCount", p.loop ? "indefinite" : "");
+  SetOrRemove(node, "fullScrn", video && p.fullScreen ? "1" : "");
+  return call.End(Result{});
+}
 
 Result Editor::InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id) {
   Call call(*this, media.video ? u"Insert Video" : u"Insert Audio");

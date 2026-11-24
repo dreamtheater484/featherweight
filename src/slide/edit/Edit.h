@@ -254,6 +254,18 @@ struct MediaInsert {
   double durationMs = 0;        // its length; 0 when unknown
 };
 
+// A video's or audio's playback settings (the Playback tab), as PowerPoint keeps them on its media node
+// in the slide's timing (p:video or p:audio). Start (In Click Sequence, Automatically) is the play
+// step's timing: SetAnimationTiming (TimingOps, p3-anim).
+struct MediaPlayback {
+  double volume = 0.8;          // cMediaNode vol, 0..1 (PowerPoint inserts at 80 %)
+  bool mute = false;
+  bool loop = false;            // Loop until Stopped: the node's repeatCount="indefinite"
+  bool hideWhenStopped = false; // Hide While Not Playing: showWhenStopped="0"
+  bool fullScreen = false;      // Play Full Screen (video): fullScrn="1"
+  bool acrossSlides = false;    // Play Across Slides (audio): numSld="999"
+};
+
 class Editor {
  public:
   explicit Editor(Presentation& deck);
@@ -340,6 +352,10 @@ class Editor {
   // ("In Click Sequence"), its media node (volume 80 %) and a click on it toggling pause. Refused for
   // an extension PowerPoint doesn't insert, or a poster that isn't PNG or JPEG.
   Result InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id = nullptr);
+  // A media shape's playback settings; false (Get) or refused (Set) when the slide's timing has no
+  // media node for it. `video` (Get): a p:video node, else p:audio.
+  bool GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, bool* video = nullptr) const;
+  Result SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p);
   // A table of `rows` by `columns` with PowerPoint's default style, as Insert > Table makes it.
   Result InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id = nullptr);
   // Deleted, with what names them: animations of them, connections to them, relationships only

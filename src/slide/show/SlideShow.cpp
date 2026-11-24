@@ -278,6 +278,8 @@ class Show final : public anim::FrameSource, private PresenterHost {
     std::unique_ptr<MediaPlayer> player;
     ID2D1Bitmap1* frame = nullptr;  // its newest frame (null: the poster shows)
     float crop[4] = {0, 0, 0, 0};   // the picture's a:srcRect (left, top, right, bottom): the video's too
+    bool hideWhenStopped = false;   // Hide While Not Playing: its poster is hidden (Timing), the video shown while it plays
+    bool fullScreen = false;        // Play Full Screen: the video over the whole slide while it plays
   };
   std::vector<Media> media_;
   std::string mediaReport_;  // --show-media-report: each video's line
@@ -1429,16 +1431,21 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
   };
   if (!resolve(embed) && !resolve(link)) return nullptr;
   MediaPlayer::Settings settings;
+  bool hide = false, full = false;
   for (const MediaNode& n : cur_->timing.media)
     if (n.spid == spid) {
       settings.volume = n.volume;
       settings.mute = n.mute;
       settings.loop = n.loop;
+      hide = !n.showWhenStopped;
+      full = n.fullScreen;
     }
   std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
   if (!player) return nullptr;
   Media m;
   m.spid = spid;
+  m.hideWhenStopped = hide;
+  m.fullScreen = full && video;
   // The poster's crop crops the video too, as in PowerPoint (in 1/1000 %).
   for (pugi::xml_node fill : sh->node.children()) {
     if (pkg::LocalNameOf(fill) != "blipFill") continue;
@@ -1514,13 +1521,25 @@ void Show::DrawVideos() {
   const M toPx = SlideToPixels();
   for (const Media& m : media_) {
     if (!m.frame || m.item >= items.size()) continue;
-    if (m.item < cur_->targets.size()) {  // hidden by its animations: not shown
+    const bool shown = m.player->Shown();
+    if (m.hideWhenStopped) {
+      if (!shown) continue;  // its poster is hidden too
+    } else if (m.item < cur_->targets.size()) {  // hidden by its animations: not shown
       const int whole = cur_->targets[m.item].whole;
       if (whole >= 0 && !cur_->animator.PoseOf(cur_->sprites[static_cast<size_t>(whole)].key).visible) continue;
     }
     const draw::Rect& b = items[m.item].bounds;
     D2D1_POINT_2F a = toPx.TransformPoint({b.left, b.top}), c = toPx.TransformPoint({b.right, b.bottom});
     const D2D1_SIZE_U px = m.frame->GetPixelSize();
+    if (m.fullScreen && shown && px.width && px.height) {
+      // The whole slide, black around the video's shape.
+      ComPtr<ID2D1SolidColorBrush> black;
+      dc_->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &black);
+      if (black) dc_->FillRectangle(D2D1::RectF(0, 0, slideW_, slideH_), black.Get());
+      const float s = std::min(slideW_ / px.width, slideH_ / px.height);
+      a = {(slideW_ - px.width * s) / 2, (slideH_ - px.height * s) / 2};
+      c = {a.x + px.width * s, a.y + px.height * s};
+    }
     const float l = std::max(0.f, m.crop[0]), t = std::max(0.f, m.crop[1]);
     const float r = std::max(l + 0.01f, 1 - std::max(0.f, m.crop[2])), bt = std::max(t + 0.01f, 1 - std::max(0.f, m.crop[3]));
     const D2D1_RECT_F src = D2D1::RectF(l * px.width, t * px.height, r * px.width, bt * px.height);

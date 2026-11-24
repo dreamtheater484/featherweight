@@ -812,6 +812,14 @@ Timing ParseTiming(pugi::xml_node timing) {
   };
   visit(t.main);
   for (const Sequence& s : t.triggers) visit(s);
+  // Hide While Not Playing (P3): the poster waits hidden; the show draws the video while it plays.
+  for (const MediaNode& m : t.media)
+    if (!m.showWhenStopped) {
+      TargetKey k;
+      k.spid = m.spid;
+      AddUnique(t.targets, k);
+      AddUnique(t.initiallyHidden, k);
+    }
   if (pugi::xml_node bld = ChildP(timing, "bldLst")) {
     for (pugi::xml_node p = bld.first_child(); p; p = p.next_sibling()) {
       if (!IsP(p, "bldP")) continue;

@@ -23,6 +23,10 @@ namespace gfx {
 class Canvas;
 }
 
+namespace fw::slide::edit {
+struct MediaPlayback;
+}
+
 namespace fw::slide::view {
 
 class Deck;
@@ -98,6 +102,10 @@ class ObjectTool {
   uint32_t TakeInserted();
   bool IsPicture(uint32_t id);
   bool IsMedia(uint32_t id);
+  // P3: the one selected video's or audio's playback settings (the Playback tab); false when the
+  // selection isn't one media shape the slide plays. Set: one undo step.
+  bool SelectedPlayback(fw::slide::edit::MediaPlayback* p, bool* video);
+  bool SetSelectedPlayback(const fw::slide::edit::MediaPlayback& p);
   void ContextMenu(HMENU menu, float x, float y);
   // A table's items (insert and delete rows and columns, merge, split) when the selected object is
   // a table: the view adds them after text editing's own menu in a cell.

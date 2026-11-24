@@ -43,6 +43,8 @@ class MediaPlayer {
   void Stop();
   // Playing: started, not paused, not ended (a video then needs frames).
   bool Playing() const;
+  // Started and not ended (paused too): what Hide While Not Playing and Play Full Screen show.
+  bool Shown() const;
   bool IsVideo() const;
   // A video's newest frame into a bitmap of the shared device, before the show's BeginDraw. Null
   // before its first frame (the poster shows). `changed`: a new frame since the last call.

@@ -314,6 +314,11 @@ constexpr NamedCommand kOther[] = {
     {CmdInsertPicture, L"Insert pictures", L""},
     {CmdInsertVideo, L"Insert video", L""},
     {CmdInsertAudio, L"Insert audio", L""},
+    {CmdMediaVolume, L"Volume", L""},
+    {CmdMediaLoop, L"Loop until stopped", L""},
+    {CmdMediaHide, L"Hide while not playing", L""},
+    {CmdMediaFullScreen, L"Play full screen", L""},
+    {CmdMediaAcrossSlides, L"Play across slides", L""},
     {CmdInsertTextBox, L"Insert a text box", L""},
     {CmdInsertTable, L"Insert a table", L""},
     {CmdInsertChart, L"Insert a chart", L""},
@@ -1950,6 +1955,23 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
       s.enabled = cells && (cmd == CmdTableSplitCell || r0 != r1 || c0 != c1);
       break;
     }
+    case CmdMediaVolume:
+    case CmdMediaLoop:
+    case CmdMediaHide:
+    case CmdMediaFullScreen:
+    case CmdMediaAcrossSlides: {
+#if FW_SLIDE_EDIT
+      fw::slide::edit::MediaPlayback p;
+      bool video = false;
+      const bool have = editable && SelectedPlayback(&p, &video);
+      s.enabled = have && (cmd != CmdMediaFullScreen || video) && (cmd != CmdMediaAcrossSlides || !video);
+      s.checked = have && (cmd == CmdMediaLoop ? p.loop
+                           : cmd == CmdMediaHide ? p.hideWhenStopped
+                           : cmd == CmdMediaFullScreen ? p.fullScreen
+                           : cmd == CmdMediaAcrossSlides && p.acrossSlides);
+#endif
+      break;
+    }
     case CmdArrangeMenu:
     case CmdInsertShape:
     case CmdInsertTextBox:
@@ -2063,6 +2085,21 @@ bool ObjectTool::Execute(int cmd) {
       const draw::Size s = host_.deck()->SlideSize();
       return InsertPictures(files, {s.width / 2, s.height / 2}, true);
     }
+#if FW_SLIDE_EDIT
+    case CmdMediaLoop:
+    case CmdMediaHide:
+    case CmdMediaFullScreen:
+    case CmdMediaAcrossSlides: {
+      fw::slide::edit::MediaPlayback p;
+      if (!SelectedPlayback(&p, nullptr)) return false;
+      bool& flag = cmd == CmdMediaLoop ? p.loop
+                   : cmd == CmdMediaHide ? p.hideWhenStopped
+                   : cmd == CmdMediaFullScreen ? p.fullScreen
+                   : p.acrossSlides;
+      flag = !flag;
+      return SetSelectedPlayback(p);
+    }
+#endif
     case CmdInsertVideo:
     case CmdInsertAudio: {
       if (!Editable()) return false;
@@ -2234,6 +2271,35 @@ bool ObjectTool::IsPicture(uint32_t id) {
 bool ObjectTool::IsMedia(uint32_t id) {
   const ob::ObjectInfo* o = Map().Find(id);
   return o && o->shape && o->shape->media;
+}
+
+bool ObjectTool::SelectedPlayback(fw::slide::edit::MediaPlayback* p, bool* video) {
+#if FW_SLIDE_EDIT
+  Map();
+  if (selection_.size() != 1 || textEditing_ || !IsMedia(selection_[0])) return false;
+  Deck* deck = host_.deck();
+  return deck && deck->Editor() && deck->Editor()->GetMediaPlayback(host_.current(), selection_[0], p, video);
+#else
+  (void)p;
+  (void)video;
+  return false;
+#endif
+}
+
+bool ObjectTool::SetSelectedPlayback(const fw::slide::edit::MediaPlayback& p) {
+#if FW_SLIDE_EDIT
+  if (!Editable() || selection_.size() != 1) return false;
+  const fw::slide::edit::Result res = host_.deck()->Editor()->SetMediaPlayback(host_.current(), selection_[0], p);
+  if (!res) {
+    Refused(W(res.message));
+    return false;
+  }
+  Edited();
+  return true;
+#else
+  (void)p;
+  return false;
+#endif
 }
 
 bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {

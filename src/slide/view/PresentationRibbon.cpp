@@ -12,6 +12,7 @@
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Geometry.h"
+#include "slide/edit/Edit.h"
 #include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
@@ -166,7 +167,8 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     t.cmd = cmd;
     t.enabled = q.enabled;
     t.checked = q.checked;
-    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide || cmd == CmdUsePresenterView;
+    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide || cmd == CmdUsePresenterView ||
+               (cmd >= CmdMediaLoop && cmd <= CmdMediaAcrossSlides);
     t.dropdown = !MenuOf(cmd).empty();
   }
   if (glyph) t.glyph = glyph;
@@ -446,6 +448,29 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Size");
     add(CmdPictureCrop, 0, S::Large, L"Crop", L"V");
   }
+  if (kinds.videos + kinds.audios == 1) {  // P3: one video or audio: its playback settings
+    const bool video = kinds.videos == 1;
+    b.Tab(L"Playback", L"JN", true);
+    b.Group(video ? L"Video Options" : L"Audio Options");
+    RibbonItem& volume = add(CmdMediaVolume, L'\xE767', S::Large, L"Volume", L"V");
+    volume.tool.dropdown = true;
+    volume.tool.choices = {L"Low", L"Medium", L"High", L"Mute"};
+    fw::slide::edit::MediaPlayback set;
+    if (Objects().SelectedPlayback(&set, nullptr))
+      volume.tool.choice = set.mute ? 3 : set.volume < 0.375 ? 0 : set.volume < 0.75 ? 1 : 2;
+    volume.tool.onChange = [this](const ToolValue& v) {
+      fw::slide::edit::MediaPlayback p;
+      if (v.index < 0 || v.index > 3 || !Objects().SelectedPlayback(&p, nullptr)) return;
+      static const double kLevels[] = {0.25, 0.5, 1.0};  // Low, Medium, High
+      p.mute = v.index == 3;
+      if (v.index < 3) p.volume = kLevels[v.index];
+      Objects().SetSelectedPlayback(p);
+    };
+    add(CmdMediaLoop, 0, S::Medium, L"Loop until Stopped", L"L", S::Medium);
+    add(CmdMediaHide, 0, S::Medium, video ? L"Hide While Not Playing" : L"Hide During Show", L"H", S::Medium);
+    if (video) add(CmdMediaFullScreen, 0, S::Medium, L"Play Full Screen", L"F", S::Medium);
+    else add(CmdMediaAcrossSlides, 0, S::Medium, L"Play Across Slides", L"A", S::Medium);
+  }
   if (kinds.tables == 1) {
     b.Tab(L"Table Layout", L"JL", true);
     b.Group(L"Rows & Columns");
@@ -485,7 +510,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.
   if (const uint32_t id = Objects().TakeInserted()) {
     if (Objects().IsMedia(id)) {
-      if (kinds.videos > 0) m.show = L"Video Format";  // P3 (audio: its Playback tab, with the playback settings)
+      m.show = kinds.videos > 0 ? L"Video Format" : L"Playback";  // P3, as PowerPoint
     } else {
       m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
     }
