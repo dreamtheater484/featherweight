@@ -425,7 +425,7 @@ class Writer {
       }
     }
     if (path.empty()) return {};
-    const bool noFill = !Bool(s, 0x017F, 4, true);  // fFillOK
+    const bool noFill = !Bool(s, 0x017F, 0, true);  // fFillOK (bit 4 is f3DOK: extrusionOk)
     return "<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l=\"l\" t=\"t\" r=\"r\" b=\"b\"/><a:pathLst><a:path w=\"" + Num(w) +
            "\" h=\"" + Num(h) + "\"" + (noFill ? " fill=\"none\"" : "") + ">" + path + "</a:path></a:pathLst></a:custGeom>";
   }
