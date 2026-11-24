@@ -4,6 +4,8 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 
 S4 adds the workbook flows (plan §7, the S4 row; s2-plan's "total a column" and "fix a value in a received workbook"): see [Workbooks (S4)](#workbooks-s4).
 
+R1 replaces the editors' toolbars with the ribbon and counts the Word, workbook and P2 presentation flows again: see [The ribbon (R1)](#the-ribbon-r1). The Word and workbook parts below keep their counts from before R1.
+
 P3 adds the presentation flows (docs/p3-plan.md: presenting, transitions and animations, comments, passwords, pictures, templates, .ppt and .odp): see [Presentations (P3)](#presentations-p3).
 
 `tests/friction-checks.ps1` runs the flows that can be scripted through Featherweight's `--script` mode, off-screen. It checks what the saved file says and counts the steps against this review's budget (see [Scripted checks](#scripted-checks)).
@@ -44,10 +46,10 @@ P3 adds the presentation flows (docs/p3-plan.md: presenting, transitions and ani
 | F1 | Letter and CV: choosing a style in the style box, then typing | Typing goes on in the page | Focus stays in the box: typing goes nowhere until a click in the page or Esc. **+1 every time** | widgets (the toolbar's dropdown) | Fixed (claude/d3-tables 75c11ed): after a choice from a toolbar list, typing goes to the page |
 | F2 | CV: Enter after a heading or the title | The next paragraph is Normal (the style's `w:next`) | It stays Heading 1 / Title. **+1 K per heading** (Ctrl+Shift+N) | widgets (Enter in the editor) | Fixed (claude/d3-tables 75c11ed): Enter at a paragraph's end takes the style's w:next |
 | F3 | CV: Enter on an empty list item | Ends the list: the item becomes plain text | Stays a list item, and so does what follows. **+1 per list** | widgets, with d2-format (lists) | Fixed (claude/d3-tables f31d826): Enter on an empty item ends the list (one undo step) |
-| F4 | Letter and CV: a style without a shortcut (No Spacing, Title, Subtitle, Quote) | 1 C in the Home tab's gallery | 2 C: open the style box, choose | Accepted: one toolbar row, no ribbon (plan §5.2). Normal and Heading 1–3 have Word's keys in both. | By design |
+| F4 | Letter and CV: a style without a shortcut (No Spacing, Title, Subtitle, Quote) | 1 C in the Home tab's gallery | 2 C: open the style box, choose | Accepted: one toolbar row, no ribbon (plan §5.2). Normal and Heading 1–3 have Word's keys in both. | Partly fixed by R1: No Spacing is 1 C in Home's Styles gallery. Title, Subtitle and Quote are still 2 C at 1366 px (RF7) |
 | F6 | Table: a row in the middle | 1 C on the ⊕ at the row's edge | 3 C: right-click, Insert, Rows Below (as Word's own menu) | Accepted: the review's target for this step was at most 3 C. A handle is worth a look once layout gives cell boxes. | Accepted |
 | F7 | Table: widening a column | 1 drag of its border | Dragging a border selects text. Today: right-click, Properties, the Column width box, a number, Enter: **3 C + 1 K instead of 1 drag** | widgets (d3-tables), waiting on d1-model's `Layout::Cells(page)` | Fixed (claude/d3-tables 7abe49e): column borders and row bottoms drag on the page |
-| F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Fixed with F13 (claude/d5-friction): Insert now goes after change case, the indents, ¶, the navigation pane, the table grid, Layout, the format painter, Review and Highlight |
+| F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Fixed with F13 (claude/d5-friction): Insert now goes after change case, the indents, ¶, the navigation pane, the table grid, Layout, the format painter, Review and Highlight. With R1, Date & Time is on the Insert tab at every width: shown at 1366, 1024 and 800 px |
 | F8 | Letter and CV: Ctrl+Shift+N for the Normal style | Normal style | A new document: the app's Ctrl+N took Ctrl+Shift+N too (5998996). The letter flow failed on d5-int. | widgets | Fixed (claude/d5-friction 3367a2d) |
 | F9 | Links: Ctrl+K, then the address | Ctrl+K, type, Enter | The panel didn't take the keyboard, and Enter didn't insert: **1 K + 2 C instead of 2 K** | widgets | Fixed (claude/d5-friction 33827ce) |
 | F10 | Bookmarks: Ctrl+Shift+F5, then the name | Type, Enter | The same as F9: **+2 steps** | widgets | Fixed (claude/d5-friction 33827ce) |
@@ -272,7 +274,7 @@ powershell -ExecutionPolicy Bypass -File tests\friction-checks.ps1 [-Workarounds
 - **Images and saved files** go to `build\friction`.
 - **The scripts are the flows as they should go.** All three pass on claude/d3-int (F1–F3 and F7 fixed). A finding that comes back makes its flow fail on what the saved file says.
 - **`-Workarounds`** adds the steps the findings need today. The content then checks out, and the counts show the cost: the letter takes 9 (budget 9), the CV 17 (budget 12), the table 18 (budget 16).
-- **Click coordinates** (the style box and its list, the table's cells and the Table panel's Column width box) are for that window size. A toolbar change that moves them makes the check fail, and it's fixed here.
+- **Click coordinates** (the Styles gallery and its grid, the Insert tab, the table's cells and the Table panel's Column width box) are for that window size. A ribbon change that moves them makes the check fail, and it's fixed here. R1 moved them (2161005d): letter 8 (budget 9), CV 12 (12), table 15 (16), all ok on the ribbon.
 
 The checks open Featherweight's own window off-screen, and nothing else. They aren't in CI, like `visual-checks.ps1`.
 
@@ -314,7 +316,7 @@ This is the spreadsheet part of the friction review (plan §11, "Zero friction";
 | W5 | 3: AutoSum with the numbers selected | Select them, Alt+=: the total goes under them, with no Enter: 1 drag + 1 K | AutoSum works from the active cell only. With the numbers selected, it starts `=SUM(…)` in the selection's first number, and Enter would replace that number. You have to click the cell below first: 1 C + 2 K. **+1**, and a trap. | s2-calc (AutoSum) | WorkbookFunctions.cpp:193-230 (198-199, 214) | Fixed (4930c5b, s4-int ce2cffa): with the numbers selected, the totals go in at once, as Excel's |
 | W6 | 7: a table in a chosen style, by mouse | Home, Format as Table, a style (with previews), OK: 3 C | Data ▾, Table…, Style ▾, the style, Create table: 5 C, plus a scroll. **+2**. The style list has 61 names and no previews. | s3-data | WorkbookData.cpp:887-894 and 920-1009 | Fixed (fb2cf25, s4-int ce2cffa) |
 | W7 | 6, 7 and 8 in a workbook opened from a .csv | They work (lost when saved as CSV; Excel's bar warns) | Refused, each with its own message. A chart: "Save the workbook as an Excel workbook first, then insert the chart." A table: "Tables need an Excel workbook: save this one as .xlsx first." A rule: "Only a worksheet of an Excel workbook keeps these rules." The menus also show them disabled. Ctrl+Shift+S and Enter come first: **+2 K, 1 D**. | s3-charts, s3-data (edit layer) | Edit.cpp:4452-4454, 5217-5218 and 5266-5267 (src/sheet/edit), WorkbookCharts.cpp:288, WorkbookData.cpp:793, WorkbookShapes.cpp:448, Sheet.h:358 ("empty for CSV") | Fixed (f522e27, s4-int ce2cffa): a workbook from CSV takes charts, tables, rules, pictures, shapes and notes; saving it as CSV asks first |
-| W8 | 5: Filter on, by mouse | Filter, with the Data tab open after sorting: 1 C | Data ▾, Filter: 2 C. **+1**. Ctrl+Shift+L is 1 K in both. | s2-format | WorkbookFormat.cpp:1415-1421 | Accepted (the coordinator, 2026-11-19): one toolbar row (plan §5.2), as F4 |
+| W8 | 5: Filter on, by mouse | Filter, with the Data tab open after sorting: 1 C | Data ▾, Filter: 2 C. **+1**. Ctrl+Shift+L is 1 K in both. | s2-format | WorkbookFormat.cpp:1415-1421 | Accepted (the coordinator, 2026-11-19): one toolbar row (plan §5.2), as F4. Fixed by R1: Filter is 1 C on the open Data tab |
 | W9 | 4: saving a .csv that now holds more than values (a formula, a width, formatting, another sheet) | Ctrl+S saves. Excel 365 shows a "Possible data loss" bar and doesn't ask *(check in Excel)* | A banner asks: Save as .xlsx or Keep CSV. **+1 C**, once per tab. | | App.cpp:1910-1921 and 1335-1341, WorkbookCommands.cpp:1031-1040, CsvWrite.cpp:143-185 | By design (s2-plan, WorkbookView.h:122-123) |
 | W10 | 10: saving an .xls (and an .ods on s4-int) | Ctrl+S keeps the format (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As, with `<name>.xlsx` beside it suggested: 2 K. **+1 K** | | WorkbookView.cpp:136-173, App.cpp:1887-1897 | By design (plan §7.1: the .xls is never written), as F17 |
 | W11 | 11: a password-protected .xlsx or .xls | Password, Enter | Refused with "…it is protected with a password, which workbooks don't support yet" (.xlsx), or "…it is protected with a password" (.xls) | s4-ods | WorkbookView.cpp:139-150, Xls.cpp:585-590 | Done on `claude/s4-ods-e4ae8e` cc6e522, not merged |
@@ -478,6 +480,126 @@ These are to be counted once cc6e522 lands.
 - None of these flows is scripted yet. `tests/friction-checks.ps1` has only the Word flows. Flows 3, 4 and 8 could be scripted the same way through `--script`.
 
 Owners (the coordinator, 2026-11-19): W1, W2, W4 and W6 s3-data; W5 and W7 s3-calc; W3 the S3 print session; W13 s4-ods. W8 is accepted; W9 and W10 are by design; W11 and W12 are s4-ods's (done on its branch and on s4-int). Each finding is marked fixed when its fix is in `claude/s4-int`: W1 to W7 and W13 are, at ce2cffa (2026-11-19); the counts above are the review's, before the fixes, and are counted again when the workbook flows are scripted (tests\workbook-friction-checks.ps1).
+
+## The ribbon (R1)
+
+R1's exit criteria (IMPLEMENTATION_PLAN.md §5.6, the R1 row) include: "Friction review: the Word, workbook and presentation flows from D5, S4 and P2 take no more steps than before." This part counts each of those flows again with the ribbon, using the Word part's rules ("How steps are counted").
+
+- **Before** is the toolbar just before R1 (`46fbf490`, where `claude/r1-int` started from P2):
+  - Word: the D5 counts above.
+  - Workbooks: the S4 counts above, with S4's own fixes (W3, W4, W6 and W13, in s4-int ce2cffa), as the toolbar had them before R1. The toolbar is counted with every item shown, as S4 counted it.
+  - Presentations: the review had no P2 flows, and p2-plan.md has no friction criterion. The flows are the parts of P2's "build from scratch" deck (title slide, bullets, a picture, a table, a chart, shapes, a theme, notes, slide numbers) and P2's slide and object operations. They're counted on P2's toolbar (`PresentationView::BuildToolbar`, `AddSlideTools`, `ObjectTool::AddTools` at 46fbf490), with every item shown.
+- **With the ribbon** is `claude/r1-review` (from `claude/p3-int` c7cf910c, then merged with a64b6a5b), on 2026-11-24.
+  - The steps are read from the ribbon tables: `DocView::BuildRibbon` (src/word/DocRibbon.cpp), `WorkbookView::BuildRibbon` (src/sheet/view/WorkbookRibbon.cpp) and `PresentationView::BuildRibbon` (src/slide/view/PresentationRibbon.cpp).
+  - They're checked on the ribbon's own layout with `--snapshot` instances (`dumpribbon` at 1366, 1024 and 800 px).
+  - The scripted Word flows and the workbook checks W1, W2, W4 and W6 were played on the ribbon (see "Scripted checks").
+- **A tab click counts as a click.** A flow starts with the ribbon expanded, on Home, where the ribbon opens. When a flow inserts a picture or shape, its Format tab opens by itself, as in Office.
+
+### Summary
+
+Of the 44 flows: **2 are shorter, 35 take the same steps, and 7 take more.**
+- Six of the 7 longer flows take one click more, and P2-7 takes two. All 7 are accepted with a reason (RF1, RF2, RF4).
+- 6 of them are Office's own count, or fewer.
+- Only RF2 (reviewing a contract in Word) is over Word's count.
+- One flow that had become longer was fixed: Export PDF (RF3).
+
+| Part | Shorter | The same | Longer |
+|---|---|---|---|
+| Word (D5, flows 1–15) | 0 | 13 | 2: page setup (RF1), review a contract (RF2) |
+| Workbooks (S4, flows 1–12, with 7b and 9b) | 2: sort and filter, a table in a chosen style | 12 | 0 |
+| Presentations (P2's flows) | 0 | 10 | 5: a picture, a table, a chart, a text box, slide numbers (RF4) |
+
+#### Word
+
+| Flow | Before | With the ribbon | Difference | Note |
+|---|---|---|---|---|
+| 1. Write a letter (scripted part) | 5 C + 3 K | 5 C + 3 K | 0 | No Spacing is 1 C in Home's Styles gallery, against 2 C in the style box (F4). The date is Insert, Date & Time, a format: 3 C, against 2 C in the Insert box. Scripted: 8, budget 9. |
+| 2. Format a CV (scripted part) | 3 C + 9 K | 3 C + 9 K | 0 | Title is the gallery's More button, then Title: 2 C, as in the style box (RF7). Scripted: 12, budget 12. |
+| 3. Fix a table | 11 C + 2 K + 2 drags | 11 C + 2 K + 2 drags | 0 | The right-click menus haven't changed. Table Layout, the contextual tab while the caret is in a table, has Insert Below, Delete ▾ and Merge Cells: once it's open, 1 C each. Scripted: 15, budget 16. |
+| 4. Pictures | 5 C + 1 drag | 5 C + 1 drag | 0 | Insert, Pictures, the file: 3 C. Picture Format opens by itself, then Wrap Text ▾, Square: 2 C. |
+| 5. Headers and page numbers | 4 C + 1 K | 4 C + 1 K | 0 | Insert, Page Number, Insert page number: 3 C. |
+| 6. Page setup | 6 C | 7 C | **+1** | Layout, then Size ▾ A4, Margins ▾ Narrow, Orientation ▾ Landscape. This is Word's 7 C. RF1. |
+| 7. Links and bookmarks | 6 K + 2 C | 6 K + 2 C | 0 | Keys, as before. |
+| 8. Review a contract | 7 C + 2 K | 8 C + 2 K | **+1** | Review, then Reviewing Pane for the comment cards. Next, Accept and Reject are on the tab and in the pane. RF2. |
+| 9. Table of contents and notes | 4 C + 1 K | 4 C + 1 K | 0 | References, Table of Contents: 2 C. Update by right-click: 2 C. |
+| 10. Fill in a form | 5 C + 1 K | 5 C + 1 K | 0 | No ribbon step. To insert content controls: Developer, the control, 2 C with no scroll. The Developer tab first needs File, Options, Show Developer tab: 3 C, once (Word: 5 C). Alt+Q finds the controls either way. |
+| 11. Text boxes, shapes and watermarks | 8 C + 1 scroll | 9 C | 0 | Insert, Text Box: 2 C. Shapes ▾, Rectangle: 2 C, with no scroll now. Design, Watermark ▾, Watermark…, Kind ▾, Text: 5 C, one more than before (RF5). |
+| 12. Export PDF | 2 C + 1 K | 2 C + 1 K | 0 | File, Export, Enter. It was 3 C + 1 K until RF3 was fixed. |
+| 13. A letter from a template | 2 C + 2 K | 2 C + 2 K | 0 | From an open document: +, New from template, Letter (or File, New, Letter): 3 C, as before. |
+| 14. Opening other formats | 1 C, Ctrl+S + Enter | 1 C, Ctrl+S + Enter | 0 | |
+| 15. A password-protected document | 1 C + 1 K | 1 C + 1 K | 0 | The password card has no ribbon. |
+
+#### Workbooks
+
+| Flow | Before | With the ribbon | Difference | Note |
+|---|---|---|---|---|
+| 1. Open and read a workbook | 6 C | 6 C | 0 | Freeze panes by right-click (2 C), as before. View, Freeze Panes ▾, Freeze Top Row is Excel's 3 C. |
+| 2. Find a value | 2 K | 2 K | 0 | |
+| 3. Total a column | 1 C + 2 K | 1 C + 2 K | 0 | Alt+=. AutoSum now has a button (Home, and Formulas): by mouse 1 C, against Alt+Q, "autosum", Enter. |
+| 4. Fix a value and save | 2 C + 1 K | 2 C + 1 K | 0 | |
+| 5. Sort and filter a list | 12 C + 1 K | 11 C + 1 K | **−1** | Data, Sort A to Z, then Filter is 1 C on the open Data tab (W8). This is Excel's count. S4 counted 14 C; W4's fix took a click off. |
+| 6. Make a chart of a range | 1 C + 1 K | 1 C + 1 K | 0 | Alt+F1. By mouse 4 C, against 3 C before: Insert, Insert Column or Bar Chart ▾, Clustered Column. This is Excel's 4 C (RF6). |
+| 7. Make a table (Ctrl+T) | 2 C + 1 K | 2 C + 1 K | 0 | |
+| 7b. A table in a chosen style, by mouse | 4 C | 3 C | **−1** | Home, Format as Table, the style, Create table. This is Excel's 3 C. Before (W6's fix): Data ▾, Table…, the style's preview, Create table. |
+| 8. Conditional formatting | 1 drag + 4 C | 1 drag + 4 C | 0 | Conditional Formatting ▾, New Rule… (Home is open), the Value box, Add rule. |
+| 9. Print, all columns on one page | 4 C + 1 K | 4 C + 1 K | 0 | Page Layout, Width ▾, 1 page, Ctrl+P, Print. Or Ctrl+F2, then the Print Preview tab's Scaling ▾, Fit All Columns on One Page, Print, and Print in Windows' dialog. Before (W3's fix): the toolbar's Page setup, Scaling ▾, the fit, Ctrl+P, Print. S4 counted 4 C + 2 K. |
+| 9b. Export PDF | 2 C + 1 K | 2 C + 1 K | 0 | File, Export, Enter (RF3). |
+| 10. An .xls or .ods, saved | 1 C, then 2 K | 1 C, then 2 K | 0 | |
+| 11. A password-protected workbook | 1 C + 1 K | 1 C + 1 K | 0 | The password card. |
+| 12. A workbook from a template | 1 C + 2 K | 1 C + 2 K | 0 | From Explorer. Inside the app: +, New from template, the template (or File, New, the template): 3 C, as before. |
+
+#### Presentations (P2's flows)
+
+| Flow | Before (P2's toolbar) | With the ribbon | Difference | Note |
+|---|---|---|---|---|
+| P2-1. A new slide in a chosen layout | 2 C | 2 C | 0 | Home, New Slide's arrow, the layout. Before: ＋ Slide's arrow, the layout. Ctrl+M is 1 K in both. |
+| P2-2. Another layout for a slide | 2 C | 2 C | 0 | Home, Layout ▾, the layout. |
+| P2-3. A picture from a file | 2 C | 3 C | **+1** | Insert, Pictures, double-click the file. PowerPoint: 4 C (This Device…). RF4. |
+| P2-4. A table, 4 × 3 | 2 C | 3 C | **+1** | Insert, Table ▾, the size. PowerPoint: 3 C. RF4. |
+| P2-5. A column chart | 2 C | 3 C | **+1** | Insert, Chart ▾, Column. PowerPoint: 3 C, and it opens Excel. RF4. |
+| P2-6. A rectangle filled with a color | 4 C | 4 C | 0 | Home, Shapes ▾, the rectangle. Shape Format opens by itself: Shape Fill ▾, the color. |
+| P2-7. A text box, its text in another font | 3 C | 5 C | **+2** | Insert, Text Box, then type. Shape Format opens by itself, so Home first: Home, Font ▾, the font. PowerPoint: 6 C (it also needs a click on the slide). RF4. |
+| P2-8. A theme | 2 C | 2 C | 0 | Design, the theme in the gallery. Before: the Design panel, the theme. |
+| P2-9. Slide size 4:3 | 3 C | 3 C | 0 | Design, Slide Size ▾, Standard (4:3). Before: the Design panel, its Slide size page, Standard. |
+| P2-10. Slide numbers on every slide | 3 C | 4 C | **+1** | Insert, Slide Number (Header & footer), Slide number ☑, Apply to all. PowerPoint: 4 C. RF4. |
+| P2-11. Speaker notes | 1 C | 1 C | 0 | The notes pane is shown by default: click in it, type. View, Notes shows or hides it. |
+| P2-12. Two shapes aligned left and grouped | 4 C | 4 C | 0 | Home, Arrange ▾, Align Left, Arrange ▾, Group (or Shape Format's Align ▾ and Group ▾). Ctrl+G is 1 K in both. |
+| P2-13. Duplicate, hide, delete and move slides | as before | as before | 0 | Ctrl+D, the thumbnail's right-click menu, Delete, a drag. |
+| P2-14. Slides copied to another deck, in their own design | as before | as before | 0 | Ctrl+C, the other tab, Ctrl+V. The source design is in the right-click menu's paste options, and in Home's Paste ▾. |
+| P2-15. Present from the beginning | 1 C | 1 C | 0 | Quick access ▶ (P4). Before: the toolbar's ▶ Present. F5 in both. |
+
+### Where the ribbon needs more than before
+
+| # | Flow, step | Before | With the ribbon | Status |
+|---|---|---|---|---|
+| RF1 | Word 6: page setup | Layout ▾ had Size, Margins and Orientation in one menu: 2 C each, 6 C | The Layout tab first: 7 C, Word's own count | Accepted: the tab click is paid once for all three settings, and the buttons are where Word has them (r1-plan, "Placement as in Office") |
+| RF2 | Word 8: reply to and resolve comments | 💬 on the toolbar opened the Review pane, with Next, Accept, Reject and the comment cards: 1 C | Review, Reviewing Pane: 2 C. Next, Accept and Reject are on the Review tab too, but the cards are only in the pane: 8 C + 2 K, one more than Word's 7 C + 2 K, because Word shows comments in the margin | Accepted for R1: the pane is Word's Reviewing Pane, where Word has it. Worth a look (not a ribbon change): show the pane by itself when a document with comments opens, as Word shows them. That would make the flow 6 C + 2 K |
+| RF3 | Word 12 and workbook 9b: Export PDF | ⋯, Export PDF…, Enter: 2 C + 1 K | File, Export, Export PDF, Enter: 3 C + 1 K | Fixed (`claude/r1-review` 62c9522f, src/AppRibbon.cpp): when Export PDF is all there is to export (documents and workbooks), File › Export runs it at once, as File › Print runs the print dialog when the tab has no print settings. Presentations keep the Export page, which also has the PNG pictures |
+| RF4 | P2-3, 4, 5, 7 and 10: a picture, a table, a chart, a text box, slide numbers | One button or list each on the toolbar | The Insert tab first: one click more each. A text box's font also needs Home, because Shape Format opens by itself after the insert | Accepted: Insert is PowerPoint's place for them, and Shape Format opening by itself is PowerPoint's behaviour too. Each flow is PowerPoint's count or fewer (picture 3 against 4, table 3 = 3, chart 3 = 3, text box and font 5 against 6, slide numbers 4 = 4) |
+| RF5 | Word 11: the watermark step | Insert ▾, Watermark…, Kind ▾, Text: 4 C | Design, Watermark ▾, Watermark…, Kind ▾, Text: 5 C. The flow ties, because the rectangle no longer needs a scroll | Accepted, with F15 (Word: 3 C). The Watermark button is a menu, as Word's is |
+| RF6 | Workbook 6: a chart by mouse | Chart ▾, Column: 2 C (+1 C in the data) | Insert, Insert Column or Bar Chart ▾, Clustered Column: 3 C | Accepted: Excel's own count by mouse. The flow's count (Alt+F1) ties |
+| RF7 | Word 2: Title from the gallery (F4) | The style box, Title: 2 C | More (or the next row), Title: 2 C. At 1366 px the gallery shows Normal, No Spacing, Heading 1 and Heading 2. Word: 1 C | Open (F4 is partly fixed). Two causes: Featherweight's blank document lists Heading 3 before Title (Word hides Heading 3 until it's used), and the gallery steps from six columns to four at 1366 px. Changing either would put Title in the first row |
+
+### Where the ribbon needs less
+
+- **Word:**
+  - No Spacing is one click in the Styles gallery (F4).
+  - Shapes ▾ needs no scroll.
+  - Once Table Layout is open, Insert Above and Below, Delete and Merge Cells are a click each.
+  - Date & Time stays on the Insert tab at 800 px (F5).
+- **Workbooks:**
+  - Filter is one click after sorting (W8).
+  - A table in a chosen style is Excel's three clicks.
+  - AutoSum has a button.
+  - Every group can be reached at 1366, 1024 and 800 px, with no overflow menu (W1's case).
+- **Presentations:** Present from the beginning is in quick access (P4).
+- **Everywhere:** KeyTips (Alt, then the letters) reach every ribbon command without the mouse. Alt+Q lists the ribbon's commands with "Tab › Group".
+
+### Not checked
+
+- **What was played:** the three scripted Word flows and the workbook checks W1, W2, W4 and W6, all ok on the ribbon (2161005d). The other counts are read from the ribbon tables and checked against the ribbon's layout at 1366, 1024 and 800 px.
+- **RF3's click:** Export runs Windows' Save dialog, which a snapshot run can't close, so this check isn't scripted. The File page runs Export through the same path as Print. Roy's checklist has it (R1 part).
+- **The "before" counts:** the presentation counts take P2's toolbar with every item shown. In a narrow window its overflow menu (») cost a click more for whatever it held.
 
 ## Presentations (P3)
 
