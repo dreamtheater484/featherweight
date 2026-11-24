@@ -489,10 +489,10 @@ R1's exit criteria (IMPLEMENTATION_PLAN.md §5.6, the R1 row) include: "Friction
   - Word: the D5 counts above.
   - Workbooks: the S4 counts above, with S4's own fixes (W3, W4, W6 and W13, in s4-int ce2cffa), as the toolbar had them before R1. The toolbar is counted with every item shown, as S4 counted it.
   - Presentations: the review had no P2 flows, and p2-plan.md has no friction criterion. The flows are the parts of P2's "build from scratch" deck (title slide, bullets, a picture, a table, a chart, shapes, a theme, notes, slide numbers) and P2's slide and object operations. They're counted on P2's toolbar (`PresentationView::BuildToolbar`, `AddSlideTools`, `ObjectTool::AddTools` at 46fbf490), with every item shown.
-- **With the ribbon** is `claude/r1-review` (from `claude/p3-int` c7cf910c), on 2026-11-24.
+- **With the ribbon** is `claude/r1-review` (from `claude/p3-int` c7cf910c, then merged with a64b6a5b), on 2026-11-24.
   - The steps are read from the ribbon tables: `DocView::BuildRibbon` (src/word/DocRibbon.cpp), `WorkbookView::BuildRibbon` (src/sheet/view/WorkbookRibbon.cpp) and `PresentationView::BuildRibbon` (src/slide/view/PresentationRibbon.cpp).
   - They're checked on the ribbon's own layout with `--snapshot` instances (`dumpribbon` at 1366, 1024 and 800 px).
-  - The scripted Word flows and the workbook checks W1 to W6 were played on the ribbon (see "Scripted checks").
+  - The scripted Word flows and the workbook checks W1, W2, W4 and W6 were played on the ribbon (see "Scripted checks").
 - **A tab click counts as a click.** A flow starts with the ribbon expanded, on Home, where the ribbon opens. When a flow inserts a picture or shape, its Format tab opens by itself, as in Office.
 
 ### Summary
