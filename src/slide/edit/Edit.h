@@ -244,6 +244,16 @@ struct HeaderFooter {
   bool notOnTitle = false;  // "Don't show on title slide"
 };
 
+// Insert > Video and Insert > Audio from a file (P3, p3-present).
+struct MediaInsert {
+  bool video = true;            // else audio
+  std::vector<uint8_t> bytes;   // the file, as read: embedded as it is
+  std::string extension;        // its extension, without the dot ("mp4", "wmv", "mp3", "m4a", "wav")
+  std::vector<uint8_t> poster;  // PNG or JPEG: the poster frame (video) or the icon (audio)
+  std::wstring name;            // the shape's name and alt text: the file's name, as PowerPoint names it
+  double durationMs = 0;        // its length; 0 when unknown
+};
+
 class Editor {
  public:
   explicit Editor(Presentation& deck);
@@ -324,6 +334,12 @@ class Editor {
   // per deck (the same bytes share a part), its aspect ratio locked, with its alt text.
   Result InsertPicture(size_t slide, std::vector<uint8_t> bytes, const draw::Rect& r, std::wstring_view altText,
                        uint32_t* id = nullptr);
+  // A video or audio embedded as PowerPoint 2021 inserts it (src/slide/edit/MediaOps.cpp, p3-present): the
+  // file in /ppt/media (stored once per deck) under a video (or audio) and a media relationship, its
+  // poster as the picture, and in the slide's timing a play step at the end of the click sequence
+  // ("In Click Sequence"), its media node (volume 80 %) and a click on it toggling pause. Refused for
+  // an extension PowerPoint doesn't insert, or a poster that isn't PNG or JPEG.
+  Result InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id = nullptr);
   // A table of `rows` by `columns` with PowerPoint's default style, as Insert > Table makes it.
   Result InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id = nullptr);
   // Deleted, with what names them: animations of them, connections to them, relationships only

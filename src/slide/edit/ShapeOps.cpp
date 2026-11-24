@@ -90,12 +90,16 @@ std::string Escape(std::string_view s) {
   return out;
 }
 
-std::string XfrmXml(const draw::Rect& r, std::string_view prefix = "a") {
+}  // namespace
+
+std::string XfrmXml(const draw::Rect& r, std::string_view prefix) {
   std::string p(prefix);
   return "<" + p + ":xfrm><a:off x=\"" + std::to_string(ToEmu(r.left)) + "\" y=\"" + std::to_string(ToEmu(r.top)) +
          "\"/><a:ext cx=\"" + std::to_string(std::max(0LL, ToEmu(r.Width()))) + "\" cy=\"" +
          std::to_string(std::max(0LL, ToEmu(r.Height()))) + "\"/></" + p + ":xfrm>";
 }
+
+namespace {
 
 constexpr std::string_view kNs =
     " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""
@@ -119,7 +123,8 @@ std::string ShapeName(std::string_view preset) {
   return "Shape";
 }
 
-// Picture formats Office stores in a:blip, from their first bytes: (extension, content type).
+}  // namespace
+
 std::pair<std::string, std::string> PictureType(const std::vector<uint8_t>& b) {
   auto at = [&](size_t i) { return i < b.size() ? b[i] : 0; };
   if (at(0) == 0x89 && at(1) == 'P' && at(2) == 'N' && at(3) == 'G') return {"png", "image/png"};
@@ -135,7 +140,7 @@ std::pair<std::string, std::string> PictureType(const std::vector<uint8_t>& b) {
   return {};
 }
 
-
+namespace {
 
 void SetAttr(pugi::xml_node n, const char* name, long long v) {
   (n.attribute(name) ? n.attribute(name) : n.append_attribute(name)).set_value(v);
@@ -358,7 +363,7 @@ void RemoveShapeRefs(const pkg::ReferenceRegistry& registry, pugi::xml_node root
       for (pugi::xml_node a = n.parent(); a && !unit; a = a.parent()) {
         std::string_view ak = LocalNameOf(a);
         if (ak == "cond") inCondition = true;
-        if (ak == "seq") unit = a;
+        if (ak == "seq" || ak == "video" || ak == "audio") unit = a;  // a media node goes alone (p3-present)
         if (ak == "par" && !inCondition) {
           pugi::xml_node cTn = P(a, "cTn");
           if (cTn.attribute("presetClass") || cTn.attribute("nodeType")) unit = a;
@@ -663,6 +668,22 @@ Result Editor::InsertAutoShape(size_t slide, std::string_view preset, const draw
   return call.End(PutShape(m, part, doc.document_element(), -1, id));
 }
 
+std::string StoreMedia(Editor::Impl& m, std::vector<uint8_t> bytes, std::string_view stem, std::string_view ext,
+                       std::string_view type) {
+  // Stored once: a media part with the same bytes is used again.
+  for (const std::string& name : m.store.PartNames()) {
+    if (!name.starts_with("/ppt/media/")) continue;
+    std::vector<uint8_t> have;
+    if (m.Read(name, have) && have == bytes) return name;
+  }
+  for (const auto& [key, state] : m.work.parts) {
+    if (state.bytes && *state.bytes == bytes) return state.name;
+  }
+  std::string media = m.NewName(stem, "." + std::string(ext));
+  m.PutBytes(media, std::move(bytes), type);
+  return media;
+}
+
 Result Editor::InsertPicture(size_t slide, std::vector<uint8_t> bytes, const draw::Rect& r, std::wstring_view altText,
                              uint32_t* id) {
   Call call(*this, u"Insert Picture");
@@ -671,23 +692,7 @@ Result Editor::InsertPicture(size_t slide, std::vector<uint8_t> bytes, const dra
   if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
   auto [ext, type] = PictureType(bytes);
   if (ext.empty()) return call.End(Result::Fail(u"That picture's format can't be put in a presentation."));
-  // Stored once: a media part with the same bytes is used again.
-  std::string media;
-  for (const std::string& name : m.store.PartNames()) {
-    if (!name.starts_with("/ppt/media/")) continue;
-    std::vector<uint8_t> have;
-    if (m.Read(name, have) && have == bytes) {
-      media = name;
-      break;
-    }
-  }
-  for (const auto& [key, state] : m.work.parts) {
-    if (media.empty() && state.bytes && *state.bytes == bytes) media = state.name;
-  }
-  if (media.empty()) {
-    media = m.NewName("/ppt/media/image", "." + ext);
-    m.PutBytes(media, std::move(bytes), type);
-  }
+  std::string media = StoreMedia(m, std::move(bytes), "/ppt/media/image", ext, type);
   std::string rel = m.AddRel(part, kRelImage, media);
   uint32_t next = Impl::NextShapeId(m.Root(part));
   std::string xml = "<p:pic" + std::string(kNs) + "><p:nvPicPr><p:cNvPr id=\"" + std::to_string(next) + "\" name=\"Picture " +
