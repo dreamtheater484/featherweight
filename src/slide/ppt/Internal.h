@@ -7,13 +7,22 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "slide/ppt/Ppt.h"
 
+namespace pugi {
+class xml_document;
+}
+
 // The .ppt reader's pieces ([MS-PPT]): records, text properties, and what the slide writer needs.
 namespace fw::slide::ppt::detail {
+
+// The XML part `name` of a zip package (PowerPoint 2007's round-trip data) into `doc`; false when
+// it isn't there or doesn't parse.
+bool PackageXml(std::span<const uint8_t> package, std::string_view name, pugi::xml_document& doc);
 
 // Master units: PowerPoint 97-2003 positions are in 1/576 inch.
 constexpr double kEmuPerUnit = 914400.0 / 576;
