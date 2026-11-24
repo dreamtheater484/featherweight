@@ -91,6 +91,7 @@ void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::st
     if (pf.align < 7) attrs += std::string(" algn=\"") + kAlgn[pf.align] + "\"";
   }
   if (pf.Has(kDefaultTab) && pf.defaultTab > 0) attrs += " defTabSz=\"" + Num(Emu(pf.defaultTab)) + "\"";
+  if (pf.Has(kTextDirection) && pf.textDirection == 1) attrs += " rtl=\"1\"";  // right to left
   if (pf.Has(kLineSpacing)) inner += Spacing("lnSpc", pf.lineSpacing);
   if (pf.Has(kSpaceBefore)) inner += Spacing("spcBef", pf.spaceBefore);
   if (pf.Has(kSpaceAfter)) inner += Spacing("spcAft", pf.spaceAfter);
@@ -423,6 +424,7 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
     Pf pf;
     Cf base;
     Layered(cx, text.type, level, pf, base, text.placeholder);
+    const Pf styled = pf;
     if (text.ruler) {
       if (text.ruler->leftMargin[level]) pf.leftMargin = *text.ruler->leftMargin[level], pf.mask |= 1u << kLeftMargin;
       if (text.ruler->indent[level]) pf.indent = *text.ruler->indent[level], pf.mask |= 1u << kIndent;
@@ -430,6 +432,11 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
       if (!text.ruler->tabs.empty()) pf.tabs = text.ruler->tabs, pf.mask |= 1u << kTabStops;
     }
     if (pr) pf.Over(pr->pf);
+    // A ruler's text offset at or left of the bullet doesn't take a bulleted paragraph's hanging indent
+    // away: PowerPoint keeps the style's for it (the ruler records an unbulleted paragraph's margin).
+    if ((pf.bulletFlags & 1) && text.ruler && text.ruler->leftMargin[level] && !(pr && pr->pf.Has(kLeftMargin)) &&
+        pf.leftMargin <= pf.indent && styled.Has(kLeftMargin) && styled.leftMargin > pf.indent)
+      pf.leftMargin = styled.leftMargin;
     const auto cfFor = [&](size_t at) {
       Cf cf = base;
       if (const Cf* c = cfAt(at)) cf.Over(*c);
