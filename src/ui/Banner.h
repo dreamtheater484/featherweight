@@ -21,8 +21,12 @@ class Banner {
     bool primary = false;
   };
 
-  void Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions = {}, int autoHideMs = 0);
+  // `owner`: what the message is about (a tab), for Owner().
+  void Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions = {}, int autoHideMs = 0,
+            const void* owner = nullptr);
   void Hide();
+  // The owner of the message that is showing, or null.
+  const void* Owner() const { return visible_ ? owner_ : nullptr; }
   bool Visible() const { return visible_ || show_.V() > 0.01f; }
   bool IsShowing() const { return visible_; }
   void Layout(const RECT& docArea, float ui);
@@ -46,6 +50,7 @@ class Banner {
   D2D1_RECT_F Card() const;
 
   bool visible_ = false;
+  const void* owner_ = nullptr;
   Anim show_;
   BannerKind kind_ = BannerKind::Info;
   std::wstring text_;

@@ -49,8 +49,8 @@ add_executable(Featherweight WIN32
   src/resource.rc
   src/Featherweight.manifest
 )
-# The ribbon (R1) is UI code that runs once a frame at most: built for size.
-set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp
+# The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
+set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
                             PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
@@ -157,6 +157,10 @@ if(FW_BUILD_TESTS)
     fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
   fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
+  # The start page (P3, p3-start): tests/screens/start.cmake, at 1366, 1920, 2560 and 5120 px, light
+  # and dark, and its states (keyboard, filter, hidden, empty, narrow, 200 %).
+  add_test(NAME start_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DOUT=${CMAKE_BINARY_DIR}/screens/start" -P "${CMAKE_SOURCE_DIR}/tests/screens/start.cmake")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

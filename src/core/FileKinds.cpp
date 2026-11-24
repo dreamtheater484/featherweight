@@ -21,7 +21,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
      L"Spreadsheets", kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
-     L"Presentation", L"Presentations", kPresentation, {}, 3, true, false},  // the viewer ships in 3.1 (P1)
+     L"Presentation", L"Presentations", kPresentation, {}, 3, true, true},  // the viewer in 3.1 (P1), the editor in 4.0 (P2, P3)
 };
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kFileKindCount);
 

@@ -40,6 +40,7 @@ constexpr UINT_PTR kTimerTooltip = 1;
 constexpr UINT_PTR kTimerCaret = 2;
 constexpr UINT_PTR kTimerModal = 3;
 constexpr UINT_PTR kTimerCursorHide = 4;
+constexpr UINT_PTR kTimerStartLists = 6;  // after the first paint: the start page's templates (5: autosave)
 constexpr float kTitleH = 40;
 constexpr float kToolbarH = 48;
 
@@ -85,6 +86,7 @@ int App::Run(const AppOptions& opts) {
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
+  InitStartPage();
   InitFiles(!snapshot_ && !opts.widgetGallery && !sandbox_);
   if (snapshot_) return RunSnapshot(opts);
 
@@ -103,6 +105,7 @@ int App::Run(const AppOptions& opts) {
     show = opts.showCommand;
   ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
+  if (!opts.widgetGallery && !sandbox_) SetTimer(hwnd_, kTimerStartLists, 1, nullptr);
   if (!opts.widgetGallery && !sandbox_) MaybeCheckForUpdates(false);
   MessageLoop();
   return 0;
@@ -326,7 +329,7 @@ void App::Layout() {
     if (left - doc.left >= static_cast<LONG>(360 * ui_)) bannerArea.right = left;
   }
   banner_.Layout(bannerArea, ui_);
-  empty_.Layout(doc, ui_, settings_.recent);
+  empty_.Layout(doc, ui_, settings_.recent, userTemplates_, settings_.showRecent);
   notes_.Layout(doc, ui_);
   if (TabContent* v = Active()) v->SetViewport(doc, ui_);
 }
@@ -356,7 +359,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
     v->Draw(canvas_, dc);
   } else {
     canvas_.Fill(RectF(doc), p.docBg);
-    empty_.Draw(canvas_, settings_.recent);
+    empty_.Draw(canvas_, settings_.recent, caretOn && focusBox_ == &empty_.Filter());
   }
   if (search_.Visible()) {
     bool none = v && !search_.Box().Text().empty() && v->SearchDone() && v->SearchCount() == 0;
@@ -642,6 +645,9 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         POINT pt{x, y};
         ClientToScreen(hwnd_, &pt);
         ShowContextMenu(pt.x, pt.y);
+      } else if (RegionAt(x, y) == Region::Doc && !Active()) {
+        const EmptyState::Result res = empty_.OnRightClick(x, y);  // a recent file's menu
+        if (res.kind == EmptyState::Result::Kind::RecentMenu) ShowRecentMenu(res.index, res.at);
       }
       return 0;
     }
@@ -670,6 +676,10 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       }
       if (TabContent* v = Active()) {
         v->OnWheel(GET_WHEEL_DELTA_WPARAM(wp), msg == WM_MOUSEHWHEEL, mods, pt.x, pt.y);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+      } else if (msg == WM_MOUSEWHEEL && empty_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp))) {
+        Layout();  // the start page scrolled: what's under the mouse changed
+        empty_.OnMouseMove(pt.x, pt.y);
         InvalidateRect(hwnd_, nullptr, FALSE);
       }
       return 0;
@@ -763,6 +773,14 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           break;
         case kTimerCursorHide:
           if (presentation_ && anim::Now() - lastMouseMove_ > 2000) SetCursor(nullptr);
+          break;
+        case kTimerStartLists:
+          // The start page's templates come from disk after the first paint, never before it.
+          KillTimer(hwnd_, kTimerStartLists);
+          if (!Active()) {
+            userTemplates_ = usertemplates::List(kUserTemplateCount);
+            if (!userTemplates_.empty()) InvalidateRect(hwnd_, nullptr, FALSE);
+          }
           break;
       }
       return 0;
@@ -894,6 +912,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
   if (r == Region::Commands) clickedBox = &commands_.Box();  // its results keep the box's keyboard
+  if (r == Region::Doc && !Active() && empty_.OverFilter(x, y)) clickedBox = &empty_.Filter();  // the start page's
   if (focusBox_ != clickedBox) FocusBox(clickedBox);
   if (r != Region::Toolbar || clickedBox) {
     toolbar_.Blur();
@@ -941,6 +960,10 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
         if (v->HasKeyFocus() || v->Dragging()) caretStart_ = anim::Now();
       } else if (button == 0) {
         empty_.OnMouseDown(x, y);
+        if (clickedBox == &empty_.Filter()) {
+          if (dbl) clickedBox->OnDoubleClick();
+          else clickedBox->OnMouseDown((float)x, (float)y, shift, empty_.Scale());
+        }
       }
       break;
     default: break;
@@ -963,6 +986,8 @@ void App::OnMouseMove(int x, int y) {
     switch (capture_) {
       case Region::Doc:
         if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
+        else if (focusBox_ == &empty_.Filter() && GetKeyState(VK_LBUTTON) < 0)
+          empty_.Filter().OnMouseDrag((float)x, (float)y, empty_.Scale());
         break;
       case Region::Toolbar:
         if (ribbonShown_) {
@@ -1295,6 +1320,13 @@ void App::OnKeyDown(UINT vk) {
       return;
     }
     TextBox* box = focusBox_;
+    if (box == &empty_.Filter() && (vk == VK_TAB || vk == VK_DOWN)) {  // the start page's filter lets go
+      FocusBox(nullptr);
+      if (vk == VK_DOWN) empty_.FocusList();
+      else empty_.LeaveFilter(!shift);
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return;
+    }
     if (box->OnKeyDown(vk, ctrl, shift)) {
       InvalidateRect(hwnd_, nullptr, FALSE);
       return;
@@ -1629,6 +1661,12 @@ void App::Execute(int cmd) {
       settings_.Save();
       Layout();
       break;
+    case CmdShowRecentFiles:  // off: the start page and File > Open don't list them (sharing a screen)
+      settings_.showRecent = !settings_.showRecent;
+      if (!settings_.showRecent && focusBox_ == &empty_.Filter()) FocusBox(nullptr);
+      if (!snapshot_) settings_.Save();
+      Layout();
+      break;
     case CmdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
     default:
       // Everything else belongs to the tab: pages, zoom, selection, highlights, notes.
@@ -1711,17 +1749,19 @@ bool App::FillWindowMenu(int which, HMENU m) {
     userTemplates_ = usertemplates::List(kUserTemplateCount);
     AppendTemplates(m, userTemplates_);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
-    HMENU recent = CreatePopupMenu();
-    for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
-      std::wstring label = fw::FileNameOf(settings_.recent[i].path);
-      if (i < 9) label = L"&" + std::to_wstring(i + 1) + L"  " + label;
-      AppendItem(recent, CmdRecent + i, label);
+    if (settings_.showRecent) {
+      HMENU recent = CreatePopupMenu();
+      for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
+        std::wstring label = fw::FileNameOf(settings_.recent[i].path);
+        if (i < 9) label = L"&" + std::to_wstring(i + 1) + L"  " + label;
+        AppendItem(recent, CmdRecent + i, label);
+      }
+      if (!settings_.recent.empty()) {
+        AppendSeparator(recent);
+        AppendItem(recent, CmdClearRecent, QueryCommand(CmdClearRecent).label, QueryCommand(CmdClearRecent).enabled);
+      }
+      AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     }
-    if (!settings_.recent.empty()) {
-      AppendSeparator(recent);
-      AppendItem(recent, CmdClearRecent, L"Clear list");
-    }
-    AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
@@ -1739,6 +1779,7 @@ bool App::FillWindowMenu(int which, HMENU m) {
     AppendItem(themeMenu, CmdThemeDark, L"Dark", true, settings_.theme == ThemeSetting::Dark, true);
     AppendSubmenu(m, themeMenu, L"App theme");
     AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
+    AppendItem(m, CmdShowRecentFiles, L"Show recent files", true, settings_.showRecent);
     // A document's spelling, AutoCorrect, Paragraph, Page setup, Ruler and Review are on its ribbon.
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
@@ -1915,20 +1956,81 @@ void App::OpenDialog(bool templates) {
 }
 
 void App::OnStartScreen(EmptyState::Result res) {
+  using K = EmptyState::Result::Kind;
   switch (res.kind) {
-    case EmptyState::Result::Kind::Open: Execute(CmdOpen); break;
-    case EmptyState::Result::Kind::New: Execute(CmdNewFile + res.index); break;
-    case EmptyState::Result::Kind::Template: Execute(CmdNewTemplate + res.index); break;
-    case EmptyState::Result::Kind::OpenRecent: Execute(CmdRecent + res.index); break;
-    case EmptyState::Result::Kind::RemoveRecent:
-      if (res.index < static_cast<int>(settings_.recent.size())) {
-        settings_.RemoveRecent(settings_.recent[res.index].path);
-        settings_.Save();
-        Layout();
-      }
+    case K::Open: Execute(CmdOpen); break;
+    case K::New: Execute(CmdNewFile + res.index); break;
+    case K::Template: Execute(CmdNewTemplate + res.index); break;
+    case K::UserTemplate: Execute(CmdUserTemplate + res.index); break;
+    case K::MoreTemplates: Execute(CmdUserTemplatesFolder); break;
+    case K::OpenRecent: Execute(CmdRecent + res.index); break;
+    case K::RemoveRecent: RecentAction(CmdRecentRemove, res.index); break;
+    case K::PinRecent: RecentAction(CmdRecentPin, res.index); break;
+    case K::RecentMenu: ShowRecentMenu(res.index, res.at); break;
+    case K::ShowRecent:
+    case K::HideRecent:
+      if (settings_.showRecent != (res.kind == K::ShowRecent)) Execute(CmdShowRecentFiles);
       break;
+    case K::FocusFilter: FocusBox(&empty_.Filter()); break;
     default: break;
   }
+}
+
+void App::InitStartPage() {
+  TextBox& filter = empty_.Filter();
+  filter.onChange = [this] { InvalidateRect(hwnd_, nullptr, FALSE); };
+  filter.onEnter = [this](bool) {
+    if (const int i = empty_.FirstShown(); i >= 0) Execute(CmdRecent + i);
+  };
+  // Esc empties the filter, then lets go of it.
+  filter.onEscape = [this] {
+    if (!empty_.Filter().Text().empty()) empty_.Filter().SetText(L"");
+    else FocusBox(nullptr);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+  };
+}
+
+void App::ShowRecentMenu(int index, POINT at) {
+  if (index < 0 || index >= static_cast<int>(settings_.recent.size())) return;
+  HMENU m = CreatePopupMenu();
+  AppendItem(m, CmdRecentPin, settings_.recent[index].pinned ? L"Unpin from list" : L"Pin to list");
+  AppendItem(m, CmdRecentRemove, L"Remove from list");
+  AppendSeparator(m);
+  AppendItem(m, CmdRecentLocation, L"Open file location");
+  ClientToScreen(hwnd_, &at);
+  theme::ApplyToMenus();
+  HideTooltip();
+  const int cmd = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, at.x, at.y, hwnd_, nullptr);
+  DestroyMenu(m);
+  if (cmd) RecentAction(cmd, index);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::RecentAction(int cmd, int index) {
+  if (index < 0 || index >= static_cast<int>(settings_.recent.size())) return;
+  const std::wstring path = settings_.recent[index].path;
+  if (cmd == CmdRecentLocation) {
+    // Explorer, with the file selected; its folder when the file has gone.
+    bool shown = false;
+    if (PIDLIST_ABSOLUTE item = ILCreateFromPathW(path.c_str())) {
+      shown = SUCCEEDED(SHOpenFolderAndSelectItems(item, 0, nullptr, 0));
+      ILFree(item);
+    }
+    if (!shown) {
+      const std::wstring folder = fw::DirOf(path);
+      if (GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES)
+        ShellExecuteW(hwnd_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+      else
+        banner_.Show(BannerKind::Error, L"“" + fw::FileNameOf(path) + L"” and its folder can’t be found.", {}, 6000);
+    }
+    return;
+  }
+  if (cmd == CmdRecentPin) settings_.PinRecent(path, !settings_.recent[index].pinned);
+  else if (cmd == CmdRecentRemove) settings_.RemoveRecent(path);
+  else return;
+  if (!snapshot_) settings_.Save();
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format,
@@ -1986,9 +2088,22 @@ void App::ActivateTab(int index) {
   if (index != active_ && search_.IsOpen()) CloseSearch();
   if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   if (index != active_) panel_.Show(nullptr, false);  // its content belongs to the tab
-  if (index != active_ && Active()) Active()->OnDeactivated();
+  if (index != active_ && Active()) {
+    TabContent* was = Active();
+    was->OnDeactivated();
+    // Its "changed by another program" notice waits for it; one that was answered is done.
+    std::erase_if(fileNotices_, [was](const auto& n) { return n.first == was; });
+    if (banner_.Owner() == was) {
+      fileNotices_.emplace_back(was, fileNotice_);
+      banner_.Hide();
+    }
+  }
+  const bool switched = index != active_;
   active_ = index;
   TabContent* v = Active();
+  if (switched)
+    for (const auto& [tab, change] : fileNotices_)
+      if (tab == v) ShowFileNotice(v, change);
   FocusBox(v->PasswordBox());
   KeyFocusMoved();
   Layout();
@@ -2033,6 +2148,8 @@ bool App::CloseTab(int index) {
   }
   RememberState(v);
   if (!snapshot_) settings_.Save();
+  std::erase_if(fileNotices_, [v](const auto& n) { return n.first == v; });
+  if (banner_.Owner() == v) banner_.Hide();  // its "changed by another program" goes with it
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
   if (index == active_) {
@@ -2047,6 +2164,7 @@ bool App::CloseTab(int index) {
     active_ = -1;
     SetWindowTextW(hwnd_, L"Featherweight");
     FocusBox(nullptr);
+    if (!snapshot_) userTemplates_ = usertemplates::List(kUserTemplateCount);  // the start page's, as it shows again
   } else {
     int next = active_ > index ? active_ - 1 : std::min(active_, static_cast<int>(tabs_.size()) - 1);
     active_ = -1;
@@ -2943,6 +3061,23 @@ void App::RunScript(const std::wstring& script) {
       if (bar != std::wstring::npos) settings_.recent.front().lastOpened -= _wtoi64(arg.c_str() + bar + 1);
       std::stable_sort(settings_.recent.begin(), settings_.recent.end(),
                        [](const RecentFile& a, const RecentFile& b) { return a.lastOpened > b.lastOpened; });
+      Layout();
+    } else if (op == L"pin") {
+      // pin:name pins the recent file of that name (the start page's snapshots).
+      for (const RecentFile& f : settings_.recent)
+        if (fw::EqualsNoCase(fw::FileNameOf(f.path), arg)) settings_.PinRecent(f.path, true);
+      Layout();
+    } else if (op == L"startfilter") {
+      // startfilter:text types into the start page's filter, which has the keyboard.
+      Layout();
+      FocusBox(&empty_.Filter());
+      empty_.Filter().SetText(arg);
+      Layout();
+    } else if (op == L"usertemplates") {
+      // usertemplates:path,path stands in for the personal templates folder (the start page's snapshots).
+      userTemplates_.clear();
+      for (const std::wstring& path : fw::Split(arg, L','))
+        if (!path.empty()) userTemplates_.push_back(path);
       Layout();
     } else if (op == L"editors") {
       // editors:all or editors:document,workbook shows the New choices as they'll be once those ship.

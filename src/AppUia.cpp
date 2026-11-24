@@ -57,7 +57,8 @@ void App::DescribeUia(uia::Tree& t) {
   if (v) {
     v->DescribeUia(t, doc);
   } else {
-    empty_.Describe(t, doc, settings_.recent, [this](EmptyState::Result res) { OnStartScreen(res); });
+    empty_.Describe(t, doc, settings_.recent, [this](EmptyState::Result res) { OnStartScreen(res); },
+                    [this] { FocusBox(&empty_.Filter()); });
   }
 
   // Focus moves the way a click moves it: the window's text box (and, for the tab's own

@@ -44,6 +44,7 @@ constexpr AppCommand kAppCommands[] = {
     {CmdRuler, L"Ruler", L""},
     {CmdDeveloperTab, L"Show Developer tab", L""},
     {CmdClearRecent, L"Clear recent files", L""},
+    {CmdShowRecentFiles, L"Show recent files", L""},
     {CmdToggleAutoUpdate, L"Update automatically", L""},
     {CmdCheckUpdates, L"Check for updates now", L""},
     {CmdMakeDefault, L"Make Featherweight the default PDF app", L""},
@@ -116,7 +117,14 @@ CommandState App::QueryCommand(int cmd) {
       s.visible = ready && v->Kind() == TabKind::Document;
       break;
     case CmdToggleAutoUpdate: s.checked = settings_.autoUpdate; break;
-    case CmdClearRecent: s.enabled = !settings_.recent.empty(); break;
+    case CmdClearRecent: {
+      // Pinned files stay.
+      const bool pinned = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return r.pinned; });
+      s.enabled = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return !r.pinned; });
+      if (pinned) s.label = L"Clear unpinned recent files";
+      break;
+    }
+    case CmdShowRecentFiles: s.checked = settings_.showRecent; break;
     case CmdMakeDefault: s.visible = !fileassoc::IsDefault(); break;
     case CmdRibbonCollapse:
       s.visible = ribbonShown_;

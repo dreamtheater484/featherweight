@@ -642,4 +642,9 @@ enum Cmd : int {
   // P3, p3-files: templates, picture export and .odp import, 3910-3949.
   CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
   CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder
+  // P3, p3-start: the start page, 3960-3969.
+  CmdShowRecentFiles = 3960,  // the setting: the start page and File > Open list the recent files
+  CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
+  CmdRecentRemove,            // Remove from list
+  CmdRecentLocation,          // Open file location
 };
