@@ -38,7 +38,8 @@ class PresenterHost {
 
 class PresenterView {
  public:
-  // Full screen on `monitor`, or (windowed) in the right half of its work area, beside the show.
+  // Full screen on `monitor`, or (windowed) in the right half of its work area, beside the show; with
+  // no monitor, no window (--show-capture draws it off screen).
   static std::unique_ptr<PresenterView> Create(PresenterHost& host, Presentation& deck, SlideRenderer& renderer,
                                                HMONITOR monitor, bool windowed, HWND owner);
   ~PresenterView();
@@ -48,6 +49,8 @@ class PresenterView {
   void Update(const PresenterState& state);
   HWND Window() const;
   // Draws the view into `dc` (a target of w x h pixels): the window's paint, and checks off screen.
+  // Prepare first, outside the target's BeginDraw: it makes the strip's thumbnails.
+  void Prepare(float w, float h);
   void Draw(ID2D1DeviceContext* dc, float w, float h);
 
   struct Impl;

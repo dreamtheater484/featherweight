@@ -598,4 +598,5 @@ enum Cmd : int {
 
   // Presenting (P3, p3-present): 3800-3829.
   CmdPresenterView = 3800,  // Alt+F5: the show and the presenter view, each in a window of its own
+  CmdUsePresenterView,      // Slide Show > Use Presenter View: F5 opens it on another monitor (on by default)
 };

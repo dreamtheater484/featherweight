@@ -44,6 +44,7 @@ constexpr CommandName kNames[] = {
     {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
     {CmdPresenterView, L"Presenter view", L"Alt+F5"},
+    {CmdUsePresenterView, L"Use Presenter View", L""},
     {CmdNextPage, L"Next slide", L"Page Down"},
     {CmdPrevPage, L"Previous slide", L"Page Up"},
     {CmdFirstPage, L"First slide", L"Home"},
@@ -172,6 +173,10 @@ CommandState PresentationView::QueryCommand(int cmd) {
       s.enabled = Ready();
       s.checked = notesShown_;
       break;
+    case CmdUsePresenterView:
+      s.enabled = Ready();
+      s.checked = usePresenter_;
+      break;
     case CmdCopyNotes: s.enabled = ready && !deck_->Notes(current_).empty(); break;
     case CmdOpenSlideLink: s.enabled = ready; break;
     case CmdReplace: s.enabled = CanReplace(); break;
@@ -239,6 +244,7 @@ bool PresentationView::Execute(int cmd) {
     case CmdSlideShowFromStart: StartShow(false); return true;
     case CmdSlideShowFromCurrent: StartShow(true); return true;
     case CmdPresenterView: StartShow(true, true); return true;
+    case CmdUsePresenterView: usePresenter_ = !usePresenter_; return true;
     case CmdNextPage:
       if (current_ + 1 < n) GoToSlide(current_ + 1);
       return true;
@@ -626,7 +632,9 @@ void PresentationView::StartShow(bool fromCurrent, bool presenterWindowed) {
   o.monitor = showMonitor_ < static_cast<int>(fw::slide::show::Monitors().size()) ? showMonitor_ : -1;
   o.deckPath = path_;
   // Alt+F5 (P3): the show and the presenter view, each in a window, as PowerPoint does on one monitor.
-  o.windowed = o.presenter = presenterWindowed;
+  // F5 with Use Presenter View on: the presenter view on another monitor, when there is one.
+  o.windowed = presenterWindowed;
+  o.presenter = presenterWindowed || usePresenter_;
   // The show ends on a slide: the tab shows it, as PowerPoint's normal view does.
   o.ended = [this](size_t slide) {
     showing_ = false;

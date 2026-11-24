@@ -91,8 +91,9 @@ std::unique_ptr<PresenterView> PresenterView::Create(PresenterHost& host, Presen
     wc.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
     return RegisterClassExW(&wc) != 0;
   }();
-  if (!registered) return nullptr;
   auto impl = std::make_unique<Impl>(host, deck, renderer);
+  if (!monitor) return std::unique_ptr<PresenterView>(new PresenterView(std::move(impl)));  // off screen
+  if (!registered) return nullptr;
   MONITORINFO mi{sizeof(mi)};
   GetMonitorInfoW(monitor, &mi);
   RECT r = mi.rcMonitor;
@@ -147,6 +148,15 @@ void PresenterView::Impl::RenderThumbs(float w, float h) {
     if (SUCCEEDED(offscreen->EndDraw())) thumbs[i] = b;
     offscreen->SetTarget(nullptr);
   }
+}
+
+void PresenterView::Prepare(float w, float h) {
+  Impl& v = *impl_;
+  const float s = static_cast<float>(v.Scale(h)), pad = std::floor(16 * s), stripH = std::floor(110 * s);
+  v.strip = {pad, h - stripH, w - pad, h - pad / 2};
+  draw::Size size = v.renderer.SlideSize();
+  const float th = std::floor((v.strip.bottom - v.strip.top) * 0.86f);
+  v.RenderThumbs(std::floor(th * size.width / size.height), th);
 }
 
 void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
@@ -216,7 +226,8 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
     if (!b && none) say(none, label.Get(), r, dim.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
     dc->DrawRectangle(r, box.Get(), 1);
   };
-  slide(v.state.current, v.current, v.state.blank, nullptr);
+  const bool atEnd = v.state.slide == PresenterState::kEnd;
+  slide(v.state.current, v.current, v.state.blank, atEnd ? L"End of slide show, click to exit." : nullptr);
   const float right = split + pad / 2, nextH = std::floor((bottom - top) * 0.42f);
   say(v.state.stepsLeft > 0 ? L"Next animation" : L"Next slide", label.Get(), {right, top, w - pad, top + 28 * s},
       dim.Get());
@@ -234,7 +245,7 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   std::wstring notes;
   if (v.state.slide != PresenterState::kEnd && v.state.slide < count)
     if (const Slide* sl = v.deck.GetSlide(v.state.slide)) notes = sl->NotesText();
-  if (notes.empty()) notes = L"No notes on this slide.";
+  if (notes.empty() && !atEnd) notes = L"No notes on this slide.";
   ComPtr<IDWriteTextLayout> layout;
   const float nw = std::max(1.f, v.notes.right - v.notes.left), nh = std::max(1.f, v.notes.bottom - v.notes.top);
   if (SUCCEEDED(dw->CreateTextLayout(notes.c_str(), static_cast<UINT32>(notes.size()), notesFmt.Get(), nw, 1e6f, &layout))) {
@@ -278,12 +289,7 @@ void PresenterView::Impl::Paint() {
   const UINT w = static_cast<UINT>(std::max(1L, rc.right)), h = static_cast<UINT>(std::max(1L, rc.bottom));
   if ((!chain.DC() || chain.Generation() != gpu::Generation()) && !chain.Create(hwnd)) return;
   chain.Resize(w, h);
-  // Thumbnails first (off screen), then the view.
-  const float s = static_cast<float>(Scale(static_cast<float>(h))), pad = std::floor(16 * s), stripH = std::floor(110 * s);
-  strip = {pad, h - stripH, w - pad, h - pad / 2};
-  draw::Size size = renderer.SlideSize();
-  const float th = std::floor((strip.bottom - strip.top) * 0.86f);
-  RenderThumbs(std::floor(th * size.width / size.height), th);
+  owner->Prepare(static_cast<float>(w), static_cast<float>(h));  // thumbnails first (off screen), then the view
   ID2D1DeviceContext* dc = chain.DC();
   dc->BeginDraw();
   owner->Draw(dc, static_cast<float>(w), static_cast<float>(h));

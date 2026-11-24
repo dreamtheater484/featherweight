@@ -165,7 +165,7 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     t.cmd = cmd;
     t.enabled = q.enabled;
     t.checked = q.checked;
-    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide;
+    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide || cmd == CmdUsePresenterView;
     t.dropdown = !MenuOf(cmd).empty();
   }
   if (glyph) t.glyph = glyph;
@@ -383,6 +383,7 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     mon.tool.onChange = [this](const ToolValue& v) {
       if (v.index >= 0) showMonitor_ = v.index - 1;
     };
+    add(CmdUsePresenterView, 0, S::Medium, L"Use Presenter View", L"V", S::Medium);  // P3: a check box
   }
 
   // ---- Review

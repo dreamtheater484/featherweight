@@ -170,7 +170,9 @@ class Show final : public anim::FrameSource, private PresenterHost {
  private:
   double Now() const { return capture_ ? clock_ : anim::Now(); }
   void Step(double t);
-  bool Save(const std::wstring& name);
+  bool Save(const std::wstring& name, ID2D1Bitmap1* from = nullptr, UINT w = 0, UINT h = 0);
+  // --show-capture with --show-presenter: the presenter view as it is now, drawn off screen.
+  bool SavePresenter(const std::wstring& name);
   static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l);
   LRESULT Proc(UINT m, WPARAM w, LPARAM l);
   void PostStop() { PostMessageW(hwnd_, kMsgStop, 0, 0); }
@@ -190,7 +192,9 @@ class Show final : public anim::FrameSource, private PresenterHost {
   M SlideToPixels() const { return M::Scale(scale_, scale_); }
 
   // Scenes.
-  std::unique_ptr<Scene> MakeScene(size_t index, bool built, double now);
+  // `built`: every step done (coming back to a slide). `steps` >= 0: the main steps up to that one
+  // done and settled (the presenter view's next animation).
+  std::unique_ptr<Scene> MakeScene(size_t index, bool built, double now, int steps = -1);
   static TargetBox BoxOf(void* ctx, const TargetKey& key);
   bool RenderSprite(Scene& s, int i);
   void DrawSprite(Scene& s, int i, const Pose& pose);
@@ -259,9 +263,10 @@ class Show final : public anim::FrameSource, private PresenterHost {
 
   std::unique_ptr<Scene> cur_, next_;
   std::vector<size_t> history_;  // slides shown, for "last viewed"
-  // P3: the presenter view, and the current slide fully built for its "next animation".
+  // P3: the presenter view, and the current slide one click on for its "next animation".
   std::unique_ptr<PresenterView> presenter_;
   std::unique_ptr<Scene> built_;
+  int builtStep_ = -1;
   void UpdatePresenter();
   void PresenterKey(UINT vk) override { Key(vk); }
   void PresenterGoTo(size_t slide) override {
@@ -400,7 +405,11 @@ bool Show::Create() {
     hwnd_ = nullptr;
     return false;
   }
-  if (capture_) return true;  // CaptureAll drives it
+  if (capture_) {
+    // CaptureAll drives it; with --show-presenter the presenter view too, off screen (no window).
+    if (opts_.presenter) presenter_ = PresenterView::Create(*this, deck_, renderer_, nullptr, false, nullptr);
+    return true;
+  }
   // A show keeps the display and the PC awake while it runs (the power settings stay as they are).
   SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
   awake_ = true;
@@ -572,7 +581,7 @@ TargetBox Show::BoxOf(void* ctx, const TargetKey& key) {
   return {};
 }
 
-std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now) {
+std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now, int steps) {
   auto s = std::make_unique<Scene>();
   s->index = index;
   if (index == kEnd) return s;
@@ -648,8 +657,15 @@ std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now) {
       }
   }
   s->animator = Animator(&s->timing, &Show::BoxOf, s.get());
-  if (built) s->animator.FinishAll(now);
-  else s->animator.Start(now, false);
+  if (built) {
+    s->animator.FinishAll(now);
+  } else if (steps >= 0) {
+    s->animator.Start(now);
+    s->animator.Finish();
+    while (s->animator.StepIndex() < steps && s->animator.Click(now)) s->animator.Finish();
+  } else {
+    s->animator.Start(now, false);
+  }
   RenderFrame(*s);
   FinishGpu(250);
   return s;
@@ -1321,11 +1337,15 @@ void Show::UpdatePresenter() {
   if (!presenter_ || !cur_) return;
   PresenterState s;
   s.slide = cur_->index;
-  s.current = cur_->frame.Get();
+  s.current = cur_->index == kEnd ? nullptr : cur_->frame.Get();  // the end's frame is black: the view says so
   s.blank = blank_;
   if (cur_->index != kEnd && cur_->animator.HasNextStep()) {
-    // Clicks left on this slide: the next click's preview is the slide built (P3: all of it).
-    if (!built_ || built_->index != cur_->index) built_ = MakeScene(cur_->index, true, Now());
+    // Clicks left on this slide: the preview is the slide as the next click leaves it.
+    const int step = cur_->animator.StepIndex() + 1;
+    if (!built_ || built_->index != cur_->index || builtStep_ != step) {
+      built_ = MakeScene(cur_->index, false, Now(), step);
+      builtStep_ = step;
+    }
     s.next = built_ ? built_->frame.Get() : nullptr;
     s.stepsLeft = std::max(1, static_cast<int>(cur_->timing.main.steps.size()) - cur_->animator.StepIndex());
   } else {
@@ -1417,19 +1437,24 @@ void Show::Step(double t) {
   Draw(clock_);
 }
 
-bool Show::Save(const std::wstring& name) {
-  if (!target_ || !dc_) return false;
+bool Show::Save(const std::wstring& name, ID2D1Bitmap1* from, UINT w, UINT h) {
+  if (!from) {
+    from = target_.Get();
+    w = w_;
+    h = h_;
+  }
+  if (!from || !dc_) return false;
   D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
       D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
       D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
   ComPtr<ID2D1Bitmap1> cpu;
   D2D1_MAPPED_RECT mapped{};
-  if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w_, h_), nullptr, 0, &props, &cpu)) ||
-      FAILED(cpu->CopyFromBitmap(nullptr, target_.Get(), nullptr)) || FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped)))
+  if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, &props, &cpu)) ||
+      FAILED(cpu->CopyFromBitmap(nullptr, from, nullptr)) || FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped)))
     return false;
   ComPtr<IWICBitmap> image;
-  HRESULT hr = gfx::WIC()->CreateBitmapFromMemory(w_, h_, GUID_WICPixelFormat32bppPBGRA, mapped.pitch,
-                                                  mapped.pitch * h_, mapped.bits, &image);
+  HRESULT hr = gfx::WIC()->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, mapped.pitch,
+                                                  mapped.pitch * h, mapped.bits, &image);
   cpu->Unmap();
   std::wstring path = opts_.captureDir + L"\\" + name + L".png";
   ComPtr<IWICStream> stream;
@@ -1444,6 +1469,21 @@ bool Show::Save(const std::wstring& name) {
          SUCCEEDED(encoder->Commit());
 }
 
+bool Show::SavePresenter(const std::wstring& name) {
+  if (!presenter_ || !cur_) return false;
+  // The next slide as kMsgPrerender makes it in the show (a capture has no message loop).
+  const size_t n = cur_->index == kEnd ? kEnd : NextIndex(cur_->index);
+  if (n != kEnd && (!next_ || next_->index != n)) next_ = MakeScene(n, false, Now());
+  UpdatePresenter();
+  constexpr UINT w = 1600, h = 900;
+  ComPtr<ID2D1Bitmap1> b = NewBitmap(w, h);
+  presenter_->Prepare(w, h);
+  if (!BeginOffscreen(b.Get(), false)) return false;
+  presenter_->Draw(dc_.Get(), w, h);
+  EndOffscreen();
+  return Save(name, b.Get(), w, h);
+}
+
 // Every slide in show order: its transition at the middle, steps that start by themselves, each
 // trigger, then each click's step at its middle and end.
 int Show::CaptureAll() {
@@ -1453,6 +1493,13 @@ int Show::CaptureAll() {
     wchar_t name[64];
     swprintf(name, 64, fmt, slide + 1, k);
     if (Save(name)) ++saved;
+  };
+  // With --show-presenter, the presenter view once each slide or step has settled.
+  auto savePresenter = [&](const wchar_t* fmt, size_t slide, int k) {
+    if (!presenter_) return;
+    wchar_t name[64];
+    swprintf(name, 64, fmt, slide + 1, k);
+    if (SavePresenter(name)) ++saved;
   };
   // The middle of whatever runs now, and its end.
   auto playOut = [&](size_t slide, const wchar_t* mid, const wchar_t* end, int k, double length) {
@@ -1479,6 +1526,7 @@ int Show::CaptureAll() {
       playOut(slide, L"s%02zu-1-auto-mid", L"s%02zu-1-auto-end", 0, steps[0].length);
     else
       save(L"s%02zu-1-start", slide, 0);
+    savePresenter(L"p%02zu-1-start", slide, 0);
     // Triggers: a click on each trigger shape.
     for (size_t t = 0; t < cur_->timing.triggers.size(); ++t) {
       const Sequence& seq = cur_->timing.triggers[t];
@@ -1491,12 +1539,14 @@ int Show::CaptureAll() {
       double length = step < static_cast<int>(steps.size()) ? steps[static_cast<size_t>(step)].length : 0;
       Next(false);
       playOut(slide, L"s%02zu-3-step%02d-mid", L"s%02zu-3-step%02d-end", k, length);
+      savePresenter(L"p%02zu-3-step%02d", slide, k);
     }
     Next(false);
   }
   if (cur_ && cur_->index == kEnd) {
     Draw(clock_);
     save(L"s%02zu-end", deck_.SlideCount(), 0);
+    savePresenter(L"p%02zu-end", deck_.SlideCount(), 0);
   }
   return saved;
 }
