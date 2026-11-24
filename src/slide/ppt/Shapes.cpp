@@ -536,7 +536,10 @@ class Writer {
     const double dist = std::sqrt(dx * dx + dy * dy);
     double dir = std::atan2(dy, dx) * 180 / 3.14159265358979;
     if (dir < 0) dir += 360;
-    return "<a:effectLst><a:outerShdw dist=\"" + Num(std::llround(dist)) + "\" dir=\"" + Num(std::llround(dir * 60000) % 21600000) +
+    // PowerPoint 2007's soft shadows keep their blur (EMUs) in the tertiary FOPT's 0x021C.
+    const int32_t blur = static_cast<int32_t>(Prop(s, 0x021C, 0));
+    return "<a:effectLst><a:outerShdw" + (blur > 0 ? " blurRad=\"" + Num(blur) + "\"" : std::string()) + " dist=\"" + Num(std::llround(dist)) +
+           "\" dir=\"" + Num(std::llround(dir * 60000) % 21600000) +
            "\" algn=\"tl\" rotWithShape=\"0\">" + ColorXml(Rgb(s, Prop(s, 0x0201, 0x808080)), Alpha(Prop(s, 0x0204, 0x10000))) +
            "</a:outerShdw></a:effectLst>";
   }

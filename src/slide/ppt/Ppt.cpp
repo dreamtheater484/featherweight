@@ -873,6 +873,7 @@ class Converter {
     defaults.basePf = basePf_;
     defaults.baseCf = baseCf_;
     defaults.scheme = mains[0].cx.scheme;
+    defaults.kern[2] = mains[0].cx.kern[2];  // text boxes kern as the first master's other text (when it was saved with any)
     for (int t = 0; t < 9; ++t) defaults.styles[t] = envStyles_[t];
     defaults.docOther = envStyles_[kOther];
     const long long cx = std::clamp<long long>(std::llround(slideW_ * kEmuPerUnit), 914400, 51206400);
