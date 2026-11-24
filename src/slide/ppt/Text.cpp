@@ -71,7 +71,18 @@ std::string Spacing(const char* tag, int16_t v) {
 }
 
 // a:pPr's attributes and children (without the element itself): `attrs` and `inner`.
-void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::string& attrs, std::string& inner) {
+// TextAutoNumberSchemeEnum in order, as DrawingML names the schemes.
+constexpr const char* kAutoNumber[] = {
+    "alphaLcPeriod", "alphaUcPeriod", "arabicParenR", "arabicPeriod", "romanLcParenBoth", "romanLcParenR", "romanLcPeriod",
+    "romanUcPeriod", "alphaLcParenBoth", "alphaLcParenR", "alphaUcParenBoth", "alphaUcParenR", "arabicParenBoth",
+    "arabicPlain", "romanUcParenBoth", "romanUcParenR", "ea1ChsPlain", "ea1ChsPeriod", "circleNumDbPlain",
+    "circleNumWdWhitePlain", "circleNumWdBlackPlain", "ea1ChtPlain", "ea1ChtPeriod", "arabic1Minus", "arabic2Minus",
+    "hebrew2Minus", "ea1JpnKorPlain", "ea1JpnKorPeriod", "arabicDbPlain", "arabicDbPeriod", "thaiAlphaPeriod",
+    "thaiAlphaParenR", "thaiAlphaParenBoth", "thaiNumPeriod", "thaiNumParenR", "thaiNumParenBoth", "hindiAlphaPeriod",
+    "hindiNumPeriod", "ea1JpnChsDbPeriod", "hindiNumParenR", "hindiAlpha1Period"};
+
+void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::string& attrs, std::string& inner,
+               const Pf9* pf9 = nullptr) {
   if (level > 0) attrs += " lvl=\"" + Num(level) + "\"";
   if (pf.Has(kLeftMargin)) attrs += " marL=\"" + Num(Emu(pf.leftMargin)) + "\"";
   if (pf.Has(kLeftMargin) || pf.Has(kIndent)) attrs += " indent=\"" + Num(Emu(pf.indent - (pf.Has(kLeftMargin) ? pf.leftMargin : 0))) + "\"";
@@ -86,14 +97,21 @@ void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::st
   if (pf.bulletFlags & 1) {
     if (pf.bulletFlags & 4) inner += "<a:buClr>" + ColorXml(ColorOf(pf.bulletColor, cx, ColorOf(cf.color, cx, cx.scheme.rgb[1]))) + "</a:buClr>";
     if ((pf.bulletFlags & 8) && pf.bulletSize > 0) inner += "<a:buSzPct val=\"" + Num(std::clamp<int>(pf.bulletSize, 25, 400) * 1000LL) + "\"/>";
-    std::string font = pf.bulletFlags & 2 ? FontName(cx, pf.bulletFont) : std::string();
-    if (!font.empty()) inner += "<a:buFont typeface=\"" + Esc(font) + "\"/>";
-    uint32_t ch = pf.Has(kBulletChar) && pf.bulletChar ? pf.bulletChar : 0x2022;
-    if (ch >= 0xF000 && ch <= 0xF0FF) ch -= 0xF000;  // a symbol font's character, as DrawingML names it
-    if (ch < 0x20 || (ch >= 0xD800 && ch < 0xE000) || ch >= 0xFFFE) ch = 0x2022;
-    std::string c;
-    AppendUtf8(c, ch);
-    inner += "<a:buChar char=\"" + Esc(c) + "\"/>";
+    if (pf9 && pf9->autoNumber == 1) {  // a number, in the text's font
+      const int scheme = pf9->scheme >= 0 && pf9->scheme < static_cast<int>(std::size(kAutoNumber)) ? pf9->scheme : 3;
+      inner += std::string("<a:buAutoNum type=\"") + kAutoNumber[scheme] + "\"";
+      if (pf9->start > 1 && pf9->start <= 32767) inner += " startAt=\"" + Num(pf9->start) + "\"";
+      inner += "/>";
+    } else {
+      std::string font = pf.bulletFlags & 2 ? FontName(cx, pf.bulletFont) : std::string();
+      if (!font.empty()) inner += "<a:buFont typeface=\"" + Esc(font) + "\"/>";
+      uint32_t ch = pf.Has(kBulletChar) && pf.bulletChar ? pf.bulletChar : 0x2022;
+      if (ch >= 0xF000 && ch <= 0xF0FF) ch -= 0xF000;  // a symbol font's character, as DrawingML names it
+      if (ch < 0x20 || (ch >= 0xD800 && ch < 0xE000) || ch >= 0xFFFE) ch = 0x2022;
+      std::string c;
+      AppendUtf8(c, ch);
+      inner += "<a:buChar char=\"" + Esc(c) + "\"/>";
+    }
   } else {
     inner += "<a:buNone/>";
   }
@@ -226,6 +244,50 @@ bool ReadMasterStyle(const Rec& r, MasterStyle& out) {
     if (level < 5) out.levels[level] = std::make_pair(pf, cf);
   }
   return true;
+}
+
+std::span<const uint8_t> Pp9Tag(std::span<const uint8_t> progTags) {
+  Records rs(progTags);
+  for (Rec r; rs.Next(r);) {
+    if (r.type != 0x138A) continue;  // ProgBinaryTag: its name, then its data
+    Records tag(r.body);
+    Rec name, data;
+    if (!tag.Next(name) || name.type != 0x0FBA || !tag.Next(data) || data.type != 0x138B) continue;
+    static constexpr char16_t kName[] = u"___PPT9";
+    if (name.body.size() != 14) continue;
+    bool same = true;
+    for (size_t i = 0; i < 7 && same; ++i) same = (name.body[2 * i] | name.body[2 * i + 1] << 8) == kName[i];
+    if (same) return data.body;
+  }
+  return {};
+}
+
+void ReadStyle9(std::span<const uint8_t> tag, std::vector<Pf9>& out) {
+  out.clear();
+  const auto atom = Find(tag, 0x0FAC);  // StyleTextProp9Atom: PF9, CF9 and SI exceptions, in turn
+  if (!atom) return;
+  Bytes b(atom->body);
+  while (b.Left() >= 12 && out.size() < 16) {
+    Pf9 p;
+    const uint32_t pf = b.U32();
+    if (pf & 0x00800000) b.I16();                     // bulletBlipRef
+    if (pf & 0x02000000) p.autoNumber = b.U16() != 0;  // fBulletHasAutoNumber
+    if (pf & 0x01000000) p.scheme = b.U16(), p.start = b.I16();
+    b.U32();  // CF9: its masks only
+    const uint32_t si = b.U32();
+    if (si & 0x001) b.U16();  // spellInfo
+    if (si & 0x002) b.U16();  // lid
+    if (si & 0x004) b.U16();  // altLid
+    if (si & 0x040) b.U16();  // bidi
+    if (si & 0x020) b.U32();  // pp10runid, grammarError
+    if (si & 0x200) {         // smartTags
+      const uint32_t n = b.U32();
+      if (n > 4096) break;
+      b.Skip(4 * n);
+    }
+    if (!b.Ok()) break;
+    out.push_back(p);
+  }
 }
 
 void ReadText(std::span<const uint8_t> records, Text& out, const std::function<std::string(uint32_t)>& link) {
@@ -373,8 +435,12 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
       if (const Cf* c = cfAt(at)) cf.Over(*c);
       return cf;
     };
+    // PowerPoint 2000's paragraph additions: the entry the first character's own CF run names.
+    const Pf9* pf9 = nullptr;
+    const Cf* own = cfAt(start);
+    if (const size_t rt = own && (own->mask & 0x3C00) ? (own->style >> 10) & 0xF : 0; rt < text.pf9.size()) pf9 = &text.pf9[rt];
     std::string attrs, inner;
-    ParaProps(pf, cfFor(start), cx, level, attrs, inner);
+    ParaProps(pf, cfFor(start), cx, level, attrs, inner, pf9);
     out += "<a:p><a:pPr" + attrs + ">" + inner + "</a:pPr>";
     // Runs: split where the character properties, a link or a field change, and at line breaks.
     size_t i = start;

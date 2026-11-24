@@ -29,6 +29,7 @@ struct Shape {
   double space[4] = {};   // FSPGR: a group's space for its shapes
   int placeholder = -1, phPosition = -1, phSize = 0;
   std::span<const uint8_t> textbox;
+  std::span<const uint8_t> style9;  // the "___PPT9" tag's records: the text's PowerPoint 2000 additions
   std::string clickTarget;
 };
 
@@ -206,6 +207,8 @@ class Writer {
               s.placeholder = p.U8();
               s.phSize = p.U8();
               if (!p.Ok()) s.placeholder = -1;
+            } else if (c.type == 0x1388) {  // ProgTags
+              s.style9 = Pp9Tag(c.body);
             } else if (c.type == 0x0FF2 && c.inst == 0) {  // InteractiveInfo: on click
               if (auto atom = Find(c.body, 0x0FF3)) {
                 Bytes a(atom->body);
@@ -629,6 +632,7 @@ class Writer {
     }
     t.type = -1;
     ReadText(s.textbox, t, env_.hyperlink);
+    if (!s.style9.empty()) ReadStyle9(s.style9, t.pf9);
     if (t.type < 0 || t.type > 8) t.type = s.placeholder >= 0 ? PlaceholderTextType(s) : kOther;
     if (env_.notes && s.placeholder == 0x0C) t.type = kNotes;
     t.placeholder = s.placeholder >= 0;
