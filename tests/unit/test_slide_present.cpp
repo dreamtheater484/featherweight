@@ -109,6 +109,41 @@ TEST(SlideInsertMedia) {
   CHECK(t.triggers.size() == 1 && t.triggers[0].triggerSpid == video);
   CHECK(t.initiallyHidden.empty());
 
+  // Playback (P3): the click plays the video from its start, a click on the video pauses or plays it;
+  // nothing is posed or hidden, and the step takes no time (the media plays on its own).
+  {
+    using fw::slide::show::Behavior;
+    using fw::slide::show::MediaCommand;
+    using fw::slide::show::MediaEvent;
+    CHECK(t.main.steps.size() == 1 && t.main.steps[0].behaviors.size() == 1);
+    const Behavior& play = t.main.steps[0].behaviors[0];
+    CHECK(play.kind == Behavior::Command && play.command == MediaCommand::Play && play.commandFromMs == 0);
+    CHECK(play.target.spid == video && t.main.steps[0].length == 0);
+    CHECK(t.triggers[0].steps.size() == 1 && t.triggers[0].steps[0].behaviors.size() == 1);
+    CHECK(t.triggers[0].steps[0].behaviors[0].command == MediaCommand::TogglePause);
+    CHECK(t.targets.empty() && t.unsupportedEffects == 0);
+    CHECK(t.media.size() == 1 && t.media[0].spid == video && t.media[0].video);
+    CHECK(t.media[0].volume > 0.79f && t.media[0].volume < 0.81f && !t.media[0].mute && !t.media[0].loop);
+    CHECK(t.media[0].showWhenStopped && !t.media[0].fullScreen && t.media[0].slides == 1);
+
+    fw::slide::show::Animator a(&t, nullptr, nullptr);
+    a.Start(0);
+    CHECK(a.TakeMediaEvents().empty());
+    CHECK(a.Click(10));
+    std::vector<MediaEvent> ev = a.TakeMediaEvents();
+    CHECK(ev.size() == 1 && ev[0].spid == video && ev[0].command == MediaCommand::Play && ev[0].fromMs == 0);
+    CHECK(!a.Running(10) && !a.HasNextStep());
+    CHECK(a.PoseOf({video}).visible);
+    for (int k = 0; k < 3; ++k) {  // every click on it
+      CHECK(a.Trigger(video, 20 + k));
+      ev = a.TakeMediaEvents();
+      CHECK(ev.size() == 1 && ev[0].command == MediaCommand::TogglePause);
+    }
+    CHECK(a.TakeMediaEvents().empty());
+    a.FinishAll(40);  // coming back to the slide: built, nothing plays
+    CHECK(a.TakeMediaEvents().empty());
+  }
+
   // An audio after it: its own node, which stops when the slide changes; the same video again shares
   // the file.
   uint32_t audio = 0, again = 0;
