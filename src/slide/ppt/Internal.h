@@ -213,6 +213,8 @@ struct Text {
   std::vector<Pf9> pf9;     // by pp9rt
   // By paragraph: margin and indent (DrawingML's marL and indent, EMUs) from PowerPoint 2007's copy of the shape.
   std::vector<std::optional<std::pair<double, double>>> indents;
+  // By character: letter spacing (hundredths of a point) from that copy; empty when there's none.
+  std::vector<int> spacing;
 };
 
 // Reads a text's records (TextHeaderAtom, TextCharsAtom or TextBytesAtom, StyleTextPropAtom,
