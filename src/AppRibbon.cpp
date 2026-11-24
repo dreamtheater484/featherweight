@@ -257,7 +257,8 @@ ui::FilePage::Model App::CurrentFilePage() {
     name = name.substr(0, name.find_last_of(L'.'));
     fresh.push_back(entry(CmdUserTemplate + static_cast<int>(i), name, kindGlyph(fw::KindOfPath(userTemplates_[i]))));
   }
-  if (docs || fw::EditorShipped(fw::FileKind::Workbook)) fresh.push_back(entry(CmdUserTemplatesFolder, L"More templates…", icon::FolderOpen));
+  if (docs || fw::EditorShipped(fw::FileKind::Workbook) || fw::EditorShipped(fw::FileKind::Presentation))
+    fresh.push_back(entry(CmdUserTemplatesFolder, L"More templates…", icon::FolderOpen));
 
   // Open: browse, then the recent files.
   auto& open = m.entries[FP::kOpen];
