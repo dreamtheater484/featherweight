@@ -595,8 +595,12 @@ class Writer {
     std::string a;
     const uint32_t wrap = Prop(s, 0x0085, 0);
     a += wrap == 2 ? " wrap=\"none\"" : " wrap=\"square\"";
-    a += " lIns=\"" + Num(Prop(s, 0x0081, 91440)) + "\" tIns=\"" + Num(Prop(s, 0x0082, 45720)) + "\" rIns=\"" +
-         Num(Prop(s, 0x0083, 91440)) + "\" bIns=\"" + Num(Prop(s, 0x0084, 45720)) + "\"";
+    // Signed: table cells PowerPoint saves often have a slightly negative inset (-635), drawn as none.
+    auto inset = [&](uint16_t pid, uint32_t def) {
+      return Num(std::clamp<int64_t>(static_cast<int32_t>(Prop(s, pid, def)), 0, 51206400));
+    };
+    a += " lIns=\"" + inset(0x0081, 91440) + "\" tIns=\"" + inset(0x0082, 45720) + "\" rIns=\"" + inset(0x0083, 91440) +
+         "\" bIns=\"" + inset(0x0084, 45720) + "\"";
     static const char* const kAnchor[] = {"t", "ctr", "b", "t", "ctr", "b", "t", "b", "t", "b"};
     const uint32_t an = Prop(s, 0x0087, 0);
     a += std::string(" anchor=\"") + kAnchor[an < 10 ? an : 0] + "\"";
