@@ -30,6 +30,10 @@
 # one-monitor reference run (p3-plan, Reference PC). -IgnoreInput: Roy's rule from 24 Nov, input never
 # spoils a run, so the idle window above isn't waited for (only the CPU, builds, the lock, the console);
 # the display is kept on while it waits and runs. -CpuLimit: the busy limit for the quiet minute.
+# -AllowRemote: runs in an active Remote Desktop session too (Roy, 24 Nov, for 4.0's gate); the frames
+# then go to RDP's display, not the panel, and the status lines say "over Remote Desktop".
+# -BesideFeatherweight: another Featherweight may run (someone's own, idle): a --show bench is its own
+# instance (no instance mutex, nothing handed over) and never touches it; the CPU check still counts it.
 param(
   [string]$Exe = '',   # default: build\Release\Featherweight.exe of this checkout
   [string]$Deck = '',  # default: bench50.pptx next to this script
@@ -44,7 +48,9 @@ param(
   [switch]$Windowed,   # --show-windowed: in windows, never full screen
   [switch]$IgnoreInput,
   [int]$CpuLimit = 10,
-  [string]$ExpectSha256 = ''  # refuse (exit 5) if the exe's SHA-256 isn't this one at launch (an exe rebuilt in place)
+  [string]$ExpectSha256 = '',  # refuse (exit 5) if the exe's SHA-256 isn't this one at launch (an exe rebuilt in place)
+  [switch]$AllowRemote,
+  [switch]$BesideFeatherweight
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Exe) { $Exe = Join-Path $PSScriptRoot '..\..\..\build\Release\Featherweight.exe' }
@@ -153,6 +159,7 @@ $window = New-Object System.Collections.Generic.List[object]
 [void](Get-Busy)
 $lastWhy = ''
 $try = 0
+$mySession = (Get-Process -Id $PID).SessionId
 Write-Status "armed: $Exe, $Deck, report $Report, up to $Tries tries, $MaxHours h$(if ($Windowed) { ', windowed' })$(if ($Presenter) { ', presenter view' })$(if ($IgnoreInput) { ', input ignored' })"
 if ($IgnoreInput) { [void][QuietPc]::SetThreadExecutionState([uint32]2147483651) }  # ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
 while ((Get-Date) -lt $deadline) {
@@ -164,11 +171,12 @@ while ((Get-Date) -lt $deadline) {
   $fw = @(Get-Process -Name Featherweight -ErrorAction SilentlyContinue).Count
   $cpuQuiet = $window.Count -ge 12 -and -not ($window | Where-Object { $_.Cpu -lt 0 -or $_.Cpu -ge $CpuLimit -or $_.Tools -gt 0 })
   $why = @()
-  if ([QuietPc]::Remote()) { $why += 'over Remote Desktop' }
-  elseif (-not [QuietPc]::OnConsole()) { $why += 'not on the console (disconnected)' }
-  elseif (Get-Process LogonUI -ErrorAction SilentlyContinue) { $why += 'locked' }
+  $remote = [QuietPc]::Remote()
+  if ($remote -and -not $AllowRemote) { $why += 'over Remote Desktop' }
+  elseif (-not $remote -and -not [QuietPc]::OnConsole()) { $why += 'not on the console (disconnected)' }
+  elseif (@(Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $mySession }).Count) { $why += 'locked' }
   if (-not $AbortTest -and -not $cpuQuiet) { $why += 'CPU or a build busy' }
-  if ($fw -gt 0) { $why += 'a Featherweight runs' }
+  if ($fw -gt 0 -and -not $BesideFeatherweight) { $why += 'a Featherweight runs' }
   if (-not $IgnoreInput -and $idle -lt 120) { $why += 'someone at the PC' }
   if (-not $IgnoreInput -and $idle -gt 270) { $why += 'idle too long (display may go off)' }
   if ($why.Count -eq 0 -and (Test-Path $Lock)) {
@@ -189,7 +197,8 @@ while ((Get-Date) -lt $deadline) {
   try {
     $try++
     if (Test-Path $Report) { Remove-Item $Report }
-    Write-Status "try ${try}: bench starts (idle $([math]::Round($idle)) s, console, not remote, not locked)"
+    $where = if ($remote) { 'over Remote Desktop (frames go to RDP, not the panel)' } else { 'console, not remote' }
+    Write-Status "try ${try}: bench starts (idle $([math]::Round($idle)) s, $where, not locked$(if ($fw -gt 0) { ", beside $fw other Featherweight" }))"
     if ($ExpectSha256 -and (Get-FileHash $Exe -Algorithm SHA256).Hash -ne $ExpectSha256.ToUpperInvariant()) {
       Write-Status "the exe's SHA-256 isn't $ExpectSha256 any more (rebuilt?): not run"
       exit 5
