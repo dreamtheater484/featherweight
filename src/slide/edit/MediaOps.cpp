@@ -10,6 +10,7 @@
 #include "pkg/XmlWriter.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
+#include "slide/edit/TimingOps.h"
 
 namespace fw::slide::edit {
 
@@ -84,11 +85,15 @@ uint32_t MaxTimeNodeId(pugi::xml_node n) {
   return best;
 }
 
-// What PowerPoint 2021 adds to a slide's timing for Insert > Video / Audio (Start: In Click Sequence):
-// a play step at the end of the main sequence, the media node, and a click on the shape toggling
-// pause. False when the slide's timing has no place for them.
-bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durationMs) {
-  if (!sld) return false;
+// The places in a slide's timing media goes, made when missing: the root's list and the main
+// sequence's steps. Null `steps` when the timing has no place for them.
+struct TimingPlaces {
+  pugi::xml_node timing, list, mainSeq, steps;
+};
+
+TimingPlaces Places(pugi::xml_node sld) {
+  TimingPlaces t;
+  if (!sld) return t;
   pugi::xml_node timing = P(sld, "timing");
   if (!timing) timing = Put(sld, WithNs("<p:timing/>"), P(sld, "extLst"));
   pugi::xml_node tnLst = P(timing, "tnLst");
@@ -98,10 +103,10 @@ bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durati
   pugi::xml_node rootPar = P(tnLst, "par");
   if (!rootPar) rootPar = Put(tnLst, WithNs("<p:par><p:cTn id=" + id() + " dur=\"indefinite\" restart=\"never\" nodeType=\"tmRoot\"/></p:par>"));
   pugi::xml_node rootCTn = P(rootPar, "cTn");
-  if (!rootCTn) return false;
+  if (!rootCTn) return t;
   pugi::xml_node list = P(rootCTn, "childTnLst");
   if (!list) list = Put(rootCTn, WithNs("<p:childTnLst/>"), P(rootCTn, "subTnLst"));
-  if (!list) return false;
+  if (!list) return t;
 
   pugi::xml_node mainSeq;
   for (pugi::xml_node c = list.first_child(); c && !mainSeq; c = c.next_sibling()) {
@@ -118,9 +123,22 @@ bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durati
   pugi::xml_node mainCTn = P(mainSeq, "cTn");
   pugi::xml_node steps = P(mainCTn, "childTnLst");
   if (!steps) steps = Put(mainCTn, WithNs("<p:childTnLst/>"), P(mainCTn, "subTnLst"));
-  if (!steps) return false;
+  t.timing = timing;
+  t.list = list;
+  t.mainSeq = mainSeq;
+  t.steps = steps;
+  return t;
+}
 
-  const std::string target = "<p:tgtEl><p:spTgt spid=\"" + std::to_string(spid) + "\"/></p:tgtEl>";
+std::string Target(uint32_t spid) { return "<p:tgtEl><p:spTgt spid=\"" + std::to_string(spid) + "\"/></p:tgtEl>"; }
+
+// The play step, at the end of the main sequence (In Click Sequence): a click group holding the media call.
+bool AddPlayStep(pugi::xml_node sld, uint32_t spid, double durationMs) {
+  TimingPlaces t = Places(sld);
+  if (!t.steps) return false;
+  uint32_t next = MaxTimeNodeId(t.timing) + 1;
+  auto id = [&] { return "\"" + std::to_string(next++) + "\""; };
+  const std::string target = Target(spid);
   const std::string dur = durationMs >= 1 ? " dur=\"" + std::to_string(std::llround(durationMs)) + "\"" : std::string();
   // The play step: a click group holding the media call.
   std::string play = "<p:par><p:cTn id=" + id() + " fill=\"hold\"><p:stCondLst><p:cond delay=\"indefinite\"/></p:stCondLst><p:childTnLst>";
@@ -131,7 +149,19 @@ bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durati
           "<p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:cmd type=\"call\" cmd=\"playFrom(0.0)\"><p:cBhvr><p:cTn id=" + id();
   play += dur + " fill=\"hold\"/>" + target + "</p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>";
   play += "</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>";
-  if (!Put(steps, WithNs(play))) return false;
+  return static_cast<bool>(Put(t.steps, WithNs(play)));
+}
+
+// What PowerPoint 2021 adds to a slide's timing for Insert > Video / Audio (Start: In Click Sequence):
+// a play step at the end of the main sequence, the media node, and a click on the shape toggling
+// pause. False when the slide's timing has no place for them.
+bool AddMediaTiming(pugi::xml_node sld, uint32_t spid, bool video, double durationMs) {
+  if (!AddPlayStep(sld, spid, durationMs)) return false;
+  TimingPlaces t = Places(sld);
+  pugi::xml_node list = t.list, mainSeq = t.mainSeq;
+  uint32_t next = MaxTimeNodeId(t.timing) + 1;
+  auto id = [&] { return "\"" + std::to_string(next++) + "\""; };
+  const std::string target = Target(spid);
 
   // The media node, after the last one (else after the main sequence).
   std::string kind = video ? "video" : "audio";
@@ -229,6 +259,47 @@ Result Editor::SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& 
   SetOrRemove(P(c, "cTn"), "repeatCount", p.loop ? "indefinite" : "");
   SetOrRemove(node, "fullScrn", video && p.fullScreen ? "1" : "");
   return call.End(Result{});
+}
+
+bool Editor::GetMediaStart(size_t slide, uint32_t id, MediaStart* out) const {
+  MediaPlayback p;
+  if (!out || !GetMediaPlayback(slide, id, &p)) return false;
+  // Its play step in the main sequence (a mediacall effect: Other, preset 1, on the shape), else none.
+  for (const AnimEffect& e : MainSequence(*this, slide))
+    if (e.shape == id && e.cls == AnimClass::Other && e.presetId == 1) {
+      *out = e.trigger == AnimTrigger::OnClick ? MediaStart::InClickSequence : MediaStart::Automatically;
+      return true;
+    }
+  *out = MediaStart::WhenClickedOn;
+  return true;
+}
+
+Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start) {
+  Call call(*this, u"Start");  // one step: the edits below join it
+  MediaStart now;
+  if (!GetMediaStart(slide, id, &now)) return call.End(Result::Fail(u"That isn't a video or audio the slide plays."));
+  if (now == start) return call.End(Result{});
+  std::u16string why;
+  auto playStep = [&]() -> int {
+    const std::vector<AnimEffect> seq = MainSequence(*this, slide, &why);
+    for (size_t i = 0; i < seq.size(); ++i)
+      if (seq[i].shape == id && seq[i].cls == AnimClass::Other && seq[i].presetId == 1) return static_cast<int>(i);
+    return -1;
+  };
+  int step = playStep();
+  if (start == MediaStart::WhenClickedOn) {
+    // The click on it plays it: its trigger toggles pause, and a toggle plays what hasn't played.
+    return call.End(step < 0 ? Result{} : RemoveAnimations(*this, slide, {static_cast<size_t>(step)}));
+  }
+  if (step < 0) {
+    Impl& m = *impl_;
+    const std::string part = m.SlidePart(slide);
+    if (!AddPlayStep(m.Edit(part), id, 0) || (step = playStep()) < 0)
+      return call.End(Result::Fail(u"The slide's animations can't be read, so the video's start can't change."));
+  }
+  AnimTimingPatch patch;
+  patch.trigger = start == MediaStart::InClickSequence ? AnimTrigger::OnClick : AnimTrigger::AfterPrevious;
+  return call.End(SetAnimationTiming(*this, slide, {static_cast<size_t>(step)}, patch));
 }
 
 Result Editor::InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id) {

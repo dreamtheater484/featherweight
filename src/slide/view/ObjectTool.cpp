@@ -319,6 +319,7 @@ constexpr NamedCommand kOther[] = {
     {CmdMediaHide, L"Hide while not playing", L""},
     {CmdMediaFullScreen, L"Play full screen", L""},
     {CmdMediaAcrossSlides, L"Play across slides", L""},
+    {CmdMediaStart, L"Start", L""},
     {CmdInsertTextBox, L"Insert a text box", L""},
     {CmdInsertTable, L"Insert a table", L""},
     {CmdInsertChart, L"Insert a chart", L""},
@@ -1956,6 +1957,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
       break;
     }
     case CmdMediaVolume:
+    case CmdMediaStart:
     case CmdMediaLoop:
     case CmdMediaHide:
     case CmdMediaFullScreen:
@@ -2298,6 +2300,39 @@ bool ObjectTool::SetSelectedPlayback(const fw::slide::edit::MediaPlayback& p) {
   return true;
 #else
   (void)p;
+  return false;
+#endif
+}
+
+bool ObjectTool::SelectedStart(int* start) {
+#if FW_SLIDE_EDIT
+  fw::slide::edit::MediaPlayback p;
+  fw::slide::edit::MediaStart s;
+  if (!start || !SelectedPlayback(&p, nullptr) ||
+      !host_.deck()->Editor()->GetMediaStart(host_.current(), selection_[0], &s))
+    return false;
+  *start = static_cast<int>(s);
+  return true;
+#else
+  (void)start;
+  return false;
+#endif
+}
+
+bool ObjectTool::SetSelectedStart(int start) {
+#if FW_SLIDE_EDIT
+  fw::slide::edit::MediaPlayback p;
+  if (start < 0 || start > 2 || !Editable() || !SelectedPlayback(&p, nullptr)) return false;
+  const fw::slide::edit::Result res = host_.deck()->Editor()->SetMediaStart(
+      host_.current(), selection_[0], static_cast<fw::slide::edit::MediaStart>(start));
+  if (!res) {
+    Refused(W(res.message));
+    return false;
+  }
+  Edited();
+  return true;
+#else
+  (void)start;
   return false;
 #endif
 }

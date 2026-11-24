@@ -267,6 +267,10 @@ struct MediaPlayback {
   bool acrossSlides = false;    // Play Across Slides (audio): numSld="999"
 };
 
+// Playback › Start: the play step In Click Sequence (On Click) or Automatically (After Previous) in the
+// main sequence, or When Clicked On: no play step, the click on the shape (its trigger) plays it.
+enum class MediaStart : uint8_t { InClickSequence, Automatically, WhenClickedOn };
+
 class Editor {
  public:
   explicit Editor(Presentation& deck);
@@ -357,6 +361,8 @@ class Editor {
   // media node for it. `video` (Get): a p:video node, else p:audio.
   bool GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, bool* video = nullptr) const;
   Result SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p);
+  bool GetMediaStart(size_t slide, uint32_t id, MediaStart* out) const;
+  Result SetMediaStart(size_t slide, uint32_t id, MediaStart start);
   // A table of `rows` by `columns` with PowerPoint's default style, as Insert > Table makes it.
   Result InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id = nullptr);
   // Deleted, with what names them: animations of them, connections to them, relationships only

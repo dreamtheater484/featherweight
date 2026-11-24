@@ -606,6 +606,7 @@ enum Cmd : int {
   CmdMediaHide,             // Playback > Hide While Not Playing (audio: Hide During Show)
   CmdMediaFullScreen,       // Playback > Play Full Screen (video)
   CmdMediaAcrossSlides,     // Playback > Play Across Slides (audio)
+  CmdMediaStart,            // Playback > Start ▾ (In Click Sequence, Automatically, When Clicked On)
   // Transitions and animations (P3, p3-anim): 3830-3879.
   CmdTransitionPreview = 3830,   // Transitions > Preview: the current slide's transition in the editor
   CmdTransitionStyles,           // Transitions > the gallery (its choices pick the effect)

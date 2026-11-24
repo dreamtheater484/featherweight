@@ -477,6 +477,15 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
       if (v.index < 3) p.volume = kLevels[v.index];
       Objects().SetSelectedPlayback(p);
     };
+    RibbonItem& start = add(CmdMediaStart, 0, S::Small, L"Start", L"S");
+    start.tool.kind = ToolKind::Dropdown;
+    start.tool.width = 140;
+    start.tool.choices = {L"In Click Sequence", L"Automatically", L"When Clicked On"};
+    int startNow = 0;
+    if (Objects().SelectedStart(&startNow)) start.tool.choice = startNow;
+    start.tool.onChange = [this](const ToolValue& v) {
+      if (v.index >= 0) Objects().SetSelectedStart(v.index);
+    };
     add(CmdMediaLoop, 0, S::Medium, L"Loop until Stopped", L"L", S::Medium);
     add(CmdMediaHide, 0, S::Medium, video ? L"Hide While Not Playing" : L"Hide During Show", L"H", S::Medium);
     if (video) add(CmdMediaFullScreen, 0, S::Medium, L"Play Full Screen", L"F", S::Medium);

@@ -282,3 +282,55 @@ TEST(SlideMediaPlayback) {
   CHECK(ed.Undo(3).ok);
   CHECK(PartText(ed, part) == before);
 }
+
+TEST(SlideMediaStart) {
+  using fw::slide::edit::MediaStart;
+  using fw::slide::show::MediaCommand;
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  Editor ed(*deck);
+  const std::string part = ed.SlidePart(0);
+  uint32_t video = 0;
+  CHECK(ed.InsertMedia(0, {true, Mp4(), "mp4", Png(), L"clip.mp4", 4000}, {100, 100, 420, 280}, &video).ok);
+  const std::string before = PartText(ed, part);
+  MediaStart s = MediaStart::WhenClickedOn;
+  CHECK(ed.GetMediaStart(0, video, &s) && s == MediaStart::InClickSequence);
+  CHECK(!ed.GetMediaStart(0, 2, &s));
+
+  // Automatically: the play step after the previous (the slide's start here), so the show plays it at once.
+  CHECK(ed.SetMediaStart(0, video, MediaStart::Automatically).ok);
+  CHECK(ed.GetMediaStart(0, video, &s) && s == MediaStart::Automatically);
+  fw::slide::show::Timing t = SlideTiming(PartText(ed, part));
+  CHECK(t.main.steps.size() == 1 && t.main.steps[0].start != fw::slide::show::StepStart::Click);
+  {
+    fw::slide::show::Animator a(&t, nullptr, nullptr);
+    a.Start(0);
+    std::vector<fw::slide::show::MediaEvent> ev = a.TakeMediaEvents();
+    CHECK(ev.size() == 1 && ev[0].command == MediaCommand::Play);
+  }
+
+  // When Clicked On: no play step; the click on it (its trigger) plays it; the media node stays.
+  CHECK(ed.SetMediaStart(0, video, MediaStart::WhenClickedOn).ok);
+  CHECK(ed.GetMediaStart(0, video, &s) && s == MediaStart::WhenClickedOn);
+  t = SlideTiming(PartText(ed, part));
+  CHECK(t.main.steps.empty() && t.triggers.size() == 1 && t.media.size() == 1);
+  {
+    fw::slide::show::Animator a(&t, nullptr, nullptr);
+    a.Start(0);
+    CHECK(a.TakeMediaEvents().empty());
+    CHECK(a.Trigger(video, 10));
+    std::vector<fw::slide::show::MediaEvent> ev = a.TakeMediaEvents();
+    CHECK(ev.size() == 1 && ev[0].command == MediaCommand::TogglePause);
+  }
+
+  // Back In Click Sequence: a play step again, on a click.
+  CHECK(ed.SetMediaStart(0, video, MediaStart::InClickSequence).ok);
+  CHECK(ed.GetMediaStart(0, video, &s) && s == MediaStart::InClickSequence);
+  t = SlideTiming(PartText(ed, part));
+  CHECK(t.main.steps.size() == 1 && t.main.steps[0].start == fw::slide::show::StepStart::Click);
+  CHECK(t.triggers.size() == 1 && t.media.size() == 1);
+  CHECK(ed.SetMediaStart(0, video, MediaStart::InClickSequence).ok);  // no change: no step
+  CHECK(ed.Undo(3).ok);
+  CHECK(PartText(ed, part) == before);
+}
