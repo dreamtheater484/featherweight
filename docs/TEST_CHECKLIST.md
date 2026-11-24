@@ -710,7 +710,11 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 
 ## P3's gate (record the numbers)
 
-- [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: ___ failures, ___ new validator errors, ___ PowerPoint repairs (target 0 each); saved without edits: byte-identical.
+- [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: 0 failures, 0 new validator errors, 0 PowerPoint repairs (target 0 each); saved without edits: byte-identical. Measured on 4.0's final code (2026-11-24; PowerPoint over Remote Desktop, 19:33-21:41):
+  - 179 decks (27 public, 152 real-world), 3 rounds of 40 random edits each: 19,871 edits done and 1,609 refused.
+  - PowerPoint opened 178 of 179 edited copies without a repair. The other, libreoffice-test-deck-tdf148478-transitionmusic, is repaired the same way as its original, as in P2's gate.
+  - Saved without edits: all 179 are byte for byte the original, PowerPoint repairs none, and 2,741 of 2,741 slides are at SSIM ≥ 0.99 against the original's PDF.
+  - The encryption round trip (`fwtool encrypt`, then `fwtool decrypt`, password `featherweight`): all 179 edited decks decrypt to the same bytes, and a wrong password is refused.
 - [ ] PowerPoint's read-back of the torture's edited decks (`scripts\timing-readback-check.ps1 -Decks build\deck-torture\saved`): ___ of ___ decks where `fwtool timing` prints the same for Featherweight's file and PowerPoint's save of it, and PowerPoint's object model has the same transitions, effects, triggers, durations and delays (target all). Comments: PowerPoint reads the same threads, replies and authors (`scripts\powerpoint-readback.ps1`): ___ of ___.
 - [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): 2,344 of 2,577 slides at SSIM ≥ 0.95, 90.96 % (target ≥ 85 %). That's 154 decks on 4.0's final head (6fe39e23, 2026-11-24):
   - slide-pages drew 152 of them, 2,285 of 2,517 slides;
