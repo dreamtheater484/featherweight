@@ -440,6 +440,7 @@ constexpr AnimOpt kSplitOpts2[] = {{u"Horizontal In", 26, 0}, {u"Horizontal Out"
 constexpr AnimOpt kWipeInOpts[] = {{u"From Bottom", 4, 0}, {u"From Left", 8, 0}, {u"From Right", 2, 0}, {u"From Top", 1, 0}};
 constexpr AnimOpt kWipeOutOpts[] = {{u"To Bottom", 4, 0}, {u"To Left", 8, 0}, {u"To Right", 2, 0}, {u"To Top", 1, 0}};
 constexpr AnimOpt kZoomOpts2[] = {{u"Object Center", 16, 0}};
+constexpr AnimOpt kZoomOutOpts[] = {{u"Object Center", 32, 0}};  // PowerPoint 2021 writes the exit as #53/32
 constexpr AnimOpt kGrowOpts[] = {{u"Both", 0, 0}, {u"Horizontal", 0, 0}, {u"Vertical", 0, 0}};
 constexpr AnimOpt kSpinOpts[] = {{u"Clockwise", 0, 0}, {u"Counterclockwise", 0, 0}};
 
@@ -460,7 +461,7 @@ constexpr AnimDef kAnims[] = {
     {Anim::Fade, AnimClass::Entrance, "entr", 10, u"Fade", 500, 0, kNoOpts, 0},
     {Anim::FlyIn, AnimClass::Entrance, "entr", 2, u"Fly In", 500, 0, kFlyInOpts, 8},
     {Anim::FloatIn, AnimClass::Entrance, "entr", 42, u"Float In", 1000, 0, kFloatInOpts, 2},
-    {Anim::Split, AnimClass::Entrance, "entr", 16, u"Split", 500, 3, kSplitOpts2, 4},
+    {Anim::Split, AnimClass::Entrance, "entr", 16, u"Split", 500, 2, kSplitOpts2, 4},
     {Anim::Wipe, AnimClass::Entrance, "entr", 22, u"Wipe", 500, 0, kWipeInOpts, 4},
     {Anim::Zoom, AnimClass::Entrance, "entr", 53, u"Zoom", 500, 0, kZoomOpts2, 1},
     {Anim::GrowShrink, AnimClass::Emphasis, "emph", 6, u"Grow/Shrink", 2000, 0, kGrowOpts, 3},
@@ -469,9 +470,9 @@ constexpr AnimDef kAnims[] = {
     {Anim::FadeOut, AnimClass::Exit, "exit", 10, u"Fade", 500, 0, kNoOpts, 0},
     {Anim::FlyOut, AnimClass::Exit, "exit", 2, u"Fly Out", 500, 0, kFlyOutOpts, 8},
     {Anim::FloatOut, AnimClass::Exit, "exit", 47, u"Float Out", 1000, 0, kFloatOutOpts, 2},
-    {Anim::SplitOut, AnimClass::Exit, "exit", 16, u"Split", 500, 3, kSplitOpts2, 4},
+    {Anim::SplitOut, AnimClass::Exit, "exit", 16, u"Split", 500, 2, kSplitOpts2, 4},
     {Anim::WipeOut, AnimClass::Exit, "exit", 22, u"Wipe", 500, 0, kWipeOutOpts, 4},
-    {Anim::ZoomOut, AnimClass::Exit, "exit", 53, u"Zoom", 500, 0, kZoomOpts2, 1},
+    {Anim::ZoomOut, AnimClass::Exit, "exit", 53, u"Zoom", 500, 0, kZoomOutOpts, 1},
 };
 
 const AnimDef* AnimDefOf(Anim a) {
