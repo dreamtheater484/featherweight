@@ -179,6 +179,18 @@ struct TextLink {
   std::string target;  // a URL, or "#slide:<id>" for a jump to a slide
 };
 
+// PowerPoint 2000's additions to a paragraph ([MS-PPT] 2.9.20 TextPFException9), found by the index
+// its first character's CF run gives (CFStyle pp9rt): an automatic number for a bulleted paragraph.
+struct Pf9 {
+  int autoNumber = -1;  // fBulletHasAutoNumber: -1 when not given
+  int scheme = -1;      // TextAutoNumberSchemeEnum, -1 when not given
+  int start = 1;
+};
+// A StyleTextProp9Atom's (0x0FAC) entries, from its body.
+void ReadStyle9(std::span<const uint8_t> atom, std::vector<Pf9>& out);
+// The "___PPT9" tag's records in a ProgTags container's body, or empty.
+std::span<const uint8_t> Pp9Tag(std::span<const uint8_t> progTags);
+
 // One text: in a shape's client text box, or the outline's for a placeholder.
 struct Text {
   int type = kOther;
@@ -189,6 +201,7 @@ struct Text {
   std::vector<Field> fields;
   std::vector<TextLink> links;
   bool placeholder = true;  // false: a text box's or shape's own text (other text: the document's style)
+  std::vector<Pf9> pf9;     // by pp9rt
 };
 
 // Reads a text's records (TextHeaderAtom, TextCharsAtom or TextBytesAtom, StyleTextPropAtom,
@@ -214,6 +227,9 @@ struct Context {
   Pf basePf;
   Cf baseCf;
   bool notes = false;
+  // Kerning (hundredths of a point; 0: none) by title, body and other style and level: the binary
+  // format has none, PowerPoint 2007 and later keep it in the master's RoundTripOArtTextStyles12Atom.
+  std::array<std::array<int, 5>, 3> kern{};
 };
 
 // A master's shape as the shapes on slides that name it (hspMaster) inherit from it: its type and

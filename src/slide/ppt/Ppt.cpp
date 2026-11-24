@@ -253,6 +253,27 @@ class Converter {
     return n;
   }
 
+  // The document's "___PPT9" tag: its OutlineTextProps9Container pairs an OutlineTextPropsHeaderExAtom
+  // (slide id, text type) with that outline text's StyleTextProp9Atom.
+  void OutlineStyle9(std::span<const uint8_t> tag) {
+    const auto container = Find(tag, 0x0FAE);
+    if (!container) return;
+    Records rs(container->body);
+    std::optional<std::pair<uint32_t, int>> key;
+    for (Rec r; rs.Next(r) && style9_.size() < 100000;) {
+      if (r.type == 0x0FAF) {
+        Bytes b(r.body);
+        const uint32_t slide = b.U32();
+        const uint32_t type = b.U32();
+        key.reset();
+        if (b.Ok() && type <= 8) key = std::make_pair(slide, static_cast<int>(type));
+      } else if (r.type == 0x0FAC && key) {
+        ReadStyle9(r.body, style9_[*key]);
+        key.reset();
+      }
+    }
+  }
+
   // ---- The document
 
   bool ReadDocument(pkg::Status& status) {
@@ -281,9 +302,18 @@ class Converter {
           else if (r.inst == 1) List(r.body, masters_);
           else if (r.inst == 2) List(r.body, notes_);
           break;
+        case 0x07D0:  // DocInfoList: its ProgTags
+          if (auto tags = Find(r.body, 0x1388)) OutlineStyle9(Pp9Tag(tags->body));
+          break;
+        case 0x1388: OutlineStyle9(Pp9Tag(r.body)); break;
         default: break;
       }
     }
+    // The outline texts' PowerPoint 2000 additions (numbered paragraphs), by slide and text type.
+    for (auto* list : {&slides_, &masters_, &notes_})
+      for (ListEntry& e : *list)
+        for (Text& t : e.texts)
+          if (auto it = style9_.find({e.id, t.type}); it != style9_.end()) t.pf9 = it->second;
     if (slideW_ <= 0 || slideH_ <= 0) slideW_ = 5760, slideH_ = 4320;
     if (notesW_ <= 0 || notesH_ <= 0) notesW_ = 4320, notesH_ = 5760;
     if (masters_.empty()) {
@@ -300,6 +330,9 @@ class Converter {
       if (r.type == 0x07D5) {  // FontCollection
         Records fs(r.body);
         for (Rec f; fs.Next(f) && fonts_.size() < 4096;) {
+          // FontEmbedDataBlob: the font before it, embedded (instance: regular, bold, italic, bold italic),
+          // the Embedded OpenType a .pptx keeps in ppt/fonts/*.fntdata.
+          if (f.type == 0x0FB8 && !fonts_.empty() && f.inst < 4 && !f.body.empty()) embedded_[fonts_.size() - 1][f.inst] = f.body;
           if (f.type != 0x0FB7) continue;
           std::u16string name;
           for (size_t i = 0; i + 1 < std::min<size_t>(f.body.size(), 64); i += 2) {
@@ -520,6 +553,22 @@ class Converter {
            solid + solid + solid + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>";
   }
 
+  // The XML part `name` of the package in a round-trip atom (PowerPoint 2007 or later data) of type
+  // `type` in `container`, into `doc`; false when there's none.
+  static bool RoundTripXml(std::span<const uint8_t> container, uint16_t type, std::string_view name, pugi::xml_document& doc) {
+    const auto atom = Find(container, type);
+    if (!atom || atom->body.size() < 22) return false;
+    auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(atom->body.begin(), atom->body.end()));
+    pkg::ZipReader zip;
+    if (!snapshot || !zip.Open(*snapshot).Ok()) return false;
+    for (const pkg::ZipEntry& e : zip.Entries()) {
+      std::vector<uint8_t> bytes;
+      if (e.name == name && e.uncompressedSize <= (8u << 20) && zip.Read(e, bytes).Ok())
+        return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8);
+    }
+    return false;
+  }
+
   // A PowerPoint 2007 or later master's own theme (RoundTripTheme12Atom's package), with the pictures
   // it uses as media parts and `rels` its relationships. Empty when there's none, or when it refers to
   // anything it doesn't carry.
@@ -633,6 +682,13 @@ class Converter {
           m.cx.scheme = ReadScheme(r.body);
         }
       }
+      if (pugi::xml_document ts; RoundTripXml(rec->body, 0x0423, "drs/slideMasters/slideMaster1.xml", ts))
+        for (int t = 0; t < 3; ++t)
+          for (int l = 0; l < 5; ++l) {
+            static constexpr const char* kStyle[] = {"p:titleStyle", "p:bodyStyle", "p:otherStyle"};
+            const pugi::xml_node d = ts.document_element().child(kStyle[t]).child(("a:lvl" + Num(l + 1) + "pPr").c_str()).child("a:defRPr");
+            m.cx.kern[t][l] = std::clamp(d.attribute("kern").as_int(), 0, 400000);
+          }
       m.part = static_cast<int>(mains.size()) + 1;
       m.defaultLayout = ++layouts;
       layoutOf[m.id] = {mains.size(), m.defaultLayout};
@@ -823,11 +879,26 @@ class Converter {
     const long long cy = std::clamp<long long>(std::llround(slideH_ * kEmuPerUnit), 914400, 51206400);
     const long long ncx = std::clamp<long long>(std::llround(notesW_ * kEmuPerUnit), 1, 51206400);
     const long long ncy = std::clamp<long long>(std::llround(notesH_ * kEmuPerUnit), 1, 51206400);
+    // Embedded fonts, as the .pptx keeps them.
+    std::string embedded;
+    std::vector<std::pair<std::string, std::span<const uint8_t>>> fontParts;
+    for (const auto& [index, styles] : embedded_) {
+      std::string faces;
+      static const char* const kStyle[] = {"regular", "bold", "italic", "boldItalic"};
+      for (int k = 0; k < 4; ++k) {
+        if (styles[k].empty()) continue;
+        const std::string name = "fonts/font" + Num(fontParts.size() + 1) + ".fntdata";
+        faces += std::string("<p:") + kStyle[k] + " r:id=\"" + presRels.Add("font", name) + "\"/>";
+        fontParts.emplace_back("ppt/" + name, styles[k]);
+      }
+      if (!faces.empty()) embedded += "<p:embeddedFont><p:font typeface=\"" + Esc(fonts_[index]) + "\"/>" + faces + "</p:embeddedFont>";
+    }
+    if (!embedded.empty()) embedded = "<p:embeddedFontLst>" + embedded + "</p:embeddedFontLst>";
     add("ppt/presentation.xml",
         std::string(kDecl) + "<p:presentation" + kNs + (firstSlide_ > 1 && firstSlide_ < 10000 ? " firstSlideNum=\"" + Num(firstSlide_) + "\"" : "") +
             " saveSubsetFonts=\"1\"><p:sldMasterIdLst>" + masterIds + "</p:sldMasterIdLst>" + notesMasterIds +
             (slideIds.empty() ? "" : "<p:sldIdLst>" + slideIds + "</p:sldIdLst>") + "<p:sldSz cx=\"" + Num(cx) + "\" cy=\"" + Num(cy) +
-            "\"/><p:notesSz cx=\"" + Num(ncx) + "\" cy=\"" + Num(ncy) + "\"/><p:defaultTextStyle>" + LevelStylesXml(defaults, kOther) +
+            "\"/><p:notesSz cx=\"" + Num(ncx) + "\" cy=\"" + Num(ncy) + "\"/>" + embedded + "<p:defaultTextStyle>" + LevelStylesXml(defaults, kOther) +
             "</p:defaultTextStyle></p:presentation>",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml");
     parts.push_back({"ppt/_rels/presentation.xml.rels", presRels.Xml()});
@@ -849,6 +920,7 @@ class Converter {
                          : ext == "bmp" ? "image/bmp" : ext == "tiff" ? "image/tiff" : ext == "emf" ? "image/x-emf" : "image/x-wmf";
       types += "<Default Extension=\"" + ext + "\" ContentType=\"" + type + "\"/>";
     }
+    if (!fontParts.empty()) types += "<Default Extension=\"fntdata\" ContentType=\"application/x-fontdata\"/>";
     parts.insert(parts.begin(), {"[Content_Types].xml", types + overrides + "</Types>"});
 
     pkg::MemorySink sink;
@@ -863,6 +935,11 @@ class Converter {
         status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
         return {};
       }
+    for (const auto& [name, bytes] : fontParts)
+      if (!zip.Add(name, bytes).Ok()) {
+        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+        return {};
+      }
     if (!zip.Finish().Ok()) {
       status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
       return {};
@@ -872,6 +949,8 @@ class Converter {
 
   std::vector<uint8_t> doc_, pictures_;
   std::map<uint32_t, uint32_t> persist_;
+  std::map<std::pair<uint32_t, int>, std::vector<Pf9>> style9_;  // outline texts' PF9, by slide id and text type
+  std::map<size_t, std::array<std::span<const uint8_t>, 4>> embedded_;  // fonts_ index: regular, bold, italic, bold italic
   uint32_t docPersist_ = 0, encryptPersist_ = 0;
   int32_t slideW_ = 0, slideH_ = 0, notesW_ = 0, notesH_ = 0;
   uint32_t notesMaster_ = 0;
