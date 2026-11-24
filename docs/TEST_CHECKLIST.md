@@ -569,6 +569,7 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 ### Presenter view
 
 - [ ] With two monitors: start the show (F5). The show is on one monitor, the presenter view on the other: the current slide, the next slide (or the next animation), the notes (scroll them; make them bigger and smaller), the timer (pause, reset), the clock, and a strip of slides (click one to jump to it). The show's keys (click, Space, arrows, Page Up/Down, a number and Enter, B, W, Esc) work in both windows.
+- [ ] With the app on the laptop's screen and the Monitor choice left on Automatic: F5 puts the slides on the projector and the presenter view on the laptop, as PowerPoint does. The audience must never see the notes (friction review P1).
 - [ ] With one monitor: Alt+F5 opens the presenter view in a window, as PowerPoint does; the show's monitor choice puts the show and the presenter view where you say.
 - [ ] A 50-slide deck with transitions presents smoothly with the presenter view on (record the frame rate below).
 
@@ -588,11 +589,13 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 
 - [ ] `made\comments.pptx`: the comments pane shows each slide's comments with markers on the slide; slide 1's thread has its two replies. Ctrl+Alt+M adds a comment; reply, edit, delete and resolve work as in documents; the Review tab has the comment group.
 - [ ] Add comments and a reply, save, open the copy in PowerPoint: the comments and the thread are there, no repair prompt. A deck with PowerPoint's older comments (`commentAuthors.xml`) keeps them.
+- [ ] Type a comment and press Enter: the box empties. A second Enter posts nothing (it used to post the same text again as a reply).
 
 ### Password-protected presentations
 
 - [ ] `made\protected\animations.pptx`: the password card asks for the password; a wrong one is refused, `featherweight` opens it. Edit and save: PowerPoint asks for the same password and opens it without a repair.
 - [ ] File › Info › Protect Presentation › Encrypt with Password sets a password on a deck of yours, and removes it again; PowerPoint asks for it (and doesn't after it's removed).
+- [ ] Set a password, type something, undo it, then Ctrl+S: the tab still saves, and PowerPoint asks for the password. (Before the fix, the undo left the tab "saved" and the file unprotected.)
 - [ ] An encrypted `.ppt` (`ppt\protected\made\animations.ppt`, `featherweight`) opens too.
 
 ### Templates and pictures
@@ -604,14 +607,29 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 
 - [ ] Open a few `.ppt`, `.pps` and `.pot` from `FeatherweightCorpus\ppt` and `.odp` from `\odp`, next to their `.pptx` originals in PowerPoint: they open read-only as a copy with a banner, look the same, and the show plays. Save As `.pptx`: PowerPoint opens it without a repair.
 - [ ] A damaged file (rename a `.txt` to `.ppt` and to `.odp`) says it seems to be damaged, and nothing else happens.
+- [ ] `ppt\made\media.ppt` and `ppt\school\zslbw-geographie-naturgefahren-prasentation.ppt`: PowerPoint wrote them but now refuses to open them (Office's file validation). Featherweight opens them or says it can't, and never hangs or closes.
+
+### PowerPoint's own steps (for the friction review)
+
+- [ ] In PowerPoint 2021, note what the friction review (P3 part) marks *(check in PowerPoint)*:
+  - which monitor Automatic gives the slides;
+  - the quick access toolbar's buttons;
+  - the message after exporting all slides as PNG, and the PNG's size;
+  - whether File opens on Info or Home;
+  - where Edit, Reply and Resolve sit on a modern comment;
+  - whether deleting every comment in the deck asks first;
+  - the status bar's Comments button;
+  - comments on selected text;
+  - the question when saving an `.odp`.
+  Tell the coordinator where PowerPoint differs from the review.
 
 ## P3's gate (record the numbers)
 
 - [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: ___ failures, ___ new validator errors, ___ PowerPoint repairs (target 0 each); saved without edits: byte-identical.
-- [ ] PowerPoint's read-back (`scripts\powerpoint-readback.ps1`, `-Compare` against `fwtool readback`): edited decks ___ of ___ with the same transitions, effects, triggers, durations, delays and comments as Featherweight wrote (target all); saved without edits ___ of ___ the same as the original (target all).
+- [ ] PowerPoint's read-back of the torture's edited decks (`scripts\timing-readback-check.ps1 -Decks build\deck-torture\saved`): ___ of ___ decks where `fwtool timing` prints the same for Featherweight's file and PowerPoint's save of it, and PowerPoint's object model has the same transitions, effects, triggers, durations and delays (target all). Comments: PowerPoint reads the same threads, replies and authors (`scripts\powerpoint-readback.ps1`): ___ of ___.
 - [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): ___ of ___ slides at SSIM ≥ 0.95, ___ % (target ≥ 85 %). `.odp` corpus (`-Folders odp`): ___ of ___, ___ % (target ≥ 80 %). Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
 - [ ] Picture export: ___ of ___ slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all).
 - [ ] `fuzz_ppt` and `fuzz_odp`, 60 s each in CI: no findings.
-- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target: at most 1.0 MB more than R1's, about 12.35 MB; < 15 MB at 4.0). Launch ___ ms and memory after launch ___ MB, no worse than R1's; idle with a video on a slide: ___ ms CPU (target 0). The quiet-PC timings and the frame bench (presenter view on: ___ fps on a ___ Hz display, ___ dropped frames) run once at the end through the coordinator.
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target: at most 1.0 MB more than R1's, about 12.35 MB; < 15 MB at 4.0). Launch ___ ms and memory after launch ___ MB, no worse than R1's; idle with a video on a slide (`-Timings`, deck-video.pptx, which needs ffmpeg on the PATH): ___ ms CPU, ___ wakeups (target: at most 5 ms and 2). The quiet-PC timings and the frame bench (presenter view on: ___ fps on a ___ Hz display, ___ dropped frames) run once at the end through the coordinator.
 - [ ] Friction review (`docs\friction-review.md`, P3 part): presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021.
 - [ ] P1's and P2's parts above still pass.
