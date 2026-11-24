@@ -12,8 +12,8 @@
 #include <ctime>
 #include <cwctype>
 #include <map>
-#include <random>
 
+#include "pkg/OfficeCrypto.h"
 #include "slide/edit/EditInternal.h"
 
 namespace fw::slide::edit {
@@ -119,18 +119,14 @@ std::wstring Trimmed(std::wstring_view s) {
   return std::wstring(s.substr(b, e - b));
 }
 
-std::mt19937_64& Rng() {
-  static std::mt19937_64 rng{std::random_device{}()};
-  return rng;
-}
+// Ids as Office writes them ("{8-4-4-4-12}", version 4): pkg/OfficeCrypto's, Windows' random numbers.
+std::string NewGuid() { return pkg::crypto::NewGuid(); }
 
-std::string NewGuid() {
-  const uint64_t hi = Rng()(), lo = Rng()();
-  char buf[48];
-  std::snprintf(buf, sizeof buf, "{%08X-%04X-4%03X-%04X-%012llX}", static_cast<unsigned>(hi >> 32),
-                static_cast<unsigned>((hi >> 16) & 0xFFFF), static_cast<unsigned>(hi & 0xFFF),
-                static_cast<unsigned>(0x8000 | ((lo >> 48) & 0x3FFF)), static_cast<unsigned long long>(lo & 0xFFFFFFFFFFFFull));
-  return buf;
+// A random 32-bit number, not 0 (a slide's creation id): from a new GUID's first eight hex digits.
+uint32_t NewCreationId() {
+  uint32_t id = 0;
+  while (id == 0) id = static_cast<uint32_t>(std::strtoul(NewGuid().substr(1, 8).c_str(), nullptr, 16));
+  return id;
 }
 
 // Now as xsd:dateTime with milliseconds, in UTC (modern) or local time (legacy dt).
@@ -165,19 +161,18 @@ std::string Hex(uint32_t v) {
 
 // ---- Authors
 
-struct Author {
-  std::wstring name, initials;
-};
-
-std::map<std::string, Author> Authors(Editor::Impl& m, std::string_view relType, std::string_view ns) {
-  std::map<std::string, Author> out;
+// The comment's author (authorId) from the presentation's authors part of that kind.
+void SetAuthor(Editor::Impl& m, std::string_view relType, std::string_view ns, pugi::xml_node cm, Comment& c) {
   const std::string part = PartOfType(m.Rels(m.PresentationPart()), relType);
   pugi::xml_node root = part.empty() ? pugi::xml_node() : m.Root(part);
+  const std::string_view id = cm.attribute("authorId").value();
   for (pugi::xml_node a = root.first_child(); a; a = a.next_sibling()) {
     if (a.type() != pugi::node_element || !(IsElement(a, ns, "author") || IsElement(a, ns, "cmAuthor"))) continue;
-    out[a.attribute("id").value()] = {Wide(a.attribute("name").value()), Wide(a.attribute("initials").value())};
+    if (id != a.attribute("id").value()) continue;
+    c.author = Wide(a.attribute("name").value());
+    c.initials = Wide(a.attribute("initials").value());
+    return;
   }
-  return out;
 }
 
 // A new part holding just its root element `<qname ...namespaces/>`.
@@ -295,17 +290,13 @@ uint32_t ShapeAnchor(pugi::xml_node anchor) {
 void ReadLegacy(Editor::Impl& m, std::string_view part, std::vector<Comment>& out) {
   pugi::xml_node root = m.Root(part);
   if (!IsElement(root, kP, "cmLst")) return;
-  const auto authors = Authors(m, kRelLegacyAuthors, kP);
   std::vector<Comment> all;
   Children(root, kP, "cm", [&](pugi::xml_node cm) {
     Comment c;
     c.legacy = true;
     c.id = LegacyId(cm.attribute("authorId"), cm.attribute("idx"));
     c.parent = LegacyParent(cm);
-    if (auto it = authors.find(cm.attribute("authorId").value()); it != authors.end()) {
-      c.author = it->second.name;
-      c.initials = it->second.initials;
-    }
+    SetAuthor(m, kRelLegacyAuthors, kP, cm, c);
     c.created = cm.attribute("dt").value();
     c.text = Wide(First(cm, kP, "text").child_value());
     if (pugi::xml_node pos = First(cm, kP, "pos")) {
@@ -337,13 +328,9 @@ void ReadLegacy(Editor::Impl& m, std::string_view part, std::vector<Comment>& ou
 void ReadModern(Editor::Impl& m, std::string_view part, std::vector<Comment>& out) {
   pugi::xml_node root = m.Root(part);
   if (!IsElement(root, kP188, "cmLst")) return;
-  const auto authors = Authors(m, kRelModernAuthors, kP188);
   auto fill = [&](pugi::xml_node n, Comment& c) {
     c.id = n.attribute("id").value();
-    if (auto it = authors.find(n.attribute("authorId").value()); it != authors.end()) {
-      c.author = it->second.name;
-      c.initials = it->second.initials;
-    }
+    SetAuthor(m, kRelModernAuthors, kP188, n, c);
     c.created = n.attribute("created").value();
     c.utc = true;
     c.text = BodyText(First(n, kP188, "txBody"));
@@ -440,8 +427,7 @@ uint32_t CreationId(Editor::Impl& m, std::string_view slidePart) {
   ext.append_attribute("uri") = std::string(kExtCreationId).c_str();
   pugi::xml_node c = ext.append_child("p14:creationId");
   c.append_attribute("xmlns:p14") = std::string(kP14).c_str();
-  uint32_t id = 0;
-  while (id == 0) id = static_cast<uint32_t>(Rng()());
+  const uint32_t id = NewCreationId();
   c.append_attribute("val") = std::to_string(id).c_str();
   return id;
 }
