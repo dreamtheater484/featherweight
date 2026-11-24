@@ -20,6 +20,7 @@
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
+#include "slide/view/PresentationAnim.h"  // p3-anim
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -394,6 +395,11 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
       deck_->PaintPrompts(current_, painter, text_->EditingShape(current_));
     }
     dc->SetTransform(old);
+  }
+  // p3-anim: a transition or the animations playing over the slide (Preview).
+  if (preview_ && DrawPreview(c, dc)) {
+    c.PopClip();
+    return;
   }
   // The text being edited, live over the slide.
   text_->Draw(c, dc, current_, rc);

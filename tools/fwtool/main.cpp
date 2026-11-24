@@ -127,6 +127,9 @@ constexpr const char* kUsage =
     "  fwtool slides --out DIR [--png] [--scale N] <deck or folder>...\n"
     "      Decks (P1): draws every slide with the slide renderer into DIR/<deck>.pdf (for pdf-compare\n"
     "      against PowerPoint's PDF), and with --png each slide as a PNG; times the first slide.\n"
+    "  fwtool timing <deck or folder>...\n"
+    "      Decks (P3): each slide's transition and main animation sequence as the edit layer reads them\n"
+    "      (effect, options, trigger, duration, delay; \"kept\" for what Featherweight can't change).\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -410,6 +413,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   if (command == L"slides") return fwtool::RunSlides(options);
+  if (command == L"timing") return fwtool::RunTiming(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }
