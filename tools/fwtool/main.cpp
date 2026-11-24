@@ -14,6 +14,7 @@
 #include "sheet/view/Grid.h"
 #include "text/Fonts.h"
 #include "sheet/xls/Xls.h"
+#include "slide/odp/Odp.h"
 
 namespace fwtool {
 namespace {
@@ -197,6 +198,7 @@ constexpr const char* kUsage =
     "  fwtool convert <file.doc> <file.docx>\n"
     "      Writes the .docx a Word 97-2003 document is read as (or the .xlsx an Excel 97-2003\n"
     "      workbook, .xls, is read as). Every other command reads .doc and .xls files this way too.\n"
+    "      An OpenDocument presentation (.odp, .otp) gives the .pptx the app reads it as.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -247,6 +249,13 @@ std::string Display(const std::filesystem::path& file) {
 // A Word 97-2003 document as the .docx it's read as; empty (with `status`) when it isn't one or
 // can't be read.
 std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Status& status) {
+  // P3: an OpenDocument presentation, as the app converts it (for `convert`).
+  if (const std::wstring ext = fw::ToLower(file.extension().wstring()); ext == L".odp" || ext == L".otp") {
+    std::vector<uint8_t> pptx;
+    auto source = fw::pkg::Snapshot::Open(file.wstring(), {}, status);
+    if (!source || !(status = fw::slide::odp::OdpToPptx(source->Bytes(), pptx)).Ok()) pptx.clear();
+    return pptx;
+  }
   std::vector<uint8_t> bytes;
   FILE* f = nullptr;
   if (_wfopen_s(&f, file.c_str(), L"rb") == 0 && f) {
