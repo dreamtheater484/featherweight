@@ -4,6 +4,8 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 
 S4 adds the workbook flows (plan §7, the S4 row; s2-plan's "total a column" and "fix a value in a received workbook"): see [Workbooks (S4)](#workbooks-s4).
 
+P3 adds the presentation flows (docs/p3-plan.md: presenting, transitions and animations, comments, passwords, pictures, templates, .ppt and .odp): see [Presentations (P3)](#presentations-p3).
+
 `tests/friction-checks.ps1` runs the flows that can be scripted through Featherweight's `--script` mode, off-screen. It checks what the saved file says and counts the steps against this review's budget (see [Scripted checks](#scripted-checks)).
 
 ## How steps are counted
@@ -476,3 +478,243 @@ These are to be counted once cc6e522 lands.
 - None of these flows is scripted yet. `tests/friction-checks.ps1` has only the Word flows. Flows 3, 4 and 8 could be scripted the same way through `--script`.
 
 Owners (the coordinator, 2026-11-19): W1, W2, W4 and W6 s3-data; W5 and W7 s3-calc; W3 the S3 print session; W13 s4-ods. W8 is accepted; W9 and W10 are by design; W11 and W12 are s4-ods's (done on its branch and on s4-int). Each finding is marked fixed when its fix is in `claude/s4-int`: W1 to W7 and W13 are, at ce2cffa (2026-11-19); the counts above are the review's, before the fixes, and are counted again when the workbook flows are scripted (tests\workbook-friction-checks.ps1).
+
+## Presentations (P3)
+
+This is the presentation part of the friction review (docs/p3-plan.md, exit criteria: "presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021"). It uses the Word part's rules ("How steps are counted").
+
+- **C** is a click (or a drag), **K** is a key or a chord, and **D** is a decision (a name, a place, a format, a password, a monitor). Typing the content isn't counted. A scroll in a list counts as a step.
+- **PowerPoint** means PowerPoint 2021 on Windows with its default ribbon and modern (threaded) comments, in a window at least 1366 px wide. Its steps come from its standard UI and weren't measured. The ones to confirm are marked *(check in PowerPoint)*. They're on Roy's checklist pass (docs/TEST_CHECKLIST.md, P3 part).
+- **Featherweight** was read from the code on each piece's branch, 2026-11-24. The app wasn't run. Every step cites the code:
+  - presenting: `claude/p3-present` 85be16e2;
+  - transitions and animations: `claude/p3-anim` 3d38ee17, then 1b83de6e (counted by p3-anim, FeatherweightNotes\p3\p3-anim-friction.md);
+  - comments and passwords: `claude/p3-review` 9f08b056;
+  - pictures and templates, and .odp: `claude/p3-files` 799f5bc5;
+  - .ppt: `claude/p3-ppt` da559019.
+  Paths are under `src/`. The pieces weren't merged together yet, so where two of them change the same code the counts take each as it is on its own branch.
+- When a step has a mouse way and a keyboard way, the table gives the one most people use, and the other in brackets.
+
+### Summary
+
+| Flow | PowerPoint 2021 | Featherweight | Notes |
+|---|---|---|---|
+| 1. Present with the presenter view on a second monitor | 7 K, 1 D (mouse: 8 C) | 7 K, 1 D, **plus 3 C, 1 D** to choose the monitor (mouse: 9 C + 1 scroll, plus the monitor) | **+3 C, 1 D** (P1): the show goes to the monitor the app is on, and the audience sees the presenter view. By mouse, start, black and end are a click more each (P2 to P4). |
+| 1b. Present from the current slide | 1 K (mouse: 1 C) | 1 K (mouse: 2 C) | The keyboard ties. There's no status-bar button (P5). |
+| 2. Transitions: one with a direction and a duration, on every slide, previewed | 9 | 9 | Passes, step for step (p3-anim's count: a click or a key each). |
+| 2b. Animations: an effect, a second one, its Start, duration, delay, order, removed | 16 | 16 | Passes. Only the common effects are offered (P7). Sequence has no All at Once (P6). |
+| 3. Commenting a deck: add, reply, edit, resolve, the pane, next, delete one and all | 18 C + 4 K | 18 C + 4 K | Ties. Editing is a click more (P9). A comment can't be tied to a shape or text (P10), a reply can't be edited or deleted alone (P11), and the box is one line of 256 characters (P13). |
+| 4. Protecting: open a protected deck, save it after an edit, protect one, remove the password | 11 C + 6 K, 2 D | 6 C + 6 K, 2 D | Passes, 5 C fewer. A wrong password is 1 K, against PowerPoint's 2 C + 1 K. |
+| 5a. The current slide as PNG | 6 C + 1 K, 1 D | 3 C + 1 K, 1 D | Passes. |
+| 5b. Every slide as PNG | 7 C + 1 K, 1 D | 3 C + 1 K, 1 D | Passes. |
+| 5c. A deck from a .potx, from Explorer, then saved | 1 C + 2 K, 2 D | 1 C + 2 K, 2 D | Ties. From inside the app it's 6 C against 4 C until the release flag is set (P14). |
+| 6a. A .ppt from mail: open, edit, save | 2 C + 1 K | 1 C + 2 K | Ties at 3: no Enable Editing, but saving is a key more (P15, by design). A password-protected .ppt is refused (P16). |
+| 6b. An .odp from mail: open, edit, save | 3 C + 1 K | 1 C + 2 K | Passes. |
+
+Presenting is the one flow over PowerPoint's count, by P1. The rest pass or tie.
+
+### Where Featherweight needs more than PowerPoint, or can't do it
+
+| # | Flow, step | PowerPoint 2021 | Featherweight | Owner | File:line | Status |
+|---|---|---|---|---|---|---|
+| P1 | 1, before the show: which monitor gets it | Automatic: the slides go to the projector, the presenter view stays with the app *(check in PowerPoint)*. Wrong anyway: Swap Presenter View and Slide Show, 2 C, during the show. | Automatic is the monitor the app window is on (`monitor = -1`, "the owner's monitor"), and the presenter view goes to the other. With the app on the laptop, the projector shows the presenter view with the notes. The way round it is Slide Show, Monitor ▾, the projector, before F5: **+3 C, 1 D**, in each tab, not kept. The presenter view has no swap. Mid-show it's Esc, those 3 C, F5. | p3-present | slide/show/SlideShow.h:27, SlideShow.cpp:344-348 and 423-430; slide/view/PresentationView.h:285 | Open (sent to p3-present 2026-11-24) |
+| P2 | 1: black the screen by mouse | The presenter view's black-screen button: 1 C | No button. Right-click the show window on the projector, Black screen: 2 C. **+1 C**. B ties. | p3-present | slide/show/PresenterView.cpp:194-202; SlideShow.cpp:1397-1420 | Open |
+| P3 | 1: end by mouse | End Slide Show in the presenter view: 1 C | No End button, and the presenter view has no title bar. Right-click the show window, End show: 2 C. **+1 C**. Esc ties. | p3-present | slide/show/PresenterView.cpp:100; SlideShow.cpp:1406 | Open |
+| P4 | 1: start by mouse | Start From Beginning in the quick access toolbar: 1 C *(check in PowerPoint)* | Slide Show, From Beginning: 2 C. Quick access has Save, Undo and Redo. **+1 C**. F5 ties. | p3-present, with R1 (quick access) | slide/view/PresentationRibbon.cpp:368-370; AppRibbon.cpp:106-119 | Open |
+| P5 | 1b: from the current slide by mouse | The status bar's Slide Show button: 1 C | Right-click the slide, Present from this slide (or Slide Show, From Current Slide): 2 C. **+1 C**. Shift+F5 ties. | p3-present | slide/view/PresentationCommands.cpp:346 and 352-364 | Open |
+| P6 | 2b: change a text effect between by paragraph and as one object | Effect Options, Sequence: 2 C | At 3d38ee17 there was no Sequence section after the effect was added: changing it meant removing the effect and adding it again. Now Effect Options has As One Object and By Paragraph: 2 C. PowerPoint's third choice, All at Once, isn't offered. | p3-anim | p3-anim-friction.md | Fixed on `claude/p3-anim` 1b83de6e, except All at Once |
+| P7 | 2b: an effect outside the common ones | More Entrance Effects… (and Emphasis, Exit, Motion Paths): 2 C and a pick | The gallery has 7 entrances, 2 emphasis and 7 exits. There are no More Effects dialogs. Effects from PowerPoint outside the list are kept, play in the show and can be reordered, retimed, replaced or removed. Their own options can't be changed. | p3-anim | p3-anim-friction.md | Recorded by p3-anim |
+| P8 | 2b: reorder by dragging in the Animation Pane | A drag: 1 C | At 3d38ee17 there was no drag, only Move Earlier and Move Later or the pane's arrows (1 C each, so one place ties). p3-anim has added the drag. | p3-anim | p3-anim-friction.md | Fixed by p3-anim in the commit after 1b83de6e |
+| P9 | 3: edit your comment | The pencil on it, then Ctrl+Enter: 1 C + 1 K *(check in PowerPoint)* | Click its card, Edit, then Enter: 2 C + 1 K. **+1 C**. | p3-review | slide/view/PresentationComments.cpp:450-458 and 622-633 | Open (sent to p3-review) |
+| P10 | 3: a comment on a shape or on text | Select it, New Comment: the comment is tied to it and moves with it | **Can't.** New comments are tied to the slide only (`pc:sldMkLst`). With a shape selected the marker is only placed at its top right corner, and it stays put when the shape moves. | p3-review | slide/edit/CommentOps.cpp:539-547; slide/view/PresentationComments.cpp:342-348 | Open |
+| P11 | 3: edit or delete one reply | Its … menu, Edit or Delete comment: 2 C *(check in PowerPoint)* | **Can't.** A card is a whole thread: Edit changes its first comment and Delete removes the thread with its replies. The edit layer can do it. | p3-review | slide/view/PresentationComments.cpp:450-479 and 625; slide/edit/CommentOps.cpp:644-688 | Open |
+| P12 | 3: show or hide the pane from another tab | The status bar's Comments button: 1 C *(check in PowerPoint)* | Review, Show Comments: 2 C. **+1 C**. Ctrl+Alt+M opens it, but to a new comment. | p3-review | slide/view/PresentationCommands.cpp:361-373; PresentationRibbon.cpp:402 | Open |
+| P13 | 3: a comment of more than one line, or more than 256 characters | Enter starts a new paragraph | **Can't.** The box is one line: Enter posts and pasted line breaks become spaces. It holds 256 characters, so a longer comment is cut while it's typed, and a longer one from PowerPoint is cut at 256 when it's edited and saved. | p3-review | ui/Controls.cpp:888; ui/Widgets.cpp:191-196 and 319-341 | Open |
+| P14 | 5c: a .potx from inside the app | File, New, Personal, the template: 4 C *(check in PowerPoint)* | File > New doesn't list .potx while the presentation editor isn't marked shipped, and More templates… opens on a filter that hides it: 6 C. **+2 C**. With the flag set for 4.0 (decision 28) it's 3 C. | p3-files, with the 4.0 release flag | slide/view/UserTemplates.cpp:60-61; core/FileKinds.cpp:23-24; App.cpp:1866-1878 | Ends with the release flag |
+| P15 | 6a: saving a .ppt | Ctrl+S keeps the .ppt (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As with `<name>.pptx` beside it: 2 K. **+1 K**. The flow still ties: there's no Enable Editing. | | slide/view/PresentationView.cpp:116-124 (p3-ppt) | By design (p3-plan: a .ppt opens with Save As .pptx, as .doc and .xls do; F17, W10) |
+| P16 | 6a, outside the flow: a password-protected .ppt | The password, Enter | Refused: "… it is protected with a password, which Featherweight can't open yet." p3-ppt's 186828df decrypts RC4 in the importer, but the tab doesn't ask for the password yet. | p3-ppt | slide/ppt/Ppt.cpp:87-88; slide/view/ModelDeck.cpp:364 | Open |
+
+These don't change the counts but are worth a look:
+
+- **Enter leaves a posted comment in the box** (p3-review). Post clears it with `SetText`, which a ComboBox ignores while it has the keyboard (ui/Controls.cpp:896-897; slide/view/PresentationComments.cpp:438). The box then says "Reply", so a second Enter posts the same text again as a reply. The Post button clears it. Checked in the code; sent to p3-review.
+- **Protect, edit, undo leaves the deck unprotected** (p3-review). Encrypt with Password marks the tab unsaved with `Edited(0)` (slide/view/PresentationProtect.cpp:133-134). An undo back to the opened state calls `Changed(false)`, which marks it clean (slide/view/PresentationFile.cpp:111-114, FileSession.cpp:69-83). Ctrl+S then saves nothing: the file stays unprotected while File > Info says a password is required. Remove password is the same the other way. Checked in the code; sent to p3-review.
+- **Black screen in the presenter view** shows the current slide black too (slide/show/PresenterView.cpp:218-224), so the presenter can't see the slide they'll bring back. PowerPoint keeps it visible there *(check in PowerPoint)*.
+- **Back by mouse** in the presenter view is a wheel turn over the slides (PresenterView.cpp:369-371). PowerPoint has ◀.
+- **Show Comments with nothing picked** opens a new-comment box but doesn't reset where its marker goes: it lands at (0, 0), or where the last New Comment put one (slide/view/PresentationComments.cpp:360-364).
+- **Anyone's comment can be edited, resolved or deleted** (PresentationComments.cpp:450-479). PowerPoint's modern comments let you edit only your own *(check in PowerPoint)*.
+- **For the merges:**
+  - p3-ppt and p3-files each add their own format to `core/FileKinds.cpp:12-13` and change `PresentationView::Load`.
+  - p3-review's `TakeProtected` takes any compound file and refuses one that isn't an encrypted package (slide/view/PresentationProtect.cpp:24-31, 43, 57-60). A .ppt is a compound file too, so the order in `Load` decides whether a .ppt still opens.
+  - The .ppt, .odp and protected-deck flows are to be counted again on p3-int once all three are in.
+
+### Where Featherweight needs less
+
+- **Jump to a slide by mouse in the show**: the strip of slides is always in the presenter view, 1 C, against See All Slides and the slide (2 C).
+- **Pictures**: File, Export, Current slide (or All slides) as PNG…, Enter: 3 C + 1 K. PowerPoint needs Change File Type, PNG, Save As, then Just This One or All Slides (and an OK for all slides): 6 or 7 C + 1 K. The width is a box in the Save dialog (1920 px at first). PowerPoint's needs a registry value *(check in PowerPoint)*.
+- **Protecting**: File opens on Info, and Encrypt with Password is one entry with both boxes in one panel: 2 C + 3 K against 5 C + 2 K. Removing the password has its own button: 3 C + 1 K against 5 C + 2 K.
+- **A wrong password**: the card stays with the text selected: 1 K, against OK and opening the file again (2 C + 1 K).
+- **Deleting every comment in the deck**: 2 C with no question (an undo brings them back), against 3 C.
+- **A .ppt or .odp from mail** opens ready to edit, with no Protected View. Saving an .odp is Enter in Save As against PowerPoint's keep-the-format question.
+
+### Not checked
+
+- The flows were read from the code, not played. Two findings were checked against the code a second time: P1 (`ShowOptions::monitor` -1 and `MonitorFromWindow(owner)` in SlideShow.cpp) and the two comment and password bugs above.
+- PowerPoint's own steps marked *(check in PowerPoint)*: the Automatic monitor rule, quick access's buttons, the message after exporting all slides, the PNG size, File opening on Info or Home, where Edit, Reply and Resolve sit on a modern comment card, whether deleting every comment asks first, the status bar's Comments button, comments on text, and the .odp keep-the-format question.
+- Featherweight: whether F5 and Shift+F5 reach the show while the keyboard is in the ribbon or the notes; whether a shape whose text is being edited is still selected after New Comment; how the one-line box shows a multi-paragraph comment from PowerPoint.
+- Saved .pptx from .odp: 14 of 14 corpus decks open in PowerPoint without repair (`readback\odp-saved-open-check.json`, 2026-11-24, p3-files 54aec9ac). From .ppt: not checked yet.
+- None of these flows is scripted. `tests/friction-checks.ps1` has the Word flows only; comments (`comment:` script ops) and transitions (`transition:`, `anim:`) could be scripted the same way.
+
+Owners: P1 to P5 p3-present (P4 with R1, whose quick access it is); P6 to P8 p3-anim; P9 to P13 p3-review; P14 ends with the 4.0 release flag; P15 is by design; P16 p3-ppt. A finding is marked fixed when its fix is in `claude/p3-int`.
+
+### The flows step by step
+
+#### 1. Presenting with the presenter view
+
+An open deck with notes and a second monitor (the projector) as an extended display. The app window is on the laptop's screen. Start from the beginning, go forward and back, jump to slide N, read the notes and the next slide, black the screen and bring it back, then end.
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-present 85be16e2) |
+|---|---|---|---|
+| 0. Which monitor gets the show | 0. "Automatic" puts the show on the projector and the presenter view on the laptop *(check in PowerPoint)*. If it's wrong: Display Settings, Swap Presenter View and Slide Show: 2 C, during the show. | "Automatic" is the monitor the app window is on (`monitor = -1`: "the owner's monitor"). With the app on the laptop, the show fills the laptop and the presenter view goes to the projector. To fix it: Slide Show, Monitor ▾, the projector: **3 C, 1 D**, before F5. It's per tab and not saved. The presenter view has no swap. If you notice during the show: Esc, those 3 C, then F5 again. | SlideShow.h:27; SlideShow.cpp:344-348 and 423-430; PresentationCommands.cpp:632; PresentationRibbon.cpp:375-387; PresentationView.h:285 |
+| 1. Start from the beginning, with the presenter view | F5: 1 K. The presenter view comes on by itself with two monitors. (Mouse: Start From Beginning in quick access: 1 C *(check in PowerPoint)*. Or Slide Show, From Beginning: 2 C.) | F5: 1 K. Use Presenter View is on by default, so the presenter view opens full screen on the other monitor. (Mouse: Slide Show, From Beginning: 2 C. Quick access has only Save, Undo and Redo.) | PresentationCommands.cpp:116, 244, 622-647 (637); PresentationView.h:286; PresentationRibbon.cpp:368-370 and 388; PresenterView.cpp:95-111; AppRibbon.cpp:106-119 |
+| 2. Forward | → (or Space, N, PgDn): 1 K. (Click the slide or ▶: 1 C.) | → (or Space, N, PgDn, Enter): 1 K, in either window. The presenter view passes its keys to the show. (Click the current or next slide in the presenter view: 1 C.) | SlideShow.cpp:1379 and 1110-1146; PresenterView.cpp:333-337 and 355-356; SlideShow.cpp:271 |
+| 3. Back | ← (or Backspace, P, PgUp): 1 K. (◀: 1 C.) | ← (or Backspace, P, PgUp): 1 K. (Mouse: no back button. Wheel up over the slides: 1 scroll.) | SlideShow.cpp:1380 and 1150-1167; PresenterView.cpp:369-371 |
+| 4. Jump to slide N | Type N, Enter: 1 K, 1 D. (See All Slides, then the slide: 2 C.) | Type N, Enter: 1 K, 1 D. (The strip of slides is always shown: click the slide, 1 C. Add a scroll when it's out of view: about 11 thumbnails fit at 1920×1080.) | SlideShow.cpp:1364-1376; PresenterView.cpp:155-159, 262-282 and 350-354 (click), 367-368 (strip scroll) |
+| 5. See the notes and the next slide | 0: both are in the presenter view | 0: the notes (wheel to scroll, A− and A+ to zoom) and the next slide. When the slide has clicks left, it shows "Next animation" instead. | PresenterView.cpp:213-259; SlideShow.cpp:1342-1355 |
+| 6. Black the screen | B (or .): 1 K. (The presenter view's black-screen button: 1 C.) | B (or .): 1 K. (Mouse: no button in the presenter view. Right-click the show window on the projector, then Black screen: 2 C.) | SlideShow.cpp:1389 and 1330-1334; SlideShow.cpp:1397-1420; PresenterView.cpp:194-202 (the only buttons: Pause, Reset, A−, A+) |
+| 7. Bring the slide back | B again, or any key: 1 K *(check in PowerPoint: whether any key or only B)*. (The button again: 1 C.) | B again, or any key but W, comma and Esc: 1 K. It doesn't also advance. (A click on the slide: 1 C.) | SlideShow.cpp:1331 and 1360-1362; PresenterView.cpp:355-356 |
+| 8. End | Esc: 1 K. (End Slide Show at the top of the presenter view: 1 C.) | Esc (or −): 1 K, in either window. Alt+F4 in the presenter view ends it too. (Mouse: no End button. The presenter view is a captionless popup. Right-click the show window, then End show: 2 C. Or click past the last slide.) | SlideShow.cpp:1391; PresenterView.cpp:100, 335, 375; SlideShow.cpp:1406 and 1417; PresenterView.cpp:230 |
+| | **Total** | **7 K, 1 D** (mouse: 8 C) | **7 K, 1 D + 3 C, 1 D** for the monitor (mouse: 9 C + 1 scroll, + the monitor) |
+
+#### 1b. Start from the current slide
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-present 85be16e2) |
+|---|---|---|---|
+| 1. From the current slide | Shift+F5: 1 K. (The Slide Show button in the status bar: 1 C. Or Slide Show, From Current Slide: 2 C.) | Shift+F5: 1 K, with the presenter view as in step 1. (Mouse: right-click the slide, then Present from this slide: 2 C. Or Slide Show, From Current Slide: 2 C. The status bar has no show button.) | PresentationCommands.cpp:116, 245 and 630; PresentationCommands.cpp:346; PresentationRibbon.cpp:371; PresentationCommands.cpp:352-364 (status bar) |
+| | **Total** | **1 K** (mouse: 1 C) | **1 K** (mouse: 2 C) |
+
+The show ends on the slide it was on, and the tab goes to that slide, as in PowerPoint (PresentationCommands.cpp:639-643).
+
+Alt+F5 in Featherweight puts the show and the presenter view side by side, each in a window, on one monitor, from the current slide (PresentationCommands.cpp:117 and 246; SlideShow.cpp:364-375; PresenterView.cpp:101-107). That's for rehearsing. It's not in the counts.
+
+#### 2. Transitions and animations
+
+Counted by p3-anim on `claude/p3-anim` 3d38ee17 and brought up to 1b83de6e, from a slide open in the editor with the Home tab showing. A step is a click or a key; a pick in an open gallery or menu is one step.
+
+| Task | PowerPoint 2021 | Featherweight (claude/p3-anim, from 1b83de6e) |
+|---|---|---|
+| Give a slide a transition | Transitions tab, pick in the gallery: 2 | same: 2 (Alt, K opens the tab too) |
+| Change its direction | Effect Options, pick: 2 | same: 2 |
+| Set its duration | Duration box, type, Enter: 3 | same: 3 (spin box) |
+| Advance after a time | After check box, type in its box: 2-3 | same: 2-3 |
+| Same transition on every slide | Apply To All: 1 | same: 1 |
+| Preview it | Preview: 1 | same: 1 (plays on the slide in the editor, never full screen) |
+| Animate a shape | select it, Animations tab, pick in the gallery: 3 | same: 3 |
+| A second effect on the same shape | Add Animation, pick: 2 | same: 2 |
+| With Previous / After Previous | Start box, pick: 2 | same: 2 |
+| Duration / delay | box, type, Enter: 3 each | same: 3 each |
+| Reorder | Move Earlier / Later: 1 each, the pane's arrows, or drag in the pane | same (dragging in the pane since the commit after 1b83de6e) |
+| Open the Animation Pane | Animation Pane: 1 | same: 1 |
+| Pick an effect in the pane and change it | click it, pick in the gallery: 2 | same: 2 (the gallery changes the picked effect only) |
+| Remove an effect | pane: pick, Delete: 2; or gallery None | same: 2 |
+| Text a paragraph at a time | Effect Options > By Paragraph: 2 (default on text placeholders) | same: 2 (Effect Options > As One Object / By Paragraph, 1b83de6e); by paragraph by default on body/content placeholders with more than one paragraph |
+
+#### 3. Commenting a deck
+
+A received deck with a colleague's thread on slide 2. The ribbon shows Home. The Review tab is counted once, in step 1; after that it's open (as the S4 model's "the Data tab is open"). The Comments pane is open after step 1. Each step starts with no thread picked.
+
+| Step | PowerPoint 2021 | Featherweight | file:line |
+|---|---|---|---|
+| 1. A comment on the slide | Review, New Comment, type, Ctrl+Enter (or Post): 2 C + 1 K [Ctrl+Alt+M, type, Ctrl+Enter: 2 K] | Review, New Comment, type, Enter: 2 C + 1 K [Ctrl+Alt+M, type, Enter: 2 K]. The pane opens and its box has the keyboard. The marker goes at the top left, stacked under earlier ones. | slide/view/PresentationRibbon.cpp:393, 398; slide/view/PresentationCommands.cpp:110, 242-246; slide/view/PresentationComments.cpp:285, 340-369 (focus 359, 584-587), 79-82, 423-440 |
+| 2. A comment on a shape | Click the shape, New Comment, type, Ctrl+Enter: 2 C + 1 K. The comment is tied to the shape. | Click the shape, New Comment, type, Enter: 2 C + 1 K. The marker is only placed at the shape's top right corner. The comment is tied to the slide, so it doesn't follow the shape (P10). | slide/view/PresentationComments.cpp:342-348; slide/edit/CommentOps.cpp:539-547 (only `pc:sldMkLst`) |
+| 2b. A comment on selected text | Select the text, New Comment, type, Ctrl+Enter: 1 drag + 1 C + 1 K, tied to the text *(check in PowerPoint)* | Can't. It goes by the shape, as in step 2 (P10). | slide/edit/CommentOps.cpp:539-547 |
+| 3. Reply to the colleague's comment | The thread's Reply box, type, Ctrl+Enter: 1 C + 1 K *(check in PowerPoint)* | Click the thread's card, type, Enter: 1 C + 1 K. The box at the top of the pane becomes "Reply" and takes the keyboard. Clicking the marker on the slide does the same. | slide/view/PresentationComments.cpp:622-633, 79-82, 442-448, 548-551; markers 175-188, 360-363 |
+| 4. Edit your comment | Edit (the pencil) on it, change it, Ctrl+Enter: 1 C + 1 K *(check in PowerPoint)* | Click its card, Edit, change it, Enter: 2 C + 1 K. **+1 C** (P9). Right after posting it's still picked: 1 C + 1 K. | slide/view/PresentationComments.cpp:87-88, 450-458, 427-429, 433-435 |
+| 5. Resolve a thread | … (More thread actions), Resolve thread: 2 C *(check in PowerPoint)* | Click its card, Resolve: 2 C. A legacy comment's Resolve is greyed out (PowerPoint's legacy comments have no Resolve either). | slide/view/PresentationComments.cpp:89-90, 460-467, 554-555; slide/edit/CommentOps.cpp:711-723 |
+| 6. Hide, then show the pane | Review > Show Comments, twice: 2 C (the pane's X hides it too). From another tab: the status bar's Comments button, or Comments at the top right: 1 C each *(check in PowerPoint)* | Review > Show Comments, twice: 2 C. The pane's close button, or Esc while the pane has the keyboard, hides it. From another tab: Review first, +1 C each way (P12). | slide/view/PresentationRibbon.cpp:402; slide/view/PresentationComments.cpp:286-289; ui/SidePanel.cpp:17-21; AppShell.cpp:330-331; slide/view/PresentationCommands.cpp:361-373 (no Comments button in the status bar) |
+| 7. Go to the next comment | Review > Next: 1 C | Review > Next: 1 C. It goes to the next slide's thread, picks it and opens the pane. It wraps around. | slide/view/PresentationRibbon.cpp:401; slide/view/PresentationComments.cpp:371-409 |
+| 8. Delete one thread | …, Delete thread: 2 C *(check in PowerPoint)* (or pick it, Review > Delete: 2 C) | Click its card, Delete: 2 C (or the card, Review > Delete). It takes the replies with it. | slide/view/PresentationComments.cpp:91-92, 469-479, 259-262; slide/view/PresentationRibbon.cpp:399 |
+| 8b. Delete one reply | …, Delete comment on the reply: 2 C *(check in PowerPoint)* | Can't. The pane only picks threads, so Delete takes the whole thread (P11). | slide/view/PresentationComments.cpp:625, 469-479 (the API can: slide/edit/CommentOps.cpp:644-688) |
+| 9. Delete all on this slide | Delete ▾, Delete All Comments and Ink on This Slide: 2 C | Delete ▾, Delete all comments on this slide: 2 C | slide/view/PresentationRibbon.cpp:399; slide/view/PresentationComments.cpp:263-266, 296 |
+| 10. Delete all in the deck | Delete ▾, Delete All Comments and Ink in This Presentation…, Yes: 3 C *(check in PowerPoint: the question)* | Delete ▾, Delete all comments in this presentation: 2 C. No question; one undo brings them back. | slide/view/PresentationComments.cpp:267-270, 297; slide/edit/CommentOps.cpp:690-709 |
+| **Total** (steps 1-10) | **18 C + 4 K** | **18 C + 4 K** | |
+
+Where legacy comments differ (PowerPoint 2013-2019, or a received deck with old comments): in PowerPoint you type a new comment or reply and click away (no Post). Edit is a click in the text. Delete is the comment's X. There's no Resolve. In Featherweight, new comments are always modern. A received legacy comment can be replied to, edited and deleted, and stays legacy. Resolve is greyed out for it (slide/view/PresentationComments.cpp:554; slide/edit/CommentOps.cpp:718). How PowerPoint 2021 with modern comments treats a deck's legacy comments, I couldn't settle *(check in PowerPoint)*.
+
+#### 4. Protecting a deck
+
+A deck to send with a password, then a received protected deck.
+
+| Step | PowerPoint 2021 | Featherweight | file:line |
+|---|---|---|---|
+| 1. Open a protected .pptx | Double-click, type the password, Enter: 1 C + 1 K, 1 D | Double-click. The tab shows the password card, and its box has the keyboard. Type the password, Enter: 1 C + 1 K, 1 D. | App.cpp:1821-1835, 1990; slide/view/PresentationView.cpp:87-96; slide/view/PresentationProtect.cpp:35-51, 53-82, 89-109; PasswordCard.cpp:12-21 |
+| 2. A wrong password | An error, OK, open it again, type, Enter: 2 C + 1 K more *(check in PowerPoint)* | The card says "That password isn't right. Try again." The box shakes and its text is selected. Type it again, Enter: 1 K more. An empty box gets the same message. A damaged file or an unsupported encryption keeps the card, with the reason. | PasswordCard.cpp:84-88; slide/view/PresentationProtect.cpp:66-79, 91-108 |
+| 3. Save after an edit | Ctrl+S, with the same password: 1 K | Ctrl+S: 1 K. It asks nothing. It's written encrypted with the key from the password. The backup of the original is the encrypted file, and the autosave is encrypted too. | slide/view/PresentationView.cpp:111-115; FileSession.cpp:110, 115-123, 124-135; slide/view/PresentationFile.cpp:116-124 |
+| 4. Protect a deck with a password | File, Info, Protect Presentation, Encrypt with Password, type, Enter, type again, Enter, Save: 5 C + 2 K, 1 D (4 C if File opens on Info *(check in PowerPoint)*) [Save As route: F12, Tools, General Options, type, OK, type again, OK, Save: 1 K + 5 C, 1 D *(check in PowerPoint)*] | File (it opens on Info), Protect Presentation: Encrypt with Password, type, Tab, type again, Enter, Ctrl+S: 2 C + 3 K, 1 D. The File page closes and a side panel opens with the Password box ready. Enter in the first box says "The passwords you typed don't match", so Tab comes first. There's no password in Save As; it isn't needed. | AppRibbon.cpp:195, 295-303; ui/FilePage.cpp:246-249; slide/view/PresentationRibbon.cpp:480-490; slide/view/PresentationProtect.cpp:122-128, 139-158, 191-195, 201-217, 130-137; ui/Controls.cpp:237-240, 1093-1096; App.cpp:2065 |
+| 5. Remove the password | File, Info, Protect Presentation, Encrypt with Password, Delete (the dots), Enter, Save: 5 C + 2 K *(check in PowerPoint: whether the dots start selected)* | File, Protect Presentation: Encrypt with Password, Remove password, Ctrl+S: 3 C + 1 K | slide/view/PresentationProtect.cpp:149-150, 178, 219-224 |
+| **Total** (steps 1, 3, 4, 5) | **11 C + 6 K, 2 D** (9 C + 6 K if File opens on Info) | **6 C + 6 K, 2 D** | |
+
+The two typed passwords don't match: Featherweight's panel says "The passwords you typed don't match." (slide/view/PresentationProtect.cpp:205-206). PowerPoint shows an error to close first *(check in PowerPoint)*.
+
+#### 5. Exporting pictures, and a deck from a template
+
+#### 5a. The current slide as PNG
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-files 799f5bc5) |
+|---|---|---|---|
+| 1. File | 1 C | 1 C. The File page opens on Info. | ui/FilePage.h:41 |
+| 2. Export | 1 C | 1 C | AppRibbon.cpp:321-324 |
+| 3. The format | Change File Type, PNG Portable Network Graphics, Save As: 3 C | Current slide as PNG…: 1 C. It's the second entry, after Export PDF…. | PresentationRibbon.cpp:469-478; PictureExport.cpp:90-97 |
+| 4. Name and place | The deck's name is suggested *(check in PowerPoint: which folder)*. Enter: 1 K, 1 D | `Slide<N>.png` in the deck's folder is suggested. A Width box (1280, 1920, 2560, 3840 pixels; 1920 at first) sits in the dialog. Enter: 1 K, 1 D | PictureExport.cpp:100-124 (105-113 name and folder, 114-123 width); PictureExport.cpp:26; PresentationView.h:215 |
+| 5. Which slides | Just This One: 1 C | 0. A banner says "Exported slide N to …". | PictureExport.cpp:63-72 and 133-137 |
+| | **Total** | **6 C + 1 K, 1 D** | **3 C + 1 K, 1 D** |
+
+(PowerPoint by keyboard: F12, Save as type ▾, a scroll, PNG, Enter, Just This One: 2 K + 3 C + 1 scroll.)
+
+#### 5b. Every slide as PNG
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-files 799f5bc5) |
+|---|---|---|---|
+| 1-2. File, Export | 2 C | 2 C | as in 2a |
+| 3. The format | Change File Type, PNG, Save As: 3 C | All slides as PNG…: 1 C | PresentationRibbon.cpp:470-471; PictureExport.cpp:92-95 |
+| 4. Name and place | The deck's name. Enter: 1 K, 1 D | The deck's name in its folder, with the Width box. Enter: 1 K, 1 D | PictureExport.cpp:105-113 |
+| 5. Which slides | All Slides: 1 C | 0 | |
+| 6. The result | A message says each slide was saved as a file in a folder, OK: 1 C *(check in PowerPoint)* | 0. A folder named as the file holds Slide1.png, Slide2.png and so on, as PowerPoint names them. A banner says "Exported N slides to the folder …". | PictureExport.cpp:74-87 and 133-137 |
+| | **Total** | **7 C + 1 K, 1 D** | **3 C + 1 K, 1 D** |
+
+A different width is the Width box: +2 C in Featherweight. It's remembered for the tab, not between sessions (PresentationView.h:215). PowerPoint exports at a fixed size, and changing it needs a registry value *(check in PowerPoint: 1280 px wide for 16:9 by default?)*.
+
+#### 5c. A deck from a .potx template
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-files 799f5bc5) |
+|---|---|---|---|
+| 1. A new deck from the template | Double-click the .potx: 1 C ("Presentation1") | Double-click: 1 C. A new "Presentation1" opens; the template isn't touched. | App.cpp:1787-1791; PresentationView.cpp:95-97 and 120-121; App.h:356 |
+| 1b. From inside the app | File, New, Personal, the template: 4 C *(check in PowerPoint)* | Not listed: File > New lists .potx only once the presentation editor is marked shipped, and it isn't. File, New, More templates… opens the Open dialog on the personal templates folder, but its Templates filter leaves out .potx. Then file type ▾, PowerPoint presentations, double-click the template: **6 C**. (Or Ctrl+O, browse, double-click: 1 K + 1 C, plus browsing.) | UserTemplates.cpp:60-61; core/FileKinds.cpp:23-24; AppRibbon.cpp:245-261; App.cpp:1460-1462, 1866-1878 |
+| 2. Save | Ctrl+S, the name and the place, Enter: 2 K, 2 D *(check in PowerPoint: whether 2021 shows File > Save As first, +1 C for Browse)* | Ctrl+S opens Save As with `Documents\Presentation1.pptx`. The name, the place, Enter: 2 K, 2 D | App.cpp:2062-2075; slide/view/PresentationFile.cpp:41-51 |
+| | **Total (from Explorer)** | **1 C + 2 K, 2 D** | **1 C + 2 K, 2 D** |
+
+#### 6. Opening a .ppt or an .odp and saving it
+
+#### 6a. A .ppt received by mail: double-click, edit, Ctrl+S
+
+| Step | PowerPoint 2021 | Featherweight | file:line |
+|---|---|---|---|
+| 1. Open the attachment | Double-click, then Enable Editing in Protected View: 2 C | Double-click: 1 C. The .ppt is converted to a .pptx in memory and opens ready to edit. A banner says "… is a PowerPoint 97–2003 presentation. Saving makes a new `<name>`.pptx and leaves it as it is." It asks nothing. | p3-ppt da559019: core/FileKinds.cpp:12; App.cpp:1787-1791; slide/view/ModelDeck.cpp:356-369; slide/view/PresentationView.cpp:86-99 and 116-124 |
+| 2. Edit | Typed | Typed. The converted deck can be edited: CanEdit only refuses a damaged main part. | p3-ppt: slide/edit/Edit.cpp:763-770 |
+| 3. Save | Ctrl+S keeps the .ppt (Compatibility Mode): 1 K. (The Compatibility Checker asks first only when newer features would be lost: +1 C.) | Ctrl+S opens Save As, because the tab has no path: `<name>.pptx` beside the .ppt is suggested, as a .pptx. Enter: 2 K. Later Ctrl+S saves that .pptx without asking. | p3-ppt: slide/view/PresentationView.cpp:119 and 123; App.cpp:2062-2075; slide/view/PresentationFile.cpp:41-43; slide/view/PresentationSave.cpp:89-93 and 123-128 |
+| | **Total** | **2 C + 1 K** | **1 C + 2 K** |
+
+What each app asks: PowerPoint asks for Enable Editing. On save it asks nothing, unless the Compatibility Checker shows. Featherweight asks nothing on open. On the first save it shows Save As with the new `.pptx` name filled in.
+
+For a mail attachment, "beside the .ppt" is the mail program's temporary folder. PowerPoint's Ctrl+S also writes there, into the .ppt itself. Featherweight's Save As at least shows the folder. That isn't counted.
+
+A .pps starts as a show, and a .pot opens as a new presentation, as in PowerPoint (p3-ppt: slide/view/PresentationView.cpp:114-115 and 131-132).
+
+#### 6b. An .odp: double-click, edit, Ctrl+S
+
+| Step | PowerPoint 2021 | Featherweight | file:line (p3-files 799f5bc5) |
+|---|---|---|---|
+| 1. Open | Double-click: 1 C. From mail, Enable Editing: +1 C | Double-click: 1 C. It's converted and opens ready to edit. A banner says "… is an OpenDocument presentation. Saving makes a new `<name>`.pptx and leaves it as it is." | core/FileKinds.cpp:12; slide/view/PresentationView.cpp:86-108; slide/view/ModelDeck.cpp:355-373 |
+| 2. Edit | Typed | Typed | |
+| 3. Save | Ctrl+S, then keep the format in PowerPoint's question: 1 K + 1 C *(check in PowerPoint)* | Ctrl+S, then Enter in Save As, with `<name>.pptx` beside the .odp suggested: 2 K | slide/view/PresentationSave.cpp:48-53; slide/view/PresentationFile.cpp:43; App.cpp:2062-2075 |
+| | **Total** | **3 C + 1 K** (from mail) | **1 C + 2 K** |
+
+An .otp opens as a new presentation (slide/view/PresentationView.cpp:120-121).
