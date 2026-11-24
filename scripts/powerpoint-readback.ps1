@@ -3,7 +3,8 @@
   P3's PowerPoint read-back check (docs/p3-plan.md, "Transitions and animations" and "Comments"):
   PowerPoint 2021 opens each deck and writes what its object model reads back, as JSON beside the
   deck's name in -Out (<name>.readback.json): per slide the transition (SlideShowTransition), the
-  main sequence and the interactive sequences (TimeLine), and the comments with their replies.
+  main sequence and the interactive sequences (TimeLine), the comments with their replies, and the
+  video and audio shapes (media type, linked, length, whether they play on entry).
   Names are PowerPoint's own enums (PpEntryEffect, MsoAnimEffect, MsoAnimTriggerType,
   MsoAnimDirection); shapes are named by their id (the file's cNvPr id, the timing's spid). `fwtool
   readback` writes the same JSON from Featherweight's model; comparing the two is the check:
@@ -104,6 +105,14 @@ if ($Child) {
         [ordered]@{ triggerShapeId = $trig; effects = $effects }
       })
       $slide.comments = @(foreach ($c in $s.Comments) { Read-Comment $c })
+      # Video and audio (p3-present's Insert): the media shapes, what they are and how they start.
+      $slide.media = @(foreach ($sh in $s.Shapes) {
+        if ([int]$sh.Type -ne 16) { continue }  # msoMedia
+        $m = [ordered]@{ shapeId = [int]$sh.Id; shape = [string]$sh.Name; mediaType = N PpMediaType $sh.MediaType }
+        try { $m.playOnEntry = ([int]$sh.AnimationSettings.PlaySettings.PlayOnEntry -eq -1) } catch { $m.playOnEntry = $null }
+        try { $m.linked = ([int]$sh.MediaFormat.IsLinked -eq -1); $m.lengthMs = [int]$sh.MediaFormat.Length } catch { $m.linked = $null; $m.lengthMs = $null }
+        $m
+      })
       $deck.slides += $slide
     }
     $result.deck = $deck
