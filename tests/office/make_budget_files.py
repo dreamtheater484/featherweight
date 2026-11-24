@@ -10,10 +10,12 @@ big for the repository:
   deck-50.pptx         P1's opening budget (docs/p1-plan.md): 50 slides as a lecture has them,
                        titles and bullets, 20 photos, 5 charts, 5 tables, groups and shapes, notes
   deck-typical.pptx    P1's memory budget: a typical 20-slide deck (8 photos, 2 charts, a table)
+  deck-video.pptx      P3's idle budget: a 1080p H.264 video on the first slide (needs ffmpeg on the
+                       PATH to make the clip; skipped without it)
 
 Output goes to the folder given (default: build/budgets, which git ignores):
   .venv\\Scripts\\python tests/office/make_budget_files.py [folder]
-  .venv\\Scripts\\python tests/office/make_budget_files.py --decks [folder]   (only the two decks)
+  .venv\\Scripts\\python tests/office/make_budget_files.py --decks [folder]   (only the decks)
 
 The output is deterministic (fixed seed, fixed dates), so timings compare across runs.
 """
@@ -134,11 +136,54 @@ def deck(path, slides, photos, charts, tables):
         f.write(normalize(to_bytes(prs)))
 
 
+def video_deck(path):
+    """P3's idle budget (docs/p3-plan.md, "Lightweight"): a deck whose first slide holds a 1080p H.264
+    video, embedded as PowerPoint embeds it, with its poster frame. The clip is ffmpeg's test pattern,
+    10 s at 30 fps without sound. Without ffmpeg on the PATH there's no such deck (returns False)."""
+    import shutil
+    import subprocess
+    import tempfile
+    import pptx
+    from pptx.util import Emu, Inches
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from make_test_office import normalize, set_core, to_bytes
+    with tempfile.TemporaryDirectory() as tmp:
+        clip, poster = os.path.join(tmp, "clip-1080p.mp4"), os.path.join(tmp, "poster.png")
+        quiet = ["-hide_banner", "-loglevel", "error", "-y"]
+        subprocess.run([ffmpeg, *quiet, "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=10",
+                        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-threads", "1",
+                        "-movflags", "+faststart", "-an", clip], check=True)
+        subprocess.run([ffmpeg, *quiet, "-i", clip, "-frames:v", "1", poster], check=True)
+        prs = pptx.Presentation()
+        set_core(prs.core_properties, "A deck with a video")
+        prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)
+        s = prs.slides.add_slide(prs.slide_layouts[5])
+        s.shapes.title.text = "A 1080p video on the first slide"
+        s.shapes.add_movie(clip, Inches(1.33), Inches(1.5), Inches(10.67), Inches(6), poster_frame_image=poster,
+                           mime_type="video/mp4")
+        for i in range(2, 5):
+            s = prs.slides.add_slide(prs.slide_layouts[1])
+            s.shapes.title.text = f"{i}. " + " ".join(WORDS[(i + k) % len(WORDS)] for k in range(4)).capitalize()
+            s.placeholders[1].text = " ".join(WORDS[(i * k) % len(WORDS)] for k in range(9))
+        with open(path, "wb") as f:
+            f.write(normalize(to_bytes(prs)))
+    return True
+
+
 def decks(out):
     for name, slides, photos, charts, tables in (("deck-50.pptx", 50, 20, 5, 5), ("deck-typical.pptx", 20, 8, 2, 1)):
         d = os.path.join(out, name)
         deck(d, slides, photos, charts, tables)
         print(f"  {d}  ({os.path.getsize(d):,} bytes, {slides} slides)")
+    v = os.path.join(out, "deck-video.pptx")
+    if video_deck(v):
+        print(f"  {v}  ({os.path.getsize(v):,} bytes, a 1080p H.264 video on slide 1)")
+    else:
+        print("  deck-video.pptx not made: ffmpeg isn't on the PATH (P3's idle budget with a video)")
 
 
 def main():
