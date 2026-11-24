@@ -3,6 +3,8 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "slide/edit/EditInternal.h"
 
@@ -26,5 +28,16 @@ Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, in
                 uint32_t parentGroup = 0);
 // Fills an empty a:hlinkClick for `target`, adding the relationship of `part` it needs.
 bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, const LinkTarget& target);
+
+// Shared with MediaOps.cpp (p3-present).
+// The a:xfrm (prefix "a") or p:xfrm element for `r`, in slide points.
+std::string XfrmXml(const draw::Rect& r, std::string_view prefix = "a");
+// Picture formats Office stores in a:blip, from their first bytes: (extension, content type); empty
+// when it isn't one.
+std::pair<std::string, std::string> PictureType(const std::vector<uint8_t>& bytes);
+// The /ppt/media part holding `bytes`: one already in the deck with the same bytes (stored once), else
+// a new "<stem><n>.<ext>" of content type `type`. Inside a Call.
+std::string StoreMedia(Editor::Impl& m, std::vector<uint8_t> bytes, std::string_view stem, std::string_view ext,
+                       std::string_view type);
 
 }  // namespace fw::slide::edit

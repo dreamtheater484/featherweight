@@ -21,6 +21,7 @@ add_library(fwslide STATIC
   edit/SlideCopy.cpp
   edit/SlideOps.cpp
   edit/TextOps.cpp
+  edit/MediaOps.cpp  # p3-present
   edit/CommentOps.cpp  # p3-review
   edit/TimingOps.cpp  # p3-anim
 )
@@ -34,12 +35,13 @@ set_source_files_properties(ppt/Ppt.cpp ppt/Shapes.cpp ppt/Text.cpp PROPERTIES C
 # p2-model: the edit layer runs once per edit, undo or save, never per frame: compiled for size.
 set_source_files_properties(edit/DesignOps.cpp edit/TableGrid.cpp edit/TableOps.cpp edit/Transform.cpp edit/Edit.cpp edit/Journal.cpp
   edit/Parts.cpp edit/Save.cpp edit/ShapeClip.cpp edit/ShapeOps.cpp edit/SlideCopy.cpp edit/SlideOps.cpp edit/TextOps.cpp
-  edit/TimingOps.cpp
+  edit/MediaOps.cpp edit/TimingOps.cpp
   PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_eot.cpp")
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_edit.cpp")  # p2-model
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_present.cpp")  # p3-present
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_ppt.cpp")  # p3-ppt
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_review.cpp")  # p3-review
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_anim.cpp")  # p3-anim

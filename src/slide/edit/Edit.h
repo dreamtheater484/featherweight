@@ -245,6 +245,32 @@ struct HeaderFooter {
   bool notOnTitle = false;  // "Don't show on title slide"
 };
 
+// Insert > Video and Insert > Audio from a file (P3, p3-present).
+struct MediaInsert {
+  bool video = true;            // else audio
+  std::vector<uint8_t> bytes;   // the file, as read: embedded as it is
+  std::string extension;        // its extension, without the dot ("mp4", "wmv", "mp3", "m4a", "wav")
+  std::vector<uint8_t> poster;  // PNG or JPEG: the poster frame (video) or the icon (audio)
+  std::wstring name;            // the shape's name and alt text: the file's name, as PowerPoint names it
+  double durationMs = 0;        // its length; 0 when unknown
+};
+
+// A video's or audio's playback settings (the Playback tab), as PowerPoint keeps them on its media node
+// in the slide's timing (p:video or p:audio). Start (In Click Sequence, Automatically) is the play
+// step's timing: SetAnimationTiming (TimingOps, p3-anim).
+struct MediaPlayback {
+  double volume = 0.8;          // cMediaNode vol, 0..1 (PowerPoint inserts at 80 %)
+  bool mute = false;
+  bool loop = false;            // Loop until Stopped: the node's repeatCount="indefinite"
+  bool hideWhenStopped = false; // Hide While Not Playing: showWhenStopped="0"
+  bool fullScreen = false;      // Play Full Screen (video): fullScrn="1"
+  bool acrossSlides = false;    // Play Across Slides (audio): numSld="999"
+};
+
+// Playback › Start: the play step In Click Sequence (On Click) or Automatically (After Previous) in the
+// main sequence, or When Clicked On: no play step, the click on the shape (its trigger) plays it.
+enum class MediaStart : uint8_t { InClickSequence, Automatically, WhenClickedOn };
+
 class Editor {
  public:
   explicit Editor(Presentation& deck);
@@ -325,6 +351,18 @@ class Editor {
   // per deck (the same bytes share a part), its aspect ratio locked, with its alt text.
   Result InsertPicture(size_t slide, std::vector<uint8_t> bytes, const draw::Rect& r, std::wstring_view altText,
                        uint32_t* id = nullptr);
+  // A video or audio embedded as PowerPoint 2021 inserts it (src/slide/edit/MediaOps.cpp, p3-present): the
+  // file in /ppt/media (stored once per deck) under a video (or audio) and a media relationship, its
+  // poster as the picture, and in the slide's timing a play step at the end of the click sequence
+  // ("In Click Sequence"), its media node (volume 80 %) and a click on it toggling pause. Refused for
+  // an extension PowerPoint doesn't insert, or a poster that isn't PNG or JPEG.
+  Result InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id = nullptr);
+  // A media shape's playback settings; false (Get) or refused (Set) when the slide's timing has no
+  // media node for it. `video` (Get): a p:video node, else p:audio.
+  bool GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, bool* video = nullptr) const;
+  Result SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p);
+  bool GetMediaStart(size_t slide, uint32_t id, MediaStart* out) const;
+  Result SetMediaStart(size_t slide, uint32_t id, MediaStart start);
   // A table of `rows` by `columns` with PowerPoint's default style, as Insert > Table makes it.
   Result InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id = nullptr);
   // Deleted, with what names them: animations of them, connections to them, relationships only

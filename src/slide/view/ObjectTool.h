@@ -23,6 +23,10 @@ namespace gfx {
 class Canvas;
 }
 
+namespace fw::slide::edit {
+struct MediaPlayback;
+}
+
 namespace fw::slide::view {
 
 class Deck;
@@ -90,12 +94,21 @@ class ObjectTool {
   // What's selected, by kind (the ribbon's contextual tabs: Shape Format, Picture Format, Table Layout).
   struct Kinds {
     int shapes = 0, pictures = 0, tables = 0, others = 0;
+    int videos = 0, audios = 0;  // P3: media shapes (not pictures): Video Format and Playback
   };
   Kinds SelectionKinds();
   // The object inserted last (a picture, shape or text box), once; 0 when none since: the ribbon
   // then shows its Format tab, as PowerPoint does.
   uint32_t TakeInserted();
   bool IsPicture(uint32_t id);
+  bool IsMedia(uint32_t id);
+  // P3: the one selected video's or audio's playback settings (the Playback tab); false when the
+  // selection isn't one media shape the slide plays. Set: one undo step.
+  bool SelectedPlayback(fw::slide::edit::MediaPlayback* p, bool* video);
+  bool SetSelectedPlayback(const fw::slide::edit::MediaPlayback& p);
+  // Its Start: 0 In Click Sequence, 1 Automatically, 2 When Clicked On (edit::MediaStart).
+  bool SelectedStart(int* start);
+  bool SetSelectedStart(int start);
   void ContextMenu(HMENU menu, float x, float y);
   // A table's items (insert and delete rows and columns, merge, split) when the selected object is
   // a table: the view adds them after text editing's own menu in a cell.
@@ -183,6 +196,8 @@ class ObjectTool {
   bool DuplicateSelection(float dx, float dy);
   bool InsertPictures(const std::vector<std::wstring>& files, draw::Point at, bool centred);
   bool InsertPictureBytes(std::vector<uint8_t> bytes, draw::Point at, bool centred);
+  // P3: a video or audio file, embedded, centred on the slide.
+  bool InsertMediaFile(const std::wstring& file, bool video);
   bool InsertShape(int index);
   bool InsertPreset(const std::string& preset, const draw::Rect& r);
   bool InsertTextBox();
@@ -223,6 +238,8 @@ class ObjectTool {
 
 // The open dialog for pictures (PNG, JPEG, GIF, BMP, TIFF, EMF, WMF, SVG): the files chosen, or none
 // when cancelled. Shared by inserting pictures and picture fills and backgrounds.
+// P3: one video (or audio) file to insert; empty when none was chosen.
+std::wstring PickMediaFile(HWND owner, bool video);
 std::vector<std::wstring> PickPictureFiles(HWND owner, bool several);
 
 }  // namespace fw::slide::view

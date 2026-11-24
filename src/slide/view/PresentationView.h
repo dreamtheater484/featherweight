@@ -196,7 +196,7 @@ class PresentationView : public TabContent {
   bool RibbonMenuState(int cmd, CommandState& s);
 
   // ---- Commands (PresentationCommands.cpp)
-  void StartShow(bool fromCurrent);
+  void StartShow(bool fromCurrent, bool presenterWindowed = false);
   void CopySlide(bool text, bool picture);
   void CopyNotes();
   void FollowLink(const SlideLink& link);
@@ -345,6 +345,7 @@ class PresentationView : public TabContent {
   // show this tab started is running (the tab outlives it, or stops it when closed).
   std::unique_ptr<fw::slide::show::SlideRenderer> showRenderer_;
   int showMonitor_ = -1;
+  bool usePresenter_ = true;  // P3: Slide Show > Use Presenter View
   bool showing_ = false;
   std::unique_ptr<text::Fonts> fonts_;  // printing's and Export PDF's text (page numbers, notes)
   size_t current_ = 0;
