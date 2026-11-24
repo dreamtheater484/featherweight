@@ -93,9 +93,11 @@ void Settings::LoadFrom(const std::wstring& path) {
     RecentFile r;
     r.path = fields[0];
     if (fields.size() > 1) r.lastOpened = _wtoi64(fields[1].c_str());
+    r.pinned = fields.size() > 2 && fields[2] == L"pinned";
     recent.push_back(r);
   }
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
+  showRecent = ini_.GetBool(kGeneral, L"ShowRecentFiles", true);
 }
 
 bool Settings::Save() {
@@ -128,9 +130,12 @@ bool Settings::Save() {
   }
   ini_.SetBool(kGeneral, L"Maximized", maximized);
 
+  // Written once turned off (files from before don't have it).
+  if (!showRecent || ini_.Has(kGeneral, L"ShowRecentFiles")) ini_.SetBool(kGeneral, L"ShowRecentFiles", showRecent);
   std::vector<fw::Ini::Entry> entries;
   for (size_t i = 0; i < recent.size(); ++i)
-    entries.emplace_back(std::to_wstring(i + 1), recent[i].path + L"|" + std::to_wstring(recent[i].lastOpened));
+    entries.emplace_back(std::to_wstring(i + 1), recent[i].path + L"|" + std::to_wstring(recent[i].lastOpened) +
+                                                     (recent[i].pinned ? L"|pinned" : L""));
   ini_.ReplaceSection(kRecent, entries);
 
   // Keep only the most recently used file states.
@@ -150,9 +155,20 @@ bool Settings::Save() {
 }
 
 void Settings::AddRecent(const std::wstring& path) {
+  bool pinned = false;
+  for (const RecentFile& r : recent)
+    if (fw::EqualsNoCase(r.path, path)) pinned = r.pinned;
   RemoveRecent(path);
-  recent.insert(recent.begin(), RecentFile{path, util::UnixNow()});
+  recent.insert(recent.begin(), RecentFile{path, util::UnixNow(), pinned});
+  // A full list lets go of the oldest file that isn't pinned.
+  for (size_t i = recent.size(); recent.size() > kMaxRecent && i-- > 0;)
+    if (!recent[i].pinned) recent.erase(recent.begin() + i);
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
+}
+
+void Settings::PinRecent(const std::wstring& path, bool pinned) {
+  for (RecentFile& r : recent)
+    if (fw::EqualsNoCase(r.path, path)) r.pinned = pinned;
 }
 
 void Settings::RemoveRecent(const std::wstring& path) {
@@ -161,7 +177,9 @@ void Settings::RemoveRecent(const std::wstring& path) {
                recent.end());
 }
 
-void Settings::ClearRecent() { recent.clear(); }
+void Settings::ClearRecent() {
+  recent.erase(std::remove_if(recent.begin(), recent.end(), [](const RecentFile& r) { return !r.pinned; }), recent.end());
+}
 
 std::wstring Settings::StateKey(const std::wstring& path) { return fw::Hex64(fw::Fnv1a64(fw::ToLower(path))); }
 

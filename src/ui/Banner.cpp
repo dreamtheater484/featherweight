@@ -8,7 +8,9 @@
 
 using namespace gfx;
 
-void Banner::Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions, int autoHideMs) {
+void Banner::Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions, int autoHideMs,
+                  const void* owner) {
+  owner_ = owner;
   kind_ = kind;
   text_ = text;
   actions_ = std::move(actions);

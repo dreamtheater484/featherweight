@@ -156,6 +156,10 @@ if(FW_BUILD_TESTS)
     fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
   endif()
   fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
+  # The start page (P3, p3-start): tests/screens/start.cmake, at 1366, 1920, 2560 and 5120 px, light
+  # and dark, and its states (keyboard, filter, hidden, empty, narrow, 200 %).
+  add_test(NAME start_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DOUT=${CMAKE_BINARY_DIR}/screens/start" -P "${CMAKE_SOURCE_DIR}/tests/screens/start.cmake")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

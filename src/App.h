@@ -159,6 +159,11 @@ class App : public PdfHost, public DropHost {
   void OpenDialog(bool templates = false);  // templates: in the personal templates folder (S4)
   // A click, key or UI Automation action on the start screen.
   void OnStartScreen(EmptyState::Result res);
+  // The start page (p3-start): its filter's keys, a recent file's menu (Pin, Remove, Open file
+  // location) and what it does.
+  void InitStartPage();
+  void ShowRecentMenu(int index, POINT at);
+  void RecentAction(int cmd, int index);
   // `copies`: more types to offer after `format`; `chosen` gets the type picked (0 for `format`,
   // 1 for the first copy type).
   std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format,
@@ -201,6 +206,9 @@ class App : public PdfHost, public DropHost {
   void RecoverDocuments(bool open);  // Recover, or Discard
   // The window or a tab was activated: did the file change on disk?
   void CheckActiveFile();
+  // "Changed by another program" belongs to its tab (p3-start): it goes when another tab or the
+  // start page shows, and comes back with its tab until it's answered.
+  void ShowFileNotice(TabContent* v, FileChange change);
   void ReloadActive();
   std::wstring LatestBackup() const;  // of the active document, or empty
   void RestoreOriginal();
@@ -358,6 +366,9 @@ class App : public PdfHost, public DropHost {
   int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)
   static constexpr int kUserTemplateCount = 16;
   std::vector<std::wstring> userTemplates_;  // as the last menu listed them (CmdUserTemplate)
+  // Tabs whose "changed by another program" notice was showing when another tab took over.
+  std::vector<std::pair<const TabContent*, FileChange>> fileNotices_;
+  FileChange fileNotice_ = FileChange::None;  // the one the banner shows (its owner is the tab)
   bool autosaveTimer_ = false;
 
   // Input state

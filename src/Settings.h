@@ -17,6 +17,7 @@
 struct RecentFile {
   std::wstring path;
   int64_t lastOpened = 0;
+  bool pinned = false;  // kept on top of the start page's list, and never pushed off it
   fw::FileKind Kind() const { return fw::KindOfPath(path); }
 };
 
@@ -32,7 +33,7 @@ struct FileState {
 // Remembers everything automatically; there is no settings screen.
 class Settings {
  public:
-  static constexpr int kMaxRecent = 10;
+  static constexpr int kMaxRecent = 25;
   static constexpr int kMaxStates = 200;
 
   void Load();
@@ -65,10 +66,13 @@ class Settings {
   RECT windowRect{};
   bool maximized = false;
 
+  // Most recently opened first. Pinned files stay when the list is full or cleared.
   std::vector<RecentFile> recent;
+  bool showRecent = true;  // the start page and File > Open list them (off: hidden while sharing a screen)
   void AddRecent(const std::wstring& path);
   void RemoveRecent(const std::wstring& path);
-  void ClearRecent();
+  void PinRecent(const std::wstring& path, bool pinned);
+  void ClearRecent();  // all but the pinned ones
 
   std::optional<FileState> GetState(const std::wstring& path) const;
   void SetState(const std::wstring& path, const FileState& state);
