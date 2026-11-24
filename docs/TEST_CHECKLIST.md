@@ -566,6 +566,87 @@ Check next to PowerPoint, on copies (never on a deck you need). Decks to edit: t
 | Checklist | This P2 part | met |
 | Release | P1 and P2 checked together by Roy | Roy |
 
+## The ribbon (R1)
+
+The ribbon replaces the editors' toolbar and its ⋯ menu (decision 27, docs\r1-plan.md). A PDF keeps its own toolbar.
+
+Check next to Word, Excel and PowerPoint (365 or 2021, the classic ribbon), on copies. Use `tests\office\generated\simple.docx`, `.xlsx` and `.pptx`, the decks and workbooks from the parts above, and a few files of your own. Use a window about 1366 px wide unless an item says otherwise.
+
+### Tabs, groups and buttons
+
+- [ ] **The tabs are placed as in Office.**
+  - Word: File, Home, Insert, Design, Layout, References, Review, View. Developer appears after File › Options › Show Developer tab.
+  - Excel: File, Home, Insert, Page Layout, Formulas, Data, Review, View.
+  - PowerPoint: File, Home, Insert, Design, Transitions, Animations, Slide Show, Review, View.
+
+  In each tab, the groups and the buttons in them come in Office's order and at Office's sizes. A button is there only for what Featherweight does: nothing is greyed out for a missing feature.
+- [ ] **Each button does what its name says.** Its tooltip names it, with its shortcut. A button that can't act now is greyed, as in Office: for example Paste with nothing to paste, or Accept with no tracked changes.
+- [ ] **Contextual tabs** appear while their object is selected, and go when it isn't:
+  - Word: Table Design and Table Layout (the caret in a table), Picture Format, Shape Format, Header & Footer (while editing a header or footer).
+  - Excel: Table Design, Chart Design (a chart or a chart sheet), Picture Format, Shape Format, PivotTable Analyze, Print Preview (Ctrl+F2).
+  - PowerPoint: Shape Format, Picture Format, Video Format and Playback, Table Layout.
+
+  Inserting a picture or a shape opens its tab by itself, as in Office, and so does creating a table in Excel. Selecting one later doesn't.
+- [ ] **Galleries:**
+  - Word's Styles: a click applies the style and typing goes on in the page; the arrows scroll; More opens the grid, with New style, Modify style and Clear all formatting under it.
+  - PowerPoint's Themes, the layouts behind New Slide's arrow and Layout, Shapes, and Colors.
+  - Excel: Format as Table's style previews.
+- [ ] **Dialog launchers** (the small arrow at a group's corner) open the panel Office's dialog would:
+  - Word: Paragraph, Page Setup, Markup (your name), and the launchers on the table, picture and shape tabs.
+  - Excel: Font, Alignment and Number (Format Cells on that page), Charts, Page Setup, Scale to Fit.
+- [ ] **Narrow windows:** at 1366, 1024 and 800 px wide, groups shrink step by step: large buttons become small, galleries show fewer columns, and then a group folds into one button that opens it. Every group in every tab, contextual tabs included, can still be reached. At full width again, everything comes back.
+- [ ] **Collapsing:** Ctrl+F1 collapses the ribbon to its tab names, and so does the ^ button at the ribbon's right edge. A click on a tab then opens it over the page, and Esc or a click elsewhere closes it again. Ctrl+F1 brings the ribbon back. Close and reopen Featherweight: the ribbon is as you left it.
+
+### Keyboard
+
+- [ ] **KeyTips:**
+  - Alt shows letters on File, the tabs and quick access.
+  - A tab's letter shows its buttons' letters. Typing a button's letters runs it, or opens its menu, which has underlined letters too.
+  - Esc goes back one level.
+  - Every control in every tab can be reached this way, including contextual tabs, folded groups and launchers. Compare a few with Office, for example Alt, H, FN (Excel's Font launcher), Alt, P, M (Word's Margins) and Alt, N, P (PowerPoint's Pictures).
+- [ ] **Alt+Q** finds the ribbon's commands. Each result has "Tab › Group" after its name, and Enter runs it.
+- [ ] **Shortcuts and right-click menus** work as before R1. For example: Ctrl+B, Ctrl+Shift+N and Ctrl+Alt+1 in documents; Ctrl+1, Alt+=, Ctrl+T, Ctrl+F2 and Alt+F1 in workbooks; Ctrl+M, Ctrl+D, Ctrl+G and F5 in presentations; Ctrl+K, Ctrl+F and Ctrl+H everywhere. The right-click menus have the same items as before.
+
+### The File page and quick access
+
+- [ ] **File** opens the File page on Info. The left column has Info, New, Open, Save, Save as, Print, Export, Close and Options, and Esc or the back arrow returns to the editor.
+  - Save, Save as and Close act at once.
+  - Print opens Windows' print dialog. A presentation first shows its print layouts (full page slides, notes pages, handouts), then Print.
+  - Export: for a document or a workbook, it exports a PDF at once (the Save box suggests `<name>.pdf`, friction review RF3). For a presentation, it lists Export PDF and the slides as PNG pictures.
+  - Info: a document's Restore original; a presentation's Protect Presentation.
+- [ ] **New** lists a blank document, workbook and presentation, the templates (Letter, CV, Report), your own templates and More templates…. **Open** lists Browse… and the recent files.
+- [ ] **Options** has:
+  - the app theme (Light, Dark, or Windows' setting);
+  - night reading and highlighting form fields;
+  - for documents: spelling and AutoCorrect as you type, the ruler, Show Developer tab and User name;
+  - updates, and About.
+
+  Each one takes effect at once and is kept after a restart.
+- [ ] **Quick access** (in the title bar, left of the tabs) has Save, Undo and Redo. The arrows beside Undo and Redo list the steps, and picking one undoes or redoes several at once. A presentation also has From Beginning. The buttons follow the active tab.
+
+### Light and dark
+
+- [ ] In light and in dark (File › Options › App theme), check the ribbon, its menus and galleries, the KeyTips, the File page and quick access: the text is readable, the icons are visible, and the selected tab and pressed buttons are clear.
+
+## R1's gate (record the numbers)
+
+- [ ] **Coverage tests** (ctest, Release, with FW_TEST_SCREENS on, as by default): `ribbon_word`, `ribbon_sheet` and `ribbon_slide` all pass. Each checks one editor, at 1366, 1024 and 800 px and with its contextual tabs open:
+  - every ribbon item runs a named command;
+  - every group fits the window;
+  - the KeyTips are unique;
+  - every command the editor's toolbar and ⋯ menu reached before R1 (`tests\ribbon\<editor>.txt`) can be reached from the ribbon, the File page, a right-click menu or Alt+Q.
+- [ ] **Snapshot tests:** `ribbon_screens` (the three editors at 1366, 1024 and 800 px, light and dark, with KeyTips, the File page, a collapsed ribbon, a gallery's grid and a contextual tab) passes. Look through the pictures in `build\screens\ribbon_screens`, `ribbon_sheet` and `ribbon_slide`: nothing is cut off or overlapping.
+- [ ] **ribbonbench**, on a document, a workbook and a deck (`Featherweight.exe <file> --snapshot out.png --size 1366x768 --script ribbonbench`, with a Release build with FW_TEST_SCREENS on):
+  - tab switch, worst: ___ / ___ / ___ ms;
+  - relayout, worst: ___ / ___ / ___ ms.
+
+  Target: 16 ms or less each. On the development PC, 2026-11-24, simple.docx, .xlsx and .pptx: switch 1.19 / 1.15 / 1.58 ms, relayout 0.14 / 0.10 / 0.54 ms.
+- [ ] **The shipped exe** (`scripts\budgets.ps1` on `build-release`): ___ MB, +___ KB over P2's. Target: at most 250 KB more in R1. `tests\budgets\ledger.json` has a line for each R1 piece: r1-control, r1-word, r1-sheet and r1-slide.
+- [ ] **Launch and memory:** launch to ready ___ ms, memory after launch ___ MB, both no worse than P2's. A document, a workbook and a deck open no slower than with P2's exe. The coordinator's 4.0 timing run on a quiet PC fills these in (the ledger's "R1 timings").
+- [ ] **No idle CPU:** with a document, a workbook and a deck open, Task Manager shows 0 % CPU for Featherweight, with the ribbon expanded, with it collapsed, and with the File page open.
+- [ ] **Friction review** (`docs\friction-review.md`, "The ribbon (R1)"): the flows from D5, S4 and P2 take no more steps than before, or the extra step is accepted there with its reason (RF1, RF2, RF4 to RF6). `tests\friction-checks.ps1` and `tests\workbook-friction-checks.ps1` pass.
+- [ ] P1's and P2's parts above still pass with the ribbon.
+
 ## Advanced presentations (P3)
 
 Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Documents\Codex\FeatherweightCorpus\made` (PowerPoint built them, `scripts\make-deck-edge-cases.ps1`: `transitions.pptx`, `animations.pptx`, `comments.pptx`, `media.pptx` with `media\clip.mp4`, and `protected\animations.pptx`, password `featherweight`), PowerPoint's `.ppt` and `.odp` copies of the real-world decks in `FeatherweightCorpus\ppt` and `\odp` (`scripts\make-deck-copies.ps1`; the encrypted ones in `ppt\protected`, password `featherweight`), and a few decks of your own. After each part, save, and open the copy in PowerPoint: no repair prompt, and it looks and plays as Featherweight shows it.
