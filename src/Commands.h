@@ -595,6 +595,18 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+
+  // Presenting (P3, p3-present): 3800-3829.
+  CmdPresenterView = 3800,  // Alt+F5: the show and the presenter view, each in a window of its own
+  CmdUsePresenterView,      // Slide Show > Use Presenter View: F5 opens it on another monitor (on by default)
+  CmdInsertVideo,           // Insert > Video: a video file, embedded, with its first frame as the poster
+  CmdInsertAudio,           // Insert > Audio: an audio file, embedded, shown as a speaker
+  CmdMediaVolume,           // Playback > Volume ▾ (Low, Medium, High, Mute)
+  CmdMediaLoop,             // Playback > Loop until Stopped
+  CmdMediaHide,             // Playback > Hide While Not Playing (audio: Hide During Show)
+  CmdMediaFullScreen,       // Playback > Play Full Screen (video)
+  CmdMediaAcrossSlides,     // Playback > Play Across Slides (audio)
+  CmdMediaStart,            // Playback > Start ▾ (In Click Sequence, Automatically, When Clicked On)
   // Transitions and animations (P3, p3-anim): 3830-3879.
   CmdTransitionPreview = 3830,   // Transitions > Preview: the current slide's transition in the editor
   CmdTransitionStyles,           // Transitions > the gallery (its choices pick the effect)
@@ -617,6 +629,14 @@ enum Cmd : int {
   CmdAnimEarlier,                // Timing > Move Earlier
   CmdAnimLater,                  // Timing > Move Later
   CmdAnimRemove,                 // the Animation Pane's Remove (Delete there)
+  // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
+  // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
+  CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
+  CmdDeleteAllComments,           // Delete All Comments in This Presentation
+  CmdPrevComment,                 // Review > Previous: the thread before, across slides
+  CmdNextComment,
+  CmdShowCommentMarkup,           // Show Comments ▾ > Show Markup: the markers on the slides
+  CmdEncryptPassword = 3890,      // File > Info > Protect Presentation > Encrypt with Password
   // P3, p3-files: templates, picture export and .odp import, 3910-3949.
   CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
   CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder

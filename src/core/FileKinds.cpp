@@ -9,8 +9,8 @@ constexpr const wchar_t* kPdf[] = {L".pdf"};
 constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".odt", L".ott"};
 constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt"};  // .rtf and .txt come in D2
 constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv", L".xls", L".ods", L".ots"};
-constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx"};
-constexpr const wchar_t* kPresentationLater[] = {L".ppt", L".odp"};
+constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppt", L".pps", L".pot"};
+constexpr const wchar_t* kPresentationLater[] = {L".odp"};
 
 // Ships a kind: set `viewer` when its viewer is released, `editor` when its editor is.
 const FileKindInfo kKinds[] = {

@@ -14,6 +14,7 @@
 #include <dwmapi.h>
 #include <dxgi1_3.h>
 #include <dwrite.h>
+#include <shlwapi.h>
 
 #include <algorithm>
 #include <climits>
@@ -26,7 +27,11 @@
 #include "core/Strings.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "pkg/XmlDom.h"
 #include "slide/Presentation.h"
+#include "slide/show/MediaPlayer.h"
+#include "slide/show/PresenterView.h"
+#include "slide/show/ShowDraw.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/Timing.h"
 #include "ui/Anim.h"
@@ -56,7 +61,6 @@ constexpr int kWarmupFrames = 4;
 // display went without a new frame).
 constexpr double kLateStart = 1.8;
 
-double Smooth(double p) { return p * p * (3 - 2 * p); }
 
 // What a target of the timing is drawn from.
 struct Sprite {
@@ -162,7 +166,7 @@ struct MonitorList {
 
 // ---------------------------------------------------------------------------------------------
 
-class Show final : public anim::FrameSource {
+class Show final : public anim::FrameSource, private PresenterHost {
  public:
   Show(Presentation& deck, SlideRenderer& renderer, ShowOptions options)
       : deck_(deck), renderer_(renderer), opts_(std::move(options)) {}
@@ -171,7 +175,9 @@ class Show final : public anim::FrameSource {
   void Stop() {
     if (hwnd_) Close();
   }
-  bool Animating() const override { return transition_ || (cur_ && cur_->animator.Running(0)); }
+  // The slide moves: a transition or a step runs. The frame loop also runs while a video plays (P3).
+  bool Moving() const { return transition_ || (cur_ && cur_->animator.Running(0)); }
+  bool Animating() const override { return Moving() || VideoPlaying(); }
   void Frame() override;
   // --show-capture: every transition and step at its middle and end, as PNG files.
   int CaptureAll();
@@ -179,7 +185,9 @@ class Show final : public anim::FrameSource {
  private:
   double Now() const { return capture_ ? clock_ : anim::Now(); }
   void Step(double t);
-  bool Save(const std::wstring& name);
+  bool Save(const std::wstring& name, ID2D1Bitmap1* from = nullptr, UINT w = 0, UINT h = 0);
+  // --show-capture with --show-presenter: the presenter view as it is now, drawn off screen.
+  bool SavePresenter(const std::wstring& name);
   static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l);
   LRESULT Proc(UINT m, WPARAM w, LPARAM l);
   void PostStop() { PostMessageW(hwnd_, kMsgStop, 0, 0); }
@@ -205,7 +213,9 @@ class Show final : public anim::FrameSource {
   M SlideToPixels() const { return M::Scale(scale_, scale_); }
 
   // Scenes.
-  std::unique_ptr<Scene> MakeScene(size_t index, bool built, double now);
+  // `built`: every step done (coming back to a slide). `steps` >= 0: the main steps up to that one
+  // done and settled (the presenter view's next animation).
+  std::unique_ptr<Scene> MakeScene(size_t index, bool built, double now, int steps = -1);
   static TargetBox BoxOf(void* ctx, const TargetKey& key);
   bool RenderSprite(Scene& s, int i);
   void DrawSprite(Scene& s, int i, const Pose& pose);
@@ -252,7 +262,7 @@ class Show final : public anim::FrameSource {
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
   // The display queue model: this present shows at the refresh after it, never before the one after
   // the previous present's. `count`: refreshes that go without a new frame count as missed.
-  void TrackVblank(bool count);
+  void TrackVblank(bool count, double start, double waited);
   void WriteBench();
   // The bench ignores the mouse and the keyboard (a click or a key changes nothing: Roy, 2026-11-24,
   // "mouse movement or a click in a running program should generally not be a throw away"); only an
@@ -277,6 +287,45 @@ class Show final : public anim::FrameSource {
 
   std::unique_ptr<Scene> cur_, next_;
   std::vector<size_t> history_;  // slides shown, for "last viewed"
+  // P3: the presenter view, and the current slide one click on for its "next animation".
+  std::unique_ptr<PresenterView> presenter_;
+  std::unique_ptr<Scene> built_;
+  int builtStep_ = -1;
+  // P3: the current slide's videos and audio, opened at their first command, gone when the slide changes.
+  struct Media {
+    uint32_t spid = 0;
+    size_t item = SIZE_MAX;  // in renderer_.Items: where a video's frames go
+    std::unique_ptr<MediaPlayer> player;
+    ID2D1Bitmap1* frame = nullptr;  // its newest frame (null: the poster shows)
+    float crop[4] = {0, 0, 0, 0};   // the picture's a:srcRect (left, top, right, bottom): the video's too
+    bool hideWhenStopped = false;   // Hide While Not Playing: its poster is hidden (Timing), the video shown while it plays
+    bool fullScreen = false;        // Play Full Screen: the video over the whole slide while it plays
+  };
+  std::vector<Media> media_;
+  // A media that couldn't play (a linked file that isn't on this PC): a line over its shape until the
+  // slide changes; its poster stays.
+  struct MediaNote {
+    uint32_t spid;
+    size_t item;
+    std::wstring text;
+  };
+  std::vector<MediaNote> mediaNotes_;
+  ComPtr<IDWriteTextFormat> noteFormat_;
+  void NoteMedia(uint32_t spid, size_t item, std::wstring text);
+  std::string mediaReport_;  // --show-media-report: each video's line
+  void ReleaseMedia();       // they stop (the report keeps their frames)
+  void TakeMedia();  // runs the media commands the slide's timing fired
+  MediaPlayer* OpenMedia(uint32_t spid);
+  bool VideoPlaying() const;
+  void VideoFrames();  // before a frame's BeginDraw
+  void DrawVideos();   // on the slide, in its pixels
+  void UpdatePresenter();
+  void PresenterKey(UINT vk) override { Key(vk); }
+  void PresenterGoTo(size_t slide) override {
+    if (slide < deck_.SlideCount()) GoTo(slide, false, false);
+  }
+  void PresenterClosed() override { PostStop(); }
+  bool PresenterBusy() const override { return Moving(); }
   SlideOrder order_;  // hidden slides, the loop, custom shows
   int hoverItem_ = -1;  // the item the mouse is over whose mouse-over action has run
   size_t lastShown_ = 0;
@@ -322,12 +371,23 @@ class Show final : public anim::FrameSource {
   };
   std::vector<SlowFrame> slow_;  // late frames in transitions, the first 40
   double waitMax_ = 0, drawMax_ = 0, presentMax_ = 0;
-  // DXGI's frame statistics, sampled after every present during transitions: refreshes against
-  // presents that reached the screen.
   // Refreshes with no new frame: each present's vblank interval (on DWM's clock) against the last.
   UINT64 vblank0_ = 0, vblankPeriod_ = 0;
   long long lastVblank_ = -1;
   int vblankMissed_ = 0;
+  // The first transition's frames, its warm-up too: what the queue model above made of each present
+  // against DXGI's own statistics (which present was on screen at which refresh), to tell a refresh
+  // that really had no new frame from the model's guess. Refresh numbers count from vblank0_.
+  struct FrameLog {
+    double start, wait, draw, present, phase;  // phase: where in its refresh the present returned (0..1)
+    long long vblank, shown, syncVblank;
+    int missed;
+    bool warm;
+    UINT lastPresent, presentCount, presentRefresh, syncRefresh;
+    HRESULT statsHr;
+    int mode;  // DXGI_FRAME_PRESENTATION_MODE (composed 0, overlay 1, none 2, failed 3), -1 unknown
+  };
+  std::vector<FrameLog> frameLog_;
 };
 
 Show* g_show = nullptr;
@@ -362,13 +422,29 @@ bool Show::Create() {
   RECT r = mi.rcMonitor;
   capture_ = !opts_.captureDir.empty();
   if (capture_) r = {0, 0, 960, 540};  // off screen: never shown
-  hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, kClass, L"Slide show", WS_POPUP, r.left, r.top, r.right - r.left,
-                          r.bottom - r.top, opts_.owner, nullptr, GetModuleHandleW(nullptr), this);
-  if (!hwnd_) return false;
-  w_ = static_cast<UINT>(std::max(1L, r.right - r.left));
-  h_ = static_cast<UINT>(std::max(1L, r.bottom - r.top));
   draw::Size size = renderer_.SlideSize();
   if (size.width <= 0 || size.height <= 0) size = {720, 540};
+  DWORD style = WS_POPUP;
+  if (opts_.windowed && !capture_) {
+    // Half the work area's width, the slide's shape, in the monitor's left half (the presenter view
+    // takes the right): a fixed size, so the slide pictures never change size.
+    style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    const RECT& work = mi.rcWork;
+    const double maxW = (work.right - work.left) / 2.0 - 16, maxH = (work.bottom - work.top) * 0.7;
+    const long cw = std::max(320L, static_cast<long>(std::min(maxW, maxH * size.width / size.height)));
+    const long ch = std::max(180L, static_cast<long>(std::lround(cw * size.height / size.width)));
+    r = {work.left + 8, work.top + 8, work.left + 8 + cw, work.top + 8 + ch};
+    AdjustWindowRectEx(&r, style, FALSE, WS_EX_NOREDIRECTIONBITMAP);
+    OffsetRect(&r, work.left + 8 - r.left, work.top + 8 - r.top);
+  }
+  hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, kClass, L"Slide Show", style, r.left, r.top, r.right - r.left,
+                          r.bottom - r.top, opts_.owner, nullptr, GetModuleHandleW(nullptr), this);
+  if (!hwnd_) return false;
+  RECT client{};
+  GetClientRect(hwnd_, &client);
+  if (capture_) client = {0, 0, r.right - r.left, r.bottom - r.top};
+  w_ = static_cast<UINT>(std::max(1L, client.right - client.left));
+  h_ = static_cast<UINT>(std::max(1L, client.bottom - client.top));
   scale_ = std::min(w_ / size.width, h_ / size.height);
   slideW_ = size.width * scale_;
   slideH_ = size.height * scale_;
@@ -388,16 +464,31 @@ bool Show::Create() {
   gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                   DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
   if (endFormat_) endFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                  DWRITE_FONT_STRETCH_NORMAL, std::max(11.f, h_ / 64.f), L"", &noteFormat_);
+  if (noteFormat_) noteFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   if (!EnsureDevice()) {
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
     return false;
   }
-  if (capture_) return true;  // CaptureAll drives it
+  if (capture_) {
+    // CaptureAll drives it; with --show-presenter the presenter view too, off screen (no window).
+    if (opts_.presenter) presenter_ = PresenterView::Create(*this, deck_, renderer_, nullptr, false, nullptr);
+    return true;
+  }
   // A show keeps the display and the PC awake while it runs (the power settings stay as they are).
   SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
   awake_ = true;
   ShowWindow(hwnd_, SW_SHOW);
+  if (opts_.presenter) {
+    // Beside the windowed show, or full screen on another monitor; with one monitor and full screen,
+    // none (PowerPoint shows only the slides then).
+    HMONITOR where = opts_.windowed ? mon : nullptr;
+    for (size_t i = 0; !where && i < monitors.handles.size(); ++i)
+      if (monitors.handles[i] != mon) where = monitors.handles[i];
+    if (where) presenter_ = PresenterView::Create(*this, deck_, renderer_, where, opts_.windowed, opts_.owner);
+  }
   warmupUntil_ = anim::Now() + kWarmupMs;
   SetForegroundWindow(hwnd_);
   SetFocus(hwnd_);
@@ -552,7 +643,7 @@ TargetBox Show::BoxOf(void* ctx, const TargetKey& key) {
   return {};
 }
 
-std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now) {
+std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now, int steps) {
   auto s = std::make_unique<Scene>();
   s->index = index;
   if (index == kEnd) return s;
@@ -628,8 +719,15 @@ std::unique_ptr<Scene> Show::MakeScene(size_t index, bool built, double now) {
       }
   }
   s->animator = Animator(&s->timing, &Show::BoxOf, s.get());
-  if (built) s->animator.FinishAll(now);
-  else s->animator.Start(now, false);
+  if (built) {
+    s->animator.FinishAll(now);
+  } else if (steps >= 0) {
+    s->animator.Start(now);
+    s->animator.Finish();
+    while (s->animator.StepIndex() < steps && s->animator.Click(now)) s->animator.Finish();
+  } else {
+    s->animator.Start(now, false);
+  }
   RenderFrame(*s);
   FinishGpu(250);
   return s;
@@ -660,58 +758,7 @@ Pose Show::PoseOfSprite(const Scene& s, int i) const {
 
 void Show::DrawSprite(Scene& s, int i, const Pose& pose) {
   const Sprite& sp = s.sprites[static_cast<size_t>(i)];
-  if (!pose.visible || pose.opacity <= 0.001f || !sp.bitmap) return;  // drawn ahead (one BeginDraw at a time)
-  float cx = (sp.box.left + sp.box.right) / 2, cy = (sp.box.top + sp.box.bottom) / 2;
-  D2D1_MATRIX_3X2_F m = M::Translation(-cx, -cy) * M::Scale(pose.sx, pose.sy) * M::Rotation(pose.rotation) *
-                        M::Translation(cx + pose.dx * slideW_, cy + pose.dy * slideH_);
-  D2D1_MATRIX_3X2_F saved;
-  dc_->GetTransform(&saved);
-  dc_->SetTransform(m * saved);
-  D2D1_RECT_F clips[2];
-  int n = 0;
-  const Reveal& rv = pose.reveal;
-  if (rv.kind != Reveal::None) {
-    const D2D1_RECT_F& b = sp.box;
-    D2D1_RECT_F r = sp.rect;
-    float f = std::clamp(rv.shown, 0.f, 1.f);
-    if (rv.kind == Reveal::Wipe) {
-      switch (rv.side) {
-        case Side::Up: r.bottom = b.top + (b.bottom - b.top) * f; break;     // from the top
-        case Side::Left: r.right = b.left + (b.right - b.left) * f; break;   // from the left
-        case Side::Right: r.left = b.right - (b.right - b.left) * f; break;  // from the right
-        default: r.top = b.bottom - (b.bottom - b.top) * f; break;           // from the bottom
-      }
-      clips[n++] = r;
-    } else if (rv.outward) {
-      if (rv.vertical) {
-        float half = (b.right - b.left) * f / 2, c = (b.left + b.right) / 2;
-        r.left = c - half;
-        r.right = c + half;
-      } else {
-        float half = (b.bottom - b.top) * f / 2, c = (b.top + b.bottom) / 2;
-        r.top = c - half;
-        r.bottom = c + half;
-      }
-      clips[n++] = r;
-    } else {
-      D2D1_RECT_F a = r, z = r;
-      if (rv.vertical) {
-        a.right = b.left + (b.right - b.left) * f / 2;
-        z.left = b.right - (b.right - b.left) * f / 2;
-      } else {
-        a.bottom = b.top + (b.bottom - b.top) * f / 2;
-        z.top = b.bottom - (b.bottom - b.top) * f / 2;
-      }
-      clips[n++] = a;
-      clips[n++] = z;
-    }
-  }
-  for (int k = 0; k < std::max(1, n); ++k) {
-    if (n) dc_->PushAxisAlignedClip(clips[k], D2D1_ANTIALIAS_MODE_ALIASED);
-    dc_->DrawBitmap(sp.bitmap.Get(), sp.rect, pose.opacity, D2D1_INTERPOLATION_MODE_LINEAR, nullptr, nullptr);
-    if (n) dc_->PopAxisAlignedClip();
-  }
-  dc_->SetTransform(saved);
+  DrawPosed(dc_.Get(), sp.bitmap.Get(), sp.rect, sp.box, pose, slideW_, slideH_);  // ShowDraw (shared with Preview)
 }
 
 // Draws pieces into `target` (cleared first): runs of static parts through the renderer, sprites
@@ -811,8 +858,10 @@ void Show::Redraw() { Draw(Now()); }
 
 void Show::Draw(double now) {
   if (!EnsureDevice()) return;
+  TakeMedia();
   if (cur_ && !cur_->frame && !cur_->layered) RenderFrame(*cur_);
   if (cur_ && cur_->layered && cur_->layers.empty()) EnsureLayers(*cur_);
+  VideoFrames();
   const double t0 = anim::Now();
   dc_->SetTarget(target_.Get());
   dc_->BeginDraw();
@@ -837,6 +886,7 @@ void Show::Draw(double now) {
     } else if (cur_->frame) {
       dc_->DrawBitmap(cur_->frame.Get());
     }
+    if (!transition_) DrawVideos();
     dc_->PopAxisAlignedClip();
     dc_->SetTransform(M::Identity());
   }
@@ -865,98 +915,9 @@ void Show::DrawEnd() {
 }
 
 void Show::DrawTransition(double p) {
-  const Transition& t = cur_->transition;
-  ID2D1Bitmap1* b = cur_->frame.Get();
-  ID2D1Bitmap1* a = from_.Get();
-  const float W = static_cast<float>(fw_), H = static_cast<float>(fh_);
-  dc_->Clear({0, 0, 0, 1});
-  auto put = [&](ID2D1Bitmap1* bmp, float x, float y, float opacity = 1) {
-    if (bmp) dc_->DrawBitmap(bmp, D2D1::RectF(x, y, x + W, y + H), opacity, D2D1_INTERPOLATION_MODE_LINEAR);
-  };
-  auto clipped = [&](ID2D1Bitmap1* bmp, D2D1_RECT_F clip) {
-    dc_->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
-    put(bmp, 0, 0);
-    dc_->PopAxisAlignedClip();
-  };
-  float sx = 0, sy = 0;  // the direction of motion
-  switch (t.side) {
-    case Side::Left: sx = -1; break;
-    case Side::Up: sy = -1; break;
-    case Side::Right: sx = 1; break;
-    case Side::Down: sy = 1; break;
-    case Side::LeftUp: sx = -1, sy = -1; break;
-    case Side::RightUp: sx = 1, sy = -1; break;
-    case Side::LeftDown: sx = -1, sy = 1; break;
-    case Side::RightDown: sx = 1, sy = 1; break;
-  }
-  const float e = static_cast<float>(Smooth(p)), f = static_cast<float>(p);
-  switch (t.kind) {
-    case TransitionKind::Fade:
-      if (t.throughBlack) {
-        if (f < 0.5f) put(a, 0, 0, 1 - 2 * f);
-        else put(b, 0, 0, 2 * f - 1);
-      } else {
-        put(a, 0, 0);
-        put(b, 0, 0, f);
-      }
-      break;
-    case TransitionKind::Push:
-      put(a, sx * e * W, sy * e * H);
-      put(b, sx * (e - 1) * W, sy * (e - 1) * H);
-      break;
-    case TransitionKind::Cover:
-      put(a, 0, 0);
-      put(b, sx * (e - 1) * W, sy * (e - 1) * H);
-      break;
-    case TransitionKind::Uncover:
-      put(b, 0, 0);
-      put(a, sx * e * W, sy * e * H);
-      break;
-    case TransitionKind::Wipe: {
-      // dir is where the edge moves: "u" wipes from the bottom up.
-      put(a, 0, 0);
-      D2D1_RECT_F r = D2D1::RectF(0, 0, W, H);
-      if (sx < 0) r.left = W * (1 - f);
-      else if (sx > 0) r.right = W * f;
-      else if (sy < 0) r.top = H * (1 - f);
-      else r.bottom = H * f;
-      clipped(b, r);
-      break;
-    }
-    case TransitionKind::Split: {
-      put(a, 0, 0);
-      if (!t.in) {
-        clipped(b, t.vertical ? D2D1::RectF(W * (1 - f) / 2, 0, W * (1 + f) / 2, H)
-                              : D2D1::RectF(0, H * (1 - f) / 2, W, H * (1 + f) / 2));
-      } else if (t.vertical) {
-        clipped(b, D2D1::RectF(0, 0, W * f / 2, H));
-        clipped(b, D2D1::RectF(W - W * f / 2, 0, W, H));
-      } else {
-        clipped(b, D2D1::RectF(0, 0, W, H * f / 2));
-        clipped(b, D2D1::RectF(0, H - H * f / 2, W, H));
-      }
-      break;
-    }
-    case TransitionKind::Zoom: {
-      // In: the new slide grows from the middle; out: the old one shrinks into it.
-      D2D1_MATRIX_3X2_F saved;
-      dc_->GetTransform(&saved);
-      if (t.in) {
-        put(a, 0, 0);
-        float s = 0.25f + 0.75f * e;
-        dc_->SetTransform(M::Scale(s, s, D2D1::Point2F(W / 2, H / 2)) * saved);
-        put(b, 0, 0, f);
-      } else {
-        put(b, 0, 0);
-        float s = 1 - 0.75f * e;
-        dc_->SetTransform(M::Scale(s, s, D2D1::Point2F(W / 2, H / 2)) * saved);
-        put(a, 0, 0, 1 - f);
-      }
-      dc_->SetTransform(saved);
-      break;
-    }
-    case TransitionKind::None: put(b, 0, 0); break;
-  }
+  // ShowDraw (shared with the editor's Preview): the old slide (or black) to the new one.
+  DrawTransitionFrame(dc_.Get(), cur_->transition, from_.Get(), cur_->frame.Get(), static_cast<float>(fw_),
+                      static_cast<float>(fh_), p);
 }
 
 void Show::EndTransition(double now) {
@@ -979,6 +940,7 @@ void Show::Frame() {
   const double waited = anim::Now() - before;
   const double start = Now();
   double now = start;
+  const bool wasMoving = Moving();
   bool warming = false;
   if (!warmedUp_) {
     if (transition_ && (warmupFrames_ < kWarmupFrames || now < warmupUntil_)) {
@@ -999,8 +961,9 @@ void Show::Frame() {
   Draw(now);
   if (!warming) BenchFrame(start, Now() - start, inTransition, waited);  // the warm-up is no part of any motion
   // Its frames still fill the display queue the first counted frames join: the model sees them too.
-  else if (bench_) TrackVblank(false);
-  if (!Animating()) AfterSettle(Now());
+  else if (bench_) TrackVblank(false, start, waited);
+  if (wasMoving && !Moving()) AfterSettle(Now());
+  else if (!Animating()) PostMessageW(hwnd_, kMsgPrerender, 0, 0);  // a video stopped: the next slide now
 }
 
 void Show::AfterSettle(double now) {
@@ -1009,6 +972,7 @@ void Show::AfterSettle(double now) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     boosted_ = false;
   }
+  UpdatePresenter();  // only once nothing moves: the presenter view never costs a transition a frame
   if (!cur_ || cur_->index == kEnd) {
     if (bench_) SetTimer(hwnd_, kTimerAdvance, static_cast<UINT>(kBenchHoldMs), nullptr);
     return;
@@ -1040,6 +1004,7 @@ bool Show::StartCustom(uint32_t id, size_t returnTo, bool loop) {
 void Show::GoTo(size_t index, bool transition, bool built) {
   const double now = Now();
   KillTimer(hwnd_, kTimerAdvance);
+  ReleaseMedia();  // the slide's videos and audio stop
   if (index != kEnd && index >= deck_.SlideCount()) return;
   order_.Moved(index);
   hoverItem_ = -1;
@@ -1074,7 +1039,7 @@ void Show::GoTo(size_t index, bool transition, bool built) {
     visibleAt_ = now;
     if (!built) cur_->animator.BeginAuto(now);
     Redraw();
-    if (!Animating()) AfterSettle(now);
+    if (!Moving()) AfterSettle(now);
   }
 }
 
@@ -1088,7 +1053,7 @@ void Show::Next(bool fromClick) {
     // A click during a transition ends it.
     EndTransition(now);
     Redraw();
-    if (!Animating()) AfterSettle(now);
+    if (!Moving()) AfterSettle(now);
     return;
   }
   if (!cur_) return;
@@ -1106,7 +1071,7 @@ void Show::Next(bool fromClick) {
     return;
   }
   if (cur_->animator.Click(now)) {
-    if (!Animating()) {
+    if (!Moving()) {
       Settle(*cur_);
       Redraw();
       AfterSettle(now);
@@ -1301,6 +1266,272 @@ void Show::Follow(const Hyperlink& link) {
 void Show::Blank(int kind) {
   blank_ = blank_ == kind ? 0 : kind;
   Redraw();
+  UpdatePresenter();
+}
+
+// ---- Media (P3) -----------------------------------------------------------------------------
+
+namespace {
+
+// A media shape of the slide by its id, in groups too.
+const Shape* FindMedia(const std::vector<Shape>& shapes, uint32_t spid) {
+  for (const Shape& s : shapes) {
+    if (s.id == spid && s.media) return &s;
+    if (const Shape* in = FindMedia(s.children, spid)) return in;
+  }
+  return nullptr;
+}
+
+std::string RelAttr(pugi::xml_node n, std::string_view local) {
+  for (pugi::xml_attribute a : n.attributes())
+    if (pkg::LocalNameOf(a) == local && std::string_view(a.name()).find(':') != std::string_view::npos) return a.value();
+  return {};
+}
+
+std::wstring ExtensionOf(const std::wstring& name) {
+  const size_t dot = name.find_last_of(L'.');
+  const size_t slash = name.find_last_of(L"\\/");
+  return dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash) ? std::wstring() : name.substr(dot);
+}
+
+}  // namespace
+
+MediaPlayer* Show::OpenMedia(uint32_t spid) {
+  const Slide* slide = cur_ && cur_->index != kEnd ? deck_.GetSlide(cur_->index) : nullptr;
+  const Shape* sh = slide ? FindMedia(slide->shapes, spid) : nullptr;
+  if (!sh) return nullptr;
+  // Its file: the embedded copy (p14:media r:embed), else what a:videoFile or a:audioFile names, embedded
+  // or a local file.
+  std::string embed, link;
+  bool video = true;
+  for (pugi::xml_node nv : sh->node.children()) {
+    if (pkg::LocalNameOf(nv).substr(0, 2) != "nv") continue;
+    for (pugi::xml_node pr : nv.children()) {
+      if (pkg::LocalNameOf(pr) != "nvPr") continue;
+      for (pugi::xml_node m : pr.children()) {
+        const std::string_view k = pkg::LocalNameOf(m);
+        if (k == "videoFile" || k == "quickTimeFile" || k == "audioFile" || k == "wavAudioFile") {
+          video = k == "videoFile" || k == "quickTimeFile";
+          link = RelAttr(m, "link");
+          if (link.empty()) link = RelAttr(m, "embed");
+        } else if (k == "extLst") {
+          for (pugi::xml_node ext : m.children())
+            for (pugi::xml_node x : ext.children())
+              if (pkg::LocalNameOf(x) == "media") embed = RelAttr(x, "embed");
+        }
+      }
+    }
+    break;
+  }
+  size_t item = SIZE_MAX;
+  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
+  for (size_t i = 0; i < items.size(); ++i)
+    if (items[i].spid == spid) item = i;
+  const pkg::RelationshipSet* rels = deck_.RelationshipsOf(slide->part);
+  MediaPlayer::Source src;
+  src.video = video;
+  std::string missing;  // a linked file that isn't on this PC (or not local: a web address, a share)
+  auto resolve = [&](const std::string& id) {
+    const pkg::Relationship* r = rels && !id.empty() ? rels->Find(id) : nullptr;
+    if (!r) return false;
+    if (r->external) {
+      src.path = LocalMediaPath(r->target, opts_.deckPath);  // a local file only: nothing is fetched
+      src.extension = ExtensionOf(src.path);
+      if (src.path.empty()) missing = r->target;
+      return !src.path.empty();
+    }
+    src.extension = ExtensionOf(Utf8ToWide(r->targetPart));
+    return PlayableMediaExtension(src.extension) && deck_.ReadPart(r->targetPart, src.bytes);
+  };
+  if (!resolve(embed) && !resolve(link)) {
+    if (!missing.empty()) {
+      // Its name only (file:///C:/My%20clips/a.mp4 -> a.mp4), never the whole path.
+      std::wstring name = Utf8ToWide(missing);
+      const size_t slash = name.find_last_of(L"\\/");
+      if (slash != std::wstring::npos) name.erase(0, slash + 1);
+      if (!name.empty()) {
+        std::vector<wchar_t> buf(name.begin(), name.end());
+        buf.push_back(0);
+        if (SUCCEEDED(UrlUnescapeW(buf.data(), nullptr, nullptr, URL_UNESCAPE_INPLACE))) name = buf.data();
+      }
+      NoteMedia(spid, item, L"The linked file isn't on this PC: " + name);
+    } else {
+      NoteMedia(spid, item, L"This media can't be played.");
+    }
+    return nullptr;
+  }
+  MediaPlayer::Settings settings;
+  bool hide = false, full = false;
+  for (const MediaNode& n : cur_->timing.media)
+    if (n.spid == spid) {
+      settings.volume = n.volume;
+      settings.mute = n.mute;
+      settings.loop = n.loop;
+      hide = !n.showWhenStopped;
+      full = n.fullScreen;
+    }
+  std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
+  if (!player) {
+    NoteMedia(spid, item, L"This media can't be played.");
+    return nullptr;
+  }
+  Media m;
+  m.spid = spid;
+  m.item = item;
+  m.hideWhenStopped = hide;
+  m.fullScreen = full && video;
+  // The poster's crop crops the video too, as in PowerPoint (in 1/1000 %).
+  for (pugi::xml_node fill : sh->node.children()) {
+    if (pkg::LocalNameOf(fill) != "blipFill") continue;
+    for (pugi::xml_node c : fill.children()) {
+      if (pkg::LocalNameOf(c) != "srcRect") continue;
+      const char* names[] = {"l", "t", "r", "b"};
+      for (int k = 0; k < 4; ++k)
+        m.crop[k] = std::clamp(c.attribute(names[k]).as_float(0) / 100000.f, -1.f, 1.f);
+    }
+  }
+  m.player = std::move(player);
+  media_.push_back(std::move(m));
+  return media_.back().player.get();
+}
+
+void Show::TakeMedia() {
+  if (!cur_ || cur_->index == kEnd) return;
+  std::vector<MediaEvent> events = cur_->animator.TakeMediaEvents();
+  if (capture_ || bench_) return;  // checks and benches play nothing
+  for (const MediaEvent& e : events) {
+    MediaPlayer* p = nullptr;
+    for (Media& m : media_)
+      if (m.spid == e.spid) p = m.player.get();
+    bool noted = false;
+    for (const MediaNote& n : mediaNotes_) noted = noted || n.spid == e.spid;
+    if (!p && !noted &&
+        (e.command == MediaCommand::Play || e.command == MediaCommand::TogglePause || e.command == MediaCommand::Resume))
+      p = OpenMedia(e.spid);
+    if (!p) continue;
+    switch (e.command) {
+      case MediaCommand::Play: p->Play(e.fromMs); break;
+      case MediaCommand::TogglePause: p->TogglePause(); break;
+      case MediaCommand::Pause: p->Pause(); break;
+      case MediaCommand::Resume: p->Resume(); break;
+      case MediaCommand::Stop: p->Stop(); break;
+      default: break;
+    }
+  }
+}
+
+void Show::ReleaseMedia() {
+  for (const Media& m : media_) {
+    if (opts_.mediaReport.empty() || !m.player->IsVideo()) continue;
+    const MediaPlayer::Stats s = m.player->VideoStats();
+    char line[384];
+    snprintf(line, sizeof(line),
+             "%s\n    {\"slide\": %zu, \"spid\": %u, \"frames\": %llu, \"skipped\": %llu, \"frameMs\": %.3f, "
+             "\"coveredMs\": %.1f, \"paused\": %s, \"ended\": %s, \"error\": %d, \"hresult\": \"0x%08lX\"}",
+             mediaReport_.empty() ? "" : ",", cur_ ? cur_->index + 1 : 0, m.spid,
+             static_cast<unsigned long long>(s.frames), static_cast<unsigned long long>(s.skipped), s.frameMs,
+             s.coveredMs, s.paused ? "true" : "false", s.ended ? "true" : "false", s.error,
+             static_cast<unsigned long>(s.extended));
+    mediaReport_ += line;
+  }
+  media_.clear();
+  mediaNotes_.clear();
+}
+
+void Show::NoteMedia(uint32_t spid, size_t item, std::wstring text) {
+  for (const MediaNote& n : mediaNotes_)
+    if (n.spid == spid) return;
+  mediaNotes_.push_back({spid, item, std::move(text)});
+}
+
+bool Show::VideoPlaying() const {
+  for (const Media& m : media_)
+    if (m.player->IsVideo() && m.player->Playing()) return true;
+  return false;
+}
+
+void Show::VideoFrames() {
+  for (Media& m : media_)
+    if (m.player->IsVideo()) m.frame = m.player->Frame(dc_.Get(), nullptr);
+}
+
+void Show::DrawVideos() {
+  if (!cur_ || cur_->index == kEnd || (media_.empty() && mediaNotes_.empty())) return;
+  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
+  const M toPx = SlideToPixels();
+  // Why a media didn't play: a line on a dark band at the foot of its shape (below a small one).
+  for (const MediaNote& n : mediaNotes_) {
+    if (n.item >= items.size() || !noteFormat_) continue;
+    const draw::Rect& b = items[n.item].bounds;
+    const D2D1_POINT_2F a = toPx.TransformPoint({b.left, b.top}), c = toPx.TransformPoint({b.right, b.bottom});
+    const float pad = noteFormat_->GetFontSize() * 0.4f;
+    const float w = std::min(slideW_, std::max(c.x - a.x, noteFormat_->GetFontSize() * 22));
+    ComPtr<IDWriteTextLayout> layout;
+    DWRITE_TEXT_METRICS tm{};
+    if (FAILED(gfx::DWrite()->CreateTextLayout(n.text.c_str(), static_cast<UINT32>(n.text.size()), noteFormat_.Get(),
+                                               w - 2 * pad, slideH_, &layout)) ||
+        FAILED(layout->GetMetrics(&tm)))
+      continue;
+    const float h = tm.height + 2 * pad;
+    const float left = std::clamp((a.x + c.x - w) / 2, 0.f, std::max(0.f, slideW_ - w));
+    float top = c.y - a.y >= 3 * h ? c.y - h : (c.y + h <= slideH_ ? c.y : a.y - h);
+    top = std::clamp(top, 0.f, std::max(0.f, slideH_ - h));
+    ComPtr<ID2D1SolidColorBrush> band, ink;
+    dc_->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 0.75f), &band);
+    dc_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1), &ink);
+    if (!band || !ink) continue;
+    dc_->FillRectangle(D2D1::RectF(left, top, left + w, top + h), band.Get());
+    dc_->DrawTextLayout({left + pad, top + pad}, layout.Get(), ink.Get());
+  }
+  for (const Media& m : media_) {
+    if (!m.frame || m.item >= items.size()) continue;
+    const bool shown = m.player->Shown();
+    if (m.hideWhenStopped) {
+      if (!shown) continue;  // its poster is hidden too
+    } else if (m.item < cur_->targets.size()) {  // hidden by its animations: not shown
+      const int whole = cur_->targets[m.item].whole;
+      if (whole >= 0 && !cur_->animator.PoseOf(cur_->sprites[static_cast<size_t>(whole)].key).visible) continue;
+    }
+    const draw::Rect& b = items[m.item].bounds;
+    D2D1_POINT_2F a = toPx.TransformPoint({b.left, b.top}), c = toPx.TransformPoint({b.right, b.bottom});
+    const D2D1_SIZE_U px = m.frame->GetPixelSize();
+    if (m.fullScreen && shown && px.width && px.height) {
+      // The whole slide, black around the video's shape.
+      ComPtr<ID2D1SolidColorBrush> black;
+      dc_->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &black);
+      if (black) dc_->FillRectangle(D2D1::RectF(0, 0, slideW_, slideH_), black.Get());
+      const float s = std::min(slideW_ / px.width, slideH_ / px.height);
+      a = {(slideW_ - px.width * s) / 2, (slideH_ - px.height * s) / 2};
+      c = {a.x + px.width * s, a.y + px.height * s};
+    }
+    const float l = std::max(0.f, m.crop[0]), t = std::max(0.f, m.crop[1]);
+    const float r = std::max(l + 0.01f, 1 - std::max(0.f, m.crop[2])), bt = std::max(t + 0.01f, 1 - std::max(0.f, m.crop[3]));
+    const D2D1_RECT_F src = D2D1::RectF(l * px.width, t * px.height, r * px.width, bt * px.height);
+    dc_->DrawBitmap(m.frame, D2D1::RectF(a.x, a.y, c.x, c.y), 1.f, D2D1_INTERPOLATION_MODE_LINEAR, &src);
+  }
+}
+
+void Show::UpdatePresenter() {
+  if (!presenter_ || !cur_) return;
+  PresenterState s;
+  s.slide = cur_->index;
+  s.current = cur_->index == kEnd ? nullptr : cur_->frame.Get();  // the end's frame is black: the view says so
+  s.blank = blank_;
+  if (cur_->index != kEnd && cur_->animator.HasNextStep()) {
+    // Clicks left on this slide: the preview is the slide as the next click leaves it.
+    const int step = cur_->animator.StepIndex() + 1;
+    if (!built_ || built_->index != cur_->index || builtStep_ != step) {
+      built_ = MakeScene(cur_->index, false, Now(), step);
+      builtStep_ = step;
+    }
+    s.next = built_ ? built_->frame.Get() : nullptr;
+    s.stepsLeft = std::max(1, static_cast<int>(cur_->timing.main.steps.size()) - cur_->animator.StepIndex());
+  } else {
+    const size_t n = cur_->index == kEnd ? kEnd : NextIndex(cur_->index);
+    s.next = n != kEnd && next_ && next_->index == n ? next_->frame.Get() : nullptr;
+    if (n != kEnd && !s.next) return;  // the next slide is still being made: kMsgPrerender updates again
+  }
+  presenter_->Update(s);
 }
 
 void Show::Key(UINT vk) {
@@ -1384,19 +1615,24 @@ void Show::Step(double t) {
   Draw(clock_);
 }
 
-bool Show::Save(const std::wstring& name) {
-  if (!target_ || !dc_) return false;
+bool Show::Save(const std::wstring& name, ID2D1Bitmap1* from, UINT w, UINT h) {
+  if (!from) {
+    from = target_.Get();
+    w = w_;
+    h = h_;
+  }
+  if (!from || !dc_) return false;
   D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
       D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
       D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
   ComPtr<ID2D1Bitmap1> cpu;
   D2D1_MAPPED_RECT mapped{};
-  if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w_, h_), nullptr, 0, &props, &cpu)) ||
-      FAILED(cpu->CopyFromBitmap(nullptr, target_.Get(), nullptr)) || FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped)))
+  if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, &props, &cpu)) ||
+      FAILED(cpu->CopyFromBitmap(nullptr, from, nullptr)) || FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped)))
     return false;
   ComPtr<IWICBitmap> image;
-  HRESULT hr = gfx::WIC()->CreateBitmapFromMemory(w_, h_, GUID_WICPixelFormat32bppPBGRA, mapped.pitch,
-                                                  mapped.pitch * h_, mapped.bits, &image);
+  HRESULT hr = gfx::WIC()->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, mapped.pitch,
+                                                  mapped.pitch * h, mapped.bits, &image);
   cpu->Unmap();
   std::wstring path = opts_.captureDir + L"\\" + name + L".png";
   ComPtr<IWICStream> stream;
@@ -1411,6 +1647,21 @@ bool Show::Save(const std::wstring& name) {
          SUCCEEDED(encoder->Commit());
 }
 
+bool Show::SavePresenter(const std::wstring& name) {
+  if (!presenter_ || !cur_) return false;
+  // The next slide as kMsgPrerender makes it in the show (a capture has no message loop).
+  const size_t n = cur_->index == kEnd ? kEnd : NextIndex(cur_->index);
+  if (n != kEnd && (!next_ || next_->index != n)) next_ = MakeScene(n, false, Now());
+  UpdatePresenter();
+  constexpr UINT w = 1600, h = 900;
+  ComPtr<ID2D1Bitmap1> b = NewBitmap(w, h);
+  presenter_->Prepare(w, h);
+  if (!BeginOffscreen(b.Get(), false)) return false;
+  presenter_->Draw(dc_.Get(), w, h);
+  EndOffscreen();
+  return Save(name, b.Get(), w, h);
+}
+
 // Every slide in show order: its transition at the middle, steps that start by themselves, each
 // trigger, then each click's step at its middle and end.
 int Show::CaptureAll() {
@@ -1421,6 +1672,13 @@ int Show::CaptureAll() {
     swprintf(name, 64, fmt, slide + 1, k);
     if (Save(name)) ++saved;
   };
+  // With --show-presenter, the presenter view once each slide or step has settled.
+  auto savePresenter = [&](const wchar_t* fmt, size_t slide, int k) {
+    if (!presenter_) return;
+    wchar_t name[64];
+    swprintf(name, 64, fmt, slide + 1, k);
+    if (SavePresenter(name)) ++saved;
+  };
   // The middle of whatever runs now, and its end.
   auto playOut = [&](size_t slide, const wchar_t* mid, const wchar_t* end, int k, double length) {
     double t0 = clock_;
@@ -1428,7 +1686,7 @@ int Show::CaptureAll() {
       Step(t0 + length / 2);
       save(mid, slide, k);
     }
-    for (int guard = 0; guard < 1000 && Animating(); ++guard) Step(clock_ + 500);
+    for (int guard = 0; guard < 1000 && Moving(); ++guard) Step(clock_ + 500);
     Step(clock_ + 1);
     save(end, slide, k);
   };
@@ -1446,6 +1704,7 @@ int Show::CaptureAll() {
       playOut(slide, L"s%02zu-1-auto-mid", L"s%02zu-1-auto-end", 0, steps[0].length);
     else
       save(L"s%02zu-1-start", slide, 0);
+    savePresenter(L"p%02zu-1-start", slide, 0);
     // Triggers: a click on each trigger shape.
     for (size_t t = 0; t < cur_->timing.triggers.size(); ++t) {
       const Sequence& seq = cur_->timing.triggers[t];
@@ -1458,12 +1717,14 @@ int Show::CaptureAll() {
       double length = step < static_cast<int>(steps.size()) ? steps[static_cast<size_t>(step)].length : 0;
       Next(false);
       playOut(slide, L"s%02zu-3-step%02d-mid", L"s%02zu-3-step%02d-end", k, length);
+      savePresenter(L"p%02zu-3-step%02d", slide, k);
     }
     Next(false);
   }
   if (cur_ && cur_->index == kEnd) {
     Draw(clock_);
     save(L"s%02zu-end", deck_.SlideCount(), 0);
+    savePresenter(L"p%02zu-end", deck_.SlideCount(), 0);
   }
   return saved;
 }
@@ -1488,6 +1749,16 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     size_t last = self->cur_ && self->cur_->index != kEnd ? self->cur_->index : self->lastShown_;
     std::wstring file = std::move(self->fileToOpen_);
     if (self->boosted_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    self->presenter_.reset();
+    self->ReleaseMedia();  // the sound stops with the show
+    if (!self->opts_.mediaReport.empty()) {
+      FILE* f = nullptr;
+      if (_wfopen_s(&f, self->opts_.mediaReport.c_str(), L"wb") == 0 && f) {
+        fprintf(f, "{\n  \"refreshHz\": %.2f,\n  \"videos\": [%s\n  ]\n}\n", self->refreshHz_,
+                self->mediaReport_.c_str());
+        fclose(f);
+      }
+    }
     if (self->awake_) SetThreadExecutionState(ES_CONTINUOUS);
     self->hwnd_ = nullptr;
     self->DropDevice();
@@ -1578,7 +1849,7 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
       if (w == kTimerCursor) {
         cursorHidden_ = true;
         SetCursor(nullptr);
-      } else if (w == kTimerAdvance && !Animating()) {
+      } else if (w == kTimerAdvance && !Moving()) {  // a playing video doesn't hold the slide
         Next(false);
       }
       return 0;
@@ -1591,6 +1862,7 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
       if (cur_ && cur_->index != kEnd && !Animating()) {
         size_t n = NextIndex(cur_->index);
         if (n != kEnd && (!next_ || next_->index != n)) next_ = MakeScene(n, false, Now());
+        UpdatePresenter();  // the next slide is ready now
       }
       return 0;
     case kMsgStop: Close(); return 0;
@@ -1630,11 +1902,11 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
     ++benchTransitions_.back().frames;
   }
   lastFrame_ = start;
-  if (inTransition) TrackVblank(true);
+  if (inTransition) TrackVblank(true, start, waitMs);
   else lastVblank_ = -1;
 }
 
-void Show::TrackVblank(bool count) {
+void Show::TrackVblank(bool count, double start, double waited) {
   {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
@@ -1646,18 +1918,63 @@ void Show::TrackVblank(bool count) {
         vblankPeriod_ = ti.qpcRefreshPeriod;
       }
     }
-    if (vblankPeriod_ && static_cast<UINT64>(qpc.QuadPart) >= vblank0_) {
-      long long index = static_cast<long long>((static_cast<UINT64>(qpc.QuadPart) - vblank0_) / vblankPeriod_);
+    if (vblankPeriod_) {
+      // Signed: DWM may already give the coming vblank's time (then the first frames are at refresh -1);
+      // an unsigned test skipped every frame while it did, and a whole transition went uncounted.
+      const long long period = static_cast<long long>(vblankPeriod_);
+      const long long since = static_cast<long long>(qpc.QuadPart) - static_cast<long long>(vblank0_);
+      const long long index = since >= 0 ? since / period : -((period - 1 - since) / period);
       // The display queue: a frame shows at the refresh after its present, and never before the one
       // after the previous frame's (frames wait their turn). A refresh between two frames shown is
       // one with no new frame.
       long long shown = lastVblank_ >= 0 ? std::max(lastVblank_ + 1, index + 1) : index + 1;
+      int missed = 0;
       if (count && lastVblank_ >= 0 && shown > lastVblank_ + 1) {
-        int missed = static_cast<int>(shown - lastVblank_ - 1);
+        missed = static_cast<int>(shown - lastVblank_ - 1);
         vblankMissed_ += missed;
         if (!benchTransitions_.empty()) benchTransitions_.back().vblankMissed += missed;
       }
       lastVblank_ = shown;
+      if (benchTransitions_.size() == 1 && frameLog_.size() < 600 && swap_) {
+        FrameLog f{};
+        f.start = start;
+        f.wait = waited;
+        f.draw = drawMs_;
+        f.present = presentMs_;
+        f.phase = static_cast<double>(since - index * period) / static_cast<double>(period);
+        f.vblank = index;
+        f.shown = shown;
+        f.missed = missed;
+        f.warm = !count;
+        f.mode = -1;
+        swap_->GetLastPresentCount(&f.lastPresent);
+        LARGE_INTEGER sync{};
+        ComPtr<IDXGISwapChainMedia> media;
+        if (SUCCEEDED(swap_.As(&media))) {
+          DXGI_FRAME_STATISTICS_MEDIA s{};
+          f.statsHr = media->GetFrameStatisticsMedia(&s);
+          if (SUCCEEDED(f.statsHr)) {
+            f.presentCount = s.PresentCount;
+            f.presentRefresh = s.PresentRefreshCount;
+            f.syncRefresh = s.SyncRefreshCount;
+            sync = s.SyncQPCTime;
+            f.mode = static_cast<int>(s.CompositionMode);
+          }
+        } else {
+          DXGI_FRAME_STATISTICS s{};
+          f.statsHr = swap_->GetFrameStatistics(&s);
+          if (SUCCEEDED(f.statsHr)) {
+            f.presentCount = s.PresentCount;
+            f.presentRefresh = s.PresentRefreshCount;
+            f.syncRefresh = s.SyncRefreshCount;
+            sync = s.SyncQPCTime;
+          }
+        }
+        f.syncVblank = sync.QuadPart ? std::llround(static_cast<double>(sync.QuadPart - static_cast<long long>(vblank0_)) /
+                                                    static_cast<double>(vblankPeriod_))
+                                     : LLONG_MIN;
+        frameLog_.push_back(f);
+      }
     }
   }
 }
@@ -1688,12 +2005,12 @@ void Show::WriteBench() {
            "  \"presentMsMax\": %.2f,\n"
            "  \"worstIntervalMs\": %.2f,\n  \"animationFrames\": %d,\n  \"animationDropped\": %d,\n"
            "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n"
-           "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n",
+           "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n  \"presenterView\": %s,\n",
            refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, vblankMissed_, dropped,
            kLateStart * periodMs_, warmupFrames_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
            pct(0.99), cpu.empty() ? 0.0 : cpu.back(), gpu::IsWarp() ? "true" : "false",
            !benchAborted_ && vblankMissed_ == 0 && frames > 0 ? "true" : "false", benchAborted_ ? "true" : "false",
-           benchAborted_ ? benchAborted_ : "");
+           benchAborted_ ? benchAborted_ : "", presenter_ ? "true" : "false");
   json += buf;
   json += "  \"lateFrames\": [\n";
   for (size_t i = 0; i < slow_.size(); ++i) {
@@ -1712,6 +2029,24 @@ void Show::WriteBench() {
              "    {\"slide\": %zu, \"kind\": %d, \"frames\": %d, \"missed\": %d, \"lateStarts\": %d, \"worstMs\": %.2f}%s\n",
              t.slide + 1, static_cast<int>(t.kind), t.frames, t.vblankMissed, t.dropped, t.worstMs,
              i + 1 < benchTransitions_.size() ? "," : "");
+    json += buf;
+  }
+  json += "  ],\n";
+  // Times in ms from the first frame; vblank, shown and syncVblank: refreshes from the first
+  // frame's (syncVblank null: DXGI gave no time). pc/prc/src: DXGI's PresentCount,
+  // PresentRefreshCount and SyncRefreshCount; last: GetLastPresentCount.
+  json += "  \"firstTransitionFrames\": [\n";
+  for (size_t i = 0; i < frameLog_.size(); ++i) {
+    const FrameLog& f = frameLog_[i];
+    char sync[24] = "null";
+    if (f.syncVblank != LLONG_MIN) snprintf(sync, sizeof(sync), "%lld", f.syncVblank);
+    snprintf(buf, sizeof(buf),
+             "    {\"t\": %.3f, \"warm\": %s, \"wait\": %.3f, \"draw\": %.3f, \"present\": %.3f, \"vblank\": %lld, "
+             "\"phase\": %.2f, \"shown\": %lld, \"missed\": %d, \"last\": %u, \"hr\": \"0x%08lx\", \"mode\": %d, "
+             "\"pc\": %u, \"prc\": %u, \"src\": %u, \"syncVblank\": %s}%s\n",
+             f.start - frameLog_[0].start, f.warm ? "true" : "false", f.wait, f.draw, f.present, f.vblank, f.phase,
+             f.shown, f.missed, f.lastPresent, static_cast<unsigned long>(f.statsHr), f.mode, f.presentCount,
+             f.presentRefresh, f.syncRefresh, sync, i + 1 < frameLog_.size() ? "," : "");
     json += buf;
   }
   json += "  ]\n}\n";
@@ -1754,7 +2089,8 @@ std::vector<std::wstring> Monitors() {
   return names;
 }
 
-int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir) {
+int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir, bool windowed,
+                  bool presenter, const std::wstring& mediaReport) {
   fw::pkg::Status st;
   fw::pkg::Snapshot::Options so;
   auto snapshot = fw::pkg::Snapshot::Open(path, so, st);
@@ -1770,6 +2106,9 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
   o.deckPath = path;
   o.benchReport = benchReport;
   o.captureDir = captureDir;
+  o.windowed = windowed;
+  o.presenter = presenter;
+  o.mediaReport = mediaReport;
   if (!Start(*deck, *renderer, o)) return 1;
   if (!captureDir.empty()) {
     int saved = g_show->CaptureAll();
