@@ -23,6 +23,7 @@
 #include "pkg/OfficeCrypto.h"
 #include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationPanels.h"
+#include "slide/view/PresentationAnim.h"  // p3-anim
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -102,6 +103,10 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
     error = Title() + L": " + why;
     return OpenResult::Failed;
   }
+  if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
+    untitled_ = L"Presentation" + std::to_wstring(newNumber_);
+    path_.clear();
+  }
   FileOpened();
   if (!key.Empty()) {
     File().Protect(std::move(key));  // saved, backed up and autosaved encrypted with it
@@ -117,6 +122,10 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();
   return OpenResult::Ok;
+}
+
+bool PresentationView::IsTemplate(const std::wstring& path) {
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm");
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }
@@ -407,6 +416,11 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
       deck_->PaintPrompts(current_, painter, text_->EditingShape(current_));
     }
     dc->SetTransform(old);
+  }
+  // p3-anim: a transition or the animations playing over the slide (Preview).
+  if (preview_ && DrawPreview(c, dc)) {
+    c.PopClip();
+    return;
   }
   // The text being edited, live over the slide.
   text_->Draw(c, dc, current_, rc);

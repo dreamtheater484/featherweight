@@ -215,6 +215,46 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
     - our-dynamic-sun 12 → 14/14 (slide 2 .879 → .960), cybersprinters-1 23 → 24/24.
     - 19 slides moved up, none down. worldbank-evolution stays at 0/8: its slides fail for other reasons.
   - Script: `FeatherweightNotes\p1\corpus-analysis\stale-refs.ps1` (`p1-queued-renders.ps1 -Stale`).
+- **On p1-int `fbbbfbaa`: corpus at 93.36 %, over the gate's 90 %** (crash fix `a2210fdf`, cloud faces by family name, p1-render's baseline shift, Proxima Nova → Tahoma, GDI advances at 576 dpi, charts, theme-font numbers and bullets, `a78d3c9e` page box, chart label text; p1-model's bullet overrun; the re-exported references).
+  - 2,349 of 2,516 slides pass. The gate needs 2,265, so there are 84 to spare. The public set is at 92/97.
+  - Against `cb26c73e` on the same references (2,225): +124. 47 decks gained 130 slides and 5 lost 6:
+    - psy-101 −2 (14 .957 → .935, 22 .950 → .925, 21 .960 → .949);
+    - 1 each at the threshold: cs-444-2 8, mis-3580 2, acuk dual-gaelic 16, who-health module-1-part-2 10 (.948–.950).
+  - Export matching apart from drawing, against a local build of `fbbbfbaa` with only `a78d3c9e` reverted:
+    - `a78d3c9e`'s page box: +6 net (unimuenster de +3, en +3, goettingen +1; who-health module 10 drops at exactly .950).
+    - With `7d70c42c`'s +11 (measured on `cb26c73e`), export matching adds about +17 in all.
+    - Drawing fixes this round: +118 (2,225 → 2,343).
+    - Without the export matching the corpus would be at about 2,332 (92.7 %), and also without the reference fix about 2,329 (92.6 %). Both are over 90 %.
+  - Every kind is over 90 %: briefings 93.6 %, charts 91.9 %, features 90.1 %, lectures 94.0 %, photos 91.8 %, school 94.0 %, shows 92.0 %, statistics 90.9 %, templates 95.7 %, training 93.0 %.
+  - Failing slides by content: pictures 62, text 59, equations 18, SmartArt 12, charts 7 (17 of 24 pass), tables 5, other 3. 127 of the 166 are near misses.
+  - The who-health crash is gone: none in 48 runs of `crash-repro.ps1` (8 at a time, `--png`), and none in the two corpus runs.
+  - `fwtool check` passes all 152 screened decks (warnings only).
+  - The Open XML SDK validator finds 141 of the 152 decks clean. The other 11 have schema errors in the downloaded originals: unexpected child elements, invalid or undeclared attributes, one part the SDK can't open. Mostly they're chart extension elements, in POI's chart decks, business bodies, goettingen and the uantwerpen templates.
+  - **Decision (coordinator, 2026-11-24):** these 11 decks count as P2's baseline, not as P1 failures. P1 never saves; P2's check is that a saved deck has no validator errors its original doesn't (`fwvalidate --compare`). For P1's "never damage a file" criterion, `fwtool check` passes all 152 and no deck changed on opening.
+  - Opening never changed a deck: every one still has its screened hash (reference-renders checks each against `real-world.json`).
+  - Shipped exe at `fbbbfbaa` (`build-release`, FW_TEST_SCREENS off): 11,149,824 bytes. That's +611,328 (597 KB) over S4 final, within the 1.0 MB budget.
+    - The quiet-PC timings committed as `f828277f` used `build-release`'s exe from 20 Nov (`abebf66`; that build wasn't redone), so its ledger line's size matches `abebf66`'s to the byte.
+    - The timings need a rerun on a release build of the gate head.
+  - Slide view against its own PDF on `fbbbfbaa`: no slide under 0.95. Sample: 233 slides, median .989, lowest .955. Public: 97 slides, median .9986, lowest .954.
+- **On p1-int `ea3fe681`: corpus at 94.16 %** (`fbbbfbaa` plus p1-render's whole-point spacing `54c86f6c`, upright bullets `257e369b` and pagepngs at the PDF's box `0d454fb5`).
+  - 2,369 of 2,516 slides pass, +20 against `fbbbfbaa`, none lost:
+    - cs-2110 sorting +4, OOP +4 (37/37), graphs +3;
+    - overheid webinar +3 (25/25), overheid workshop +2;
+    - 1 each on cybersprinters-3, the unimuenster poster, anyone-out-there and 15-213 VM.
+  - The public set stays at 92/97.
+  - Slide view against its own PDF: no slide under 0.95 on the sample (median .989, lowest .955) or the public set (median .9986, lowest .954).
+    - goettingen, outside the sample: slides 1, 6 and 4 at .941, .942 and .947, and 3 at .872. All four are accepted as explained (see "goettingen's view against its own PDF accepted as explained" below): 3 and 4 are export-matching gaps, and 1 and 6 are a Direct2D-vs-pdfium picture-scaling difference that isn't one-sided against PowerPoint.
+  - Shipped exe at `ea3fe681`: 11,149,824 bytes, as at `fbbbfbaa`. The quiet-PC timings are armed on this build.
+- **2026-11-24: fidelity work stops at the gate** (coordinator). The corpus passed at 93.36 % on `fbbbfbaa` (84 slides over 90 %; about 92.6 % without export matching and the reference fix). The gate code is `ea3fe681`; later commits on `claude/p1-int` change docs only. Further drawing changes would need a full re-measure, so p1-render's and p1-model's remaining ideas are parked under "After P1".
+- **2026-11-24: goettingen's view against its own PDF accepted as explained** (coordinator).
+  - Slides 3 and 4 are export-matching gaps: the JPEG re-encode at q75, and a 0.1-px offset.
+  - Slides 1 and 6 (0.941, 0.943) differ by a picture scaled up to 1.6 px narrower in Direct2D than in pdfium, at the 1333-px box only. It isn't one-sided against PowerPoint: on slide 1 the PDF is closer, on slide 6 the view is.
+  - No code change before the next fidelity round. Every other sampled slide stays within 0.05.
+- **2026-11-24: the slide-show frame bench accepted on two full runs** (coordinator). The bench ran at the console on Roy's PC (5120×1440 at 240 Hz, four times a typical display's rate), with the gate's drawing code (`ea3fe681` plus bench-only commits `3e717cb7`, `3a9b992f`, `d8b2ed27` in `src/slide/show/SlideShow.cpp`: input no longer stops a run, the window's own closing no longer counts as a focus change, the first transition warms up behind black, and late starts count from 1.8 refreshes).
+  - 10:26: 50 transitions, 12,085 frames; transitions 2–50 with no missed refresh, worst interval 7.28 ms (under 2 refreshes), CPU per frame p99 0.48 ms.
+  - 11:05: 12,086 frames; transitions 2–27 and 29–50 with no missed refresh; one 23 ms present stall on slide 28 (CPU 0.48 ms for that frame, the present blocked), while other sessions' builds were still winding down.
+  - Slide 1's 3–4 counted misses in both runs are the bench's queue model, not frames: no frame on slide 1 started more than 6.43 ms (1.54 refreshes) after the one before, and it has no late starts. p1-show fixes the count for P3's presenter-view bench.
+  - So on the reference PC every transition presents at the display's rate except one external stall, with about 10× CPU headroom at 240 Hz; at a typical 60 Hz the same frames are far inside one refresh. Further runs would need the whole PC idle, which Roy asked not to depend on.
 
 ## After P1: notes for P3 or later
 
@@ -253,3 +293,28 @@ P1 stopped at the gate (93.36 % on `fbbbfbaa`). What is known about the slides s
   - `bulletpos.py`: where the text starts after a bullet.
   - `fontsubst.py`: what PowerPoint draws a missing font in.
   - `embedfonts.py`, `eotheader.py`, `t2load.py`: embedded fonts.
+- **From p1-render (24 Nov 2026), parked at the gate.** Patches and scripts are in `FeatherweightNotes\p1\` and `FeatherweightNotes\p1\p1-render-tools\`.
+  - **Punctuation in an East Asian-language run** (`p1-render-east-asian-punctuation.patch`, with its unit test). A run whose `lang` is ja, zh or ko draws the punctuation it shares with Latin text (’ “ ” …) in its East Asian font, as PowerPoint does. psy-101 14 has a `lang="ja-JP"` apostrophe drawn in MS PGothic, 10 pt wide in 20-pt Verdana. The patch sets `TextStyle::eastAsiaHint`, which Word's layout already honours. A/B over the 4 decks that have such runs (`eapunct.py`): +2 (cs-425 leader election 10 .946 → .965, psy-101 12 .933 → .960), none lost.
+  - **Glyph advances, hinted or natural** (`p1-render-gdi-natural-advances.patch`, not to apply as it is). PowerPoint's Verdana is the font's unhinted advances, each rounded to a whole 576-dpi pixel (GDI natural). Verdana's hinting makes ours 0.2 % narrower, and psy-101 14 wraps "expectation" where PowerPoint doesn't (`linwidth.py`: "conditioned stimulus" 207.0 natural, 206.5 hinted, PowerPoint 207.11).
+    - Applied to every font, the change loses: 54 near-miss decks 1701 → 1681.
+    - It gains psy-101 +2 (14 .940 → .967, 22 .925 → .940) and acuk +1 in each template.
+    - It loses the Arial decks that set the 576-dpi rule (zslbw globale −6, physik −4, naturgefahren −3, rlf-webinar ii −2, unisaarland −2).
+    - So PowerPoint chooses per font. Next: find which fonts take natural advances (Verdana, maybe the hdmx/LTSH-hinted ones) and switch those only.
+  - **Symbol fallback.** For mathematical operators missing from the text's font, PowerPoint draws them in Cambria Math (∈ and ⊆ in Tw Cen MT runs, cs-2110 graphs 10 and 13); we draw them in Segoe UI Symbol, 2.5 pt wider each. Survey the blocks first (`symfonts.py` over all reference PDFs), then map them in `Fonts::SetPowerPointFallback`, beside Arabic → Tahoma.
+  - **The first line of a box under tight line spacing.** At 90 % we place it as PowerPoint does; at 70 % PowerPoint puts it 0.55–0.85 pt lower (`firstlines.py`; `tightspc.py` lists 91 decks).
+    - Data: ilo Arial 32 pt at 70 % +0.58; space-rocks Times New Roman 32 pt at 70 % +0.80 to +0.85; acuk Arial Bold 32 pt at 90 % −0.02; tum at 80 % +0.03 and at 60 % +0.52; 15-213 VM 14–16 pt at 88–98 % +0.15 to +0.27.
+    - Rejected on paper: the part below the baseline as the font's descent (acuk off by 0.5), the baseline at min(share, .75) of the line (acuk off by 1.3), and a floor of .631 × size (tum off). A model needs builds.
+  - **goettingen, the slide view against its own PDF** (pagepngs at 100 dpi; the 0.05 gap). Slides 2, 5 and 7 pass since `0d454fb5`, and 3 is the JPEG q75 gap explained above. On the other three (`panelshift.py` on pdf-compare's side-by-side images):
+    - Slide 4 (.947): a constant 0.1-px offset and picture noise across the photo. That is the q75 re-encode and the PDF viewer's resampling against Direct2D's cubic, an export-matching gap.
+    - Slides 1 (.941) and 6 (.943): the photo is a little narrower in the view than in the PDF, by up to 1.35 and 1.6 px at the right edge. The text and shapes don't drift. It shows only at 1333 px; at 1334 the two agreed (.972, .982).
+    - Not one-sided: against PowerPoint, slide 1's PDF is closer (.989; view .931), slide 6's view is closer (.954; PDF .926).
+    - Not yet explained. Candidates: how the view snaps a stretched picture to whole pixels and decodes a JPEG at the target size (D2DPainter::DrawBitmap), against pdfium's own image stretching. Slide 1's photo also has a negative crop (`srcRect l="-169" b="-122"`, 14 decks have one), which the view's whole-pixel crop rounding skips.
+    - Snapping edges within 0.01 px was tried and lost acuk 8 slides, so it was reverted.
+  - **Smaller ones:**
+    - 15-213 VM's ⬛ bullet (Noto Sans Symbols, drawn in Segoe UI Emoji) comes out at 14.04 pt in PowerPoint's PDF for buSzPts 14.4.
+    - psy-101 22 (.925) is still unexplained.
+- **2026-11-24: the slide show's first transition warms up before it moves; the frame bench ignores input** (p1-show).
+  - Why: at the console (240 Hz, 5120×1440, gate head `ea3fe681`), all 3 missed refreshes of a 50-transition run were in the first transition. Its second and third frames came 16.2 and 12.9 ms apart, each waiting ~16 ms for a buffer, while the compositor took up a full-screen window shown a moment before. Every later transition starts on a window that is already presenting, and none missed a refresh.
+  - Which: a warm-up, not a second pre-render. The next slide is already prepared and finished on the GPU before every transition, the first included. What only the first lacks is a window that has presented before. So the first transition holds at its start for 100 ms and at least 4 frames before its clock starts. Its start is black (it comes from black), so nobody sees the wait. The bench leaves the held frames out (`warmupFrames` in its report) and times the transition from when it moves.
+  - The bench ignores the mouse and the keyboard (Roy, 24 Nov: a mouse move or a click shouldn't throw a run away). Only Esc, Alt+F4, closing it, or another program taking the focus stop it. Its own ending no longer counts as losing the focus: destroying the window hands the focus to another program, which had made two complete runs end as aborted.
+  - Report: DXGI's frame statistics are gone, since they give nothing for this windowed swap chain (4,073,665 "missed"). `lateFrameStarts` now counts only starts more than 1.8 refreshes apart (`lateStartThresholdMs`). The 6.3 ms starts at 240 Hz (1.5 refreshes) are on time: the frame queued ahead keeps a new frame at every refresh, and `missedRefreshes`, counted on DWM's vblank clock, is the pass criterion.
