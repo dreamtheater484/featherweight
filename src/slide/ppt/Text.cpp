@@ -494,7 +494,10 @@ std::string LevelStylesXml(const Context& cx, int type) {
     std::string attrs, inner;
     ParaProps(pf, cf, cx, 0, attrs, inner);
     const std::string tag = "a:lvl" + Num(level + 1) + "pPr";
-    out += "<" + tag + attrs + ">" + inner + RunProps("defRPr", cf, cx) + "</" + tag + ">";
+    std::string def = RunProps("defRPr", cf, cx);
+    const int style = type == kTitle ? 0 : type == kBody ? 1 : type == kOther ? 2 : -1;
+    if (style >= 0 && cx.kern[style][level] > 0) def.insert(9, " kern=\"" + Num(cx.kern[style][level]) + "\"");  // after "<a:defRPr"
+    out += "<" + tag + attrs + ">" + inner + def + "</" + tag + ">";
   }
   return out;
 }

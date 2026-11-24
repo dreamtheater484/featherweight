@@ -227,6 +227,9 @@ struct Context {
   Pf basePf;
   Cf baseCf;
   bool notes = false;
+  // Kerning (hundredths of a point; 0: none) by title, body and other style and level: the binary
+  // format has none, PowerPoint 2007 and later keep it in the master's RoundTripOArtTextStyles12Atom.
+  std::array<std::array<int, 5>, 3> kern{};
 };
 
 // A master's shape as the shapes on slides that name it (hspMaster) inherit from it: its type and

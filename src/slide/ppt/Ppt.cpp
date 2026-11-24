@@ -553,6 +553,22 @@ class Converter {
            solid + solid + solid + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>";
   }
 
+  // The XML part `name` of the package in a round-trip atom (PowerPoint 2007 or later data) of type
+  // `type` in `container`, into `doc`; false when there's none.
+  static bool RoundTripXml(std::span<const uint8_t> container, uint16_t type, std::string_view name, pugi::xml_document& doc) {
+    const auto atom = Find(container, type);
+    if (!atom || atom->body.size() < 22) return false;
+    auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(atom->body.begin(), atom->body.end()));
+    pkg::ZipReader zip;
+    if (!snapshot || !zip.Open(*snapshot).Ok()) return false;
+    for (const pkg::ZipEntry& e : zip.Entries()) {
+      std::vector<uint8_t> bytes;
+      if (e.name == name && e.uncompressedSize <= (8u << 20) && zip.Read(e, bytes).Ok())
+        return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8);
+    }
+    return false;
+  }
+
   // A PowerPoint 2007 or later master's own theme (RoundTripTheme12Atom's package), with the pictures
   // it uses as media parts and `rels` its relationships. Empty when there's none, or when it refers to
   // anything it doesn't carry.
@@ -666,6 +682,13 @@ class Converter {
           m.cx.scheme = ReadScheme(r.body);
         }
       }
+      if (pugi::xml_document ts; RoundTripXml(rec->body, 0x0423, "drs/slideMasters/slideMaster1.xml", ts))
+        for (int t = 0; t < 3; ++t)
+          for (int l = 0; l < 5; ++l) {
+            static constexpr const char* kStyle[] = {"p:titleStyle", "p:bodyStyle", "p:otherStyle"};
+            const pugi::xml_node d = ts.document_element().child(kStyle[t]).child(("a:lvl" + Num(l + 1) + "pPr").c_str()).child("a:defRPr");
+            m.cx.kern[t][l] = std::clamp(d.attribute("kern").as_int(), 0, 400000);
+          }
       m.part = static_cast<int>(mains.size()) + 1;
       m.defaultLayout = ++layouts;
       layoutOf[m.id] = {mains.size(), m.defaultLayout};
