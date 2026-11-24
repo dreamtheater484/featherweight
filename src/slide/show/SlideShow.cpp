@@ -300,6 +300,8 @@ class Show final : public anim::FrameSource, private PresenterHost {
     float crop[4] = {0, 0, 0, 0};   // the picture's a:srcRect (left, top, right, bottom): the video's too
     bool hideWhenStopped = false;   // Hide While Not Playing: its poster is hidden (Timing), the video shown while it plays
     bool fullScreen = false;        // Play Full Screen: the video over the whole slide while it plays
+    int slidesLeft = 1;             // Play Across Slides (audio, numSld): the slides it may still play on
+    bool carried = false;           // an audio from an earlier slide: no shape here, no commands
   };
   std::vector<Media> media_;
   // A media that couldn't play (a linked file that isn't on this PC): a line over its shape until the
@@ -313,7 +315,8 @@ class Show final : public anim::FrameSource, private PresenterHost {
   ComPtr<IDWriteTextFormat> noteFormat_;
   void NoteMedia(uint32_t spid, size_t item, std::wstring text);
   std::string mediaReport_;  // --show-media-report: each video's line
-  void ReleaseMedia();       // they stop (the report keeps their frames)
+  // They stop (the report keeps their frames); at a slide change an audio playing across slides goes on.
+  void ReleaseMedia(bool slideChange = false);
   void TakeMedia();  // runs the media commands the slide's timing fired
   MediaPlayer* OpenMedia(uint32_t spid);
   bool VideoPlaying() const;
@@ -1004,7 +1007,7 @@ bool Show::StartCustom(uint32_t id, size_t returnTo, bool loop) {
 void Show::GoTo(size_t index, bool transition, bool built) {
   const double now = Now();
   KillTimer(hwnd_, kTimerAdvance);
-  ReleaseMedia();  // the slide's videos and audio stop
+  ReleaseMedia(true);  // the slide's videos and audio stop (not an audio playing across slides)
   if (index != kEnd && index >= deck_.SlideCount()) return;
   order_.Moved(index);
   hoverItem_ = -1;
@@ -1362,6 +1365,7 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
   }
   MediaPlayer::Settings settings;
   bool hide = false, full = false;
+  int slides = 1;
   for (const MediaNode& n : cur_->timing.media)
     if (n.spid == spid) {
       settings.volume = n.volume;
@@ -1369,6 +1373,7 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
       settings.loop = n.loop;
       hide = !n.showWhenStopped;
       full = n.fullScreen;
+      slides = n.slides;
     }
   std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
   if (!player) {
@@ -1380,6 +1385,7 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
   m.item = item;
   m.hideWhenStopped = hide;
   m.fullScreen = full && video;
+  m.slidesLeft = video ? 1 : slides;  // PowerPoint plays only audio across slides
   // The poster's crop crops the video too, as in PowerPoint (in 1/1000 %).
   for (pugi::xml_node fill : sh->node.children()) {
     if (pkg::LocalNameOf(fill) != "blipFill") continue;
@@ -1402,7 +1408,7 @@ void Show::TakeMedia() {
   for (const MediaEvent& e : events) {
     MediaPlayer* p = nullptr;
     for (Media& m : media_)
-      if (m.spid == e.spid) p = m.player.get();
+      if (m.spid == e.spid && !m.carried) p = m.player.get();
     bool noted = false;
     for (const MediaNote& n : mediaNotes_) noted = noted || n.spid == e.spid;
     if (!p && !noted &&
@@ -1420,21 +1426,31 @@ void Show::TakeMedia() {
   }
 }
 
-void Show::ReleaseMedia() {
-  for (const Media& m : media_) {
-    if (opts_.mediaReport.empty() || !m.player->IsVideo()) continue;
+void Show::ReleaseMedia(bool slideChange) {
+  std::vector<Media> goOn;
+  for (Media& m : media_) {
+    // Play Across Slides: an audio that's playing goes on to the next slide while it has slides left.
+    if (slideChange && !m.player->IsVideo() && m.slidesLeft > 1 && m.player->Playing()) {
+      --m.slidesLeft;
+      m.carried = true;
+      m.item = SIZE_MAX;
+      goOn.push_back(std::move(m));
+      continue;
+    }
+    if (opts_.mediaReport.empty()) continue;
     const MediaPlayer::Stats s = m.player->VideoStats();
-    char line[384];
+    char line[448];
     snprintf(line, sizeof(line),
-             "%s\n    {\"slide\": %zu, \"spid\": %u, \"frames\": %llu, \"skipped\": %llu, \"frameMs\": %.3f, "
-             "\"coveredMs\": %.1f, \"paused\": %s, \"ended\": %s, \"error\": %d, \"hresult\": \"0x%08lX\"}",
-             mediaReport_.empty() ? "" : ",", cur_ ? cur_->index + 1 : 0, m.spid,
+             "%s\n    {\"slide\": %zu, \"spid\": %u, \"audio\": %s, \"carried\": %s, \"frames\": %llu, \"skipped\": %llu, "
+             "\"frameMs\": %.3f, \"coveredMs\": %.1f, \"paused\": %s, \"ended\": %s, \"error\": %d, \"hresult\": \"0x%08lX\"}",
+             mediaReport_.empty() ? "" : ",", cur_ && cur_->index != kEnd ? cur_->index + 1 : 0, m.spid,
+             m.player->IsVideo() ? "false" : "true", m.carried ? "true" : "false",
              static_cast<unsigned long long>(s.frames), static_cast<unsigned long long>(s.skipped), s.frameMs,
              s.coveredMs, s.paused ? "true" : "false", s.ended ? "true" : "false", s.error,
              static_cast<unsigned long>(s.extended));
     mediaReport_ += line;
   }
-  media_.clear();
+  media_ = std::move(goOn);  // the others stop
   mediaNotes_.clear();
 }
 
