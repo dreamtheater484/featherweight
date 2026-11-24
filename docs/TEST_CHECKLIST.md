@@ -712,9 +712,17 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 
 - [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: ___ failures, ___ new validator errors, ___ PowerPoint repairs (target 0 each); saved without edits: byte-identical.
 - [ ] PowerPoint's read-back of the torture's edited decks (`scripts\timing-readback-check.ps1 -Decks build\deck-torture\saved`): ___ of ___ decks where `fwtool timing` prints the same for Featherweight's file and PowerPoint's save of it, and PowerPoint's object model has the same transitions, effects, triggers, durations and delays (target all). Comments: PowerPoint reads the same threads, replies and authors (`scripts\powerpoint-readback.ps1`): ___ of ___.
-- [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): ___ of ___ slides at SSIM ≥ 0.95, ___ % (target ≥ 85 %). `.odp` corpus (`-Folders odp`): ___ of ___, ___ % (target ≥ 80 %). Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
-- [ ] Picture export: ___ of ___ slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all).
-- [ ] `fuzz_ppt` and `fuzz_odp`, 60 s each in CI: no findings.
+- [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): 2,344 of 2,577 slides at SSIM ≥ 0.95, 90.96 % (target ≥ 85 %). That's 154 decks on 4.0's final head (6fe39e23, 2026-11-24):
+  - slide-pages drew 152 of them, 2,285 of 2,517 slides;
+  - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60. `.odp` corpus (`-Folders odp`): ___ of ___, ___ % (target ≥ 80 %). Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
+- [ ] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). That's `scripts\picture-export-check.ps1` on the public set: 18 decks, every slide exported as PNG, 2026-11-24.
+  - All 95 are at ≥ 0.95.
+  - The six below 0.99 are bullets.pptx slide 3, one in shapes-groups.pptx, and text-autofit.pptx slides 1 to 4 (worst 0.954, its smallest text).
+  - These six have the same layout and line breaks, and differ only at glyph and pattern-fill edges: the app's PNG and pdfium's drawing of the PDF antialias them differently.
+- [ ] `fuzz_ppt` and `fuzz_odp`, 60 s each in CI: no findings. Run as CI runs them (build-fuzz, RelWithDebInfo, 60 s each) on 4.0's final code: `fuzz_ppt` 14,253 runs, `fuzz_odp` 60,246 runs, no findings. `fuzz_pptx` (P2's row) also had no findings: 60 s, then replayed over the 146 real-world `.pptx` decks.
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target: at most 1.0 MB more than R1's, about 12.35 MB; < 15 MB at 4.0). Launch ___ ms and memory after launch ___ MB, no worse than R1's; idle with a video on a slide (`-Timings`, deck-video.pptx, which needs ffmpeg on the PATH): ___ ms CPU, ___ wakeups (target: at most 5 ms and 2). The quiet-PC timings and the frame bench (presenter view on: ___ fps on a ___ Hz display, ___ dropped frames) run once at the end through the coordinator.
-- [ ] Friction review (`docs\friction-review.md`, P3 part): presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021.
+- [ ] Friction review (`docs\friction-review.md`, P3 part): presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021. On 6fe39e23, every flow passes or ties. Read from the code; PowerPoint's own steps marked *(check in PowerPoint)* are in "PowerPoint's own steps" above.
+  - Fixed: P1 to P4, P6, P8, P14 (4.0's flag: File, New, the template, 3 C against 4) and P16.
+  - By design: P5 and P15.
+  - Open: P9 and P12, a click more each inside the comment flow, which still ties. Also P10, P11 and P13, things comments can't do yet.
 - [ ] P1's and P2's parts above still pass.
