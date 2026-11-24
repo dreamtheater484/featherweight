@@ -124,14 +124,15 @@ const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8
     "presentation:placeholder=\"true\"/></draw:page>"
     "</office:presentation></office:body></office:document-content>";
 
-std::vector<uint8_t> MakeOdp(std::string_view mime = "application/vnd.oasis.opendocument.presentation") {
+std::vector<uint8_t> MakeOdp(std::string_view mime = "application/vnd.oasis.opendocument.presentation",
+                             std::string_view content = kContent) {
   pkg::MemorySink sink;
   pkg::ZipWriter zip(sink);
   auto put = [&](std::string_view name, std::string_view text) {
     zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()), nullptr, pkg::ZipWriter::Compression::Store);
   };
   put("mimetype", mime);
-  put("content.xml", kContent);
+  put("content.xml", content);
   put("styles.xml", kStyles);
   zip.Add("media/image1.png", std::span<const uint8_t>(kPng, sizeof kPng));
   zip.Finish();
@@ -245,4 +246,39 @@ TEST(slide_odp_refuses_what_isnt_a_presentation) {
   const std::string junk = "not a zip at all";
   CHECK(!slide::odp::OdpToPptx(std::span(reinterpret_cast<const uint8_t*>(junk.data()), junk.size()), pptx).Ok());
   CHECK(pptx.empty());
+}
+
+// A line of no height in a group, as PowerPoint writes one: its viewBox has no height and its text area
+// divides by it. The path spans the shape, and the text rectangle stays in it (PowerPoint repairs a .pptx
+// with one of billions of EMU).
+TEST(slide_odp_keeps_a_flat_line_in_its_shape) {
+  std::string content = kContent;
+  content.insert(content.find("</draw:g>"),
+                 "<draw:custom-shape draw:style-name=\"a8\" svg:width=\"1.06828in\" svg:height=\"0in\" "
+                 "draw:transform=\"rotate(-2.56529) translate(4in 4.5in)\"><draw:enhanced-geometry draw:type=\"non-primitive\" "
+                 "svg:viewBox=\"0 0 976838 0\" draw:enhanced-path=\"M 0 0 L 976838 0 N\" draw:text-areas=\"?f8 ?f10 ?f9 ?f10\">"
+                 "<draw:equation draw:name=\"f0\" draw:formula=\"left\"/><draw:equation draw:name=\"f1\" draw:formula=\"right\"/>"
+                 "<draw:equation draw:name=\"f2\" draw:formula=\"top\"/><draw:equation draw:name=\"f3\" draw:formula=\"bottom\"/>"
+                 "<draw:equation draw:name=\"f4\" draw:formula=\"?f3 - ?f2\"/><draw:equation draw:name=\"f5\" draw:formula=\"?f1 - ?f0\"/>"
+                 "<draw:equation draw:name=\"f6\" draw:formula=\"?f5 / 976838\"/><draw:equation draw:name=\"f7\" draw:formula=\"?f4 / 0\"/>"
+                 "<draw:equation draw:name=\"f8\" draw:formula=\"0 / ?f6\"/><draw:equation draw:name=\"f9\" draw:formula=\"976838 / ?f6\"/>"
+                 "<draw:equation draw:name=\"f10\" draw:formula=\"0 / ?f7\"/></draw:enhanced-geometry></draw:custom-shape>");
+  std::vector<uint8_t> pptx;
+  pkg::Status st = slide::odp::OdpToPptx(MakeOdp("application/vnd.oasis.opendocument.presentation", content), pptx);
+  CHECK(st.Ok());
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(pptx)), pkg::Limits::Default(), st);
+  auto deck = package ? slide::Read(std::move(package), st) : nullptr;
+  const slide::Slide* s = deck ? deck->GetSlide(0) : nullptr;
+  CHECK(s && s->shapes.size() == 7 && s->shapes[4].children.size() == 3);
+  if (!s || s->shapes.size() != 7 || s->shapes[4].children.size() != 3) return;
+  pugi::xml_node geom = s->shapes[4].children[2].node.child("p:spPr").child("a:custGeom");
+  pugi::xml_node path = geom.child("a:pathLst").child("a:path");
+  CHECK(std::string_view(path.attribute("w").value()) == "976838");
+  CHECK(std::string_view(path.child("a:lnTo").child("a:pt").attribute("x").value()) == "976838");
+  pugi::xml_node rect = geom.child("a:rect");
+  CHECK(rect);
+  for (const char* side : {"l", "t", "r", "b"}) {
+    const long long v = rect.attribute(side).as_llong(-1);
+    CHECK(v >= 0 && v <= 976835);  // in the line's 1.06828 in
+  }
 }

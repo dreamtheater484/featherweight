@@ -54,6 +54,8 @@ std::optional<double> Number(std::string_view s, size_t& used) {
 }
 
 double Finite(double v) { return std::isfinite(v) ? std::clamp(v, -1e12, 1e12) : 0; }
+// A coordinate as written: PowerPoint repairs a .pptx with one beyond int32.
+int64_t Coord(double v) { return std::llround(std::clamp(Finite(v), -2147483647.0, 2147483647.0)); }
 
 // The equations of one enhanced geometry, evaluated for one shape.
 class Equations {
@@ -242,7 +244,7 @@ class Equations {
 class PathWriter {
  public:
   PathWriter(double left, double top, double width, double height)
-      : left_(left), top_(top), w_(std::max<int64_t>(1, std::llround(Finite(width)))), h_(std::max<int64_t>(1, std::llround(Finite(height)))) {}
+      : left_(left), top_(top), w_(std::max<int64_t>(1, Coord(width))), h_(std::max<int64_t>(1, Coord(height))) {}
 
   void NoFill() { noFill_ = true; }
   void NoStroke() { noStroke_ = true; }
@@ -316,8 +318,7 @@ class PathWriter {
     cur_ += name;
     cur_ += ">";
     for (auto it = xy.begin(); it != xy.end(); it += 2) {
-      cur_ += "<a:pt x=\"" + std::to_string(std::llround(Finite(*it - left_))) + "\" y=\"" +
-              std::to_string(std::llround(Finite(*(it + 1) - top_))) + "\"/>";
+      cur_ += "<a:pt x=\"" + std::to_string(Coord(*it - left_)) + "\" y=\"" + std::to_string(Coord(*(it + 1) - top_)) + "\"/>";
     }
     cur_ += "</a:";
     cur_ += name;
@@ -379,7 +380,11 @@ bool ViewBox(std::string_view text, double box[4]) {
     box[i] = *v;
     text.remove_prefix(used);
   }
-  return box[2] > 0 && box[3] > 0;
+  // A line's may have no height or no width: that side counts as 1 (its points all lie on 0).
+  if (!(box[2] >= 0 && box[3] >= 0) || box[2] + box[3] == 0) return false;
+  if (box[2] == 0) box[2] = 1;
+  if (box[3] == 0) box[3] = 1;
+  return true;
 }
 
 }  // namespace
@@ -479,9 +484,13 @@ std::string CustomGeometry(xml_node geometry, int64_t w, int64_t h) {
   int got = 0;
   for (std::string_view a = area.Next(); !a.empty() && got < 4; a = area.Next()) r[got++] = eq.Value(a);
   if (got == 4) {
-    auto ex = [&](double x) { return std::llround(Finite((x - vb[0]) * static_cast<double>(w) / vb[2])); };
-    auto ey = [&](double y) { return std::llround(Finite((y - vb[1]) * static_cast<double>(h) / vb[3])); };
-    rect = Rect(ex(std::min(r[0], r[2])), ey(std::min(r[1], r[3])), ex(std::max(r[0], r[2])), ey(std::max(r[1], r[3])));
+    // One far outside the shape (equations that divide by a side of no size) is left out: the text
+    // then takes the shape's bounds, PowerPoint's default.
+    const double W = static_cast<double>(w), H = static_cast<double>(h);
+    const double l = Finite((std::min(r[0], r[2]) - vb[0]) * W / vb[2]), tp = Finite((std::min(r[1], r[3]) - vb[1]) * H / vb[3]);
+    const double rr = Finite((std::max(r[0], r[2]) - vb[0]) * W / vb[2]), b = Finite((std::max(r[1], r[3]) - vb[1]) * H / vb[3]);
+    auto inside = [](double v, double size) { return v >= -size && v <= 2 * size; };
+    if (inside(l, W) && inside(rr, W) && inside(tp, H) && inside(b, H)) rect = Rect(Coord(l), Coord(tp), Coord(rr), Coord(b));
   }
   return Geometry(rect, out.Paths());
 }
