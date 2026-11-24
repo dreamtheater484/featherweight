@@ -573,7 +573,7 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 ### Presenter view
 
 - [ ] With two monitors: start the show (F5). The show is on one monitor, the presenter view on the other: the current slide, the next slide (or the next animation), the notes (scroll them; make them bigger and smaller), the timer (pause, reset), the clock, and a strip of slides (click one to jump to it). The show's keys (click, Space, arrows, Page Up/Down, a number and Enter, B, W, Esc) work in both windows.
-- [ ] With the app on the laptop's screen and the Monitor choice left on Automatic: F5 puts the slides on the projector and the presenter view on the laptop, as PowerPoint does. The audience must never see the notes (friction review P1).
+- [ ] With the app on the laptop's screen and the Monitor choice left on Automatic: F5 puts the slides on the projector and the presenter view on the laptop, as PowerPoint does. The audience must never see the notes (friction review P1). The presenter view's Swap displays puts the slides and the presenter view on each other's monitors; Black screen and End show are on its bar.
 - [ ] With one monitor: Alt+F5 opens the presenter view in a window, as PowerPoint does; the show's monitor choice puts the show and the presenter view where you say.
 - [ ] A 50-slide deck with transitions presents smoothly with the presenter view on (record the frame rate below).
 
