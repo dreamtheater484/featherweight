@@ -119,7 +119,9 @@ const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8
     // Slide 2: hidden, a slide number field.
     "<draw:page draw:name=\"Slide2\" draw:style-name=\"a2\" draw:master-page-name=\"Master1-Layout1-title-Title-Slide\">"
     "<draw:frame svg:x=\"1in\" svg:y=\"1in\" svg:width=\"2in\" svg:height=\"1in\"><draw:text-box><text:p>Slide "
-    "<text:page-number>2</text:page-number></text:p></draw:text-box></draw:frame></draw:page>"
+    "<text:page-number>2</text:page-number></text:p></draw:text-box></draw:frame>"
+    "<draw:frame draw:style-name=\"a8\" svg:x=\"5in\" svg:y=\"0in\" svg:width=\"5in\" svg:height=\"5in\" presentation:class=\"graphic\" "
+    "presentation:placeholder=\"true\"/></draw:page>"
     "</office:presentation></office:body></office:document-content>";
 
 std::vector<uint8_t> MakeOdp(std::string_view mime = "application/vnd.oasis.opendocument.presentation") {
@@ -232,6 +234,9 @@ TEST(slide_odp_converts_a_presentation) {
     const slide::TextBody* f = deck->Text(hidden->shapes[0], *hidden);
     CHECK(f && f->paragraphs.size() == 1 && f->paragraphs[0].runs.back().fieldType == "slidenum");
   }
+  // An empty picture placeholder is kept, with its fill (PowerPoint draws it).
+  CHECK(hidden && hidden->shapes.size() == 2 && hidden->shapes[1].placeholder.type == slide::PlaceholderType::Picture &&
+        hidden->shapes[1].node.child("p:spPr").child("a:solidFill"));
 }
 
 TEST(slide_odp_refuses_what_isnt_a_presentation) {

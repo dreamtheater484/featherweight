@@ -1032,6 +1032,7 @@ void Converter::Frame(xml_node el, Part& part, std::string& out, Bounds* bounds)
   if (table) Table(el, table, box, part, out);
   else if (image) Picture(el, image, box, chain, part, out);
   else if (text) Sp(el, text, Preset("rect"), box, chain, part, out, Attr(el, "presentation:class").empty());
+  else if (!Attr(el, "presentation:class").empty()) Sp(el, {}, Preset("rect"), box, chain, part, out, false);  // an empty one: its fill and line show
   else return;
   if (bounds) bounds->Add(box);
 }
