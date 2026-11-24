@@ -291,6 +291,7 @@ class PresentationView : public TabContent {
   std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
   bool newDeck_ = false;
   int newNumber_ = 0;  // OpenAsNew: the file is a template, and the tab a new presentation
+  std::wstring imported_;  // P3: the OpenDocument presentation the tab was converted from
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).

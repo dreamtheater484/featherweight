@@ -58,7 +58,7 @@ std::vector<std::wstring> List(size_t max, const std::vector<std::wstring>& fold
   if (fw::EditorShipped(fw::FileKind::Workbook))
     for (const wchar_t* e : {L".xltx", L".xltm", L".ots"}) exts.push_back(e);
   if (fw::EditorShipped(fw::FileKind::Presentation))
-    for (const wchar_t* e : {L".potx", L".potm"}) exts.push_back(e);
+    for (const wchar_t* e : {L".potx", L".potm", L".otp"}) exts.push_back(e);
   std::vector<std::wstring> out;
   if (exts.empty()) return out;
   for (const std::wstring& folder : folders) {

@@ -71,7 +71,8 @@ TEST(FileKinds_ThePdfReaderTheEditorsAndThePresentationViewerHaveShipped) {
   CHECK(Opens(L"old.XLS"));  // .xls is imported (S4)
   CHECK(Opens(L"sheet.ods") && Opens(L"Form.OTS"));  // .ods is imported (S4)
   CHECK(Opens(L"Deck.pptx") && Opens(L"Show.PPSX") && Opens(L"Macros.pptm") && Opens(L"Theme.potx"));  // P1
-  CHECK(!Opens(L"old.ppt") && !Opens(L"slides.odp") && !Opens(L"photo.png"));  // .ppt and .odp come in P3
+  CHECK(Opens(L"slides.odp") && Opens(L"Theme.OTP"));  // .odp is imported (P3)
+  CHECK(!Opens(L"old.ppt") && !Opens(L"photo.png"));  // .ppt comes in P3
 }
 
 TEST(FileKinds_EditorsForTesting) {

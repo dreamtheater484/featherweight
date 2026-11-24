@@ -83,8 +83,10 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
+  const bool odf = !newDeck_ && !fromBytes_ && IsOpenDocument(path_);
   deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
           : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
+          : odf        ? OpenOpenDocument(path_, why)
                        : OpenDeck(path_, why);
   if (!deck_) {
     error = Title() + L": " + why;
@@ -93,8 +95,17 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
     untitled_ = L"Presentation" + std::to_wstring(newNumber_);
     path_.clear();
+  } else if (odf) {  // P3: converted, the tab is a copy that Save As saves as a .pptx; the file is left as it is
+    imported_ = path_;
+    untitled_ = FileNameOf(path_);
+    path_.clear();
   }
   FileOpened();
+  if (!imported_.empty()) {
+    std::wstring base = untitled_.substr(0, untitled_.find_last_of(L'.'));
+    host_.ViewMessage(BannerKind::Info, untitled_ + L" is an OpenDocument presentation. Saving makes a new " + base +
+                                            L".pptx and leaves it as it is.");
+  }
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
@@ -107,7 +118,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
 }
 
 bool PresentationView::IsTemplate(const std::wstring& path) {
-  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm");
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm") || EndsWithNoCase(path, L".otp");
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }

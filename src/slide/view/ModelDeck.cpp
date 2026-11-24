@@ -10,6 +10,7 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
+#include "slide/odp/Odp.h"
 #include "slide/render/SlideRender.h"
 #include "text/Fonts.h"
 
@@ -350,6 +351,26 @@ std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
   }
   return DeckOf(std::move(snap), error);
 }
+
+std::unique_ptr<Deck> OpenOpenDocument(const std::wstring& path, std::wstring& error) {
+  pkg::Status status;
+  std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path, {}, status);
+  if (!snap) {
+    error = L"The file couldn't be read.";
+    return nullptr;
+  }
+  std::vector<uint8_t> pptx;
+  status = odp::OdpToPptx(snap->Bytes(), pptx);
+  snap.reset();
+  if (!status.Ok()) {
+    error = status.code == pkg::Status::Code::TooLarge ? L"It's too large to open."
+                                                       : L"It seems to be damaged or isn't an OpenDocument presentation.";
+    return nullptr;
+  }
+  return DeckOf(pkg::Snapshot::FromBytes(std::move(pptx)), error);
+}
+
+bool IsOpenDocument(const std::wstring& path) { return EndsWithNoCase(path, L".odp") || EndsWithNoCase(path, L".otp"); }
 
 std::unique_ptr<Deck> OpenDeckFromBytes(std::vector<uint8_t> bytes, std::wstring& error) {
   if (bytes.empty()) {

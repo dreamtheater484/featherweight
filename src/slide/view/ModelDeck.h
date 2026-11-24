@@ -13,5 +13,8 @@ namespace fw::slide::view {
 
 // Null with a plain-language message in `error` when the file can't be read as a presentation.
 std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error);
+// An OpenDocument presentation (.odp, .otp), converted (P3, p3-files): the file itself isn't kept.
+std::unique_ptr<Deck> OpenOpenDocument(const std::wstring& path, std::wstring& error);
+bool IsOpenDocument(const std::wstring& path);
 
 }  // namespace fw::slide::view

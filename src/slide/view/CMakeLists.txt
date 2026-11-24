@@ -18,7 +18,7 @@ target_link_libraries(fwslideviewcore PUBLIC fwdoc fwproof)
 set_source_files_properties(TextDoc.cpp TextSession.cpp TextFormat.cpp TextClip.cpp TextFind.cpp TextSpell.cpp TextModelEdit.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(fwslideviewcore PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwpkg fwdraw fwtext fwcore)
+target_link_libraries(fwslideviewcore PUBLIC fwslide_render fwslide fwslideodp fwpkg fwdraw fwtext fwcore)
 target_compile_options(fwslideviewcore PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp PresentationPrint.cpp
