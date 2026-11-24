@@ -173,7 +173,14 @@ class Writer {
         case 0xF2: base = Rgb(s, Prop(s, 0x01C2, 0xFFFFFF), depth + 1); break;
         case 0xF3: base = Rgb(s, Prop(s, 0x0183, 0xFFFFFF), depth + 1); break;
         case 0xF4: base = Rgb(s, Prop(s, 0x0201, 0x808080), depth + 1); break;
-        default: base = 0;
+        default: {
+          // System colors in OfficeArt's order (button face, window text, menu, ..., window 17), as Windows
+          // draws them by default: what PowerPoint writes as sysClr's lastClr.
+          static constexpr uint32_t kSystem[] = {0xF0F0F0, 0x000000, 0xF0F0F0, 0x0078D7, 0xFFFFFF, 0x000000, 0x99B4D1,
+                                                 0xFFFFFF, 0xA0A0A0, 0x000000, 0x6D6D6D, 0xBFCDDB, 0x000000, 0xFFFFE1,
+                                                 0x000000, 0x000000, 0xC8C8C8, 0xFFFFFF, 0x646464, 0xE3E3E3};
+          base = index < std::size(kSystem) ? kSystem[index] : 0;
+        }
       }
       if (fn != 1 && fn != 2) return base;
       uint32_t out = 0;
@@ -632,7 +639,9 @@ class Writer {
     }
   }
 
-  std::string BodyPr(const Shape& s) const {
+  // `metro`: PowerPoint 2007's copy of it, for what the binary doesn't keep: space before the first
+  // paragraph (spcFirstLastPara).
+  std::string BodyPr(const Shape& s, pugi::xml_node metro = {}) const {
     std::string a;
     const uint32_t wrap = Prop(s, 0x0085, 0);
     a += wrap == 2 ? " wrap=\"none\"" : " wrap=\"square\"";
@@ -654,6 +663,9 @@ class Writer {
     }
     a += " rtlCol=\"0\"";
     const bool fit = Bool(s, 0x00BF, 1, false);
+    if (metro.attribute("spcFirstLastPara").as_bool()) a += " spcFirstLastPara=\"1\"";
+    // Not its normAutofit: PowerPoint fits the text again when it opens the file, and draws it at full
+    // size where the copy's fontScale is stale (scotland census, 31 slides).
     return "<a:bodyPr" + a + ">" + (fit ? "<a:spAutoFit/>" : "<a:noAutofit/>") + "</a:bodyPr>";
   }
 
@@ -689,10 +701,37 @@ class Writer {
   // drs/shapexml.xml is the p:sp): its spPr after the xfrm and its p:style keep what the binary
   // properties can't (soft shadows, glows, gradient stops, theme references). False when there's none,
   // or they refer to other parts.
-  static bool Metro(const Shape& s, std::string& spPr, std::string& style, bool& useBg) {
+  static bool MetroDoc(const Shape& s, pugi::xml_document& doc) {
     const auto it = s.complex.find(0x03A9);
+    return it != s.complex.end() && PackageXml(it->second, "drs/shapexml.xml", doc);
+  }
+  // Its text keeps each paragraph's margin and indent, which the binary has only per level (a ruler); its
+  // characters are masked, so they're taken when its paragraphs are as long as the text's.
+  static void MetroIndents(const pugi::xml_document& doc, Text& t) {
+    std::vector<size_t> lengths(1);
+    for (const char16_t c : t.chars)
+      if (c == u'\r') lengths.push_back(0);
+      else if (c < 0xDC00 || c >= 0xE000) ++lengths.back();  // code points
+    std::vector<std::optional<std::pair<double, double>>> out;
+    for (pugi::xml_node p : doc.document_element().child("p:txBody").children("a:p")) {
+      size_t length = 0;
+      for (pugi::xml_node c : p.children()) {
+        if (std::string_view(c.name()) == "a:br") ++length;
+        else if (std::string_view(c.name()) == "a:r")
+          for (const char* q = c.child_value("a:t"); *q; ++q) length += (*q & 0xC0) != 0x80;
+        else if (std::string_view(c.name()) == "a:fld") return;  // its text isn't the field's character
+      }
+      if (out.size() >= lengths.size() || lengths[out.size()] != length) return;
+      const pugi::xml_node pPr = p.child("a:pPr");
+      const pugi::xml_attribute marL = pPr.attribute("marL"), indent = pPr.attribute("indent");
+      out.push_back(marL && indent ? std::optional(std::pair(marL.as_double(), indent.as_double())) : std::nullopt);
+    }
+    if (out.size() == lengths.size()) t.indents = std::move(out);
+  }
+
+  static bool Metro(const Shape& s, std::string& spPr, std::string& style, bool& useBg) {
     pugi::xml_document doc;
-    if (it == s.complex.end() || !PackageXml(it->second, "drs/shapexml.xml", doc)) return false;
+    if (!MetroDoc(s, doc)) return false;
     const pugi::xml_node root = doc.document_element();
     if (std::string_view(root.name()) != "p:sp" && std::string_view(root.name()) != "p:cxnSp") return false;
     const pugi::xml_node props = root.child("p:spPr"), st = root.child("p:style");
@@ -763,7 +802,10 @@ class Writer {
                     "</p:nvPr></p:nvSpPr><p:spPr>" + Xfrm(s) + props + "</p:spPr>" + style;
     Text t;
     if (TextOf(s, t) && (!t.chars.empty() || s.placeholder >= 0)) {
-      x += "<p:txBody>" + BodyPr(s) + "<a:lstStyle/>" + ParagraphsXml(t, env_.text, env_.link) + "</p:txBody>";
+      pugi::xml_document doc;
+      if (MetroDoc(s, doc)) MetroIndents(doc, t);
+      x += "<p:txBody>" + BodyPr(s, doc.document_element().child("p:txBody").child("a:bodyPr")) + "<a:lstStyle/>" +
+           ParagraphsXml(t, env_.text, env_.link) + "</p:txBody>";
     }
     return x + "</p:sp>";
   }
