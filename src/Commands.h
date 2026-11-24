@@ -629,6 +629,8 @@ enum Cmd : int {
   CmdAnimEarlier,                // Timing > Move Earlier
   CmdAnimLater,                  // Timing > Move Later
   CmdAnimRemove,                 // the Animation Pane's Remove (Delete there)
+  CmdAnimAsOneObject = 3865,     // Effect Options > Sequence: As One Object (fixed: merges reorder blocks)
+  CmdAnimByParagraph = 3866,     // Effect Options > Sequence: By Paragraph
   // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
   // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
   CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
@@ -637,8 +639,6 @@ enum Cmd : int {
   CmdNextComment,
   CmdShowCommentMarkup,           // Show Comments ▾ > Show Markup: the markers on the slides
   CmdEncryptPassword = 3890,      // File > Info > Protect Presentation > Encrypt with Password
-  CmdAnimAsOneObject,            // Effect Options > Sequence: As One Object
-  CmdAnimByParagraph,            // Effect Options > Sequence: By Paragraph
   // P3, p3-files: templates, picture export and .odp import, 3910-3949.
   CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
   CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder
