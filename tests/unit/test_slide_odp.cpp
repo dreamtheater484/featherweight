@@ -107,7 +107,10 @@ const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8
     "<draw:connector draw:name=\"Arrow 6\" draw:style-name=\"a9\" draw:type=\"line\" svg:x1=\"9in\" svg:y1=\"5in\" svg:x2=\"8in\" svg:y2=\"4.5in\"/>"
     "<draw:frame draw:name=\"Picture 7\" svg:x=\"0in\" svg:y=\"0in\" svg:width=\"1in\" svg:height=\"1in\"><draw:image xlink:href=\"media/image1.png\"/>"
     "<svg:desc>A dot</svg:desc></draw:frame>"
-    "</draw:page>"
+    "<presentation:notes><draw:page-thumbnail presentation:class=\"page\" svg:x=\"1in\" svg:y=\"0.75in\" svg:width=\"5in\" svg:height=\"3in\"/>"
+    "<draw:frame presentation:class=\"notes\" svg:x=\"0.75in\" svg:y=\"4.75in\" svg:width=\"6in\" svg:height=\"4.5in\"><draw:text-box>"
+    "<text:p>Say hello</text:p><text:p>then <text:span text:style-name=\"a5\">wave</text:span></text:p></draw:text-box></draw:frame>"
+    "</presentation:notes></draw:page>"
     // Slide 2: hidden, a slide number field.
     "<draw:page draw:name=\"Slide2\" draw:style-name=\"a2\" draw:master-page-name=\"Master1-Layout1-title-Title-Slide\">"
     "<draw:frame svg:x=\"1in\" svg:y=\"1in\" svg:width=\"2in\" svg:height=\"1in\"><draw:text-box><text:p>Slide "
@@ -210,8 +213,11 @@ TEST(slide_odp_converts_a_presentation) {
   CHECK(std::string_view(s->shapes[5].node.child("p:spPr").child("a:ln").child("a:tailEnd").attribute("type").value()) == "triangle");
   CHECK(s->shapes[6].kind == Kind::Picture && s->shapes[6].description == "A dot");
 
+  // The speaker notes keep their text; a slide without notes has none.
+  CHECK(s->NotesText() == L"Say hello\nthen wave");
+
   const slide::Slide* hidden = deck->GetSlide(1);
-  CHECK(hidden && hidden->hidden);
+  CHECK(hidden && hidden->hidden && hidden->NotesText().empty());
   if (hidden && !hidden->shapes.empty()) {
     const slide::TextBody* f = deck->Text(hidden->shapes[0], *hidden);
     CHECK(f && f->paragraphs.size() == 1 && f->paragraphs[0].runs.back().fieldType == "slidenum");

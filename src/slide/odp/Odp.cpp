@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -296,6 +297,7 @@ class Converter {
   uint64_t mediaBytes_ = 0;
   std::vector<std::string> layoutMasters_;                            // master page names, by layout
   std::vector<std::pair<std::string, std::string>> layouts_;          // xml, rels
+  std::vector<std::tuple<std::string, std::string, std::string>> notes_;  // xml, its slide's number, rels
   int fields_ = 0;
   uint64_t written_ = 0;  // shape XML written, against the limits
 };
@@ -1158,6 +1160,37 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
     sld += "><p:cSld>" + Background(page, false, part) +
            "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>" + shapes +
            "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>";
+    // The speaker notes: the notes frame's text, when there is some.
+    const std::string n = N(static_cast<int64_t>(slides.size()) + 1);
+    xml_node notes = page.child("presentation:notes");
+    xml_node body;
+    for (xml_node f : notes.children("draw:frame")) {
+      xml_node box = f.child("draw:text-box");
+      const bool text = box.find_node([](xml_node x) {
+        return x.type() == pugi::node_pcdata && std::string_view(x.value()).find_first_not_of(" \t\r\n") != std::string_view::npos;
+      });
+      if (Attr(f, "presentation:class") == "notes" && text) {
+        body = box;
+        break;
+      }
+    }
+    if (body) {
+      Part np;
+      np.Rel("notesMaster", "../notesMasters/notesMaster1.xml");
+      np.Rel("slide", "../slides/slide" + n + ".xml");
+      const Box box = ReadBox(body.parent());
+      std::string text = TextBody(body, ShapeChain(body.parent(), false), np, "p:txBody");
+      notes_.emplace_back(std::string(kDecl) + "<p:notes" + std::string(kNs) +
+                              "><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+                              "<p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image Placeholder 1\"/><p:cNvSpPr><a:spLocks "
+                              "noGrp=\"1\" noRot=\"1\" noChangeAspect=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"sldImg\"/></p:nvPr></p:nvSpPr>"
+                              "<p:spPr/></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Notes Placeholder 2\"/><p:cNvSpPr><a:spLocks "
+                              "noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:spPr>" +
+                              (box.w > 0 && box.h > 0 ? Xfrm(box) : std::string()) + "</p:spPr>" + text +
+                              "</p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>",
+                          n, std::move(np.rels));
+      part.Rel("notesSlide", "../notesSlides/notesSlide" + n + ".xml");
+    }
     slides.emplace_back(std::move(sld), std::move(part.rels));
   }
   if (layouts_.empty()) LayoutOf({});  // no slides: a blank layout
@@ -1207,6 +1240,38 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
     const std::string target = std::string_view(type) == "theme" ? "theme/theme1.xml" : std::string(type) + ".xml";
     presRels += "<Relationship Id=\"rId" + N(rid++) + "\" Type=\"" + std::string(kRel) + type + "\" Target=\"" + target + "\"/>";
   }
+  // The notes: a notes master (its own theme), and each slide's notes slide.
+  std::string notesMasterId;
+  if (!notes_.empty()) {
+    const std::string ph = "<p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph ";
+    put("ppt/notesMasters/notesMaster1.xml",
+        std::string(kDecl) + "<p:notesMaster" + std::string(kNs) +
+            "><p:cSld><p:bg><p:bgRef idx=\"1001\"><a:schemeClr val=\"bg1\"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" "
+            "name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image "
+            "Placeholder 1\"/>" + ph + "type=\"sldImg\" idx=\"2\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"1143000\" y=\"685800\"/>"
+            "<a:ext cx=\"4572000\" cy=\"3429000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/><a:ln w=\"12700\">"
+            "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" "
+            "name=\"Notes Placeholder 2\"/>" + ph + "type=\"body\" sz=\"quarter\" idx=\"3\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm>"
+            "<a:off x=\"685800\" y=\"4343400\"/><a:ext cx=\"5486400\" cy=\"4114800\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/>"
+            "</a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Click to edit Master text "
+            "styles</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" "
+            "accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" "
+            "hlink=\"hlink\" folHlink=\"folHlink\"/><p:notesStyle><a:lvl1pPr><a:defRPr sz=\"1200\"/></a:lvl1pPr></p:notesStyle>"
+            "</p:notesMaster>");
+    put("ppt/notesMasters/_rels/notesMaster1.xml.rels", std::string(kDecl) + std::string(kRelsOpen) + "<Relationship Id=\"rId1\" Type=\"" +
+                                                            std::string(kRel) + "theme\" Target=\"../theme/theme2.xml\"/></Relationships>");
+    put("ppt/theme/theme2.xml", std::string(kDecl) + std::string(draw::Theme::DefaultXml()));
+    types += "<Override PartName=\"/ppt/notesMasters/notesMaster1.xml\" ContentType=\"" + std::string(kCt) + "notesMaster+xml\"/>"
+             "<Override PartName=\"/ppt/theme/theme2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>";
+    notesMasterId = "rId" + N(rid++);
+    presRels += "<Relationship Id=\"" + notesMasterId + "\" Type=\"" + std::string(kRel) + "notesMaster\" Target=\"notesMasters/notesMaster1.xml\"/>";
+    for (auto& [xml, n, rels] : notes_) {
+      if (pkg::Status s = put("ppt/notesSlides/notesSlide" + n + ".xml", xml); !s.Ok()) return s;
+      put("ppt/notesSlides/_rels/notesSlide" + n + ".xml.rels", std::string(kDecl) + std::string(kRelsOpen) + rels + "</Relationships>");
+      types += "<Override PartName=\"/ppt/notesSlides/notesSlide" + n + ".xml\" ContentType=\"" + std::string(kCt) + "notesSlide+xml\"/>";
+    }
+    notes_.clear();
+  }
   std::string layoutIds, masterRels = std::string(kDecl) + std::string(kRelsOpen);
   for (size_t i = 0; i < layouts_.size(); ++i) {
     const std::string n = N(static_cast<int64_t>(i) + 1);
@@ -1237,7 +1302,9 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
                                                   "def=\"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}\"/>");
   put("ppt/presentation.xml", std::string(kDecl) + "<p:presentation" + std::string(kNs) +
                                   " saveSubsetFonts=\"1\"><p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rId1\"/>"
-                                  "</p:sldMasterIdLst>" + (slideIds.empty() ? "" : "<p:sldIdLst>" + slideIds + "</p:sldIdLst>") +
+                                  "</p:sldMasterIdLst>" +
+                                  (notesMasterId.empty() ? "" : "<p:notesMasterIdLst><p:notesMasterId r:id=\"" + notesMasterId + "\"/></p:notesMasterIdLst>") +
+                                  (slideIds.empty() ? "" : "<p:sldIdLst>" + slideIds + "</p:sldIdLst>") +
                                   "<p:sldSz cx=\"" + N(cx) + "\" cy=\"" + N(cy) + "\"/><p:notesSz cx=\"6858000\" cy=\"9144000\"/></p:presentation>");
   put("ppt/_rels/presentation.xml.rels", presRels + "</Relationships>");
   for (auto& [name, bytes] : media_) {

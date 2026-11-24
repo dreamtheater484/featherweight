@@ -109,6 +109,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     const Slide* s = deck->GetSlide(i);
     Check(s != nullptr && s->layout != nullptr, "a slide isn't read with its layout");
     DrawPart(*deck, *s);
+    if (s->notes) DrawPart(*deck, *s->notes);
+    s->NotesText();
   }
   for (const auto& l : deck->Layouts()) DrawPart(*deck, *l);
   for (const auto& m : deck->Masters()) DrawPart(*deck, *m);
