@@ -1485,4 +1485,35 @@ Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& eff
   return call.End({});
 }
 
+Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byParagraph) {
+  const std::vector<AnimEffect> seq = MainSequence(ed, slide);
+  if (effect >= seq.size()) return Result::Fail(u"That animation isn't on the slide.");
+  const AnimEffect a = seq[effect];
+  if (!a.editable) return Result::Fail(u"This animation's options can't be changed in Featherweight.");
+  auto same = [&](size_t k) { return seq[k].shape == a.shape && seq[k].paragraph >= 0 && seq[k].anim == a.anim; };
+  size_t first = effect, last = effect;
+  if (a.paragraph >= 0) {
+    while (first > 0 && same(first - 1)) --first;
+    while (last + 1 < seq.size() && same(last + 1)) ++last;
+  }
+  if ((a.paragraph >= 0) == byParagraph) return {};
+  EditGroup group(ed, u"Effect Options");
+  AnimSpec s;
+  s.anim = a.anim;
+  s.option = a.option;
+  s.trigger = seq[first].trigger;
+  s.delayMs = seq[first].delayMs;
+  s.byParagraph = byParagraph;
+  if (DefaultAnimMs(a.anim) > 0) s.durationMs = seq[first].durationMs;
+  // The new effects in front of the old ones, then the old ones removed; the group is cancelled
+  // (nothing changed) when either is refused.
+  if (Result r = AddAnimation(ed, slide, a.shape, s, static_cast<int>(first)); !r) return r;
+  const size_t added = MainSequence(ed, slide).size() - seq.size();
+  std::vector<size_t> old;
+  for (size_t k = first; k <= last; ++k) old.push_back(k + added);
+  Result r = RemoveAnimations(ed, slide, old);
+  group.done = static_cast<bool>(r);
+  return r;
+}
+
 }  // namespace fw::slide::edit

@@ -90,6 +90,24 @@ const Shape* FindShapeIn(const std::vector<Shape>& shapes, uint32_t id) {
   return nullptr;
 }
 
+// The shape's paragraphs with text in them.
+int TextParagraphs(const Shape* sh) {
+  int n = 0;
+  if (sh && sh->textNode)
+    for (pugi::xml_node p = sh->textNode.first_child(); p; p = p.next_sibling())
+      if (std::string_view(p.name()).ends_with(":p") && p.find_node([](pugi::xml_node x) { return std::string_view(x.name()).ends_with(":t") && *x.text().get(); }))
+        ++n;
+  return n;
+}
+
+// Effect Options > Sequence: every target a common effect on a shape with text.
+bool SequenceApplies(const Slide* slide, const std::vector<ed::AnimEffect>& seq, const std::vector<size_t>& targets) {
+  if (!slide || targets.empty()) return false;
+  for (size_t k : targets)
+    if (k >= seq.size() || !seq[k].editable || TextParagraphs(FindShapeIn(slide->shapes, seq[k].shape)) == 0) return false;
+  return true;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -444,13 +462,8 @@ void PresentationView::ApplyAnim(int index, bool add) {
     s.anim = a;
     // A body placeholder with several paragraphs builds a paragraph at a time, as PowerPoint's default.
     const Shape* sh = slide ? FindShapeIn(slide->shapes, id) : nullptr;
-    if (sh && (sh->placeholder.type == PlaceholderType::Body || sh->placeholder.type == PlaceholderType::Object) && sh->textNode) {
-      int paragraphs = 0;
-      for (pugi::xml_node p = sh->textNode.first_child(); p; p = p.next_sibling())
-        if (std::string_view(p.name()).ends_with(":p") && p.find_node([](pugi::xml_node n) { return std::string_view(n.name()).ends_with(":t") && *n.text().get(); }))
-          ++paragraphs;
-      s.byParagraph = paragraphs > 1;
-    }
+    if (sh && (sh->placeholder.type == PlaceholderType::Body || sh->placeholder.type == PlaceholderType::Object))
+      s.byParagraph = TextParagraphs(sh) > 1;
     return s;
   };
   edit::EditGroup group(*e, add ? u"Add Animation" : index == 0 ? u"Remove Animation" : u"Animation");
@@ -642,6 +655,9 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     RibbonItem& it = add(CmdAnimOptionsMenu, kOptions, RibbonSize::Large, L"Effect\nOptions", L"EM");
     it.tool.dropdown = true;
     it.menu = menuOf(CmdAnimOption, ed::AnimOptions(a).size());
+    if (!it.menu.empty()) it.menu.push_back(0);
+    it.menu.push_back(CmdAnimAsOneObject);
+    it.menu.push_back(CmdAnimByParagraph);
   }
   group(L"Advanced Animation");
   {
@@ -701,7 +717,7 @@ std::vector<int> PresentationView::AnimCommands() const {
 }
 
 bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
-  if (cmd < CmdTransitionPreview || cmd > CmdAnimRemove) return false;
+  if (cmd < CmdTransitionPreview || cmd > CmdAnimByParagraph) return false;
   edit::Editor* e = SlideEditor();
   const bool ready = Ready() && SlideCount() > 0 && e;
   const ed::TransitionInfo tr = ready ? ed::GetTransition(*e, current_) : ed::TransitionInfo{};
@@ -779,11 +795,21 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
       s.enabled = ready && !Objects().Selection().empty();
       s.label = L"Add animation";
       break;
-    case CmdAnimOptionsMenu: {
+    case CmdAnimOptionsMenu:
+    case CmdAnimAsOneObject:
+    case CmdAnimByParagraph: {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
       const std::vector<ed::AnimEffect> seq = ready ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
-      s.enabled = !t.empty() && seq[t.front()].editable && !ed::AnimOptions(seq[t.front()].anim).empty();
-      s.label = L"Animation effect options";
+      const Slide* slide = ready && deck_->Model() ? const_cast<Presentation*>(deck_->Model())->GetSlide(current_) : nullptr;
+      const bool sequence = SequenceApplies(slide, seq, t);
+      if (cmd == CmdAnimOptionsMenu) {
+        s.enabled = !t.empty() && seq[t.front()].editable && (!ed::AnimOptions(seq[t.front()].anim).empty() || sequence);
+        s.label = L"Animation effect options";
+      } else {
+        s.enabled = sequence;
+        s.checked = sequence && (seq[t.front()].paragraph >= 0) == (cmd == CmdAnimByParagraph);
+        s.label = cmd == CmdAnimByParagraph ? L"By Paragraph" : L"As One Object";
+      }
       break;
     }
     case CmdAnimPane:
@@ -822,7 +848,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
 }
 
 bool PresentationView::AnimCommand(int cmd) {
-  if (cmd < CmdTransitionPreview || cmd > CmdAnimRemove) return false;
+  if (cmd < CmdTransitionPreview || cmd > CmdAnimByParagraph) return false;
   edit::Editor* e = SlideEditor();
   if (!Ready() || !SlideCount() || !e) return true;
   if (cmd == CmdAnimPane) {
@@ -891,6 +917,22 @@ bool PresentationView::AnimCommand(int cmd) {
       if (!t.empty() && Done(ed::RemoveAnimations(*e, current_, t))) animPicked_.clear();
       break;
     }
+    case CmdAnimAsOneObject:
+    case CmdAnimByParagraph: {
+      // One picked effect per shape, the last first: each change leaves the effects before it in place.
+      const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+      std::vector<size_t> one;
+      for (size_t k : AnimTargets())
+        if (k < seq.size() && std::none_of(one.begin(), one.end(), [&](size_t j) { return seq[j].shape == seq[k].shape; }))
+          one.push_back(k);
+      std::sort(one.rbegin(), one.rend());
+      edit::EditGroup group(*e, u"Effect Options");
+      bool ok = !one.empty();
+      for (size_t k : one) ok = ok && Done(ed::SetAnimationSequence(*e, current_, k, cmd == CmdAnimByParagraph));
+      group.done = ok;
+      animPicked_.clear();
+      break;
+    }
     default: break;
   }
   AnimChanged();
@@ -943,8 +985,9 @@ bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& 
     const std::vector<size_t> targets = AnimTargets();
     for (size_t i = 0; i < seq.size(); ++i) {
       const ed::AnimEffect& a = seq[i];
-      fwprintf(stderr, L"animdump: %zu. shape %u %ls option %d, %ls, %.0f ms, delay %.0f ms%ls\n", i + 1, a.shape,
-               W(ed::AnimName(a.anim)).c_str(), a.option,
+      const std::wstring paragraph = a.paragraph >= 0 ? L" paragraph " + std::to_wstring(a.paragraph) : L"";
+      fwprintf(stderr, L"animdump: %zu. shape %u%ls %ls option %d, %ls, %.0f ms, delay %.0f ms%ls\n", i + 1, a.shape,
+               paragraph.c_str(), W(ed::AnimName(a.anim)).c_str(), a.option,
                a.trigger == ed::AnimTrigger::OnClick ? L"click" : a.trigger == ed::AnimTrigger::WithPrevious ? L"with" : L"after",
                a.durationMs, a.delayMs, std::find(targets.begin(), targets.end(), i) != targets.end() ? L", selected" : L"");
     }

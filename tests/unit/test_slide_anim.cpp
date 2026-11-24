@@ -597,3 +597,55 @@ TEST(SlideAnimMediaPlayStepTakesItsStart) {
   CHECK_EQ(seq.size(), 2u);
   CHECK(seq.size() == 2 && seq[0].trigger == AnimTrigger::OnClick && seq[1].anim == Anim::Fade);
 }
+
+// Effect Options › Sequence: the body placeholder by paragraph and back, its kind, option and timing
+// kept; a shape without text can't go by paragraph, and nothing changes then.
+TEST(SlideAnimSequenceByParagraphAndBack) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  CHECK(WriteSlide(ed, 0, std::string(kHead) + "</p:sld>"));
+  CHECK(AddAnimation(ed, 0, 2, AnimSpec{}));
+  AnimSpec fly;
+  fly.anim = Anim::FlyIn;
+  fly.option = 2;
+  fly.trigger = AnimTrigger::AfterPrevious;
+  fly.delayMs = 250;
+  CHECK(AddAnimation(ed, 0, 3, fly));
+
+  CHECK(SetAnimationSequence(ed, 0, 1, true));
+  CHECK(ed.UndoName() == u"Effect Options");
+  std::vector<AnimEffect> seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 3u);  // "One" with "One.a" under it, and "Two"; the empty paragraph left out
+  if (seq.size() != 3) return;
+  CHECK(seq[1].shape == 3 && seq[1].paragraph == 0 && seq[1].anim == Anim::FlyIn && seq[1].option == 2);
+  CHECK(seq[1].trigger == AnimTrigger::AfterPrevious && seq[1].delayMs == 250);
+  CHECK(seq[2].shape == 3 && seq[2].paragraph == 3);
+  std::string x = SlideXml(ed, 0);
+  CHECK_EQ(Count(x, "<p:bldP spid=\"3\""), 1u);
+  CHECK(Has(x, "build=\"p\""));
+  CHECK(IdsUnique(x));
+
+  // Back to one object, from the second paragraph's effect.
+  CHECK(SetAnimationSequence(ed, 0, 2, false));
+  seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 2u);
+  if (seq.size() != 2) return;
+  CHECK(seq[1].shape == 3 && seq[1].paragraph == -1 && seq[1].anim == Anim::FlyIn && seq[1].option == 2);
+  CHECK(seq[1].trigger == AnimTrigger::AfterPrevious && seq[1].delayMs == 250);
+  x = SlideXml(ed, 0);
+  CHECK_EQ(Count(x, "<p:bldP spid=\"3\""), 1u);
+  CHECK(!Has(x, "build=\"p\""));
+  CHECK(IdsUnique(x));
+  // Already one object: nothing to do.
+  CHECK(SetAnimationSequence(ed, 0, 1, false));
+
+  // A shape without text: refused, and the slide as it was.
+  uint32_t rect = 0;
+  CHECK(ed.InsertAutoShape(0, "rect", {100, 100, 200, 160}, &rect));
+  CHECK(AddAnimation(ed, 0, rect, AnimSpec{}));
+  const std::string before = SlideXml(ed, 0);
+  CHECK(!SetAnimationSequence(ed, 0, 2, true));
+  CHECK(SlideXml(ed, 0) == before);
+  CHECK(ed.UndoName() == u"Add Animation");
+}

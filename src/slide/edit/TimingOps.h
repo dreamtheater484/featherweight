@@ -131,5 +131,10 @@ Result SetAnimationTiming(Editor& ed, size_t slide, const std::vector<size_t>& e
 // them (Move Earlier and Move Later, dragging in the Animation Pane). Triggers stay.
 Result MoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects, size_t to);
 Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects);
+// Effect Options › Sequence (As One Object, By Paragraph): the shape of `effect` animated as one
+// object, or a paragraph at a time. Its effects of that kind in a row become one effect per
+// paragraph, or one for the whole shape, with the first one's kind, option and timing. One undo step;
+// nothing changes when it fails (a shape without text can't go by paragraph).
+Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byParagraph);
 
 }  // namespace fw::slide::edit
