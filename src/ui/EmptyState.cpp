@@ -325,6 +325,7 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
   pinnedRows_ = 0;
   recentCard_ = note_ = {};
   noteText_.clear();
+  float centerH = 0;  // the height the page is centred by
   if (!showRecent) {
     noteText_ = L"Recent files are hidden.";
     note_ = RectF(left, y - 4 * s, right, y + 20 * s);
@@ -342,6 +343,11 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
           if (pinned) ++pinnedRows_;
         }
     const float pad = 6 * s, rowH = std::round(kRowH * s);
+    // While the filter has text, the page stays where the whole list put it, so nothing moves
+    // under the typing.
+    const size_t pinnedAll = std::count_if(recent.begin(), recent.end(), [](const RecentFile& f) { return f.pinned; });
+    if (!recent.empty())
+      centerH = y + 2 * pad + recent.size() * rowH + (pinnedAll > 0 && pinnedAll < recent.size() ? 9 * s : 0);
     if (order.empty()) {
       recentCard_ = RectF(left, y, right, y + std::round(64 * s));
       note_ = recentCard_;
@@ -360,15 +366,16 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
     y = recentCard_.bottom;
   }
   contentH_ = y;
+  centerH = std::max(centerH, contentH_);
 
   // Where it all goes. The keyboard's place is scrolled into view after a key.
   const float margin = 32 * s;
   float base;
-  if (contentH_ + 2 * margin <= areaH) {
+  if (centerH + 2 * margin <= areaH) {
     scroll_ = scrollMax_ = 0;
-    base = area.top + std::max(margin, std::floor((areaH - contentH_) * 0.4f));
+    base = area.top + std::max(margin, std::floor((areaH - centerH) * 0.4f));
   } else {
-    scrollMax_ = contentH_ + 2 * margin - areaH;
+    scrollMax_ = std::max(0.0f, contentH_ + 2 * margin - areaH);
     if (reveal_) {
       D2D1_RECT_F at{};
       if (focus_ == Focus::Item && focusItem_ >= 0 && focusItem_ < static_cast<int>(items_.size())) at = items_[focusItem_].rc;
