@@ -726,11 +726,12 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
 
   `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn.
 
-  Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` 156 of 157. These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
-  - PowerPoint repairs the save of `odp\training\usgov-materials-to-support-learning-optional-slides.odp`, though it reads that `.odp` itself.
-  - The cause is on slide 2. Six lines in a group (the original's diagram) come from the `.odp` with zero height, and the converter maps their `draw:text-areas` through the viewBox (`src\slide\odp\OdpGeometry.cpp:475-485`, p3-files).
-  - That gives text rectangles of 0.6 to 2.3 billion EMU; one, `r="2336928472"`, is beyond 32 bits. The validator accepts them, since the schema's type is 64-bit.
-  - With only those six rectangles set to the shape's bounds, PowerPoint opens the deck without a repair (`build\odp-rect-confirm`).
+  Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` 157 of 157. These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
+  - On 6fe39e23 it was 156 of 157. PowerPoint repaired the save of `odp\training\usgov-materials-to-support-learning-optional-slides.odp`, though it reads that `.odp` itself.
+  - The cause was on slide 2. Six lines in a group (the original's diagram) come from the `.odp` with zero height, and the converter mapped their `draw:text-areas` through the viewBox. That gave text rectangles of 0.6 to 2.3 billion EMU, one beyond 32 bits, which the validator accepts.
+  - p3-files' fc09006a fixed it (`src\slide\odp\OdpGeometry.cpp`: a zero side of a viewBox counts as 1, and out-of-range text rectangles are left out).
+  - On p3-int cc38f6ad, all 157 `.odp` were converted again: the validator found no errors, and only two saves changed. That deck and `school\zslbw-geographie-naturgefahren-prasentation`.
+  - PowerPoint opens both without a repair, and the app's own Save As `.pptx` of the deck too (`build\odp-recheck`). Their slides against PowerPoint's are as before (5 of 16 and 29 of 50), so the 80.84 % stands.
 - [ ] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). The coordinator restated the criterion on 2026-11-24 (p3-plan): SSIM ≥ 0.999 against P1's page renderer (`pagepngs`) at the same size. Against the PDF, the bar is ≥ 0.99, or ≥ 0.95 on slides with dense small text.
 
   Measured with `scripts\picture-export-check.ps1` on the public set (18 decks, every slide exported as PNG), 4.0's final code, 2026-11-24:
