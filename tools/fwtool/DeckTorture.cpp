@@ -94,6 +94,7 @@ constexpr struct {
     {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
     {Op::Table, "table"},        {Op::Comment, "comment"},      {Op::Transition, "transition"},
     {Op::TransitionAll, "transition-all"}, {Op::Anim, "anim"}, {Op::Media, "media"},
+    {Op::MediaPlay, "media-play"},
 };
 constexpr const char* kMediaExtensions[] = {"mp4", "mov", "wmv", "wav", "mp3", "m4a"};
 
@@ -247,7 +248,8 @@ bool SpecFields(std::string_view spec, std::vector<std::pair<std::string, std::s
 
 bool IsShapeOp(Op op) {
   return op == Op::Type || op == Op::Move || op == Op::Resize || op == Op::Rotate || op == Op::DeleteShape ||
-         op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table;
+         op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table ||
+         op == Op::MediaPlay;
 }
 
 }  // namespace
@@ -290,6 +292,7 @@ std::string FormatEdit(const Edit& e) {
       s += " " + at + " " + e.arg;
       for (int n : e.nums) s += " " + std::to_string(n);
       break;
+    case Op::MediaPlay: s += " " + at + " " + e.text; break;
     case Op::Comment: {
       s += " " + std::to_string(e.slide) + " " + e.arg;
       const std::string which = e.nums.empty() ? "0" : std::to_string(e.nums[0]);
@@ -452,6 +455,11 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Rotate: return ToDouble(NextWord(s), e.dx) && s.empty();
     case Op::DeleteShape:
     case Op::Ungroup: return s.empty();
+    case Op::MediaPlay: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      e.text = std::string(NextWord(s));
+      return !e.text.empty() && SpecFields(e.text, fields) && s.empty();
+    }
     case Op::Order: {
       e.arg = std::string(NextWord(s));
       return (e.arg == "front" || e.arg == "back" || e.arg == "forward" || e.arg == "backward") && s.empty();
@@ -823,8 +831,35 @@ class EditTarget : public DeckTarget {
         uint32_t id = 0;
         return editor_.InsertMedia(slide, std::move(m), r, &id);
       }
+      case Op::MediaPlay: {
+        std::vector<std::pair<std::string, std::string>> fields;
+        SpecFields(e.text, fields);
+        if (fields.size() == 1 && fields[0].first == "s") {
+          const std::string& v = fields[0].second;
+          return editor_.SetMediaStart(slide, e.shape,
+                                       v == "auto"      ? ed::MediaStart::Automatically
+                                       : v == "clicked" ? ed::MediaStart::WhenClickedOn
+                                                        : ed::MediaStart::InClickSequence);
+        }
+        ed::MediaPlayback p;
+        if (!editor_.GetMediaPlayback(slide, e.shape, &p)) {
+          why = "shape " + std::to_string(e.shape) + " has no media node in the slide's timing";
+          return {};
+        }
+        for (const auto& [k, v] : fields) {
+          const bool on = v == "1";
+          if (k == "v") p.volume = std::atoi(v.c_str()) / 100.0;
+          else if (k == "m") p.mute = on;
+          else if (k == "l") p.loop = on;
+          else if (k == "h") p.hideWhenStopped = on;
+          else if (k == "f") p.fullScreen = on;
+          else if (k == "a") p.acrossSlides = on;
+        }
+        return editor_.SetMediaPlayback(slide, e.shape, p);
+      }
 #else
-      case Op::Media: why = "fwtool was built without the media operation"; return {};
+      case Op::Media:
+      case Op::MediaPlay: why = "fwtool was built without the media operations"; return {};
 #endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
@@ -1141,7 +1176,7 @@ class Generator {
         {Op::Transition, 5}, {Op::TransitionAll, 1}, {Op::Anim, 9},
 #endif
 #if FW_SLIDE_MEDIA
-        {Op::Media, 2},
+        {Op::Media, 2}, {Op::MediaPlay, 3},
 #endif
     };
     uint32_t total = 0;
@@ -1416,6 +1451,9 @@ class Generator {
         case Op::Table:
           if (s.kind == sl::Shape::Kind::Table) candidates.push_back(&s);
           break;
+        case Op::MediaPlay:
+          if (s.media) candidates.push_back(&s);
+          break;
         default:
           // Moving shapes inside groups now and then; mostly the slide's own.
           if (i.topLevel || rng_.Chance(25)) candidates.push_back(&s);
@@ -1465,6 +1503,24 @@ class Generator {
           case 7: e.arg = std::string("shadow=") + (rng_.Chance(70) ? "on" : "off"); break;
           default: e.arg = "color=" + color; break;
         }
+        return true;
+      }
+      case Op::MediaPlay: {
+        // The Start now and then; otherwise one to three playback settings, as the Playback tab sets them.
+        if (rng_.Chance(30)) {
+          static constexpr const char* kStarts[] = {"click", "auto", "clicked"};
+          e.text = std::string("s=") + rng_.Pick(kStarts);
+          return true;
+        }
+        static constexpr const char* kKeys[] = {"m", "l", "h", "f", "a"};
+        std::string spec;
+        static constexpr int kVolumes[] = {0, 25, 50, 80, 100};
+        if (rng_.Chance(40)) spec = "v=" + std::to_string(rng_.Pick(kVolumes));
+        for (uint32_t n = 1 + rng_.Below(3); n; --n) {
+          if (!spec.empty()) spec += ",";
+          spec += std::string(rng_.Pick(kKeys)) + "=" + (rng_.Chance(60) ? "1" : "0");
+        }
+        e.text = spec;
         return true;
       }
       case Op::Crop: {
