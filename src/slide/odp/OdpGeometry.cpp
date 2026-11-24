@@ -487,10 +487,10 @@ std::string CustomGeometry(xml_node geometry, int64_t w, int64_t h) {
     // One far outside the shape (equations that divide by a side of no size) is left out: the text
     // then takes the shape's bounds, PowerPoint's default.
     const double W = static_cast<double>(w), H = static_cast<double>(h);
-    const double l = Finite((std::min(r[0], r[2]) - vb[0]) * W / vb[2]), t = Finite((std::min(r[1], r[3]) - vb[1]) * H / vb[3]);
+    const double l = Finite((std::min(r[0], r[2]) - vb[0]) * W / vb[2]), tp = Finite((std::min(r[1], r[3]) - vb[1]) * H / vb[3]);
     const double rr = Finite((std::max(r[0], r[2]) - vb[0]) * W / vb[2]), b = Finite((std::max(r[1], r[3]) - vb[1]) * H / vb[3]);
     auto inside = [](double v, double size) { return v >= -size && v <= 2 * size; };
-    if (inside(l, W) && inside(rr, W) && inside(t, H) && inside(b, H)) rect = Rect(Coord(l), Coord(t), Coord(rr), Coord(b));
+    if (inside(l, W) && inside(rr, W) && inside(tp, H) && inside(b, H)) rect = Rect(Coord(l), Coord(tp), Coord(rr), Coord(b));
   }
   return Geometry(rect, out.Paths());
 }
