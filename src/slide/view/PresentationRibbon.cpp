@@ -153,8 +153,9 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     v.insert(v.end(), {CmdFontBox, CmdSizeBox});
     return v;
   }();
-  constexpr int kObjects[] = {CmdInsertPicture, CmdInsertShape, CmdInsertTextBox, CmdInsertTable, CmdInsertChart,
-                              CmdObjectFill,    CmdObjectOutline, CmdObjectOutlineWeight, CmdPictureCrop};
+  constexpr int kObjects[] = {CmdInsertPicture, CmdInsertShape,   CmdInsertTextBox,       CmdInsertTable,
+                              CmdInsertChart,   CmdObjectFill,    CmdObjectOutline,       CmdObjectOutlineWeight,
+                              CmdPictureCrop,   CmdInsertVideo,   CmdInsertAudio};
   ToolItem t;
   if (std::find(textOnly.begin(), textOnly.end(), cmd) != textOnly.end()) {
     t = text_->Tool(cmd);
@@ -314,6 +315,9 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   // Date & Time and Slide Number open Header & footer, as PowerPoint's open its dialog.
   add(CmdHeaderFooter, icon::Calendar, S::Medium, L"Date & Time", L"D").tool.checked = false;
   add(CmdHeaderFooter, icon::PageNumber, S::Medium, L"Slide Number", L"SN").tool.checked = false;
+  b.Group(L"Media");  // P3: Insert's last group, as PowerPoint's
+  add(CmdInsertVideo, 0, S::Large, L"Video", L"V");
+  add(CmdInsertAudio, 0, S::Large, L"Audio", L"O");
 
   // ---- Design
   b.Tab(L"Design", L"G");
@@ -432,6 +436,16 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Size");
     add(CmdPictureCrop, 0, S::Large, L"Crop", L"V");
   }
+  if (kinds.videos > 0) {  // P3: a video (only the media tabs, as PowerPoint)
+    b.Tab(L"Video Format", L"JV", true);
+    b.Group(L"Video Styles");
+    add(CmdObjectOutline, 0, S::Medium, L"Video Border", L"SO");
+    add(CmdObjectOutlineWeight, 0, S::Medium, L"Weight", L"SW");
+    add(CmdSlideEffectsMenu, icon::ShapeEffects, S::Medium, L"Video Effects", L"SE");
+    arrange();
+    b.Group(L"Size");
+    add(CmdPictureCrop, 0, S::Large, L"Crop", L"V");
+  }
   if (kinds.tables == 1) {
     b.Tab(L"Table Layout", L"JL", true);
     b.Group(L"Rows & Columns");
@@ -469,7 +483,13 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     m.file.push_back(std::move(f));
   }
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.
-  if (const uint32_t id = Objects().TakeInserted()) m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
+  if (const uint32_t id = Objects().TakeInserted()) {
+    if (Objects().IsMedia(id)) {
+      if (kinds.videos > 0) m.show = L"Video Format";  // P3 (audio: its Playback tab, with the playback settings)
+    } else {
+      m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
+    }
+  }
 }
 
 }  // namespace fw::slide::view
