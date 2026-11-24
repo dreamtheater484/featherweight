@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "slide/edit/TimingOps.h"
+#include "slide/show/ShowDraw.h"
+#include "slide/show/SlideRenderer.h"
 #include "slide/show/Timing.h"
 #include "slide/view/PresentationView.h"
 #include "ui/PanelButton.h"
@@ -55,11 +57,16 @@ class PresentationView::AnimationPane : public PanelContent {
 struct PresentationView::AnimPreview {
   bool transition = false;
   size_t slide = 0;
-  double start = 0;  // ms, the clock it started at
+  double start = 0;      // ms, the clock it started at
+  double settled = -1;   // animations: when the last step ended (the last frame stays a moment)
+  size_t fromStep = 0;   // animations: the click to play from
+  double fixedAt = -1;   // script steps: the frame this many ms in, held (snapshots)
+  bool prepared = false;
   show::Transition trans;
   show::Timing timing;
-  show::Animator animator;
-  Microsoft::WRL::ComPtr<ID2D1Bitmap1> from, to;  // transition: the slide before and this one
+  std::unique_ptr<show::SlideRenderer> renderer;
+  show::AnimationPlayer player;
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> from, to, frame;  // transition: the slide before, this one, the frame
   UINT w = 0, h = 0;
 };
 

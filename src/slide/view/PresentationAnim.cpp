@@ -16,6 +16,7 @@
 #include "slide/view/ObjectTool.h"
 #include "slide/view/PresentationAnim.h"
 #include "slide/view/PresentationView.h"
+#include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/PanelButton.h"
 #include "ui/RibbonModel.h"
@@ -94,9 +95,150 @@ const Shape* FindShapeIn(const std::vector<Shape>& shapes, uint32_t id) {
 // ---------------------------------------------------------------------------------------------
 // Preview (filled in with the show's drawing)
 
-void PresentationView::StartPreview(bool /*transition*/, size_t /*fromEffect*/) {}
-void PresentationView::StopPreview() { preview_.reset(); }
-bool PresentationView::DrawPreview(Canvas& /*c*/, ID2D1DeviceContext* /*dc*/) { return false; }
+namespace {
+
+// A context for drawing off-screen on the same device as `dc`, so its bitmaps draw on `dc`.
+ID2D1DeviceContext* PreviewContext(ID2D1DeviceContext* dc) {
+  static Microsoft::WRL::ComPtr<ID2D1DeviceContext> ctx;
+  static ID2D1Device* of = nullptr;
+  Microsoft::WRL::ComPtr<ID2D1Device> device;
+  dc->GetDevice(&device);
+  if (!device) return nullptr;
+  if (!ctx || of != device.Get()) {
+    ctx.Reset();
+    of = nullptr;
+    if (FAILED(device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &ctx))) return nullptr;
+    of = device.Get();
+  }
+  return ctx.Get();
+}
+
+constexpr double kHoldMs = 600;  // the last frame of an animation preview stays this long
+
+}  // namespace
+
+void PresentationView::StartPreview(bool transition, size_t fromEffect) {
+  StopPreview();
+  edit::Editor* e = SlideEditor();
+  Presentation* model = deck_ ? deck_->Model() : nullptr;
+  if (!Ready() || !SlideCount() || !model || !e) return;
+  const Slide* slide = model->GetSlide(current_);
+  if (!slide) return;
+  auto p = std::make_unique<AnimPreview>();
+  p->transition = transition;
+  p->slide = current_;
+  if (transition) {
+    p->trans = show::ParseTransition(slide->transition);
+    if (p->trans.kind == show::TransitionKind::None || p->trans.durationMs <= 0) return;
+  } else {
+    p->timing = show::ParseTiming(slide->timing);
+    if (p->timing.main.steps.empty()) return;
+    // The click the effect plays on: steps are the sequence's click groups.
+    const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+    // (A sequence that starts with the slide has that group as step 0; else the first click's is.)
+    size_t clicks = 0;
+    for (size_t i = 0; i < seq.size() && i <= fromEffect; ++i)
+      if (seq[i].trigger == ed::AnimTrigger::OnClick && i > 0) ++clicks;
+    p->fromStep = std::min(clicks, p->timing.main.steps.size() - 1);
+    p->renderer = show::MakeRenderer(*model);  // fresh: the slides as they are now
+  }
+  p->start = anim::Now();
+  preview_ = std::move(p);
+  host_.ViewInvalidate();
+}
+
+void PresentationView::StopPreview() {
+  if (!preview_) return;
+  preview_.reset();
+  slideBitmap_.Reset();
+  host_.ViewInvalidate();
+}
+
+bool PresentationView::DrawPreview(Canvas& /*c*/, ID2D1DeviceContext* dc) {
+  AnimPreview& p = *preview_;
+  if (p.slide != current_) {
+    preview_.reset();
+    return false;
+  }
+  const D2D1_RECT_F rc = SlideRect();
+  const UINT w = static_cast<UINT>(std::lround(Width(rc))), h = static_cast<UINT>(std::lround(Height(rc)));
+  ID2D1DeviceContext* ctx = PreviewContext(dc);
+  if (!ctx || !w || !h || w > 4096 || h > 4096) {
+    preview_.reset();
+    return false;
+  }
+  const double now = p.fixedAt >= 0 ? p.start + p.fixedAt : anim::Now();
+  if (!p.prepared || p.w != w || p.h != h) {
+    p.w = w;
+    p.h = h;
+    p.prepared = true;
+    if (p.transition) {
+      p.to = RenderBitmap(dc, current_, w, h);
+      p.from = current_ > 0 ? RenderBitmap(dc, current_ - 1, w, h) : nullptr;
+      const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+          D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+      p.frame.Reset();
+      if (!p.to || FAILED(ctx->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &p.frame))) {
+        preview_.reset();
+        return false;
+      }
+    } else {
+      if (!p.player.Prepare(ctx, *p.renderer, current_, p.timing, w, h, p.start)) {
+        preview_.reset();
+        return false;
+      }
+      // The steps before the one to play from, done at once; that one starts now.
+      show::Animator& a = p.player.Anim();
+      if (p.fromStep > 0) {
+        a.Finish();
+        while (static_cast<size_t>(a.StepIndex()) < p.fromStep && a.HasNextStep()) {
+          a.Click(p.start);
+          a.Finish();
+        }
+      }
+      if (!a.Running(p.start) && a.HasNextStep()) a.Click(p.start);
+    }
+  }
+  bool done = false;
+  if (p.transition) {
+    const double t = std::clamp((now - p.start) / std::max(1.0, p.trans.durationMs), 0.0, 1.0);
+    ctx->SetTarget(p.frame.Get());
+    ctx->BeginDraw();
+    ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+    show::DrawTransitionFrame(ctx, p.trans, p.from.Get(), p.to.Get(), static_cast<float>(w), static_cast<float>(h), t);
+    ctx->EndDraw();
+    ctx->SetTarget(nullptr);
+    dc->DrawBitmap(p.frame.Get(), rc, 1, D2D1_INTERPOLATION_MODE_LINEAR);
+    done = t >= 1;
+  } else {
+    // Each step plays when the one before it ends, as if clicked: PowerPoint's Preview.
+    show::Animator& a = p.player.Anim();
+    a.Update(now);
+    if (!a.Running(now)) {
+      if (a.HasNextStep()) {
+        a.Click(now);
+      } else if (p.settled < 0) {
+        p.settled = now;
+      }
+    }
+    D2D1_MATRIX_3X2_F old;
+    dc->GetTransform(&old);
+    dc->PushAxisAlignedClip(rc, D2D1_ANTIALIAS_MODE_ALIASED);
+    dc->SetTransform(D2D1::Matrix3x2F::Translation(rc.left, rc.top) * old);
+    p.player.Draw(dc);
+    dc->SetTransform(old);
+    dc->PopAxisAlignedClip();
+    done = p.settled >= 0 && now - p.settled > kHoldMs;
+  }
+  if (done && p.fixedAt < 0) {
+    preview_.reset();
+    host_.ViewInvalidate();
+    return true;
+  }
+  anim::KeepAlive(now + 100);
+  host_.ViewInvalidate();
+  return true;
+}
 
 // ---------------------------------------------------------------------------------------------
 // The Animation Pane
@@ -759,7 +901,8 @@ bool PresentationView::AnimCommand(int cmd) {
 // animadd:N adds animation N to the selected shapes, animpane opens the pane, animpick:1,3 picks
 // effects there (1-based), animdump prints the slide's transition and sequence to stderr.
 bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"transition" && op != L"anim" && op != L"animadd" && op != L"animpane" && op != L"animpick" && op != L"animdump")
+  if (op != L"transition" && op != L"anim" && op != L"animadd" && op != L"animpane" && op != L"animpick" && op != L"animdump" &&
+      op != L"preview")
     return false;
   edit::Editor* e = SlideEditor();
   if (!Ready() || !SlideCount() || !e) return true;
@@ -771,6 +914,17 @@ bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& 
     Done(ed::SetTransition(*e, SelectedSlides(), p));
   } else if (op == L"anim" || op == L"animadd") {
     if (n >= 0) ApplyAnim(n, op == L"animadd");
+  } else if (op == L"preview") {
+    // preview:transition@400 or preview:animations@300 (or animations:3@300, from effect 3): the
+    // preview held at that many ms, for a snapshot.
+    const size_t at = arg.find(L'@');
+    const std::wstring what = arg.substr(0, at);
+    const size_t colon = what.find(L':');
+    int from = 1, ms = 0;
+    if (colon != std::wstring::npos) ParseInt(what.substr(colon + 1), from);
+    if (at != std::wstring::npos) ParseInt(arg.substr(at + 1), ms);
+    StartPreview(what.rfind(L"transition", 0) == 0, static_cast<size_t>(std::max(1, from) - 1));
+    if (preview_) preview_->fixedAt = std::max(0, ms);
   } else if (op == L"animpane") {
     if (!animPane_) animPane_ = std::make_unique<AnimationPane>(*this);
     host_.ViewShowPanel(animPane_.get());

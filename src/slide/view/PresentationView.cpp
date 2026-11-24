@@ -396,6 +396,11 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
     }
     dc->SetTransform(old);
   }
+  // p3-anim: a transition or the animations playing over the slide (Preview).
+  if (preview_ && DrawPreview(c, dc)) {
+    c.PopClip();
+    return;
+  }
   // The text being edited, live over the slide.
   text_->Draw(c, dc, current_, rc);
   text_->DrawSpelling(c, current_, rc, host_.ViewSpelling());

@@ -130,6 +130,10 @@ elseif(MODE STREQUAL "slide")
     run(slide-animations-${size} ${size} dark "insert:shape|rect|100,100,200,120;animadd:3;animpane;animpick:1;ribbon:Animations;ribboncheck"
         "${FILES}/simple.pptx")
   endforeach()
+  # Preview held half way: Push from the slide before, and an animation flying in.
+  run(slide-preview-transition 1024x700 light "slide:2;transition:3;preview:transition@500;ribboncheck" "${FILES}/simple.pptx")
+  run(slide-preview-animation 1024x700 dark "insert:shape|rect|100,100,200,120;animadd:3;preview:animations@250;ribboncheck"
+      "${FILES}/simple.pptx")
   execute_process(COMMAND "${EXE}" --snapshot "${OUT}/slide-anim-change.png" --size 1366x768 --theme light
                           --script "insert:shape|rect|100,100,200,120;animadd:3;animadd:12;animpick:2;anim:6;animdump"
                           "${FILES}/simple.pptx"
