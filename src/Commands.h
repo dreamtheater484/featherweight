@@ -629,8 +629,8 @@ enum Cmd : int {
   CmdAnimEarlier,                // Timing > Move Earlier
   CmdAnimLater,                  // Timing > Move Later
   CmdAnimRemove,                 // the Animation Pane's Remove (Delete there)
-  CmdAnimAsOneObject,            // Effect Options > Sequence: As One Object
-  CmdAnimByParagraph,            // Effect Options > Sequence: By Paragraph
+  CmdAnimAsOneObject = 3865,     // Effect Options > Sequence: As One Object (fixed: merges reorder blocks)
+  CmdAnimByParagraph = 3866,     // Effect Options > Sequence: By Paragraph
   // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
   // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
   CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
