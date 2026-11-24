@@ -1751,6 +1751,7 @@ int Show::CaptureAll() {
     save(end, slide, k);
   };
   GoTo(FirstIndex() == kEnd ? kEnd : std::min(opts_.first, deck_.SlideCount() - 1), true, false);
+  bool blackSaved = false;
   for (int guard = 0; guard < 5000 && cur_ && cur_->index != kEnd; ++guard) {
     const size_t slide = cur_->index;
     if (transition_) {
@@ -1765,6 +1766,12 @@ int Show::CaptureAll() {
     else
       save(L"s%02zu-1-start", slide, 0);
     savePresenter(L"p%02zu-1-start", slide, 0);
+    if (presenter_ && !blackSaved) {  // the presenter view while the show is black, once
+      blackSaved = true;
+      blank_ = 1;
+      savePresenter(L"p%02zu-1-black", slide, 0);
+      blank_ = 0;
+    }
     // Triggers: a click on each trigger shape.
     for (size_t t = 0; t < cur_->timing.triggers.size(); ++t) {
       const Sequence& seq = cur_->timing.triggers[t];

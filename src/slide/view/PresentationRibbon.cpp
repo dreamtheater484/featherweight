@@ -184,6 +184,10 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
 void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   if (!Ready()) return;
   galleryLayouts_ = deck_->LayoutsFor(current_);  // New Slide and Layout show these
+  // Quick access: From Beginning after Save, Undo and Redo, as PowerPoint's.
+  ToolItem& fromStart = m.quick.emplace_back();
+  fromStart.cmd = CmdSlideShowFromStart;
+  fromStart.glyph = icon::Slideshow;
   Builder b{m};
   auto add = [&](int cmd, wchar_t glyph, S size, const wchar_t* label, const wchar_t* keyTip, S smallest = S::Small) -> RibbonItem& {
     RibbonItem& it = b.Add(RibbonTool(cmd, glyph), size, label, keyTip, smallest);

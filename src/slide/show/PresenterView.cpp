@@ -59,6 +59,7 @@ struct PresenterView::Impl {
   // Where things were drawn last, for the mouse.
   D2D1_RECT_F current{}, next{}, notes{}, strip{}, pause{}, reset{}, smaller{}, larger{};
   D2D1_RECT_F black{}, swap{}, end{};  // Black screen, Swap displays (full screen only), End show
+  D2D1_RECT_F back{}, forward{};       // ◄ and ►: the previous and next animation or slide, as the show's keys
   bool windowed = false;               // beside a windowed show (Alt+F5): one monitor, nothing to swap
 
   void Paint();
@@ -226,12 +227,19 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   }
   if (!v.windowed) button(v.swap, L"Swap displays");
   button(v.end, L"End show");
+  // ◄ and ► before the slide number: back and on by mouse, as PowerPoint's arrows under its slide.
+  v.back = {pad + 370 * s, bar * 0.2f, pad + 414 * s, bar * 0.8f};
+  v.forward = {pad + 420 * s, bar * 0.2f, pad + 464 * s, bar * 0.8f};
+  for (const auto& [r, t] : {std::pair{v.back, L"◄"}, std::pair{v.forward, L"►"}}) {
+    dc->FillRoundedRectangle(D2D1::RoundedRect(r, 4 * s, 4 * s), box.Get());
+    say(t, big.Get(), r, text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);  // the label's size is too small for them
+  }
   const size_t count = v.renderer.SlideCount();
   if (v.state.slide != PresenterState::kEnd)
     swprintf(buf, 64, L"Slide %zu of %zu", v.state.slide + 1, count);
   else
     swprintf(buf, 64, L"End of slide show");
-  say(buf, label.Get(), {pad + 370 * s, 0, std::max(pad + 370 * s, v.black.left - bgap), bar}, dim.Get());
+  say(buf, label.Get(), {pad + 480 * s, 0, std::max(pad + 480 * s, v.black.left - bgap), bar}, dim.Get());
   wchar_t clock[32] = L"";
   GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, nullptr, nullptr, clock, 32);
   say(clock, big.Get(), {w / 2, 0, w - pad, bar}, text.Get(), DWRITE_TEXT_ALIGNMENT_TRAILING);
@@ -242,13 +250,18 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   const float split = std::floor(w * 0.6f);
   v.current = Fit({pad, top, split - pad / 2, bottom}, size.width, size.height);
   auto slide = [&](ID2D1Bitmap1* b, D2D1_RECT_F r, int blank, const wchar_t* none) {
-    if (blank == 2) dc->FillRectangle(r, text.Get());
-    if (blank == 1 || (!b && blank == 0)) {
-      ComPtr<ID2D1SolidColorBrush> black;
-      dc->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &black);
-      if (black) dc->FillRectangle(r, black.Get());
+    ComPtr<ID2D1SolidColorBrush> black;
+    dc->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &black);
+    if (black) dc->FillRectangle(r, black.Get());
+    // While the show is black (or white) the slide stays here, dimmed, so the presenter sees what
+    // comes back; a band says what the audience sees.
+    if (b) dc->DrawBitmap(b, r, blank ? 0.35f : 1.f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+    if (blank) {
+      const D2D1_RECT_F band{r.left, r.top, r.right, std::min(r.bottom, r.top + 36 * s)};
+      dc->FillRectangle(band, box.Get());
+      say(blank == 2 ? L"The screen is white" : L"The screen is black", label.Get(), band, text.Get(),
+          DWRITE_TEXT_ALIGNMENT_CENTER);
     }
-    if (b && blank == 0) dc->DrawBitmap(b, r, 1.f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
     if (!b && none) say(none, label.Get(), r, dim.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
     dc->DrawRectangle(r, box.Get(), 1);
   };
@@ -375,6 +388,8 @@ LRESULT PresenterView::Impl::Proc(UINT m, WPARAM w, LPARAM l) {
         started = GetTickCount64();
         pausedTotal = 0;
         pausedAt = started;
+      } else if (Inside(back, x, y) || Inside(forward, x, y)) {
+        host.PresenterKey(Inside(back, x, y) ? VK_LEFT : VK_RIGHT);
       } else if (Inside(black, x, y)) {
         host.PresenterKey('B');  // the show's B: black, or back from black
       } else if (Inside(end, x, y)) {
