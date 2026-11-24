@@ -706,3 +706,57 @@ TEST(SlideAnimDurationIsOnePlay) {
   CHECK(seq.size() == 1 && seq[0].durationMs == 1000 && seq[0].repeat == 2);
   CHECK(Has(SlideXml(ed, 0), "<p:cTn id=\"7\" dur=\"1000\"/>"));
 }
+
+// A slide without a transition of its own plays its layout's (p3-corpus's read-back: PowerPoint's
+// SlideShowTransition reads it). Changing it writes the slide its own; None over it is an empty one.
+TEST(SlideAnimTransitionFromTheLayout) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  const std::string layoutPart = deck->GetSlide(0)->layout ? deck->GetSlide(0)->layout->part : std::string();
+  CHECK(!layoutPart.empty());
+  if (layoutPart.empty()) return;
+  std::vector<uint8_t> b;
+  CHECK(ed.ReadPart(layoutPart, b));
+  std::string layout(b.begin(), b.end());
+  const size_t at = layout.find("<p:clrMapOvr>") != std::string::npos ? layout.find("<p:clrMapOvr>") : layout.find("</p:sldLayout>");
+  // After clrMapOvr if there is one: transition comes after it in the schema.
+  size_t place = layout.find("</p:clrMapOvr>");
+  place = place != std::string::npos ? place + 14 : at;
+  layout.insert(place, "<p:transition spd=\"slow\"><p:wipe/></p:transition>");
+  CHECK(ed.Run(u"Write", [&] {
+    return ed.WritePart(layoutPart, std::vector<uint8_t>(layout.begin(), layout.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  CHECK(!Has(SlideXml(ed, 0), "<p:transition"));
+
+  TransitionInfo t = GetTransition(ed, 0);
+  CHECK(t.inherited && t.effect == TransitionEffect::Wipe && t.durationMs == 1000);
+  CHECK(show::ParseTransition(deck->GetSlide(0)->transition).durationMs == 1000);  // the show plays it
+
+  // A new duration: the slide gets its own wipe.
+  TransitionPatch longer;
+  longer.durationMs = 2000;
+  CHECK(SetTransition(ed, {0}, longer));
+  t = GetTransition(ed, 0);
+  CHECK(!t.inherited && t.effect == TransitionEffect::Wipe && t.durationMs == 2000);
+  CHECK(Has(SlideXml(ed, 0), "<p:wipe"));
+
+  // None over the layout's: an empty transition of the slide's own, and nothing plays.
+  TransitionPatch none;
+  none.effect = TransitionEffect::None;
+  CHECK(SetTransition(ed, {0}, none));
+  t = GetTransition(ed, 0);
+  CHECK(!t.inherited && t.effect == TransitionEffect::None);
+  const std::string x = SlideXml(ed, 0);
+  CHECK(Has(x, "<p:transition") && !Has(x, "<p:wipe"));
+  CHECK(show::ParseTransition(deck->GetSlide(0)->transition).kind == show::TransitionKind::None);
+
+  // Apply To All from a slide playing the layout's: every slide gets its own copy.
+  CHECK(ed.Undo(2));
+  CHECK(GetTransition(ed, 0).inherited);
+  CHECK(ApplyTransitionToAll(ed, 0));
+  for (size_t i = 1; i < deck->SlideCount(); ++i) {
+    t = GetTransition(ed, i);
+    CHECK(!t.inherited && t.effect == TransitionEffect::Wipe);
+  }
+}

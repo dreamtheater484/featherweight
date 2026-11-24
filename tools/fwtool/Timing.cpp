@@ -202,8 +202,8 @@ int RunTiming(const Options& options) {
       if (t.option >= 0 && t.option < static_cast<int>(opts.size()))
         std::printf(" (%s)", U8(opts[t.option]).c_str());
       if (!t.element.empty()) std::printf(" <%s>", t.element.c_str());
-      std::printf(" %.0f ms, click %d, after %.0f ms%s\n", t.durationMs, t.advanceOnClick ? 1 : 0, t.advanceAfterMs,
-                  t.sound ? ", sound" : "");
+      std::printf(" %.0f ms, click %d, after %.0f ms%s%s\n", t.durationMs, t.advanceOnClick ? 1 : 0, t.advanceAfterMs,
+                  t.sound ? ", sound" : "", t.inherited ? ", from the layout" : "");
       if (!why.empty()) std::printf("    animations not editable: %s\n", U8(why).c_str());
       for (size_t k = 0; k < seq.size(); ++k) {
         const ed::AnimEffect& a = seq[k];

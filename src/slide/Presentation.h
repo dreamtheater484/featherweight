@@ -178,7 +178,8 @@ struct Slide : SlideBase {
   const Master* master = nullptr;
   const NotesSlide* notes = nullptr;  // null when the slide has none
   // For the slide show (p1-show parses these): p:transition and p:timing as written, or the
-  // mc:AlternateContent element holding them (its branches untouched). Null when missing.
+  // mc:AlternateContent element holding them (its branches untouched). Null when missing. A slide
+  // without a transition of its own has its layout's, else its master's (as PowerPoint plays it).
   pugi::xml_node transition, timing;
 
   // The speaker notes as plain text: paragraphs separated by '\n'.

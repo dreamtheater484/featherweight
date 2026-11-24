@@ -47,6 +47,8 @@ struct TransitionInfo {
   double advanceAfterMs = -1;  // -1: the slide doesn't advance by itself
   bool sound = false;          // a sound plays with it (kept; not changed here)
   std::string element;         // Other: the effect's element as written, "p15:prstTrans prst=curtains"
+  bool inherited = false;      // the slide has none of its own and plays its layout's (or master's), as
+                               // PowerPoint does; changing it writes the slide its own
 };
 TransitionInfo GetTransition(const Editor& ed, size_t slide);
 

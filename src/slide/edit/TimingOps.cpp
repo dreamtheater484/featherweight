@@ -321,9 +321,65 @@ bool CopyRels(Editor::Impl& m, std::string_view from, std::string_view to, pugi:
   return true;
 }
 
+// The transition of the slide's layout, else of its master: what a slide without its own plays (as
+// PowerPoint). `from` gets the part it's in.
+pugi::xml_node LayoutTransition(Editor::Impl& m, std::string_view slidePart, std::string* from) {
+  const std::string layout = TargetOfType(m.Rels(slidePart), "slideLayout");
+  const std::string master = layout.empty() ? std::string() : TargetOfType(m.Rels(layout), "slideMaster");
+  for (const std::string& p : {layout, master}) {
+    pugi::xml_node root = p.empty() ? pugi::xml_node() : m.Root(p);
+    if (pugi::xml_node n = root ? FindTransition(root).node : pugi::xml_node()) {
+      if (from) *from = p;
+      return n;
+    }
+  }
+  return {};
+}
+
+// Declares in the copy `c` of `s` (from another part) the prefixes it uses that aren't bound where it
+// landed; false when one is bound to another namespace there.
+bool BindLike(pugi::xml_node c, pugi::xml_node s) {
+  auto bind = [&](std::string_view qname) {
+    const size_t colon = qname.find(':');
+    if (colon == std::string_view::npos) return true;
+    const std::string prefix(qname.substr(0, colon));
+    if (prefix == "xmlns" || prefix == "xml") return true;
+    const auto want = pkg::LookupNamespace(s, prefix);
+    if (!want) return true;
+    if (const auto have = pkg::LookupNamespace(c, prefix)) return *have == *want;
+    c.append_attribute(("xmlns:" + prefix).c_str()) = std::string(*want).c_str();
+    return true;
+  };
+  if (!bind(c.name())) return false;
+  for (pugi::xml_attribute a = c.first_attribute(); a; a = a.next_attribute())
+    if (!bind(a.name())) return false;
+  for (pugi::xml_node cc = c.first_child(), sc = s.first_child(); cc && sc; cc = cc.next_sibling(), sc = sc.next_sibling())
+    if (cc.type() == pugi::node_element && !BindLike(cc, sc)) return false;
+  return true;
+}
+
+// A transition from part `from` copied into slide `root` (in `part`) before `before`, with the
+// relationships and prefixes it needs; null when it can't be.
+pugi::xml_node CopyTransition(Editor::Impl& m, std::string_view from, pugi::xml_node src, std::string_view part,
+                              pugi::xml_node root, pugi::xml_node before) {
+  pugi::xml_node copy = InsertCopy(root, src, before);
+  if (BindLike(copy, src) && CopyRels(m, from, part, copy)) return copy;
+  root.remove_child(copy);
+  return {};
+}
+
 Result SetOneTransition(Editor::Impl& m, const std::string& part, const TransitionPatch& patch) {
   pugi::xml_node root = m.Root(part);
   if (!root) return Result::Fail(u"The slide can't be read.");
+  std::string from;
+  const bool layoutHas = static_cast<bool>(LayoutTransition(m, part, &from));
+  if (layoutHas && !FindTransition(root).node) {
+    // A slide playing its layout's transition gets its own copy first, as PowerPoint writes one when
+    // it's changed.
+    root = m.Edit(part);
+    if (!CopyTransition(m, from, LayoutTransition(m, part, nullptr), part, root, TransitionPlace(root)))
+      return Result::Fail(u"The layout's transition can't be copied to the slide.");
+  }
   TransitionInfo now = ReadTransition(root);
   TransTarget t{now.effect, now.option, now.durationMs, now.advanceOnClick, now.advanceAfterMs};
   bool newEffect = patch.effect && *patch.effect != now.effect;
@@ -391,7 +447,9 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
   // A transition Featherweight writes: made anew, its sound and extensions kept.
   pugi::xml_node snd = PChild(s.primary, "sndAc"), ext = PChild(s.primary, "extLst");
   pugi::xml_node place = s.node ? s.node : TransitionPlace(root);
-  bool empty = t.effect == TransitionEffect::None && t.click && t.after < 0 && !snd && !ext;
+  // None on a slide whose layout has a transition is an empty one of its own: without it, the
+  // layout's would play.
+  bool empty = t.effect == TransitionEffect::None && t.click && t.after < 0 && !snd && !ext && !layoutHas;
   if (!empty) {
     std::string x;
     if (timed && t.ms != SpdMs(SpdFor(t.ms))) {
@@ -1130,7 +1188,12 @@ TransitionInfo GetTransition(const Editor& ed, size_t slide) {
   Editor::Impl& m = const_cast<Editor&>(ed).Internals();
   std::string part = m.SlidePart(slide);
   pugi::xml_node root = part.empty() ? pugi::xml_node() : m.Root(part);
-  return root ? ReadTransition(root) : TransitionInfo{};
+  if (!root) return {};
+  std::string from;
+  if (FindTransition(root).node || !LayoutTransition(m, part, &from)) return ReadTransition(root);
+  TransitionInfo info = ReadTransition(m.Root(from));
+  info.inherited = true;
+  return info;
 }
 
 Result SetTransition(Editor& ed, const std::vector<size_t>& slides, const TransitionPatch& patch) {
@@ -1154,28 +1217,40 @@ Result ApplyTransitionToAll(Editor& ed, size_t from) {
   Editor::Impl& m = ed.Internals();
   std::vector<Editor::Impl::SlideEntry> list = m.SlideList();
   if (from >= list.size()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  pugi::xml_node src = m.Root(list[from].part);
-  if (!src) return call.End(Result::Fail(u"The slide can't be read."));
-  TransSlot s = FindTransition(src);
-  std::string fromXml = s.node ? Serialize(s.node) : std::string();
+  if (!m.Root(list[from].part)) return call.End(Result::Fail(u"The slide can't be read."));
+  // What the slide plays: its own transition, or its layout's.
+  std::string srcPart;
+  auto source = [&] {
+    srcPart = list[from].part;
+    pugi::xml_node own = FindTransition(m.Root(srcPart)).node;
+    return own ? own : LayoutTransition(m, list[from].part, &srcPart);
+  };
+  pugi::xml_node node = source();
+  const std::string fromXml = node ? Serialize(node) : std::string();
+  const bool sound = node && node.find_node([](pugi::xml_node n) { return IsP(n, "sndAc"); });
   for (size_t i = 0; i < list.size(); ++i) {
     if (i == from) continue;
     pugi::xml_node look = m.Root(list[i].part);
     if (!look) continue;
     TransSlot here = FindTransition(look);
-    // The same already (a sound is copied anyway: its relationship may name another sound here).
-    bool sound = s.node && s.node.find_node([](pugi::xml_node n) { return IsP(n, "sndAc"); });
-    if (!sound && (here.node ? Serialize(here.node) : std::string()) == fromXml) continue;
+    const bool layoutHas = static_cast<bool>(LayoutTransition(m, list[i].part, nullptr));
+    // The same already (a sound is copied anyway: its relationship may name another sound here), or
+    // none to play and none playing.
+    if (!sound && here.node && Serialize(here.node) == fromXml) continue;
+    if (!node && !here.node && !layoutHas) continue;
     pugi::xml_node root = m.Edit(list[i].part);
     if (!root) continue;
-    src = m.Root(list[from].part);
-    s = FindTransition(src);
+    node = source();
     here = FindTransition(root);
-    if (s.node) {
-      pugi::xml_node place = here.node ? here.node : TransitionPlace(root);
-      pugi::xml_node copy = InsertCopy(root, s.node, place);
-      if (!CopyRels(m, list[from].part, list[i].part, copy))
+    pugi::xml_node place = here.node ? here.node : TransitionPlace(root);
+    if (node) {
+      if (!CopyTransition(m, srcPart, node, list[i].part, root, place))
         return call.End(Result::Fail(u"The transition's sound can't be copied to the other slides."));
+    } else if (layoutHas) {
+      // None over a layout's transition: an empty one of the slide's own.
+      pugi::xml_document doc;
+      if (!Fragment(TransitionXml(TransTarget{}, false), doc)) return call.End(Result::Fail(u"The transition can't be written."));
+      InsertCopy(root, doc.document_element().first_child(), place);
     }
     if (here.node) root.remove_child(here.node);
   }
