@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "core/Strings.h"
+#include "pkg/CompoundFile.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "slide/ppt/Ppt.h"
 #include "slide/Presentation.h"
 #include "slide/render/SlideRender.h"
 #include "text/Fonts.h"
@@ -349,6 +351,27 @@ std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
     return nullptr;
   }
   return DeckOf(std::move(snap), error);
+}
+
+bool ReadLegacyPresentation(const std::wstring& path, std::wstring_view password, std::vector<uint8_t>& pptx,
+                            std::wstring& error, bool& locked) {
+  pptx.clear();
+  error.clear();
+  locked = false;
+  pkg::Status status;
+  std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path, {}, status);
+  if (!snap || !pkg::CompoundFile::HasSignature(snap->Bytes())) return false;
+  auto cf = pkg::CompoundFile::Open(snap->Bytes());
+  const ppt::StreamFn streams = [&cf](std::string_view name) { return cf->Stream(name); };
+  if (!cf || !ppt::IsPresentation(streams)) return false;
+  locked = ppt::NeedsPassword(streams);
+  if (locked && password.empty()) return true;
+  pptx = ppt::ToPptx(streams, status, password);
+  if (pptx.empty() && locked && status.code == pkg::Status::Code::Rejected) return true;  // the wrong password
+  if (pptx.empty())
+    error = status.message.empty() ? L"This file isn't a presentation Featherweight can open, or it is damaged."
+                                   : L"It couldn't be opened — " + Utf8ToWide(status.message);
+  return true;
 }
 
 std::unique_ptr<Deck> OpenDeckFromBytes(std::vector<uint8_t> bytes, std::wstring& error) {

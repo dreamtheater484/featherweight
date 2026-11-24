@@ -69,5 +69,23 @@ struct DocStreams {
 bool IsEncryptedDoc(const CompoundFile& file);
 Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStreams& out);
 
+// RC4 CryptoAPI as .ppt files use it ([MS-PPT] 2.3.7): Open checks the password against an
+// EncryptionInfo (version 2.2 to 4.2: flags, header size, header and verifier, as in a .doc's table
+// stream); then Decrypt decrypts any run of bytes in place with a block number's key, the key stream
+// starting at the run's start. The key is wiped when it goes away.
+class Rc4Key {
+ public:
+  Rc4Key() = default;
+  Rc4Key(const Rc4Key&) = delete;
+  Rc4Key& operator=(const Rc4Key&) = delete;
+  ~Rc4Key();
+  Result Open(std::span<const uint8_t> info, std::wstring_view password);
+  bool Decrypt(uint32_t block, std::span<uint8_t> bytes) const;
+
+ private:
+  size_t keyBytes_ = 16;
+  std::vector<uint8_t> base_;
+};
+
 }  // namespace crypto
 }  // namespace fw::pkg

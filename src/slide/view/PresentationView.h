@@ -337,6 +337,7 @@ class PresentationView : public TabContent {
   ViewHost& host_;
   std::wstring path_;
   std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  std::wstring imported_;  // a PowerPoint 97-2003 file's name: the tab is its copy (P3, p3-ppt)
   bool newDeck_ = false;
   int newNumber_ = 0;  // OpenAsNew: the file is a template, and the tab a new presentation
   std::unique_ptr<Deck> deck_;
