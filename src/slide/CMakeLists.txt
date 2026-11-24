@@ -6,6 +6,8 @@ add_library(fwslide STATIC
   Shapes.cpp
   Tables.cpp
   TextStyles.cpp
+  # P3 (p3-ppt): PowerPoint 97-2003 presentations, converted to .pptx.
+  ppt/Ppt.cpp ppt/Shapes.cpp ppt/Text.cpp
   # P2 (p2-model): the edit layer, the .pptx writer and crash recovery.
   edit/DesignOps.cpp edit/TableGrid.cpp edit/TableOps.cpp edit/Transform.cpp
   edit/HeaderFooter.cpp  # p2-slides
@@ -33,6 +35,7 @@ set_source_files_properties(edit/DesignOps.cpp edit/TableGrid.cpp edit/TableOps.
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_eot.cpp")
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_edit.cpp")  # p2-model
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_ppt.cpp")  # p3-ppt
   # t2embed makes the Embedded OpenType the decoder is checked against (test only).
   target_link_libraries(fw_tests PRIVATE fwslide t2embed)
 endif()

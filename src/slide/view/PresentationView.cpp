@@ -83,9 +83,21 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
-          : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
-                       : OpenDeck(path_, why);
+  // A PowerPoint 97-2003 presentation (P3, p3-ppt) is converted, and the tab is a copy that Save As
+  // saves as a .pptx beside it: the .ppt itself is never written.
+  std::vector<uint8_t> converted;
+  if (!newDeck_ && !fromBytes_ && ReadLegacyPresentation(path_, converted, why)) {
+    if (converted.empty()) {
+      error = Title() + L": " + why;
+      return OpenResult::Failed;
+    }
+    imported_ = Title();
+    deck_ = OpenDeckFromBytes(std::move(converted), why);
+  } else {
+    deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
+            : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
+                         : OpenDeck(path_, why);
+  }
   if (!deck_) {
     error = Title() + L": " + why;
     return OpenResult::Failed;
@@ -95,7 +107,17 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
-  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
+  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx") || EndsWithNoCase(path_, L".pps")) &&
+                 !util::UsingPrivateClipboard();
+  if (!imported_.empty()) {
+    const size_t dot = path_.find_last_of(L'.');
+    const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
+    File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
+    host_.ViewMessage(BannerKind::Info, imported_ + L" is a PowerPoint 97–2003 presentation. Saving makes a new " + stem +
+                                            L".pptx and leaves it as it is.");
+    untitled_ = imported_;
+    path_.clear();  // Save is Save As
+  }
   SlideEditor();  // P2: the deck's Editor made and listened to before anything can edit it (OnEditorMade)
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();

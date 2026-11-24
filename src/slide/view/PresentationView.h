@@ -277,6 +277,7 @@ class PresentationView : public TabContent {
   ViewHost& host_;
   std::wstring path_;
   std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  std::wstring imported_;  // a PowerPoint 97-2003 file's name: the tab is its copy (P3, p3-ppt)
   bool newDeck_ = false;
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a

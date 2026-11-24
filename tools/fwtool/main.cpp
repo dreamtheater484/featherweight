@@ -14,6 +14,7 @@
 #include "sheet/view/Grid.h"
 #include "text/Fonts.h"
 #include "sheet/xls/Xls.h"
+#include "slide/ppt/Ppt.h"
 
 namespace fwtool {
 namespace {
@@ -206,7 +207,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
     for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls", L".ods", L".ots",
-                                 L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
+                                 L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm", L".ppt", L".pps", L".pot"})
       if (ext == known) files.push_back(it->path());
   }
   std::sort(files.begin(), files.end());
@@ -255,15 +256,20 @@ std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Stat
   // An Excel 97-2003 workbook: the .xlsx it's read as.
   if (cf && fw::sheet::xls::IsWorkbook([&cf](std::string_view name) { return cf->Stream(name); }))
     return fw::sheet::xls::ToXlsx([&cf](std::string_view name) { return cf->Stream(name); }, status);
+  // A PowerPoint 97-2003 presentation (P3): the .pptx it's read as.
+  if (cf && fw::slide::ppt::IsPresentation([&cf](std::string_view name) { return cf->Stream(name); }))
+    return fw::slide::ppt::ToPptx([&cf](std::string_view name) { return cf->Stream(name); }, status);
   if (!cf || !cf->Stream("WordDocument")) {
-    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document or Excel 97-2003 workbook");
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported,
+                                   "not a Word 97-2003 document, Excel 97-2003 workbook or PowerPoint 97-2003 presentation");
     return {};
   }
   return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
 }
 
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
-  if (fw::ToLower(file.extension().wstring()) == L".doc" || fw::ToLower(file.extension().wstring()) == L".xls") {
+  if (const std::wstring ext = fw::ToLower(file.extension().wstring());
+      ext == L".doc" || ext == L".xls" || ext == L".ppt" || ext == L".pps" || ext == L".pot") {
     std::vector<uint8_t> docx = ConvertDoc(file, status);
     if (docx.empty()) return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
