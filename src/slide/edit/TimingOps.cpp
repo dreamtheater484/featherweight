@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include <set>
 
 #include "slide/edit/EditInternal.h"
@@ -247,24 +248,29 @@ struct TransTarget {
   double after = -1;
 };
 
+// Appends `parts` to `x`: one call instead of a chain of string temporaries (much smaller code).
+void Cat(std::string& x, std::initializer_list<std::string_view> parts) {
+  for (std::string_view part : parts) x += part;
+}
+
 std::string TransitionXml(const TransTarget& t, bool choice) {
   const TransDef& d = DefOf(t.effect);
-  bool timed = t.effect != TransitionEffect::None && t.effect != TransitionEffect::Cut;
+  const bool timed = t.effect != TransitionEffect::None && t.effect != TransitionEffect::Cut;
   std::string x = "<p:transition";
   if (timed) {
-    const char* spd = SpdFor(t.ms);
-    if (std::string_view(spd) != "fast") x += std::string(" spd=\"") + spd + "\"";
-    if (choice) x += " p14:dur=\"" + MsText(t.ms) + "\"";
+    const std::string_view spd = SpdFor(t.ms);
+    if (spd != "fast") Cat(x, {" spd=\"", spd, "\""});
+    if (choice) Cat(x, {" p14:dur=\"", MsText(t.ms), "\""});
   }
   if (!t.click) x += " advClick=\"0\"";
-  if (t.after >= 0) x += " advTm=\"" + MsText(t.after) + "\"";
+  if (t.after >= 0) Cat(x, {" advTm=\"", MsText(t.after), "\""});
   x += ">";
   if (*d.element) {
-    x += std::string("<p:") + d.element;
+    Cat(x, {"<p:", d.element});
     if (d.count) {
       const TransOpt& o = d.opts[t.option];
-      if (o.orient && std::string_view(o.orient) != "horz") x += std::string(" orient=\"") + o.orient + "\"";
-      if (o.dir && (!d.defaultDir || std::string_view(o.dir) != d.defaultDir)) x += std::string(" dir=\"") + o.dir + "\"";
+      if (o.orient && std::string_view(o.orient) != "horz") Cat(x, {" orient=\"", o.orient, "\""});
+      if (o.dir && (!d.defaultDir || std::string_view(o.dir) != d.defaultDir)) Cat(x, {" dir=\"", o.dir, "\""});
       if (o.thruBlk) x += " thruBlk=\"1\"";
     }
     x += "/>";
@@ -321,9 +327,65 @@ bool CopyRels(Editor::Impl& m, std::string_view from, std::string_view to, pugi:
   return true;
 }
 
+// The transition of the slide's layout, else of its master: what a slide without its own plays (as
+// PowerPoint). `from` gets the part it's in.
+pugi::xml_node LayoutTransition(Editor::Impl& m, std::string_view slidePart, std::string* from) {
+  const std::string layout = TargetOfType(m.Rels(slidePart), "slideLayout");
+  const std::string master = layout.empty() ? std::string() : TargetOfType(m.Rels(layout), "slideMaster");
+  for (const std::string& p : {layout, master}) {
+    pugi::xml_node root = p.empty() ? pugi::xml_node() : m.Root(p);
+    if (pugi::xml_node n = root ? FindTransition(root).node : pugi::xml_node()) {
+      if (from) *from = p;
+      return n;
+    }
+  }
+  return {};
+}
+
+// Declares in the copy `c` of `s` (from another part) the prefixes it uses that aren't bound where it
+// landed; false when one is bound to another namespace there.
+bool BindLike(pugi::xml_node c, pugi::xml_node s) {
+  auto bind = [&](std::string_view qname) {
+    const size_t colon = qname.find(':');
+    if (colon == std::string_view::npos) return true;
+    const std::string prefix(qname.substr(0, colon));
+    if (prefix == "xmlns" || prefix == "xml") return true;
+    const auto want = pkg::LookupNamespace(s, prefix);
+    if (!want) return true;
+    if (const auto have = pkg::LookupNamespace(c, prefix)) return *have == *want;
+    c.append_attribute(("xmlns:" + prefix).c_str()) = std::string(*want).c_str();
+    return true;
+  };
+  if (!bind(c.name())) return false;
+  for (pugi::xml_attribute a = c.first_attribute(); a; a = a.next_attribute())
+    if (!bind(a.name())) return false;
+  for (pugi::xml_node cc = c.first_child(), sc = s.first_child(); cc && sc; cc = cc.next_sibling(), sc = sc.next_sibling())
+    if (cc.type() == pugi::node_element && !BindLike(cc, sc)) return false;
+  return true;
+}
+
+// A transition from part `from` copied into slide `root` (in `part`) before `before`, with the
+// relationships and prefixes it needs; null when it can't be.
+pugi::xml_node CopyTransition(Editor::Impl& m, std::string_view from, pugi::xml_node src, std::string_view part,
+                              pugi::xml_node root, pugi::xml_node before) {
+  pugi::xml_node copy = InsertCopy(root, src, before);
+  if (BindLike(copy, src) && CopyRels(m, from, part, copy)) return copy;
+  root.remove_child(copy);
+  return {};
+}
+
 Result SetOneTransition(Editor::Impl& m, const std::string& part, const TransitionPatch& patch) {
   pugi::xml_node root = m.Root(part);
   if (!root) return Result::Fail(u"The slide can't be read.");
+  std::string from;
+  const bool layoutHas = static_cast<bool>(LayoutTransition(m, part, &from));
+  if (layoutHas && !FindTransition(root).node) {
+    // A slide playing its layout's transition gets its own copy first, as PowerPoint writes one when
+    // it's changed.
+    root = m.Edit(part);
+    if (!CopyTransition(m, from, LayoutTransition(m, part, nullptr), part, root, TransitionPlace(root)))
+      return Result::Fail(u"The layout's transition can't be copied to the slide.");
+  }
   TransitionInfo now = ReadTransition(root);
   TransTarget t{now.effect, now.option, now.durationMs, now.advanceOnClick, now.advanceAfterMs};
   bool newEffect = patch.effect && *patch.effect != now.effect;
@@ -391,7 +453,9 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
   // A transition Featherweight writes: made anew, its sound and extensions kept.
   pugi::xml_node snd = PChild(s.primary, "sndAc"), ext = PChild(s.primary, "extLst");
   pugi::xml_node place = s.node ? s.node : TransitionPlace(root);
-  bool empty = t.effect == TransitionEffect::None && t.click && t.after < 0 && !snd && !ext;
+  // None on a slide whose layout has a transition is an empty one of its own: without it, the
+  // layout's would play.
+  bool empty = t.effect == TransitionEffect::None && t.click && t.after < 0 && !snd && !ext && !layoutHas;
   if (!empty) {
     std::string x;
     if (timed && t.ms != SpdMs(SpdFor(t.ms))) {
@@ -492,28 +556,32 @@ struct Ids {
   std::string operator()() { return std::to_string(next++); }
 };
 
-std::string Val(std::string_view v) {
-  return v == "0" ? "<p:fltVal val=\"0\"/>" : "<p:strVal val=\"" + std::string(v) + "\"/>";
+void Val(std::string& x, std::string_view v) {
+  if (v == "0") x += "<p:fltVal val=\"0\"/>";
+  else Cat(x, {"<p:strVal val=\"", v, "\"/>"});
 }
 
-std::string SetVis(Ids& id, const std::string& tgt, bool visible, double delay) {
-  return "<p:set><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"1\" fill=\"hold\"><p:stCondLst><p:cond delay=\"" + MsText(delay) +
-         "\"/></p:stCondLst></p:cTn>" + tgt +
-         "<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"" +
-         (visible ? "visible" : "hidden") + "\"/></p:to></p:set>";
+void SetVis(std::string& x, Ids& id, std::string_view tgt, bool visible, double delay) {
+  Cat(x, {"<p:set><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"1\" fill=\"hold\"><p:stCondLst><p:cond delay=\"", MsText(delay),
+          "\"/></p:stCondLst></p:cTn>", tgt,
+          "<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"",
+          visible ? "visible" : "hidden", "\"/></p:to></p:set>"});
 }
 
-std::string Filter(Ids& id, const std::string& tgt, bool in, const std::string& filter, double dur) {
-  return std::string("<p:animEffect transition=\"") + (in ? "in" : "out") + "\" filter=\"" + filter +
-         "\"><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\"/>" + tgt + "</p:cBhvr></p:animEffect>";
+void Filter(std::string& x, Ids& id, std::string_view tgt, bool in, std::string_view filter, double dur) {
+  Cat(x, {"<p:animEffect transition=\"", in ? "in" : "out", "\" filter=\"", filter, "\"><p:cBhvr><p:cTn id=\"", id(),
+          "\" dur=\"", MsText(dur), "\"/>", tgt, "</p:cBhvr></p:animEffect>"});
 }
 
-std::string Prop(Ids& id, const std::string& tgt, const char* attr, std::string_view from, std::string_view to, double dur,
-                 bool base, bool hold) {
-  return std::string("<p:anim calcmode=\"lin\" valueType=\"num\"><p:cBhvr") + (base ? " additive=\"base\"" : "") +
-         "><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\"" + (hold ? " fill=\"hold\"" : "") + "/>" + tgt +
-         "<p:attrNameLst><p:attrName>" + attr + "</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm=\"0\"><p:val>" +
-         Val(from) + "</p:val></p:tav><p:tav tm=\"100000\"><p:val>" + Val(to) + "</p:val></p:tav></p:tavLst></p:anim>";
+void Prop(std::string& x, Ids& id, std::string_view tgt, const char* attr, std::string_view from, std::string_view to, double dur,
+          bool base, bool hold) {
+  Cat(x, {"<p:anim calcmode=\"lin\" valueType=\"num\"><p:cBhvr", base ? " additive=\"base\"" : "", "><p:cTn id=\"", id(),
+          "\" dur=\"", MsText(dur), "\"", hold ? " fill=\"hold\"" : "", "/>", tgt, "<p:attrNameLst><p:attrName>", attr,
+          "</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm=\"0\"><p:val>"});
+  Val(x, from);
+  x += "</p:val></p:tav><p:tav tm=\"100000\"><p:val>";
+  Val(x, to);
+  x += "</p:val></p:tav></p:tavLst></p:anim>";
 }
 
 const char* WipeFilter(int sub) { return sub == 1 ? "wipe(up)" : sub == 2 ? "wipe(right)" : sub == 8 ? "wipe(left)" : "wipe(down)"; }
@@ -522,72 +590,87 @@ const char* SplitFilter(int sub) {
 }
 
 // The behaviors of an animation, as PowerPoint writes them (the corpus' and PowerPoint 2021's).
-std::string Behaviors(const AnimDef& d, int option, double dur, const std::string& tgt, Ids& id) {
-  const AnimOpt& o = OptOf(d, option);
-  int sub = o.subtype;
+std::string Behaviors(const AnimDef& d, int option, double dur, std::string_view tgt, Ids& id) {
+  const int sub = OptOf(d, option).subtype;
+  const bool down = PresetIdOf(d, option) == 47;  // Float: Down (47) or Up (42)
+  std::string x;
   switch (d.anim) {
     case Anim::Appear:
-      return SetVis(id, tgt, true, 0);
+      SetVis(x, id, tgt, true, 0);
+      break;
     case Anim::Fade:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, "fade", dur);
-    case Anim::FlyIn: {
-      const char* x = sub & 8 ? "0-#ppt_w/2" : sub & 2 ? "1+#ppt_w/2" : "#ppt_x";
-      const char* y = sub & 1 ? "0-#ppt_h/2" : sub & 4 ? "1+#ppt_h/2" : "#ppt_y";
-      return SetVis(id, tgt, true, 0) + Prop(id, tgt, "ppt_x", x, "#ppt_x", dur, true, true) +
-             Prop(id, tgt, "ppt_y", y, "#ppt_y", dur, true, true);
-    }
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, "fade", dur);
+      break;
+    case Anim::FlyIn:
+      SetVis(x, id, tgt, true, 0);
+      Prop(x, id, tgt, "ppt_x", sub & 8 ? "0-#ppt_w/2" : sub & 2 ? "1+#ppt_w/2" : "#ppt_x", "#ppt_x", dur, true, true);
+      Prop(x, id, tgt, "ppt_y", sub & 1 ? "0-#ppt_h/2" : sub & 4 ? "1+#ppt_h/2" : "#ppt_y", "#ppt_y", dur, true, true);
+      break;
     case Anim::FloatIn:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, "fade", dur) +
-             Prop(id, tgt, "ppt_x", "#ppt_x", "#ppt_x", dur, false, true) +
-             Prop(id, tgt, "ppt_y", PresetIdOf(d, option) == 47 ? "#ppt_y-.1" : "#ppt_y+.1", "#ppt_y", dur, false, true);
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, "fade", dur);
+      Prop(x, id, tgt, "ppt_x", "#ppt_x", "#ppt_x", dur, false, true);
+      Prop(x, id, tgt, "ppt_y", down ? "#ppt_y-.1" : "#ppt_y+.1", "#ppt_y", dur, false, true);
+      break;
     case Anim::Split:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, SplitFilter(sub), dur);
     case Anim::Wipe:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, WipeFilter(sub), dur);
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, d.anim == Anim::Split ? SplitFilter(sub) : WipeFilter(sub), dur);
+      break;
     case Anim::Zoom:
-      return SetVis(id, tgt, true, 0) + Prop(id, tgt, "ppt_w", "0", "#ppt_w", dur, false, true) +
-             Prop(id, tgt, "ppt_h", "0", "#ppt_h", dur, false, true) + Filter(id, tgt, true, "fade", dur);
-    case Anim::GrowShrink: {
-      const char* x = option == 2 ? "100000" : "150000";
-      const char* y = option == 1 ? "100000" : "150000";
-      return "<p:animScale><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\" fill=\"hold\"/>" + tgt +
-             "</p:cBhvr><p:by x=\"" + x + "\" y=\"" + y + "\"/></p:animScale>";
-    }
+      SetVis(x, id, tgt, true, 0);
+      Prop(x, id, tgt, "ppt_w", "0", "#ppt_w", dur, false, true);
+      Prop(x, id, tgt, "ppt_h", "0", "#ppt_h", dur, false, true);
+      Filter(x, id, tgt, true, "fade", dur);
+      break;
+    case Anim::GrowShrink:
+      Cat(x, {"<p:animScale><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"", MsText(dur), "\" fill=\"hold\"/>", tgt,
+              "</p:cBhvr><p:by x=\"", option == 2 ? "100000" : "150000", "\" y=\"", option == 1 ? "100000" : "150000",
+              "\"/></p:animScale>"});
+      break;
     case Anim::Spin:
-      return std::string("<p:animRot by=\"") + (option == 1 ? "-21600000" : "21600000") + "\"><p:cBhvr><p:cTn id=\"" + id() +
-             "\" dur=\"" + MsText(dur) + "\" fill=\"hold\"/>" + tgt +
-             "<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>";
+      Cat(x, {"<p:animRot by=\"", option == 1 ? "-21600000" : "21600000", "\"><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"",
+              MsText(dur), "\" fill=\"hold\"/>", tgt, "<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>"});
+      break;
     case Anim::Disappear:
-      return SetVis(id, tgt, false, 0);
+      SetVis(x, id, tgt, false, 0);
+      break;
     case Anim::FadeOut:
-      return Filter(id, tgt, false, "fade", dur) + SetVis(id, tgt, false, dur - 1);
-    case Anim::FlyOut: {
-      const char* x = sub & 8 ? "0-ppt_w/2" : sub & 2 ? "1+ppt_w/2" : "ppt_x";
-      const char* y = sub & 1 ? "0-ppt_h/2" : sub & 4 ? "1+ppt_h/2" : "ppt_y";
-      return Prop(id, tgt, "ppt_x", "ppt_x", x, dur, true, false) + Prop(id, tgt, "ppt_y", "ppt_y", y, dur, true, false) +
-             SetVis(id, tgt, false, dur - 1);
-    }
-    case Anim::FloatOut:
-      return Filter(id, tgt, false, "fade", dur) + Prop(id, tgt, "ppt_x", "ppt_x", "ppt_x", dur, false, false) +
-             Prop(id, tgt, "ppt_y", "ppt_y", PresetIdOf(d, option) == 47 ? "ppt_y+.1" : "ppt_y-.1", dur, false, false) +
-             SetVis(id, tgt, false, dur - 1);
     case Anim::SplitOut:
-      return Filter(id, tgt, false, SplitFilter(sub), dur) + SetVis(id, tgt, false, dur - 1);
     case Anim::WipeOut:
-      return Filter(id, tgt, false, WipeFilter(sub), dur) + SetVis(id, tgt, false, dur - 1);
+      Filter(x, id, tgt, false, d.anim == Anim::FadeOut ? "fade" : d.anim == Anim::SplitOut ? SplitFilter(sub) : WipeFilter(sub), dur);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
+    case Anim::FlyOut:
+      Prop(x, id, tgt, "ppt_x", "ppt_x", sub & 8 ? "0-ppt_w/2" : sub & 2 ? "1+ppt_w/2" : "ppt_x", dur, true, false);
+      Prop(x, id, tgt, "ppt_y", "ppt_y", sub & 1 ? "0-ppt_h/2" : sub & 4 ? "1+ppt_h/2" : "ppt_y", dur, true, false);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
+    case Anim::FloatOut:
+      Filter(x, id, tgt, false, "fade", dur);
+      Prop(x, id, tgt, "ppt_x", "ppt_x", "ppt_x", dur, false, false);
+      Prop(x, id, tgt, "ppt_y", "ppt_y", down ? "ppt_y+.1" : "ppt_y-.1", dur, false, false);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
     case Anim::ZoomOut:
-      return Prop(id, tgt, "ppt_w", "ppt_w", "0", dur, false, false) + Prop(id, tgt, "ppt_h", "ppt_h", "0", dur, false, false) +
-             Filter(id, tgt, false, "fade", dur) + SetVis(id, tgt, false, dur - 1);
+      Prop(x, id, tgt, "ppt_w", "ppt_w", "0", dur, false, false);
+      Prop(x, id, tgt, "ppt_h", "ppt_h", "0", dur, false, false);
+      Filter(x, id, tgt, false, "fade", dur);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
     default:
-      return {};
+      break;
   }
+  return x;
 }
 
 std::string TargetXml(uint32_t spid, int first, int last) {
-  std::string x = "<p:tgtEl><p:spTgt spid=\"" + std::to_string(spid) + "\"";
-  if (first < 0) return x + "/></p:tgtEl>";
-  return x + "><p:txEl><p:pRg st=\"" + std::to_string(first) + "\" end=\"" + std::to_string(last) +
-         "\"/></p:txEl></p:spTgt></p:tgtEl>";
+  std::string x;
+  Cat(x, {"<p:tgtEl><p:spTgt spid=\"", std::to_string(spid), "\""});
+  if (first < 0) x += "/></p:tgtEl>";
+  else Cat(x, {"><p:txEl><p:pRg st=\"", std::to_string(first), "\" end=\"", std::to_string(last), "\"/></p:txEl></p:spTgt></p:tgtEl>"});
+  return x;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1130,7 +1213,12 @@ TransitionInfo GetTransition(const Editor& ed, size_t slide) {
   Editor::Impl& m = const_cast<Editor&>(ed).Internals();
   std::string part = m.SlidePart(slide);
   pugi::xml_node root = part.empty() ? pugi::xml_node() : m.Root(part);
-  return root ? ReadTransition(root) : TransitionInfo{};
+  if (!root) return {};
+  std::string from;
+  if (FindTransition(root).node || !LayoutTransition(m, part, &from)) return ReadTransition(root);
+  TransitionInfo info = ReadTransition(m.Root(from));
+  info.inherited = true;
+  return info;
 }
 
 Result SetTransition(Editor& ed, const std::vector<size_t>& slides, const TransitionPatch& patch) {
@@ -1154,28 +1242,40 @@ Result ApplyTransitionToAll(Editor& ed, size_t from) {
   Editor::Impl& m = ed.Internals();
   std::vector<Editor::Impl::SlideEntry> list = m.SlideList();
   if (from >= list.size()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  pugi::xml_node src = m.Root(list[from].part);
-  if (!src) return call.End(Result::Fail(u"The slide can't be read."));
-  TransSlot s = FindTransition(src);
-  std::string fromXml = s.node ? Serialize(s.node) : std::string();
+  if (!m.Root(list[from].part)) return call.End(Result::Fail(u"The slide can't be read."));
+  // What the slide plays: its own transition, or its layout's.
+  std::string srcPart;
+  auto source = [&] {
+    srcPart = list[from].part;
+    pugi::xml_node own = FindTransition(m.Root(srcPart)).node;
+    return own ? own : LayoutTransition(m, list[from].part, &srcPart);
+  };
+  pugi::xml_node node = source();
+  const std::string fromXml = node ? Serialize(node) : std::string();
+  const bool sound = node && node.find_node([](pugi::xml_node n) { return IsP(n, "sndAc"); });
   for (size_t i = 0; i < list.size(); ++i) {
     if (i == from) continue;
     pugi::xml_node look = m.Root(list[i].part);
     if (!look) continue;
     TransSlot here = FindTransition(look);
-    // The same already (a sound is copied anyway: its relationship may name another sound here).
-    bool sound = s.node && s.node.find_node([](pugi::xml_node n) { return IsP(n, "sndAc"); });
-    if (!sound && (here.node ? Serialize(here.node) : std::string()) == fromXml) continue;
+    const bool layoutHas = static_cast<bool>(LayoutTransition(m, list[i].part, nullptr));
+    // The same already (a sound is copied anyway: its relationship may name another sound here), or
+    // none to play and none playing.
+    if (!sound && here.node && Serialize(here.node) == fromXml) continue;
+    if (!node && !here.node && !layoutHas) continue;
     pugi::xml_node root = m.Edit(list[i].part);
     if (!root) continue;
-    src = m.Root(list[from].part);
-    s = FindTransition(src);
+    node = source();
     here = FindTransition(root);
-    if (s.node) {
-      pugi::xml_node place = here.node ? here.node : TransitionPlace(root);
-      pugi::xml_node copy = InsertCopy(root, s.node, place);
-      if (!CopyRels(m, list[from].part, list[i].part, copy))
+    pugi::xml_node place = here.node ? here.node : TransitionPlace(root);
+    if (node) {
+      if (!CopyTransition(m, srcPart, node, list[i].part, root, place))
         return call.End(Result::Fail(u"The transition's sound can't be copied to the other slides."));
+    } else if (layoutHas) {
+      // None over a layout's transition: an empty one of the slide's own.
+      pugi::xml_document doc;
+      if (!Fragment(TransitionXml(TransTarget{}, false), doc)) return call.End(Result::Fail(u"The transition can't be written."));
+      InsertCopy(root, doc.document_element().first_child(), place);
     }
     if (here.node) root.remove_child(here.node);
   }
@@ -1233,7 +1333,10 @@ std::vector<AnimEffect> MainSequence(const Editor& ed, size_t slide, std::u16str
     a.cls = c.cls;
     a.option = c.option;
     a.trigger = e.trigger;
-    a.durationMs = Length(e.cTn) * Repeat(e.cTn);
+    a.durationMs = Length(e.cTn);
+    double v;
+    const char* rc = e.cTn.attribute("repeatCount").value();
+    a.repeat = std::string_view(rc) == "indefinite" ? 0 : ParseMs(rc, v) ? v / 1000 : 1;
     a.delayMs = CondDelay(e.cTn);
     a.editable = c.def && c.editable;
     a.presetId = static_cast<int>(Number(e.cTn.attribute("presetID").value(), 0));
@@ -1316,11 +1419,11 @@ Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& sp
     AnimTrigger trigger = k == 0 ? spec.trigger : AnimTrigger::OnClick;
     std::string tgt = TargetXml(shape, ranges[k].first, ranges[k].second);
     std::string effectId = ids();
-    x += "<p:par><p:cTn id=\"" + effectId + "\" presetID=\"" + std::to_string(PresetIdOf(*def, option)) + "\" presetClass=\"" +
-         def->presetClass + "\" presetSubtype=\"" + std::to_string(OptOf(*def, option).subtype) + "\" fill=\"hold\"" +
-         (grp.empty() ? std::string() : " grpId=\"" + grp + "\"") + " nodeType=\"" + NodeTypeOf(trigger) +
-         "\"><p:stCondLst><p:cond delay=\"" + MsText(spec.delayMs) + "\"/></p:stCondLst><p:childTnLst>" +
-         Behaviors(*def, option, ms, tgt, ids) + "</p:childTnLst></p:cTn></p:par>";
+    Cat(x, {"<p:par><p:cTn id=\"", effectId, "\" presetID=\"", std::to_string(PresetIdOf(*def, option)), "\" presetClass=\"",
+            def->presetClass, "\" presetSubtype=\"", std::to_string(OptOf(*def, option).subtype), "\" fill=\"hold\"",
+            grp.empty() ? "" : " grpId=\"", grp, grp.empty() ? "" : "\"", " nodeType=\"", NodeTypeOf(trigger),
+            "\"><p:stCondLst><p:cond delay=\"", MsText(spec.delayMs), "\"/></p:stCondLst><p:childTnLst>",
+            Behaviors(*def, option, ms, tgt, ids), "</p:childTnLst></p:cTn></p:par>"});
   }
   pugi::xml_document doc;
   if (!Fragment(x, doc)) return call.End(Result::Fail(u"The animation can't be written."));
@@ -1483,6 +1586,37 @@ Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& eff
   Rebuild(root, s, rest);
   if (PChild(root, "timing") == timing) DropBuilds(root, groups);
   return call.End({});
+}
+
+Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byParagraph) {
+  const std::vector<AnimEffect> seq = MainSequence(ed, slide);
+  if (effect >= seq.size()) return Result::Fail(u"That animation isn't on the slide.");
+  const AnimEffect a = seq[effect];
+  if (!a.editable) return Result::Fail(u"This animation's options can't be changed in Featherweight.");
+  auto same = [&](size_t k) { return seq[k].shape == a.shape && seq[k].paragraph >= 0 && seq[k].anim == a.anim; };
+  size_t first = effect, last = effect;
+  if (a.paragraph >= 0) {
+    while (first > 0 && same(first - 1)) --first;
+    while (last + 1 < seq.size() && same(last + 1)) ++last;
+  }
+  if ((a.paragraph >= 0) == byParagraph) return {};
+  EditGroup group(ed, u"Effect Options");
+  AnimSpec s;
+  s.anim = a.anim;
+  s.option = a.option;
+  s.trigger = seq[first].trigger;
+  s.delayMs = seq[first].delayMs;
+  s.byParagraph = byParagraph;
+  if (DefaultAnimMs(a.anim) > 0) s.durationMs = seq[first].durationMs;
+  // The new effects in front of the old ones, then the old ones removed; the group is cancelled
+  // (nothing changed) when either is refused.
+  if (Result r = AddAnimation(ed, slide, a.shape, s, static_cast<int>(first)); !r) return r;
+  const size_t added = MainSequence(ed, slide).size() - seq.size();
+  std::vector<size_t> old;
+  for (size_t k = first; k <= last; ++k) old.push_back(k + added);
+  Result r = RemoveAnimations(ed, slide, old);
+  group.done = static_cast<bool>(r);
+  return r;
 }
 
 }  // namespace fw::slide::edit

@@ -115,6 +115,12 @@ std::vector<TitleBar::QuickButton> App::QuickAccess(const RibbonModel& m) {
       if (it.cmd == cmd && !it.choices.empty()) b.list = true;
     q.push_back(b);
   }
+  // The tab's own buttons after Redo.
+  for (const ToolItem& it : m.quick) {
+    if (!it.glyph || it.cmd == CmdSave || it.cmd == CmdUndo || it.cmd == CmdRedo) continue;
+    const CommandState s = QueryCommand(it.cmd);
+    if (s.visible) q.push_back({it.cmd, it.glyph, s.Tooltip(), s.enabled});
+  }
   return q;
 }
 

@@ -441,6 +441,10 @@ void DropUnusedRels(Editor::Impl& m, std::string_view part, pugi::xml_node root,
 
 // ---- Shared (ShapeXml.h)
 
+void DropShapeRefs(Editor::Impl& m, pugi::xml_node root, const std::set<uint32_t>& ids) {
+  if (!ids.empty()) RemoveShapeRefs(m.registry, root, ids);
+}
+
 std::string ColorFillXml(const ColorSpec& c) {
   switch (c.kind) {
     case ColorSpec::Kind::None:

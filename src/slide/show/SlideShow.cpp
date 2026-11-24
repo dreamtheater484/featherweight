@@ -329,6 +329,9 @@ class Show final : public anim::FrameSource, private PresenterHost {
   }
   void PresenterClosed() override { PostStop(); }
   bool PresenterBusy() const override { return Moving(); }
+  void PresenterSwap() override;
+  // The slide's place in a client area of w x h pixels (letterboxed, centered); the text formats with it.
+  void Place(UINT w, UINT h);
   SlideOrder order_;  // hidden slides, the loop, custom shows
   int hoverItem_ = -1;  // the item the mouse is over whose mouse-over action has run
   size_t lastShown_ = 0;
@@ -412,7 +415,19 @@ bool Show::Create() {
   HMONITOR mon = nullptr;
   if (opts_.monitor >= 0 && opts_.monitor < static_cast<int>(monitors.handles.size()))
     mon = monitors.handles[opts_.monitor];
-  if (!mon) mon = MonitorFromWindow(opts_.owner, MONITOR_DEFAULTTOPRIMARY);
+  const HMONITOR ownerMon = MonitorFromWindow(opts_.owner, MONITOR_DEFAULTTOPRIMARY);
+  if (!mon && opts_.presenter && !opts_.windowed && opts_.captureDir.empty()) {
+    // Automatic, with the presenter view: the slides on a monitor the app isn't on (a secondary one
+    // first: the projector), the presenter view stays with the app, as PowerPoint does.
+    for (HMONITOR h : monitors.handles) {
+      if (h == ownerMon) continue;
+      MONITORINFO info{sizeof(info)};
+      const bool primary = GetMonitorInfoW(h, &info) && (info.dwFlags & MONITORINFOF_PRIMARY);
+      if (!mon || !primary) mon = h;
+      if (!primary) break;
+    }
+  }
+  if (!mon) mon = ownerMon;
   MONITORINFOEXW mi{};
   mi.cbSize = sizeof(mi);
   GetMonitorInfoW(mon, &mi);
@@ -446,15 +461,7 @@ bool Show::Create() {
   RECT client{};
   GetClientRect(hwnd_, &client);
   if (capture_) client = {0, 0, r.right - r.left, r.bottom - r.top};
-  w_ = static_cast<UINT>(std::max(1L, client.right - client.left));
-  h_ = static_cast<UINT>(std::max(1L, client.bottom - client.top));
-  scale_ = std::min(w_ / size.width, h_ / size.height);
-  slideW_ = size.width * scale_;
-  slideH_ = size.height * scale_;
-  ox_ = std::floor((w_ - slideW_) / 2);
-  oy_ = std::floor((h_ - slideH_) / 2);
-  fw_ = static_cast<UINT>(std::max(1.f, std::ceil(slideW_)));
-  fh_ = static_cast<UINT>(std::max(1.f, std::ceil(slideH_)));
+  Place(static_cast<UINT>(std::max(1L, client.right - client.left)), static_cast<UINT>(std::max(1L, client.bottom - client.top)));
   bench_ = !opts_.benchReport.empty();
   Presentation* deck = &deck_;
   order_ = SlideOrder(
@@ -464,12 +471,6 @@ bool Show::Create() {
         return s && s->hidden;
       },
       deck_.Show().loop && !bench_);
-  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                                  DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
-  if (endFormat_) endFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                                  DWRITE_FONT_STRETCH_NORMAL, std::max(11.f, h_ / 64.f), L"", &noteFormat_);
-  if (noteFormat_) noteFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   if (!EnsureDevice()) {
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
@@ -487,7 +488,7 @@ bool Show::Create() {
   if (opts_.presenter) {
     // Beside the windowed show, or full screen on another monitor; with one monitor and full screen,
     // none (PowerPoint shows only the slides then).
-    HMONITOR where = opts_.windowed ? mon : nullptr;
+    HMONITOR where = opts_.windowed ? mon : (ownerMon != mon ? ownerMon : nullptr);  // with the app, if it can
     for (size_t i = 0; !where && i < monitors.handles.size(); ++i)
       if (monitors.handles[i] != mon) where = monitors.handles[i];
     if (where) presenter_ = PresenterView::Create(*this, deck_, renderer_, where, opts_.windowed, opts_.owner);
@@ -511,6 +512,49 @@ bool Show::Create() {
 }
 
 // ---- Device ---------------------------------------------------------------------------------
+
+void Show::Place(UINT w, UINT h) {
+  draw::Size size = renderer_.SlideSize();
+  if (size.width <= 0 || size.height <= 0) size = {720, 540};
+  w_ = std::max(1u, w);
+  h_ = std::max(1u, h);
+  scale_ = std::min(w_ / size.width, h_ / size.height);
+  slideW_ = size.width * scale_;
+  slideH_ = size.height * scale_;
+  ox_ = std::floor((w_ - slideW_) / 2);
+  oy_ = std::floor((h_ - slideH_) / 2);
+  fw_ = static_cast<UINT>(std::max(1.f, std::ceil(slideW_)));
+  fh_ = static_cast<UINT>(std::max(1.f, std::ceil(slideH_)));
+  endFormat_.Reset();
+  noteFormat_.Reset();
+  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                  DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
+  if (endFormat_) endFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                  DWRITE_FONT_STRETCH_NORMAL, std::max(11.f, h_ / 64.f), L"", &noteFormat_);
+  if (noteFormat_) noteFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+}
+
+void Show::PresenterSwap() {
+  // Swap Displays: the slides go to the presenter view's monitor and the view to the slides'. The show
+  // takes the other monitor's size: a new swap chain, and its pictures are made again at that size.
+  if (!presenter_ || !presenter_->Window() || opts_.windowed || capture_ || bench_) return;
+  const HMONITOR showMon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+  const HMONITOR viewMon = MonitorFromWindow(presenter_->Window(), MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi{sizeof(mi)};
+  if (showMon == viewMon || !GetMonitorInfoW(viewMon, &mi)) return;
+  presenter_->MoveTo(showMon);
+  const RECT& r = mi.rcMonitor;
+  SetWindowPos(hwnd_, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  RECT client{};
+  GetClientRect(hwnd_, &client);
+  Place(static_cast<UINT>(std::max(1L, client.right)), static_cast<UINT>(std::max(1L, client.bottom)));
+  DropDevice();  // the old size's swap chain and pictures
+  built_.reset();
+  if (!EnsureDevice()) return;
+  Redraw();
+  if (!Animating()) PostMessageW(hwnd_, kMsgPrerender, 0, 0);  // the next slide at the new size, then the view
+}
 
 bool Show::EnsureDevice() {
   if (dc_ && target_ && generation_ == gpu::Generation()) return true;
@@ -1707,6 +1751,7 @@ int Show::CaptureAll() {
     save(end, slide, k);
   };
   GoTo(FirstIndex() == kEnd ? kEnd : std::min(opts_.first, deck_.SlideCount() - 1), true, false);
+  bool blackSaved = false;
   for (int guard = 0; guard < 5000 && cur_ && cur_->index != kEnd; ++guard) {
     const size_t slide = cur_->index;
     if (transition_) {
@@ -1721,6 +1766,12 @@ int Show::CaptureAll() {
     else
       save(L"s%02zu-1-start", slide, 0);
     savePresenter(L"p%02zu-1-start", slide, 0);
+    if (presenter_ && !blackSaved) {  // the presenter view while the show is black, once
+      blackSaved = true;
+      blank_ = 1;
+      savePresenter(L"p%02zu-1-black", slide, 0);
+      blank_ = 0;
+    }
     // Triggers: a click on each trigger shape.
     for (size_t t = 0; t < cur_->timing.triggers.size(); ++t) {
       const Sequence& seq = cur_->timing.triggers[t];

@@ -15,6 +15,9 @@ namespace fw::slide::view {
 
 // Null with a plain-language message in `error` when the file can't be read as a presentation.
 std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error);
+// An OpenDocument presentation (.odp, .otp), converted (P3, p3-files): the file itself isn't kept.
+std::unique_ptr<Deck> OpenOpenDocument(const std::wstring& path, std::wstring& error);
+bool IsOpenDocument(const std::wstring& path);
 
 // A PowerPoint 97-2003 presentation (.ppt, .pps, .pot: a compound file with a "PowerPoint Document"
 // stream) converted into the .pptx it's shown and saved as (P3, p3-ppt). False when the file isn't

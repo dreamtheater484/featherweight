@@ -597,3 +597,196 @@ TEST(SlideAnimMediaPlayStepTakesItsStart) {
   CHECK_EQ(seq.size(), 2u);
   CHECK(seq.size() == 2 && seq[0].trigger == AnimTrigger::OnClick && seq[1].anim == Anim::Fade);
 }
+
+// Effect Options › Sequence: the body placeholder by paragraph and back, its kind, option and timing
+// kept; a shape without text can't go by paragraph, and nothing changes then.
+TEST(SlideAnimSequenceByParagraphAndBack) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  CHECK(WriteSlide(ed, 0, std::string(kHead) + "</p:sld>"));
+  CHECK(AddAnimation(ed, 0, 2, AnimSpec{}));
+  AnimSpec fly;
+  fly.anim = Anim::FlyIn;
+  fly.option = 2;
+  fly.trigger = AnimTrigger::AfterPrevious;
+  fly.delayMs = 250;
+  CHECK(AddAnimation(ed, 0, 3, fly));
+
+  CHECK(SetAnimationSequence(ed, 0, 1, true));
+  CHECK(ed.UndoName() == u"Effect Options");
+  std::vector<AnimEffect> seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 3u);  // "One" with "One.a" under it, and "Two"; the empty paragraph left out
+  if (seq.size() != 3) return;
+  CHECK(seq[1].shape == 3 && seq[1].paragraph == 0 && seq[1].anim == Anim::FlyIn && seq[1].option == 2);
+  CHECK(seq[1].trigger == AnimTrigger::AfterPrevious && seq[1].delayMs == 250);
+  CHECK(seq[2].shape == 3 && seq[2].paragraph == 3);
+  std::string x = SlideXml(ed, 0);
+  CHECK_EQ(Count(x, "<p:bldP spid=\"3\""), 1u);
+  CHECK(Has(x, "build=\"p\""));
+  CHECK(IdsUnique(x));
+
+  // Back to one object, from the second paragraph's effect.
+  CHECK(SetAnimationSequence(ed, 0, 2, false));
+  seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 2u);
+  if (seq.size() != 2) return;
+  CHECK(seq[1].shape == 3 && seq[1].paragraph == -1 && seq[1].anim == Anim::FlyIn && seq[1].option == 2);
+  CHECK(seq[1].trigger == AnimTrigger::AfterPrevious && seq[1].delayMs == 250);
+  x = SlideXml(ed, 0);
+  CHECK_EQ(Count(x, "<p:bldP spid=\"3\""), 1u);
+  CHECK(!Has(x, "build=\"p\""));
+  CHECK(IdsUnique(x));
+  // Already one object: nothing to do.
+  CHECK(SetAnimationSequence(ed, 0, 1, false));
+
+  // A shape without text: refused, and the slide as it was.
+  uint32_t rect = 0;
+  CHECK(ed.InsertAutoShape(0, "rect", {100, 100, 200, 160}, &rect));
+  CHECK(AddAnimation(ed, 0, rect, AnimSpec{}));
+  const std::string before = SlideXml(ed, 0);
+  CHECK(!SetAnimationSequence(ed, 0, 2, true));
+  CHECK(SlideXml(ed, 0) == before);
+  CHECK(ed.UndoName() == u"Add Animation");
+}
+
+// A layout change that drops an empty placeholder takes its effects and build with it (p3-corpus's
+// torture: new slide, an effect on its empty title, then a layout without a title).
+TEST(SlideAnimLayoutChangeDropsTheEffectsOfDroppedPlaceholders) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  size_t title = SIZE_MAX, blank = SIZE_MAX;
+  for (size_t i = 0; i < deck->Layouts().size(); ++i) {
+    if (deck->Layouts()[i]->type == "title") title = i;
+    if (deck->Layouts()[i]->type == "blank") blank = i;
+  }
+  CHECK(title != SIZE_MAX && blank != SIZE_MAX);
+  if (title == SIZE_MAX || blank == SIZE_MAX) return;
+  const size_t at = deck->SlideCount();
+  CHECK(ed.NewSlide(at, title));
+  const Slide* slide = deck->GetSlide(at);
+  CHECK(slide && !slide->shapes.empty());
+  if (!slide || slide->shapes.empty()) return;
+  const uint32_t shape = slide->shapes.front().id;
+  AnimSpec floatOut;
+  floatOut.anim = Anim::FloatOut;
+  floatOut.option = 1;
+  CHECK(AddAnimation(ed, at, shape, floatOut));
+  CHECK(Has(SlideXml(ed, at), "<p:spTgt spid=\"" + std::to_string(shape) + "\""));
+  CHECK(ed.SetLayout({at}, blank));
+  const std::string x = SlideXml(ed, at);
+  CHECK(!Has(x, "spid=\"" + std::to_string(shape) + "\""));
+  CHECK(MainSequence(ed, at).empty());
+  CHECK(ed.Undo());
+  CHECK_EQ(MainSequence(ed, at).size(), 1u);
+}
+
+// PowerPoint's Duration is one play; Repeat is apart (p3-corpus's read-back: a path repeated twice).
+TEST(SlideAnimDurationIsOnePlay) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  std::string fade =
+      "<p:par><p:cTn id=\"5\" presetID=\"10\" presetClass=\"entr\" presetSubtype=\"0\" repeatCount=\"2000\" fill=\"hold\" grpId=\"0\" "
+      "nodeType=\"clickEffect\"><p:stCondLst><p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id=\"6\" dur=\"1\" "
+      "fill=\"hold\"><p:stCondLst><p:cond delay=\"0\"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl><p:attrNameLst>"
+      "<p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"visible\"/></p:to></p:set>"
+      "<p:animEffect transition=\"in\" filter=\"fade\"><p:cBhvr><p:cTn id=\"7\" dur=\"500\"/><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl>"
+      "</p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>";
+  CHECK(WriteSlide(ed, 0, std::string(kHead) + TimingWith(fade, "<p:bldLst><p:bldP spid=\"3\" grpId=\"0\"/></p:bldLst>") + "</p:sld>"));
+  std::vector<AnimEffect> seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 1u);
+  if (seq.size() != 1) return;
+  CHECK(seq[0].durationMs == 500 && seq[0].repeat == 2);
+  AnimTimingPatch p;
+  p.durationMs = 1000;
+  CHECK(SetAnimationTiming(ed, 0, {0}, p));
+  seq = MainSequence(ed, 0);
+  CHECK(seq.size() == 1 && seq[0].durationMs == 1000 && seq[0].repeat == 2);
+  CHECK(Has(SlideXml(ed, 0), "<p:cTn id=\"7\" dur=\"1000\"/>"));
+}
+
+// A slide without a transition of its own plays its layout's (p3-corpus's read-back: PowerPoint's
+// SlideShowTransition reads it). Changing it writes the slide its own; None over it is an empty one.
+TEST(SlideAnimTransitionFromTheLayout) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  const std::string layoutPart = deck->GetSlide(0)->layout ? deck->GetSlide(0)->layout->part : std::string();
+  CHECK(!layoutPart.empty());
+  if (layoutPart.empty()) return;
+  std::vector<uint8_t> b;
+  CHECK(ed.ReadPart(layoutPart, b));
+  std::string layout(b.begin(), b.end());
+  const size_t at = layout.find("<p:clrMapOvr>") != std::string::npos ? layout.find("<p:clrMapOvr>") : layout.find("</p:sldLayout>");
+  // After clrMapOvr if there is one: transition comes after it in the schema.
+  size_t place = layout.find("</p:clrMapOvr>");
+  place = place != std::string::npos ? place + 14 : at;
+  layout.insert(place, "<p:transition spd=\"slow\"><p:wipe/></p:transition>");
+  CHECK(ed.Run(u"Write", [&] {
+    return ed.WritePart(layoutPart, std::vector<uint8_t>(layout.begin(), layout.end())) ? Result{} : Result::Fail(u"write");
+  }));
+  CHECK(!Has(SlideXml(ed, 0), "<p:transition"));
+
+  TransitionInfo t = GetTransition(ed, 0);
+  CHECK(t.inherited && t.effect == TransitionEffect::Wipe && t.durationMs == 1000);
+  CHECK(show::ParseTransition(deck->GetSlide(0)->transition).durationMs == 1000);  // the show plays it
+
+  // A new duration: the slide gets its own wipe.
+  TransitionPatch longer;
+  longer.durationMs = 2000;
+  CHECK(SetTransition(ed, {0}, longer));
+  t = GetTransition(ed, 0);
+  CHECK(!t.inherited && t.effect == TransitionEffect::Wipe && t.durationMs == 2000);
+  CHECK(Has(SlideXml(ed, 0), "<p:wipe"));
+
+  // None over the layout's: an empty transition of the slide's own, and nothing plays.
+  TransitionPatch none;
+  none.effect = TransitionEffect::None;
+  CHECK(SetTransition(ed, {0}, none));
+  t = GetTransition(ed, 0);
+  CHECK(!t.inherited && t.effect == TransitionEffect::None);
+  const std::string x = SlideXml(ed, 0);
+  CHECK(Has(x, "<p:transition") && !Has(x, "<p:wipe"));
+  CHECK(show::ParseTransition(deck->GetSlide(0)->transition).kind == show::TransitionKind::None);
+
+  // Apply To All from a slide playing the layout's: every slide gets its own copy.
+  CHECK(ed.Undo(2));
+  CHECK(GetTransition(ed, 0).inherited);
+  CHECK(ApplyTransitionToAll(ed, 0));
+  for (size_t i = 1; i < deck->SlideCount(); ++i) {
+    t = GetTransition(ed, i);
+    CHECK(!t.inherited && t.effect == TransitionEffect::Wipe);
+  }
+}
+
+// Header & Footer turning slide numbers off drops the number's placeholder with its effects and build
+// (p3-corpus's torture: an effect on a slide-number placeholder, then Header & Footer without it).
+TEST(SlideAnimHeaderFooterDropsTheEffectsOfDroppedPlaceholders) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  size_t layout = SIZE_MAX;
+  for (size_t i = 0; i < deck->Layouts().size(); ++i)
+    if (deck->Layouts()[i]->type == "obj") layout = i;
+  CHECK(layout != SIZE_MAX);
+  if (layout == SIZE_MAX) return;
+  const size_t at = deck->SlideCount();
+  CHECK(ed.NewSlide(at, layout));
+  HeaderFooter numbers;
+  numbers.slideNumber = true;
+  CHECK(ed.SetHeaderFooter({at}, numbers));
+  uint32_t number = 0;
+  for (const Shape& sh : deck->GetSlide(at)->shapes)
+    if (sh.placeholder.type == PlaceholderType::SlideNumber) number = sh.id;
+  CHECK(number != 0);
+  if (!number) return;
+  AnimSpec fade;
+  CHECK(AddAnimation(ed, at, number, fade));
+  CHECK_EQ(MainSequence(ed, at).size(), 1u);
+  CHECK(ed.SetHeaderFooter({at}, HeaderFooter{}));
+  const std::string x = SlideXml(ed, at);
+  CHECK(!Has(x, "spid=\"" + std::to_string(number) + "\""));
+  CHECK(MainSequence(ed, at).empty());
+}

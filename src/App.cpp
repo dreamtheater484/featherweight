@@ -1909,7 +1909,7 @@ void App::OpenDialog(bool templates) {
   std::wstring tmpl;
   if (fw::EditorShipped(fw::FileKind::Document)) tmpl += L"*.dotx;*.dotm;*.ott";
   if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
-  if (fw::EditorShipped(fw::FileKind::Presentation)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.potx;*.potm";
+  if (fw::EditorShipped(fw::FileKind::Presentation)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.potx;*.potm;*.otp";
   if (tmpl.empty()) templates = false;
   COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
                                  {L"Files Featherweight opens", all.c_str()},

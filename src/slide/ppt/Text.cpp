@@ -479,10 +479,14 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
       const Cf runCf = cfFor(i);
       const Cf* run = cfAt(i);
       const TextLink* lk = linkAt(i);
+      const auto spacing = [&](size_t at) { return at < text.spacing.size() ? text.spacing[at] : 0; };
+      const int spc = spacing(i);
       size_t j = i + 1;
-      while (j < end && s[j] != u'\v' && cfAt(j) == run && linkAt(j) == lk && !fieldAt(j)) ++j;
+      while (j < end && s[j] != u'\v' && cfAt(j) == run && linkAt(j) == lk && !fieldAt(j) && spacing(j) == spc) ++j;
       const std::string rel = lk && linkRel ? linkRel(lk->target) : std::string();
-      out += "<a:r>" + RunProps("rPr", runCf, cx, rel) + "<a:t>" + Esc(s.substr(i, j - i)) + "</a:t></a:r>";
+      std::string rPr = RunProps("rPr", runCf, cx, rel);
+      if (spc) rPr.insert(6, " spc=\"" + Num(spc) + "\"");  // after "<a:rPr"
+      out += "<a:r>" + rPr + "<a:t>" + Esc(s.substr(i, j - i)) + "</a:t></a:r>";
       i = j;
     }
     out += RunProps("endParaRPr", cfFor(end), cx) + "</a:p>";

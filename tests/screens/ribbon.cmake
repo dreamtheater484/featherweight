@@ -141,6 +141,14 @@ elseif(MODE STREQUAL "slide")
   if(NOT code EQUAL 0 OR NOT err MATCHES "animdump: 1\\. shape [0-9]+ Fly In option 0, click" OR NOT err MATCHES "animdump: 2\\. shape [0-9]+ Wipe option 0, click")
     message(FATAL_ERROR "The Animations gallery didn't change the picked effect (${code}):\n${err}")
   endif()
+  # Effect Options › Sequence: the subtitle by paragraph (3866), then as one object again (3865).
+  execute_process(COMMAND "${EXE}" --snapshot "${OUT}/slide-anim-sequence.png" --size 1366x768 --theme light
+                          --script "edit:subtitle;key:esc;animadd:3;cmd:3866;animdump;cmd:3865;animdump;ribbon:Animations;ribboncheck"
+                          "${FILES}/simple.pptx"
+                  RESULT_VARIABLE code ERROR_VARIABLE err TIMEOUT 120)
+  if(NOT code EQUAL 0 OR NOT err MATCHES "animdump: 1\\. shape [0-9]+ paragraph 0 Fly In option 0, click.*animdump: 1\\. shape [0-9]+ Fly In option 0, click")
+    message(FATAL_ERROR "Effect Options › Sequence didn't animate by paragraph and back (${code}):\n${err}")
+  endif()
 else()
   message(FATAL_ERROR "MODE: screens, word, sheet or slide")
 endif()

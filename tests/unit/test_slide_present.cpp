@@ -324,10 +324,20 @@ TEST(SlideMediaStart) {
     CHECK(ev.size() == 1 && ev[0].command == MediaCommand::TogglePause);
   }
 
-  // Back In Click Sequence: a play step again, on a click.
-  CHECK(ed.SetMediaStart(0, video, MediaStart::InClickSequence).ok);
+  // The embedded file, for the clip's length (the view reads it with Media Foundation).
+  std::vector<uint8_t> file;
+  std::string ext;
+  CHECK(ed.GetMediaFile(0, video, &file, &ext) && file == Mp4() && ext == "mp4");
+  CHECK(!ed.GetMediaFile(0, 2, &file, &ext));
+  CHECK(PartText(ed, part).find("dur=\"4000\"") == std::string::npos);  // the play step went with its length
+
+  // Back In Click Sequence: a play step again, on a click, its cmd keeping the clip's length (PowerPoint
+  // writes it there, and After Previous delays count it).
+  CHECK(ed.SetMediaStart(0, video, MediaStart::InClickSequence, 4000).ok);
   CHECK(ed.GetMediaStart(0, video, &s) && s == MediaStart::InClickSequence);
-  t = SlideTiming(PartText(ed, part));
+  const std::string back = PartText(ed, part);
+  CHECK(back.find("dur=\"4000\"") != std::string::npos);
+  t = SlideTiming(back);
   CHECK(t.main.steps.size() == 1 && t.main.steps[0].start == fw::slide::show::StepStart::Click);
   CHECK(t.triggers.size() == 1 && t.media.size() == 1);
   CHECK(ed.SetMediaStart(0, video, MediaStart::InClickSequence).ok);  // no change: no step

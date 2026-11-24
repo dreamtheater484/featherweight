@@ -153,6 +153,8 @@ struct RibbonModel {
   std::wstring show;
   // Quick access in the title bar (Save, Undo, Redo) runs the commands CmdSave, CmdUndo and CmdRedo.
   // An item here with the same command and `choices` adds a ▾ with that list (the actions Undo
-  // would take back); picking one calls its onChange with ToolValue::index.
+  // would take back); picking one calls its onChange with ToolValue::index. An item with another
+  // command and a glyph is a button of the tab's own after Redo (a presentation's From Beginning, as
+  // PowerPoint's quick access has).
   std::vector<ToolItem> quick;
 };

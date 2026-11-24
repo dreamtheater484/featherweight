@@ -2321,10 +2321,25 @@ bool ObjectTool::SelectedStart(int* start) {
 
 bool ObjectTool::SetSelectedStart(int start) {
 #if FW_SLIDE_EDIT
+  using fw::slide::edit::MediaStart;
   fw::slide::edit::MediaPlayback p;
-  if (start < 0 || start > 2 || !Editable() || !SelectedPlayback(&p, nullptr)) return false;
-  const fw::slide::edit::Result res = host_.deck()->Editor()->SetMediaStart(
-      host_.current(), selection_[0], static_cast<fw::slide::edit::MediaStart>(start));
+  bool video = false;
+  if (start < 0 || start > 2 || !Editable() || !SelectedPlayback(&p, &video)) return false;
+  fw::slide::edit::Editor* ed = host_.deck()->Editor();
+  const auto want = static_cast<MediaStart>(start);
+  // From When Clicked On a play step comes back: the clip's length for its dur, as PowerPoint writes it.
+  double durationMs = 0;
+  MediaStart was{};
+  std::vector<uint8_t> bytes;
+  std::string ext;
+  if (want != MediaStart::WhenClickedOn && ed->GetMediaStart(host_.current(), selection_[0], &was) &&
+      was == MediaStart::WhenClickedOn && ed->GetMediaFile(host_.current(), selection_[0], &bytes, &ext)) {
+    std::wstring wext = L".";
+    for (char c : ext) wext += static_cast<wchar_t>(std::towlower(static_cast<unsigned char>(c)));
+    fw::slide::show::MediaInfo info;
+    if (fw::slide::show::ReadMediaInfo(bytes, wext, video, &info)) durationMs = info.durationMs;
+  }
+  const fw::slide::edit::Result res = ed->SetMediaStart(host_.current(), selection_[0], want, durationMs);
   if (!res) {
     Refused(W(res.message));
     return false;

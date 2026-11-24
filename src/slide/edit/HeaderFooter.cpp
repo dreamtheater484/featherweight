@@ -7,6 +7,7 @@
 #include <random>
 
 #include "slide/edit/EditInternal.h"
+#include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
 
 namespace fw::slide::edit {
@@ -149,6 +150,7 @@ Result Editor::SetHeaderFooter(const std::vector<size_t>& slides, const HeaderFo
         pugi::xml_node shape = PlaceholderShape(root, TypeOf(kind));
         const uint32_t id = ShapeId(shape);
         shape.parent().remove_child(shape);
+        DropShapeRefs(m, root, {id});  // its effects and build go with it, as deleting it does
         m.Touched(part, id);
         continue;
       }
