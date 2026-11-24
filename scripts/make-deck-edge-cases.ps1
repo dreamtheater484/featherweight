@@ -270,10 +270,16 @@ if ($Child) {
       $bytes = [IO.File]::ReadAllBytes($x.path)
       $cfb = $bytes.Length -gt 8 -and $bytes[0] -eq 0xD0 -and $bytes[1] -eq 0xCF -and $bytes[2] -eq 0x11 -and $bytes[3] -eq 0xE0
       $text = [Text.Encoding]::Unicode.GetString($bytes)
-      $kind = if ($x.path -like "*.ppt") { if ($text.Contains("EncryptedSummary")) { "an EncryptedSummary stream (CryptoAPI)" } else { "NO EncryptedSummary stream" } }
+      # A .ppt's encryption is a CryptSession10Container in its PowerPoint Document stream; an
+      # EncryptedSummary stream only when the document properties are encrypted too (they hold the
+      # slide titles). So the proof is PowerPoint's: a wrong password is refused, the right one opens.
+      $kind = if ($x.path -like "*.ppt") { if ($text.Contains("EncryptedSummary")) { "properties encrypted too (EncryptedSummary)" } else { "properties not encrypted (no EncryptedSummary)" } }
               elseif ($text.Contains("EncryptionInfo") -and $text.Contains("EncryptedPackage")) { "EncryptionInfo and EncryptedPackage streams" } else { "NO EncryptionInfo stream" }
+      $wrong = "refused"
+      try { $w = $pp.Presentations.Open($x.path + "::not-the-password::", -1, 0, 0); [void]$open.Add($w); $wrong = "OPENED (not encrypted)"; Close-Deck $w } catch {}
       $d = $pp.Presentations.Open($x.path + "::" + $testPassword + "::", -1, 0, 0); [void]$open.Add($d)
-      Note ("{0}: compound file {1}, {2}; opens with the test password: {3} slides" -f (Split-Path -Leaf $x.path), $cfb, $kind, $d.Slides.Count)
+      Note ("{0}: compound file {1}, {2}; a wrong password {3}; the test password opens {4} slides" -f (Split-Path -Leaf $x.path), $cfb, $kind, $wrong, $d.Slides.Count)
+      if ($wrong -ne "refused") { throw "$(Split-Path -Leaf $x.path) opens with a wrong password: it isn't encrypted" }
       Close-Deck $d
     }
     } catch { Fail-Section "encryption check" $_ }
