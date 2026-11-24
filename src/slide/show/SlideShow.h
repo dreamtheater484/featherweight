@@ -41,6 +41,9 @@ struct ShowOptions {
   bool windowed = false;
   // The presenter view: full screen on another monitor, or in a window of its own when windowed.
   bool presenter = false;
+  // Checking video playback (--show-media-report): each video's frames shown and skipped go to this
+  // JSON file when the show ends.
+  std::wstring mediaReport;
 };
 
 // Starts a show of `deck` drawn by `renderer` (both outlive it). False when a show runs already or
@@ -57,8 +60,9 @@ std::vector<std::wstring> Monitors();
 // pictures that check every transition and animation. Returns the exit code: 0, 1 when the deck
 // can't be opened, 2 when the bench dropped frames, 3 when the bench stopped on someone's input
 // (any key, click, wheel or mouse move, anywhere, or another program taking the focus).
-// `--show-windowed`: the show in a window; `--show-presenter`: with the presenter view (P3).
+// `--show-windowed`: the show in a window; `--show-presenter`: with the presenter view;
+// `--show-media-report <report.json>`: the videos' frames (P3).
 int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {},
-                  bool windowed = false, bool presenter = false);
+                  bool windowed = false, bool presenter = false, const std::wstring& mediaReport = {});
 
 }  // namespace fw::slide::show

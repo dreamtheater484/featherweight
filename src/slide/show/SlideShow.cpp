@@ -26,7 +26,9 @@
 #include "core/Strings.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "pkg/XmlDom.h"
 #include "slide/Presentation.h"
+#include "slide/show/MediaPlayer.h"
 #include "slide/show/PresenterView.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/Timing.h"
@@ -162,7 +164,9 @@ class Show final : public anim::FrameSource, private PresenterHost {
   void Stop() {
     if (hwnd_) DestroyWindow(hwnd_);
   }
-  bool Animating() const override { return transition_ || (cur_ && cur_->animator.Running(0)); }
+  // The slide moves: a transition or a step runs. The frame loop also runs while a video plays (P3).
+  bool Moving() const { return transition_ || (cur_ && cur_->animator.Running(0)); }
+  bool Animating() const override { return Moving() || VideoPlaying(); }
   void Frame() override;
   // --show-capture: every transition and step at its middle and end, as PNG files.
   int CaptureAll();
@@ -267,6 +271,22 @@ class Show final : public anim::FrameSource, private PresenterHost {
   std::unique_ptr<PresenterView> presenter_;
   std::unique_ptr<Scene> built_;
   int builtStep_ = -1;
+  // P3: the current slide's videos and audio, opened at their first command, gone when the slide changes.
+  struct Media {
+    uint32_t spid = 0;
+    size_t item = SIZE_MAX;  // in renderer_.Items: where a video's frames go
+    std::unique_ptr<MediaPlayer> player;
+    ID2D1Bitmap1* frame = nullptr;  // its newest frame (null: the poster shows)
+    float crop[4] = {0, 0, 0, 0};   // the picture's a:srcRect (left, top, right, bottom): the video's too
+  };
+  std::vector<Media> media_;
+  std::string mediaReport_;  // --show-media-report: each video's line
+  void ReleaseMedia();       // they stop (the report keeps their frames)
+  void TakeMedia();  // runs the media commands the slide's timing fired
+  MediaPlayer* OpenMedia(uint32_t spid);
+  bool VideoPlaying() const;
+  void VideoFrames();  // before a frame's BeginDraw
+  void DrawVideos();   // on the slide, in its pixels
   void UpdatePresenter();
   void PresenterKey(UINT vk) override { Key(vk); }
   void PresenterGoTo(size_t slide) override {
@@ -847,8 +867,10 @@ void Show::Redraw() { Draw(Now()); }
 
 void Show::Draw(double now) {
   if (!EnsureDevice()) return;
+  TakeMedia();
   if (cur_ && !cur_->frame && !cur_->layered) RenderFrame(*cur_);
   if (cur_ && cur_->layered && cur_->layers.empty()) EnsureLayers(*cur_);
+  VideoFrames();
   const double t0 = anim::Now();
   dc_->SetTarget(target_.Get());
   dc_->BeginDraw();
@@ -873,6 +895,7 @@ void Show::Draw(double now) {
     } else if (cur_->frame) {
       dc_->DrawBitmap(cur_->frame.Get());
     }
+    if (!transition_) DrawVideos();
     dc_->PopAxisAlignedClip();
     dc_->SetTransform(M::Identity());
   }
@@ -1020,6 +1043,7 @@ void Show::Frame() {
   const double start = Now();
   double now = start;
   bool inTransition = transition_;
+  const bool wasMoving = Moving();
   if (transition_ && cur_ && now - transitionStart_ >= cur_->transition.durationMs) EndTransition(now);
   if (!transition_ && cur_) {
     cur_->animator.Update(now);
@@ -1028,7 +1052,8 @@ void Show::Frame() {
   }
   Draw(now);
   BenchFrame(start, Now() - start, inTransition, waited);
-  if (!Animating()) AfterSettle(Now());
+  if (wasMoving && !Moving()) AfterSettle(Now());
+  else if (!Animating()) PostMessageW(hwnd_, kMsgPrerender, 0, 0);  // a video stopped: the next slide now
 }
 
 void Show::AfterSettle(double now) {
@@ -1069,6 +1094,7 @@ bool Show::StartCustom(uint32_t id, size_t returnTo, bool loop) {
 void Show::GoTo(size_t index, bool transition, bool built) {
   const double now = Now();
   KillTimer(hwnd_, kTimerAdvance);
+  ReleaseMedia();  // the slide's videos and audio stop
   if (index != kEnd && index >= deck_.SlideCount()) return;
   order_.Moved(index);
   hoverItem_ = -1;
@@ -1103,7 +1129,7 @@ void Show::GoTo(size_t index, bool transition, bool built) {
     visibleAt_ = now;
     if (!built) cur_->animator.BeginAuto(now);
     Redraw();
-    if (!Animating()) AfterSettle(now);
+    if (!Moving()) AfterSettle(now);
   }
 }
 
@@ -1117,7 +1143,7 @@ void Show::Next(bool fromClick) {
     // A click during a transition ends it.
     EndTransition(now);
     Redraw();
-    if (!Animating()) AfterSettle(now);
+    if (!Moving()) AfterSettle(now);
     return;
   }
   if (!cur_) return;
@@ -1135,7 +1161,7 @@ void Show::Next(bool fromClick) {
     return;
   }
   if (cur_->animator.Click(now)) {
-    if (!Animating()) {
+    if (!Moving()) {
       Settle(*cur_);
       Redraw();
       AfterSettle(now);
@@ -1333,6 +1359,175 @@ void Show::Blank(int kind) {
   UpdatePresenter();
 }
 
+// ---- Media (P3) -----------------------------------------------------------------------------
+
+namespace {
+
+// A media shape of the slide by its id, in groups too.
+const Shape* FindMedia(const std::vector<Shape>& shapes, uint32_t spid) {
+  for (const Shape& s : shapes) {
+    if (s.id == spid && s.media) return &s;
+    if (const Shape* in = FindMedia(s.children, spid)) return in;
+  }
+  return nullptr;
+}
+
+std::string RelAttr(pugi::xml_node n, std::string_view local) {
+  for (pugi::xml_attribute a : n.attributes())
+    if (pkg::LocalNameOf(a) == local && std::string_view(a.name()).find(':') != std::string_view::npos) return a.value();
+  return {};
+}
+
+std::wstring ExtensionOf(const std::wstring& name) {
+  const size_t dot = name.find_last_of(L'.');
+  const size_t slash = name.find_last_of(L"\\/");
+  return dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash) ? std::wstring() : name.substr(dot);
+}
+
+}  // namespace
+
+MediaPlayer* Show::OpenMedia(uint32_t spid) {
+  const Slide* slide = cur_ && cur_->index != kEnd ? deck_.GetSlide(cur_->index) : nullptr;
+  const Shape* sh = slide ? FindMedia(slide->shapes, spid) : nullptr;
+  if (!sh) return nullptr;
+  // Its file: the embedded copy (p14:media r:embed), else what a:videoFile or a:audioFile names, embedded
+  // or a local file.
+  std::string embed, link;
+  bool video = true;
+  for (pugi::xml_node nv : sh->node.children()) {
+    if (pkg::LocalNameOf(nv).substr(0, 2) != "nv") continue;
+    for (pugi::xml_node pr : nv.children()) {
+      if (pkg::LocalNameOf(pr) != "nvPr") continue;
+      for (pugi::xml_node m : pr.children()) {
+        const std::string_view k = pkg::LocalNameOf(m);
+        if (k == "videoFile" || k == "quickTimeFile" || k == "audioFile" || k == "wavAudioFile") {
+          video = k == "videoFile" || k == "quickTimeFile";
+          link = RelAttr(m, "link");
+          if (link.empty()) link = RelAttr(m, "embed");
+        } else if (k == "extLst") {
+          for (pugi::xml_node ext : m.children())
+            for (pugi::xml_node x : ext.children())
+              if (pkg::LocalNameOf(x) == "media") embed = RelAttr(x, "embed");
+        }
+      }
+    }
+    break;
+  }
+  const pkg::RelationshipSet* rels = deck_.RelationshipsOf(slide->part);
+  MediaPlayer::Source src;
+  src.video = video;
+  auto resolve = [&](const std::string& id) {
+    const pkg::Relationship* r = rels && !id.empty() ? rels->Find(id) : nullptr;
+    if (!r) return false;
+    if (r->external) {
+      src.path = LocalMediaPath(r->target, opts_.deckPath);  // a local file only: nothing is fetched
+      src.extension = ExtensionOf(src.path);
+      return !src.path.empty();
+    }
+    src.extension = ExtensionOf(Utf8ToWide(r->targetPart));
+    return PlayableMediaExtension(src.extension) && deck_.ReadPart(r->targetPart, src.bytes);
+  };
+  if (!resolve(embed) && !resolve(link)) return nullptr;
+  MediaPlayer::Settings settings;
+  for (const MediaNode& n : cur_->timing.media)
+    if (n.spid == spid) {
+      settings.volume = n.volume;
+      settings.mute = n.mute;
+      settings.loop = n.loop;
+    }
+  std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
+  if (!player) return nullptr;
+  Media m;
+  m.spid = spid;
+  // The poster's crop crops the video too, as in PowerPoint (in 1/1000 %).
+  for (pugi::xml_node fill : sh->node.children()) {
+    if (pkg::LocalNameOf(fill) != "blipFill") continue;
+    for (pugi::xml_node c : fill.children()) {
+      if (pkg::LocalNameOf(c) != "srcRect") continue;
+      const char* names[] = {"l", "t", "r", "b"};
+      for (int k = 0; k < 4; ++k)
+        m.crop[k] = std::clamp(c.attribute(names[k]).as_float(0) / 100000.f, -1.f, 1.f);
+    }
+  }
+  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
+  for (size_t i = 0; i < items.size(); ++i)
+    if (items[i].spid == spid) m.item = i;
+  m.player = std::move(player);
+  media_.push_back(std::move(m));
+  return media_.back().player.get();
+}
+
+void Show::TakeMedia() {
+  if (!cur_ || cur_->index == kEnd) return;
+  std::vector<MediaEvent> events = cur_->animator.TakeMediaEvents();
+  if (capture_ || bench_) return;  // checks and benches play nothing
+  for (const MediaEvent& e : events) {
+    MediaPlayer* p = nullptr;
+    for (Media& m : media_)
+      if (m.spid == e.spid) p = m.player.get();
+    if (!p && (e.command == MediaCommand::Play || e.command == MediaCommand::TogglePause ||
+               e.command == MediaCommand::Resume))
+      p = OpenMedia(e.spid);
+    if (!p) continue;
+    switch (e.command) {
+      case MediaCommand::Play: p->Play(e.fromMs); break;
+      case MediaCommand::TogglePause: p->TogglePause(); break;
+      case MediaCommand::Pause: p->Pause(); break;
+      case MediaCommand::Resume: p->Resume(); break;
+      case MediaCommand::Stop: p->Stop(); break;
+      default: break;
+    }
+  }
+}
+
+void Show::ReleaseMedia() {
+  for (const Media& m : media_) {
+    if (opts_.mediaReport.empty() || !m.player->IsVideo()) continue;
+    const MediaPlayer::Stats s = m.player->VideoStats();
+    char line[384];
+    snprintf(line, sizeof(line),
+             "%s\n    {\"slide\": %zu, \"spid\": %u, \"frames\": %llu, \"skipped\": %llu, \"frameMs\": %.3f, "
+             "\"coveredMs\": %.1f, \"paused\": %s, \"ended\": %s, \"error\": %d, \"hresult\": \"0x%08lX\"}",
+             mediaReport_.empty() ? "" : ",", cur_ ? cur_->index + 1 : 0, m.spid,
+             static_cast<unsigned long long>(s.frames), static_cast<unsigned long long>(s.skipped), s.frameMs,
+             s.coveredMs, s.paused ? "true" : "false", s.ended ? "true" : "false", s.error,
+             static_cast<unsigned long>(s.extended));
+    mediaReport_ += line;
+  }
+  media_.clear();
+}
+
+bool Show::VideoPlaying() const {
+  for (const Media& m : media_)
+    if (m.player->IsVideo() && m.player->Playing()) return true;
+  return false;
+}
+
+void Show::VideoFrames() {
+  for (Media& m : media_)
+    if (m.player->IsVideo()) m.frame = m.player->Frame(dc_.Get(), nullptr);
+}
+
+void Show::DrawVideos() {
+  if (!cur_ || cur_->index == kEnd || media_.empty()) return;
+  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
+  const M toPx = SlideToPixels();
+  for (const Media& m : media_) {
+    if (!m.frame || m.item >= items.size()) continue;
+    if (m.item < cur_->targets.size()) {  // hidden by its animations: not shown
+      const int whole = cur_->targets[m.item].whole;
+      if (whole >= 0 && !cur_->animator.PoseOf(cur_->sprites[static_cast<size_t>(whole)].key).visible) continue;
+    }
+    const draw::Rect& b = items[m.item].bounds;
+    D2D1_POINT_2F a = toPx.TransformPoint({b.left, b.top}), c = toPx.TransformPoint({b.right, b.bottom});
+    const D2D1_SIZE_U px = m.frame->GetPixelSize();
+    const float l = std::max(0.f, m.crop[0]), t = std::max(0.f, m.crop[1]);
+    const float r = std::max(l + 0.01f, 1 - std::max(0.f, m.crop[2])), bt = std::max(t + 0.01f, 1 - std::max(0.f, m.crop[3]));
+    const D2D1_RECT_F src = D2D1::RectF(l * px.width, t * px.height, r * px.width, bt * px.height);
+    dc_->DrawBitmap(m.frame, D2D1::RectF(a.x, a.y, c.x, c.y), 1.f, D2D1_INTERPOLATION_MODE_LINEAR, &src);
+  }
+}
+
 void Show::UpdatePresenter() {
   if (!presenter_ || !cur_) return;
   PresenterState s;
@@ -1508,7 +1703,7 @@ int Show::CaptureAll() {
       Step(t0 + length / 2);
       save(mid, slide, k);
     }
-    for (int guard = 0; guard < 1000 && Animating(); ++guard) Step(clock_ + 500);
+    for (int guard = 0; guard < 1000 && Moving(); ++guard) Step(clock_ + 500);
     Step(clock_ + 1);
     save(end, slide, k);
   };
@@ -1572,6 +1767,15 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     std::wstring file = std::move(self->fileToOpen_);
     if (self->boosted_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     self->presenter_.reset();
+    self->ReleaseMedia();  // the sound stops with the show
+    if (!self->opts_.mediaReport.empty()) {
+      FILE* f = nullptr;
+      if (_wfopen_s(&f, self->opts_.mediaReport.c_str(), L"wb") == 0 && f) {
+        fprintf(f, "{\n  \"refreshHz\": %.2f,\n  \"videos\": [%s\n  ]\n}\n", self->refreshHz_,
+                self->mediaReport_.c_str());
+        fclose(f);
+      }
+    }
     if (self->awake_) SetThreadExecutionState(ES_CONTINUOUS);
     self->hwnd_ = nullptr;
     self->DropDevice();
@@ -1667,7 +1871,7 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
       if (w == kTimerCursor) {
         cursorHidden_ = true;
         SetCursor(nullptr);
-      } else if (w == kTimerAdvance && !Animating()) {
+      } else if (w == kTimerAdvance && !Moving()) {  // a playing video doesn't hold the slide
         Next(false);
       }
       return 0;
@@ -1863,7 +2067,7 @@ std::vector<std::wstring> Monitors() {
 }
 
 int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir, bool windowed,
-                  bool presenter) {
+                  bool presenter, const std::wstring& mediaReport) {
   fw::pkg::Status st;
   fw::pkg::Snapshot::Options so;
   auto snapshot = fw::pkg::Snapshot::Open(path, so, st);
@@ -1881,6 +2085,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
   o.captureDir = captureDir;
   o.windowed = windowed;
   o.presenter = presenter;
+  o.mediaReport = mediaReport;
   if (!Start(*deck, *renderer, o)) return 1;
   if (!captureDir.empty()) {
     int saved = g_show->CaptureAll();

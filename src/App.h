@@ -51,7 +51,7 @@ struct AppOptions {
   bool sandbox = false;
   // --show <deck> [--show-bench <report.json>]: the deck straight into a slide show, without the
   // app's window (trying the show, and the frame-rate bench).
-  std::wstring showPath, showBench, showCapture;
+  std::wstring showPath, showBench, showCapture, showMediaReport;  // --show-media-report (P3)
   bool showWindowed = false, showPresenter = false;  // --show-windowed, --show-presenter (P3)
 };
 
