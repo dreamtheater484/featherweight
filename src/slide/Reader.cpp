@@ -568,6 +568,20 @@ void Loader::Refresh(Presentation& deck, const std::set<std::string>& parts, boo
     for (const auto& [key, theme] : deck.themes_) full = full || parts.count(key) > 0;
     std::string styles = TargetOfType(deck.RelationshipsOf(deck.presentationPart_), "tableStyles");
     full = full || changed(styles);
+    // Layouts no master lists are read as the slides naming them are, so which ones there are and
+    // their order follow the slides: when the slide list changes, everything is read again, so the
+    // deck lists the layouts a fresh read of it would (fuzz_pptx finding: a deck without masters,
+    // a slide deleted, its replayed journal listing one layout less).
+    if (!full && changed(deck.presentationPart_)) {
+      std::set<std::string> listed;
+      for (const auto& m : deck.masters_) {
+        ForEachChild(P(m->root, "sldLayoutIdLst"), [&](pugi::xml_node id) {
+          listed.insert(pkg::PartKey(TargetOf(m->relationships, RelId(id, "id"))));
+          return true;
+        });
+      }
+      for (const auto& l : deck.layouts_) full = full || !listed.count(pkg::PartKey(l->part));
+    }
   }
   bool presentation = full || changed(deck.presentationPart_);
   if (!presentation && !std::any_of(parts.begin(), parts.end(), [&](const std::string& k) {
