@@ -695,7 +695,10 @@ void EditOnce(edit::Editor& ed, Presentation& deck, Rng& rng, State& state, uint
   }
 }
 
-// The parts of a saved file, by name: their bytes as text.
+// What PartsOf gives for a part that doesn't read (its zip entry damaged: a bad CRC, a wrong size).
+const std::string kUnreadable = std::string("\x01unreadable", 11);
+
+// The parts of a saved file, by name: their bytes as text (kUnreadable for one that doesn't read).
 std::vector<std::pair<std::string, std::string>> PartsOf(const std::vector<uint8_t>& zip, const Limits& limits) {
   Status st;
   auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(zip)), limits, st);
@@ -703,8 +706,8 @@ std::vector<std::pair<std::string, std::string>> PartsOf(const std::vector<uint8
   std::vector<std::pair<std::string, std::string>> out;
   std::vector<uint8_t> bytes;
   for (const auto& part : pkg->Parts()) {
-    Check(pkg->ReadPart(part.name, bytes).Ok());
-    out.push_back({part.name, std::string(bytes.begin(), bytes.end())});
+    const Status read = pkg->ReadPart(part.name, bytes);
+    out.push_back({part.name, read.Ok() ? std::string(bytes.begin(), bytes.end()) : kUnreadable});
   }
   return out;
 }
@@ -752,6 +755,8 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
     std::vector<uint8_t> mine;
     for (const auto& [name, bytes] : parts) {
       if (anew.count(name)) {
+        if (bytes == kUnreadable) std::fprintf(stderr, "the save wrote %s, which doesn't read\n", name.c_str());
+        Check(bytes != kUnreadable);
         std::string canonical;
         if (name.ends_with(".xml") || name.ends_with(".rels")) {
           const Status parsed = CanonicalizeXml(bytes, canonical, limits, name);
@@ -761,6 +766,9 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
         continue;
       }
       const bool had = original->ReadPart(name, mine).Ok();
+      // A part damaged in the input (fuzzer: a bad CRC) is copied as it was: the save doesn't make
+      // it worse, and can't make it better (its bytes are lost).
+      if (!had && bytes == kUnreadable) continue;
       if (!had || std::string(mine.begin(), mine.end()) != bytes) std::fprintf(stderr, "%s changed but isn't written anew\n", name.c_str());
       Check(had && std::string(mine.begin(), mine.end()) == bytes);
     }

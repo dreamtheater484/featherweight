@@ -316,6 +316,36 @@ TEST(SlideEditDeletingASlideDropsItsOutlineEntry) {
   CHECK(PartText(ed, view) == before);
 }
 
+// A shape jumping to another slide, pasted into another deck: the link can't come along, so it goes
+// (never an empty r:id, which PowerPoint repairs); within the deck it stays.
+TEST(SlideEditPastingIntoAnotherDeckDropsSlideLinks) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr && deck->SlideCount() >= 2);
+  Editor ed(*deck);
+  const Shape* shape = FirstWithText(deck->GetSlide(0));
+  CHECK(shape != nullptr);
+  if (!shape) return;
+  const uint32_t id = shape->id;
+  LinkTarget jump;
+  jump.kind = LinkTarget::Kind::Slide;
+  jump.slide = 1;
+  CHECK(ed.SetShapeLink(0, id, jump));
+  ShapeClip clip = ed.CopyShapes(0, {id});
+  std::vector<uint32_t> pasted;
+  CHECK(ed.PasteShapes(0, clip, &pasted));
+  CHECK(pasted.size() == 1 && JumpsNameTheirSlide(ed.ShapeXml(0, pasted[0])));
+  CHECK(ed.ShapeXml(0, pasted[0]).find("hlinksldjump") != std::string::npos);
+  auto other = Open("layouts.pptx");
+  CHECK(other != nullptr);
+  if (!other) return;
+  Editor ed2(*other);
+  CHECK(ed2.PasteShapes(0, clip, &pasted));
+  CHECK(pasted.size() == 1);
+  const std::string xml = ed2.ShapeXml(0, pasted[0]);
+  CHECK(xml.find("hlinkClick") == std::string::npos);
+  CHECK(xml.find("r:id=\"\"") == std::string::npos);
+}
+
 TEST(SlideEditTypingCoalescesAndFormats) {
   auto deck = Open("simple.pptx");
   CHECK(deck != nullptr);
