@@ -165,11 +165,14 @@ if ($Child) {
     $s = Add-Slide $d "ppLayoutText" "Text by paragraph"
     $s.Shapes.Item(2).TextFrame.TextRange.Text = "First point`rSecond point`rThird point`rFourth point"
     [void](Add-Effect $s $s.Shapes.Item(2) "msoAnimEffectFade" $onClick 0.5 0 "" -level (E MsoAnimateByLevel msoAnimateTextByFirstLevel))
-    # Slide 4: effects Featherweight plays as appear, motion paths, a repeat, an interactive trigger.
+    # Slide 4: effects Featherweight plays as appear, motion paths, a repeat, an interactive trigger,
+    # and the gallery's Zoom and Float In: the object model's msoAnimEffectZoom (23) and Float (30) on
+    # slide 1 are older presets; the gallery writes presetID 53 (FadedZoom) and 42 (Ascend).
     $s = Add-Slide $d "ppLayoutTitleOnly" "Other effects, paths and a trigger"
-    $other = @("msoAnimEffectBounce", "msoAnimEffectSwivel", "msoAnimEffectPinwheel", "msoAnimEffectPathCircle", "msoAnimEffectPathDown")
+    $other = @("msoAnimEffectBounce", "msoAnimEffectSwivel", "msoAnimEffectPinwheel", "msoAnimEffectPathCircle", "msoAnimEffectPathDown",
+               "msoAnimEffectFadedZoom", "msoAnimEffectAscend")
     for ($i = 0; $i -lt $other.Count; $i++) {
-      $b = Add-Box $s (40 + $i * 180) 140 160 80 ($other[$i] -replace '^msoAnimEffect', '') 0x3090C0
+      $b = Add-Box $s (40 + ($i % 5) * 180) (140 + [Math]::Floor($i / 5) * 95) 160 80 ($other[$i] -replace '^msoAnimEffect', '') 0x3090C0
       $e = Add-Effect $s $b $other[$i] $(if ($i -eq 0) { $onClick } else { $afterPrev }) 1.0 0 ""
       if ($other[$i] -eq "msoAnimEffectPathCircle") { $e.Timing.RepeatCount = 2 }
     }
