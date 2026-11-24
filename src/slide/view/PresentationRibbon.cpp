@@ -472,11 +472,11 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     volume.tool.choices = {L"Low", L"Medium", L"High", L"Mute"};
     fw::slide::edit::MediaPlayback set;
     if (Objects().SelectedPlayback(&set, nullptr))
-      volume.tool.choice = set.mute ? 3 : set.volume < 0.375 ? 0 : set.volume < 0.75 ? 1 : 2;
+      volume.tool.choice = set.mute ? 3 : set.volume < 0.35 ? 0 : set.volume < 0.65 ? 1 : 2;
     volume.tool.onChange = [this](const ToolValue& v) {
       fw::slide::edit::MediaPlayback p;
       if (v.index < 0 || v.index > 3 || !Objects().SelectedPlayback(&p, nullptr)) return;
-      static const double kLevels[] = {0.25, 0.5, 1.0};  // Low, Medium, High
+      static const double kLevels[] = {0.2, 0.5, 0.8};  // Low, Medium, High: PowerPoint's (its UI probe, 24 Nov)
       p.mute = v.index == 3;
       if (v.index < 3) p.volume = kLevels[v.index];
       Objects().SetSelectedPlayback(p);

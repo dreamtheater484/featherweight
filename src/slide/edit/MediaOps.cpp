@@ -251,8 +251,9 @@ Result Editor::SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& 
   pugi::xml_node node = MediaNodeOf(m.Edit(part), id);
   pugi::xml_node c = P(node, "cMediaNode");
   const bool video = LocalNameOf(node) == "video";
-  // As PowerPoint writes them: what's at its default is left out (vol always written).
-  SetOrRemove(c, "vol", std::to_string(std::lround(std::clamp(p.volume, 0.0, 1.0) * 100000)));
+  // As PowerPoint writes them: what's at its default is left out (Medium's 50 % too; mute keeps vol).
+  const long vol = std::lround(std::clamp(p.volume, 0.0, 1.0) * 100000);
+  SetOrRemove(c, "vol", vol == 50000 ? "" : std::to_string(vol));
   SetOrRemove(c, "mute", p.mute ? "1" : "");
   SetOrRemove(c, "numSld", !video && p.acrossSlides ? "999" : "");
   SetOrRemove(c, "showWhenStopped", p.hideWhenStopped ? "0" : "");

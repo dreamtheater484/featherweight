@@ -245,18 +245,18 @@ TEST(SlideMediaPlayback) {
   // The video: low, muted, looping, hidden while stopped, full screen; across slides is the audio's only.
   const std::string before = PartText(ed, part);
   fw::slide::edit::MediaPlayback v;
-  v.volume = 0.25;
+  v.volume = 0.2;  // PowerPoint's Low
   v.mute = v.loop = v.hideWhenStopped = v.fullScreen = v.acrossSlides = true;
   CHECK(ed.SetMediaPlayback(0, video, v).ok);
   std::string xml = PartText(ed, part);
-  CHECK(xml.find("<p:video fullScrn=\"1\"><p:cMediaNode vol=\"25000\" mute=\"1\" showWhenStopped=\"0\">") != std::string::npos);
+  CHECK(xml.find("<p:video fullScrn=\"1\"><p:cMediaNode vol=\"20000\" mute=\"1\" showWhenStopped=\"0\">") != std::string::npos);
   CHECK(xml.find("repeatCount=\"indefinite\"") != std::string::npos);
   CHECK(xml.find("numSld") == std::string::npos);
   fw::slide::show::Timing t = SlideTiming(xml);
   CHECK(t.media.size() == 2);
   if (t.media.size() == 2) {
     CHECK(t.media[0].spid == video && t.media[0].loop && t.media[0].mute && !t.media[0].showWhenStopped);
-    CHECK(t.media[0].fullScreen && t.media[0].volume > 0.24f && t.media[0].volume < 0.26f && t.media[0].slides == 1);
+    CHECK(t.media[0].fullScreen && t.media[0].volume > 0.19f && t.media[0].volume < 0.21f && t.media[0].slides == 1);
   }
   CHECK(ed.GetMediaPlayback(0, video, &p) && p.mute && p.loop && p.hideWhenStopped && p.fullScreen && !p.acrossSlides);
   // Hidden while not playing: the show starts the poster hidden.
@@ -273,13 +273,19 @@ TEST(SlideMediaPlayback) {
   xml = PartText(ed, part);
   CHECK(xml.find("<p:video><p:cMediaNode vol=\"80000\"><p:cTn") != std::string::npos);
   CHECK(xml.find("repeatCount") == std::string::npos);
+  // Medium (50 %, the schema's default) leaves vol out, as PowerPoint writes it.
+  fw::slide::edit::MediaPlayback medium;
+  medium.volume = 0.5;
+  CHECK(ed.SetMediaPlayback(0, video, medium).ok);
+  CHECK(PartText(ed, part).find("<p:video><p:cMediaNode><p:cTn") != std::string::npos);
+  CHECK(ed.GetMediaPlayback(0, video, &p) && p.volume > 0.49 && p.volume < 0.51);
 
   // Refused for what isn't media, changing nothing; undone step by step.
   const std::string now = PartText(ed, part);
   CHECK(!ed.SetMediaPlayback(0, 2, v).ok);
   CHECK(!ed.SetMediaPlayback(9, video, v).ok);
   CHECK(PartText(ed, part) == now);
-  CHECK(ed.Undo(3).ok);
+  CHECK(ed.Undo(4).ok);
   CHECK(PartText(ed, part) == before);
 }
 
