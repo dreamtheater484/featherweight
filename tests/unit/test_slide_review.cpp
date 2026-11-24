@@ -1,6 +1,9 @@
 // Comments on slides (P3, p3-review; src/slide/edit/Comments.h): PowerPoint's modern and legacy
 // comments read, changed through the edit layer with undo and redo, written as PowerPoint writes them,
 // and kept on save.
+#include <windows.h>
+
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -280,4 +283,45 @@ TEST(SlideReview_DuplicatedSlidesLeaveCommentsBehind) {
   CHECK(copy.find("commentRel") == std::string::npos);
   CHECK(copy.find("r:id=\"\"") == std::string::npos);
   CheckSaved(Saved(ed));
+}
+
+// FW_P3_REVIEW_PROBE=<folder>: the decks p3-review's PowerPoint open check reads (modern threads, legacy
+// comments as written by hand, a slide with both, a duplicated slide). Nothing is written otherwise.
+TEST(SlideReview_ProbeDecks) {
+  char dir[512] = {};
+  if (GetEnvironmentVariableA("FW_P3_REVIEW_PROBE", dir, sizeof dir) == 0) return;
+  auto write = [&](const char* name, const std::vector<uint8_t>& bytes) {
+    const std::filesystem::path p = std::filesystem::path(dir) / name;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, p.wstring().c_str(), L"wb") == 0 && f) {
+      std::fwrite(bytes.data(), 1, bytes.size(), f);
+      std::fclose(f);
+    }
+  };
+  {
+    auto deck = OpenBytes(FileBytes(Generated() / "simple.pptx"));
+    REQUIRE(deck != nullptr);
+    Editor ed(*deck);
+    std::string a, b;
+    CHECK(AddComment(ed, 0, {100, 50}, L"Thread one\nsecond paragraph", {L"Ann Lee", L""}, &a));
+    CHECK(ReplyToComment(ed, 0, a, L"A reply", {L"Bo Ek", L""}));
+    CHECK(AddComment(ed, 0, {300, 200}, L"Resolved thread", {L"Ann Lee", L""}, &b));
+    CHECK(ResolveComment(ed, 0, b, true));
+    const std::vector<uint8_t> modern = Saved(ed);
+    write("fw-modern.pptx", modern);
+    CHECK(ed.DuplicateSlides({0}));
+    write("fw-duplicated.pptx", Saved(ed));
+  }
+  const std::vector<uint8_t> legacy = LegacyDeck();
+  write("fw-legacy.pptx", legacy);
+  {
+    auto deck = OpenBytes(legacy);
+    REQUIRE(deck != nullptr);
+    Editor ed(*deck);
+    const std::vector<Comment> c = SlideComments(ed, 0);
+    REQUIRE(c.size() == 3);
+    CHECK(ReplyToComment(ed, 0, c[0].id, L"Legacy reply by Featherweight", {L"Cy Do", L""}));
+    CHECK(AddComment(ed, 0, {500, 300}, L"Modern beside legacy", {L"Cy Do", L""}));
+    write("fw-mixed.pptx", Saved(ed));
+  }
 }
