@@ -293,6 +293,16 @@ std::shared_ptr<const Theme> PackageResources::FindTheme(const fw::pkg::Package&
 }
 
 ColorMap PackageResources::FindColorMap(const fw::pkg::Package& package, std::string_view partName) {
+  // Word: w:clrSchemeMapping in the settings, and only there. A Word document's parts never have a
+  // PowerPoint p:clrMap, and looking for one parsed the whole document.xml a second time while it
+  // opened (2.6 MB for a 300-page document).
+  const std::string main = TargetOfType(package, "/", "officeDocument");
+  const std::string_view type = package.ContentTypeOf(main);
+  if (type.find("wordprocessingml") != std::string_view::npos || type.starts_with("application/vnd.ms-word")) {
+    std::unique_ptr<fw::pkg::XmlDom> dom = ParsePart(package, TargetOfType(package, main, "settings"));
+    pugi::xml_node map = dom ? Child(dom->Root(), kW, "clrSchemeMapping") : pugi::xml_node();
+    return map ? ColorMap::Read(map) : ColorMap{};
+  }
   // Slides: an override on the slide or its layout, else the master's p:clrMap.
   for (const std::string& part : Chain(package, partName)) {
     std::unique_ptr<fw::pkg::XmlDom> dom = ParsePart(package, part);
@@ -300,11 +310,6 @@ ColorMap PackageResources::FindColorMap(const fw::pkg::Package& package, std::st
     pugi::xml_node root = dom->Root();
     if (pugi::xml_node map = Child(root, kP, "clrMap")) return ColorMap::Read(map);
     if (pugi::xml_node over = A(Child(root, kP, "clrMapOvr"), "overrideClrMapping")) return ColorMap::Read(over);
-  }
-  // Word: w:clrSchemeMapping in the settings.
-  std::string settings = TargetOfType(package, TargetOfType(package, "/", "officeDocument"), "settings");
-  if (std::unique_ptr<fw::pkg::XmlDom> dom = ParsePart(package, settings)) {
-    if (pugi::xml_node map = Child(dom->Root(), kW, "clrSchemeMapping")) return ColorMap::Read(map);
   }
   return {};
 }
