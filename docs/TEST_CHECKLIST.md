@@ -561,3 +561,57 @@ Check next to PowerPoint, on copies (never on a deck you need). Decks to edit: t
 | Fuzzed | `fuzz_pptx` with edits (random operations, save, reread, check, journal, undo/redo); 60 s per target in CI (build.yml `fuzz`); 38 seeds and the 152 corpus decks replayed: no findings, no open ones (all 4 reported were fixed by p2-model and p2-slides) | met |
 | Checklist | This P2 part | met |
 | Release | P1 and P2 checked together by Roy | Roy |
+
+## Advanced presentations (P3)
+
+Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Documents\Codex\FeatherweightCorpus\made` (PowerPoint built them, `scripts\make-deck-edge-cases.ps1`: `transitions.pptx`, `animations.pptx`, `comments.pptx`, `media.pptx` with `media\clip.mp4`, and `protected\animations.pptx`, password `featherweight`), PowerPoint's `.ppt` and `.odp` copies of the real-world decks in `FeatherweightCorpus\ppt` and `\odp` (`scripts\make-deck-copies.ps1`; the encrypted ones in `ppt\protected`, password `featherweight`), and a few decks of your own. After each part, save, and open the copy in PowerPoint: no repair prompt, and it looks and plays as Featherweight shows it.
+
+### Presenter view
+
+- [ ] With two monitors: start the show (F5). The show is on one monitor, the presenter view on the other: the current slide, the next slide (or the next animation), the notes (scroll them; make them bigger and smaller), the timer (pause, reset), the clock, and a strip of slides (click one to jump to it). The show's keys (click, Space, arrows, Page Up/Down, a number and Enter, B, W, Esc) work in both windows.
+- [ ] With one monitor: Alt+F5 opens the presenter view in a window, as PowerPoint does; the show's monitor choice puts the show and the presenter view where you say.
+- [ ] A 50-slide deck with transitions presents smoothly with the presenter view on (record the frame rate below).
+
+### Transitions and animations
+
+- [ ] The Transitions tab: pick fade, push, wipe, split, cover, uncover and zoom from the gallery; Effect Options changes the direction; Duration; advance on click and after a time; Apply To All; Preview plays it in the editor. Save, open the copy in PowerPoint: the same transitions, directions, durations and timings.
+- [ ] The Animations tab: add appear, fade, fly in, wipe, zoom, float, split, grow and shrink, and spin to shapes and to text (by paragraph); Effect Options; Add Animation puts a second effect on the same shape; Start (On Click, With Previous, After Previous), Duration and Delay; the Animation Pane lists them in order, and Move Earlier and Move Later change it; Preview plays them in the editor. Save, open the copy in PowerPoint: the same effects, order, triggers, durations and delays, and the show plays them alike.
+- [ ] `made\animations.pptx`: change one effect on slide 4 (bounce, swivel, pinwheel, the motion paths, the trigger): the other effects there, which Featherweight can't edit, stay as they were in PowerPoint.
+
+### Video and audio
+
+- [ ] Insert › Video and Insert › Audio from a file (an `.mp4` and a `.wav` or `.mp3` of yours): the video shows its first frame as the poster; the Video Format and Playback tabs appear when it's selected. In the show it plays on click, or by itself when set so, without stutters (a 1080p H.264 video too).
+- [ ] `made\media.pptx`: the embedded video plays on click, the sound plays by itself on slide 2, the linked video plays while `made\media\clip.mp4` is there (rename the file: the slide shows the poster and says the file is missing; nothing is fetched from the internet).
+- [ ] Open a deck with a video and leave it in the editor: Task Manager shows no CPU use.
+
+### Comments
+
+- [ ] `made\comments.pptx`: the comments pane shows each slide's comments with markers on the slide; slide 1's thread has its two replies. Ctrl+Alt+M adds a comment; reply, edit, delete and resolve work as in documents; the Review tab has the comment group.
+- [ ] Add comments and a reply, save, open the copy in PowerPoint: the comments and the thread are there, no repair prompt. A deck with PowerPoint's older comments (`commentAuthors.xml`) keeps them.
+
+### Password-protected presentations
+
+- [ ] `made\protected\animations.pptx`: the password card asks for the password; a wrong one is refused, `featherweight` opens it. Edit and save: PowerPoint asks for the same password and opens it without a repair.
+- [ ] File › Info › Protect Presentation › Encrypt with Password sets a password on a deck of yours, and removes it again; PowerPoint asks for it (and doesn't after it's removed).
+- [ ] An encrypted `.ppt` (`ppt\protected\made\animations.ppt`, `featherweight`) opens too.
+
+### Templates and pictures
+
+- [ ] A `.potx` and a `.potm` open as a new presentation ("Presentation1"); Save As writes a `.potx`; File › New and the start screen list your personal templates.
+- [ ] File › Export: the current slide and all slides as PNG, at 1920 px wide by default and at another width; the pictures look as the slides do in the view.
+
+### .ppt and .odp
+
+- [ ] Open a few `.ppt`, `.pps` and `.pot` from `FeatherweightCorpus\ppt` and `.odp` from `\odp`, next to their `.pptx` originals in PowerPoint: they open read-only as a copy with a banner, look the same, and the show plays. Save As `.pptx`: PowerPoint opens it without a repair.
+- [ ] A damaged file (rename a `.txt` to `.ppt` and to `.odp`) says it seems to be damaged, and nothing else happens.
+
+## P3's gate (record the numbers)
+
+- [ ] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: ___ failures, ___ new validator errors, ___ PowerPoint repairs (target 0 each); saved without edits: byte-identical.
+- [ ] PowerPoint's read-back (`scripts\powerpoint-readback.ps1`, `-Compare` against `fwtool readback`): edited decks ___ of ___ with the same transitions, effects, triggers, durations, delays and comments as Featherweight wrote (target all); saved without edits ___ of ___ the same as the original (target all).
+- [ ] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): ___ of ___ slides at SSIM ≥ 0.95, ___ % (target ≥ 85 %). `.odp` corpus (`-Folders odp`): ___ of ___, ___ % (target ≥ 80 %). Their `.pptx` saves open in PowerPoint without a repair: ___ of ___.
+- [ ] Picture export: ___ of ___ slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all).
+- [ ] `fuzz_ppt` and `fuzz_odp`, 60 s each in CI: no findings.
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target: at most 1.0 MB more than R1's, about 12.35 MB; < 15 MB at 4.0). Launch ___ ms and memory after launch ___ MB, no worse than R1's; idle with a video on a slide: ___ ms CPU (target 0). The quiet-PC timings and the frame bench (presenter view on: ___ fps on a ___ Hz display, ___ dropped frames) run once at the end through the coordinator.
+- [ ] Friction review (`docs\friction-review.md`, P3 part): presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021.
+- [ ] P1's and P2's parts above still pass.
