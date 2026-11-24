@@ -264,6 +264,26 @@ class PresentationView : public TabContent {
   bool DesignCommand(int cmd);
   void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
   // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
+  // p3-anim (PresentationAnim.cpp): the Transitions and Animations tabs, the Animation Pane, Preview.
+  class AnimationPane;
+  struct AnimPreview;
+  std::unique_ptr<AnimationPane> animPane_;
+  std::unique_ptr<AnimPreview> preview_;
+  std::vector<size_t> animPicked_;  // effects picked in the pane (main-sequence indexes on the current slide)
+  size_t animPickedSlide_ = SIZE_MAX;
+  std::vector<uint32_t> animPickedShapes_;  // the shapes selected then: clicking others drops the pick
+  void ApplyAnim(int galleryIndex, bool add);  // 0: None (removes), else kAnimGallery[index - 1]
+  bool AnimScriptOp(const std::wstring& op, const std::wstring& arg);  // transition:, anim:, animpane, animdump
+  void PickAnims(const std::vector<size_t>& effects);
+  void BuildAnimTabs(RibbonModel& m);
+  bool AnimCommandState(int cmd, CommandState& s);
+  bool AnimCommand(int cmd);
+  std::vector<int> AnimCommands() const;
+  std::vector<size_t> AnimTargets();  // the effects the Animations tab's controls change
+  void AnimChanged();                 // after an edit or another slide: the pane follows
+  void StartPreview(bool transition, size_t fromEffect = 0);
+  void StopPreview();
+  bool DrawPreview(gfx::Canvas& c, ID2D1DeviceContext* dc);  // false when no preview runs
   void SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all);
   std::vector<uint32_t> SlideIds() const;
 

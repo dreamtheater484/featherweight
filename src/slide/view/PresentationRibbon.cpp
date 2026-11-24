@@ -1,7 +1,7 @@
 // The presentation tab's ribbon (R1, r1-slide; plan §5.6): PowerPoint 2021/365's tabs, groups and
 // buttons in PowerPoint's order, each on a command the shortcuts, menus and command search already
-// run. Buttons PowerPoint has and Featherweight doesn't are left out; Transitions, Animations, Table
-// Design and Chart Design come with the commands that fill them (P3). The table of every PowerPoint
+// run. Buttons PowerPoint has and Featherweight doesn't are left out; Table Design and Chart Design
+// come with the commands that fill them. Transitions and Animations are p3-anim's (PresentationAnim.cpp). The table of every PowerPoint
 // control and where it went is in r1-slide's state note; docs/r1-plan.md has the decisions.
 
 #include <algorithm>
@@ -364,7 +364,10 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdSlideSizeMenu, icon::SlideSize, S::Large, L"Slide\nSize", L"S", S::Large);
   add(CmdFormatBackground, icon::FormatBackground, S::Large, L"Format\nBackground", L"F", S::Large);
 
-  // ---- Slide Show (Transitions and Animations come with P3's commands)
+  // ---- Transitions and Animations (p3-anim, PresentationAnim.cpp)
+  BuildAnimTabs(m);
+
+  // ---- Slide Show
   b.Tab(L"Slide Show", L"S");
   b.Group(L"Start Slide Show");
   add(CmdSlideShowFromStart, icon::Slideshow, S::Large, L"From\nBeginning", L"B");
