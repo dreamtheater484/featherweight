@@ -19,7 +19,11 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
+#include "PasswordCard.h"
+#include "pkg/OfficeCrypto.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationPanels.h"
+#include "slide/view/PresentationAnim.h"  // p3-anim
 #include "text/Fonts.h"
 #include "ui/Anim.h"
 #include "ui/StatusBar.h"
@@ -80,26 +84,76 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
   return view;
 }
 
-OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
+OpenResult PresentationView::Load(const std::wstring& password, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
-          : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
-                       : OpenDeck(path_, why);
+  pkg::crypto::Key key;
+  // A PowerPoint 97-2003 presentation (P3, p3-ppt) is converted, and the tab is a copy that Save As
+  // saves as a .pptx beside it: the .ppt itself is never written. An encrypted one asks for its
+  // password on the password card, and the .pptx it's saved as keeps the password.
+  std::vector<uint8_t> converted;
+  bool locked = false;
+  if (!newDeck_ && !fromBytes_ && protected_.empty() && ReadLegacyPresentation(path_, password, converted, why, locked)) {
+    if (converted.empty()) {
+      if (locked && why.empty()) {
+        needPassword_ = true;
+        return password.empty() ? OpenResult::NeedPassword : OpenResult::WrongPassword;
+      }
+      error = Title() + L": " + why;
+      return OpenResult::Failed;
+    }
+    needPassword_ = false;
+    if (locked) key = pkg::crypto::NewKey(password);
+    imported_ = Title();
+    deck_ = OpenDeckFromBytes(std::move(converted), why);
+  } else if (!protected_.empty() || TakeProtected()) {
+    // p3-review: a password-protected presentation (or a recovered one) is a compound file, read whole
+    // and opened decrypted; until its password is given the tab shows the password card.
+    std::vector<uint8_t> plain;
+    if (OpenResult r = Unlock(password, plain, key, error); r != OpenResult::Ok) return r;
+    deck_ = OpenDeckFromBytes(std::move(plain), why);
+  } else {
+    deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
+            : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
+                         : OpenDeck(path_, why);
+  }
   if (!deck_) {
     error = Title() + L": " + why;
     return OpenResult::Failed;
   }
+  if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
+    untitled_ = L"Presentation" + std::to_wstring(newNumber_);
+    path_.clear();
+  }
   FileOpened();
+  if (!key.Empty()) {
+    File().Protect(std::move(key));  // saved, backed up and autosaved encrypted with it
+    protected_.clear();
+    protected_.shrink_to_fit();
+  }
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
-  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
+  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx") || EndsWithNoCase(path_, L".pps")) &&
+                 !util::UsingPrivateClipboard();
+  if (!imported_.empty() && !newNumber_) {  // a .pot is a template: a new presentation, as above
+    const size_t dot = path_.find_last_of(L'.');
+    const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
+    File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
+    host_.ViewMessage(BannerKind::Info, imported_ + L" is a PowerPoint 97–2003 presentation. Saving makes a new " + stem +
+                                            L".pptx and leaves it as it is.");
+    untitled_ = imported_;
+    path_.clear();  // Save is Save As
+  }
   SlideEditor();  // P2: the deck's Editor made and listened to before anything can edit it (OnEditorMade)
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();
   return OpenResult::Ok;
+}
+
+bool PresentationView::IsTemplate(const std::wstring& path) {
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm") || EndsWithNoCase(path, L".pot");  // .pot: p3-ppt
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }
@@ -290,6 +344,10 @@ ID2D1Bitmap* PresentationView::ThumbBitmap(ID2D1DeviceContext* dc, size_t slide,
 void PresentationView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   c.Fill(RectF(vp_), p.docBg);
+  if (needPassword_) {  // p3-review: the password card until the file opens
+    Card().Draw(c, vp_, ui_, Title());
+    return;
+  }
   if (!deck_) return;
   if (!bannerShown_) {
     bannerShown_ = true;
@@ -387,6 +445,11 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
     }
     dc->SetTransform(old);
   }
+  // p3-anim: a transition or the animations playing over the slide (Preview).
+  if (preview_ && DrawPreview(c, dc)) {
+    c.PopClip();
+    return;
+  }
   // The text being edited, live over the slide.
   text_->Draw(c, dc, current_, rc);
   text_->DrawSpelling(c, current_, rc, host_.ViewSpelling());
@@ -413,6 +476,7 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
       if (cur) c.Stroke(s, p.searchCurrent, std::max(1.0f, ui_));
     }
   }
+  Comments().DrawMarkers(c, rc);  // p3-review: the comments' markers, over everything
   c.PopClip();
 }
 
@@ -512,6 +576,10 @@ void PresentationView::OnDeactivated() {
 // Mouse
 
 void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseDown(x, y, mods, doubleClick, ui_);
+    return;
+  }
   if (!deck_ || button != 0) return;
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   downX_ = x;
@@ -539,6 +607,10 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   keysInThumbs_ = false;
   if (notesShown_ && Contains(notes_, fx, fy) && NotesMouseDown()) return;  // P2: typing notes
   if (Contains(view_, fx, fy)) {
+    if (Comments().MouseDown(fx, fy)) {  // p3-review: a comment's marker (picked, maybe dragged)
+      text_->End();
+      return;
+    }
     if (const SlideLink* link = LinkAt(x, y); link && (mods & kModCtrl)) {
       FollowLink(*link);
       return;
@@ -568,7 +640,12 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
 }
 
 void PresentationView::OnMouseMove(int x, int y, UINT mods) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseMove(x, y, ui_);
+    return;
+  }
   if (!deck_) return;
+  if (commentsPanel_ && commentsPanel_->MouseMove(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseMove(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -605,6 +682,11 @@ void PresentationView::OnMouseMove(int x, int y, UINT mods) {
 }
 
 void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseUp(x, y);
+    return;
+  }
+  if (commentsPanel_ && commentsPanel_->MouseUp(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseUp(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -620,6 +702,7 @@ void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
 }
 
 void PresentationView::OnMouseLeave() {
+  if (needPassword_) Card().OnMouseLeave();  // p3-review
   if (hoverThumb_ >= 0) {
     hoverThumb_ = -1;
     host_.ViewInvalidate();
@@ -708,6 +791,7 @@ draw::Point PresentationView::SlidePoint(int x, int y) const {
 }
 
 HCURSOR PresentationView::CursorAt(int x, int y) {
+  if (needPassword_) return Card().CursorAt(x, y);  // p3-review
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ns = LoadCursor(nullptr, IDC_SIZENS),
                  hand = LoadCursor(nullptr, IDC_HAND), all = LoadCursor(nullptr, IDC_SIZEALL);
   if (drag_ == Drag::Splitter || (notesShown_ && Contains(Inflate(splitter_, 0, 2 * ui_), (float)x, (float)y))) return ns;
@@ -724,6 +808,8 @@ HCURSOR PresentationView::CursorAt(int x, int y) {
 }
 
 std::wstring PresentationView::TooltipAt(int x, int y) {
+  if (commentsPanel_ && Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p3-review
+    if (std::wstring tip = commentsPanel_->Tooltip(static_cast<float>(x), static_cast<float>(y)); !tip.empty()) return tip;
   if (const SlideLink* link = LinkAt(x, y)) {
     std::wstring tip = link->tooltip.empty() ? link->url : link->tooltip;
     return tip + (tip.empty() ? L"" : L"\n") + L"Ctrl+click to follow the link";

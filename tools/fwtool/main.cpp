@@ -14,6 +14,7 @@
 #include "sheet/view/Grid.h"
 #include "text/Fonts.h"
 #include "sheet/xls/Xls.h"
+#include "slide/ppt/Ppt.h"
 
 namespace fwtool {
 namespace {
@@ -127,6 +128,9 @@ constexpr const char* kUsage =
     "  fwtool slides --out DIR [--png] [--scale N] <deck or folder>...\n"
     "      Decks (P1): draws every slide with the slide renderer into DIR/<deck>.pdf (for pdf-compare\n"
     "      against PowerPoint's PDF), and with --png each slide as a PNG; times the first slide.\n"
+    "  fwtool timing <deck or folder>...\n"
+    "      Decks (P3): each slide's transition and main animation sequence as the edit layer reads them\n"
+    "      (effect, options, trigger, duration, delay; \"kept\" for what Featherweight can't change).\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -191,9 +195,10 @@ constexpr const char* kUsage =
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
-    "  fwtool convert <file.doc> <file.docx>\n"
+    "  fwtool convert [--password P] <file.doc> <file.docx>\n"
     "      Writes the .docx a Word 97-2003 document is read as (or the .xlsx an Excel 97-2003\n"
     "      workbook, .xls, is read as). Every other command reads .doc and .xls files this way too.\n"
+    "      --password opens an encrypted .ppt (also with other commands that take --password).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -206,7 +211,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
     for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls", L".ods", L".ots",
-                                 L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
+                                 L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm", L".ppt", L".pps", L".pot"})
       if (ext == known) files.push_back(it->path());
   }
   std::sort(files.begin(), files.end());
@@ -241,6 +246,9 @@ std::string Display(const std::filesystem::path& file) {
   return fw::WideToUtf8(shown.generic_wstring());
 }
 
+// --password: opens an encrypted PowerPoint 97-2003 presentation.
+std::wstring legacyPassword;
+
 // A Word 97-2003 document as the .docx it's read as; empty (with `status`) when it isn't one or
 // can't be read.
 std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Status& status) {
@@ -255,15 +263,20 @@ std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Stat
   // An Excel 97-2003 workbook: the .xlsx it's read as.
   if (cf && fw::sheet::xls::IsWorkbook([&cf](std::string_view name) { return cf->Stream(name); }))
     return fw::sheet::xls::ToXlsx([&cf](std::string_view name) { return cf->Stream(name); }, status);
+  // A PowerPoint 97-2003 presentation (P3): the .pptx it's read as.
+  if (cf && fw::slide::ppt::IsPresentation([&cf](std::string_view name) { return cf->Stream(name); }))
+    return fw::slide::ppt::ToPptx([&cf](std::string_view name) { return cf->Stream(name); }, status, legacyPassword);
   if (!cf || !cf->Stream("WordDocument")) {
-    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document or Excel 97-2003 workbook");
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported,
+                                   "not a Word 97-2003 document, Excel 97-2003 workbook or PowerPoint 97-2003 presentation");
     return {};
   }
   return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
 }
 
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
-  if (fw::ToLower(file.extension().wstring()) == L".doc" || fw::ToLower(file.extension().wstring()) == L".xls") {
+  if (const std::wstring ext = fw::ToLower(file.extension().wstring());
+      ext == L".doc" || ext == L".xls" || ext == L".ppt" || ext == L".pps" || ext == L".pot") {
     std::vector<uint8_t> docx = ConvertDoc(file, status);
     if (docx.empty()) return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
@@ -303,13 +316,15 @@ int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
   fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
-  if (argc == 4 && std::wstring(argv[1]) == L"convert") {
+  if (std::wstring(argv[1]) == L"convert" && (argc == 4 || (argc == 6 && std::wstring(argv[2]) == L"--password"))) {
+    const int at = argc == 6 ? 4 : 2;
+    if (argc == 6) fwtool::legacyPassword = argv[3];
     fw::pkg::Status st;
-    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[2], st);
+    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[at], st);
     FILE* f = nullptr;
-    if (!docx.empty() && _wfopen_s(&f, argv[3], L"wb") != 0) f = nullptr;
+    if (!docx.empty() && _wfopen_s(&f, argv[at + 1], L"wb") != 0) f = nullptr;
     if (!f) {
-      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[2]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
+      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[at]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
       return 1;
     }
     std::fwrite(docx.data(), 1, docx.size(), f);
@@ -386,6 +401,7 @@ int wmain(int argc, wchar_t** argv) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
   }
+  fwtool::legacyPassword = options.password;
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"formulas") return fwtool::RunFormulas(options);
@@ -410,6 +426,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   if (command == L"slides") return fwtool::RunSlides(options);
+  if (command == L"timing") return fwtool::RunTiming(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

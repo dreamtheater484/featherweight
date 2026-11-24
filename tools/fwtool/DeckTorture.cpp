@@ -5,7 +5,9 @@
 // seeded random edits through the edit API, aimed at what breaks decks: new, duplicated, deleted,
 // moved and hidden slides, layout changes, typing in placeholders, text boxes and shapes, notes,
 // moving, resizing, rotating, deleting, grouping, ungrouping and reordering shapes, formatting, undo
-// and redo. After each round the deck is saved, and the saved file must open, pass fwtool check with
+// and redo; and P3's operations as each piece lands them (comments: add, reply, edit, delete, resolve,
+// move; their lines join the deck's digest, so undo, redo and the read-back cover them too). After
+// each round the deck is saved, and the saved file must open, pass fwtool check with
 // no errors the original didn't have, raise no new model problems, read back as the edited deck, and
 // keep every part the save didn't write byte for byte. Undoing every edit must give the deck as
 // opened, and redoing them the deck as edited. A failure is shrunk to the fewest edits that still
@@ -47,6 +49,29 @@
 #else
 #define FW_SLIDE_OBJECTS 0
 #endif
+// P3's operations, each piece's as it lands (docs/p3-plan.md, "Order"): p3-review's comments.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/Comments.h")
+#include "slide/edit/Comments.h"
+#define FW_SLIDE_COMMENTS 1
+#else
+#define FW_SLIDE_COMMENTS 0
+#endif
+// p3-anim's transitions and animations.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/TimingOps.h")
+#include "slide/edit/TimingOps.h"
+#define FW_SLIDE_TIMING 1
+#else
+#define FW_SLIDE_TIMING 0
+#endif
+// p3-present's video and audio insert: Editor::InsertMedia in Edit.h, which has no header of its own
+// to look for, so its source file tells whether it's there.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/MediaOps.cpp")
+#define FW_SLIDE_MEDIA 1
+#else
+#define FW_SLIDE_MEDIA 0
+#endif
+// What the deck holds beyond the model's digest, read through an editor (comments, timing).
+#define FW_TORTURE_EXTRA (FW_SLIDE_COMMENTS || FW_SLIDE_TIMING)
 
 namespace fwtool {
 namespace decktorture {
@@ -67,8 +92,38 @@ constexpr struct {
     {Op::Format, "format"},      {Op::Undo, "undo"},            {Op::Redo, "redo"},
     {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
     {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
-    {Op::Table, "table"},
+    {Op::Table, "table"},        {Op::Comment, "comment"},      {Op::Transition, "transition"},
+    {Op::TransitionAll, "transition-all"}, {Op::Anim, "anim"}, {Op::Media, "media"},
 };
+constexpr const char* kMediaExtensions[] = {"mp4", "mov", "wmv", "wav", "mp3", "m4a"};
+
+// A 1x1 PNG: inserted pictures, and the posters of inserted video and audio.
+std::vector<uint8_t> TinyPng() {
+  static const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+                                 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+                                 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+                                 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+                                 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+  return std::vector<uint8_t>(std::begin(kPng), std::end(kPng));
+}
+
+// Names in specs, in the order of TimingOps.h's TransitionEffect (without Other), Anim (without
+// Other) and AnimTrigger.
+constexpr const char* kTransitionNames[] = {"none", "cut", "fade", "push", "wipe", "split", "uncover", "cover", "zoom"};
+constexpr const char* kAnimNames[] = {"appear",   "fade",      "fly-in",   "float-in", "split",     "wipe",
+                                      "zoom",     "grow-shrink", "spin",   "disappear", "fade-out", "fly-out",
+                                      "float-out", "split-out", "wipe-out", "zoom-out"};
+constexpr const char* kTriggerNames[] = {"click", "with", "after"};
+
+bool IsAnimAction(std::string_view a) {
+  return a == "add" || a == "change" || a == "option" || a == "timing" || a == "move" || a == "remove";
+}
+
+// Comment actions and the ones that name a comment (nums[0]: its place in SlideComments).
+bool IsCommentAction(std::string_view a) {
+  return a == "add" || a == "reply" || a == "edit" || a == "delete" || a == "delete-all" || a == "resolve" ||
+         a == "reopen" || a == "move";
+}
 
 const char* OpName(Op op) {
   for (const auto& o : kOps)
@@ -155,6 +210,41 @@ bool ParseShapeRef(std::string_view s, int& slide, std::vector<uint32_t>& ids) {
   return !ids.empty();
 }
 
+// "0,2,3" -> {0, 2, 3}.
+bool ParseIndexes(std::string_view s, std::vector<int>& out) {
+  out.clear();
+  for (std::string_view rest = s; !rest.empty();) {
+    size_t comma = rest.find(',');
+    int n = 0;
+    if (!ToInt(rest.substr(0, comma), n) || n < 0) return false;
+    out.push_back(n);
+    rest.remove_prefix(comma == std::string_view::npos ? rest.size() : comma + 1);
+  }
+  return !out.empty();
+}
+
+std::string JoinIndexes(const std::vector<int>& v) {
+  std::string s;
+  for (size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
+  return s;
+}
+
+// A spec's fields: "e=fade,d=700" -> {e: fade, d: 700}. False for a field without '=' or a spec with
+// a space (it's one word in an edit line).
+bool SpecFields(std::string_view spec, std::vector<std::pair<std::string, std::string>>& out) {
+  out.clear();
+  if (spec.find(' ') != std::string_view::npos) return false;
+  for (std::string_view rest = spec; !rest.empty();) {
+    size_t comma = rest.find(',');
+    std::string_view f = rest.substr(0, comma);
+    size_t eq = f.find('=');
+    if (eq == std::string_view::npos || eq == 0) return false;
+    out.emplace_back(std::string(f.substr(0, eq)), std::string(f.substr(eq + 1)));
+    rest.remove_prefix(comma == std::string_view::npos ? rest.size() : comma + 1);
+  }
+  return true;
+}
+
 bool IsShapeOp(Op op) {
   return op == Op::Type || op == Op::Move || op == Op::Resize || op == Op::Rotate || op == Op::DeleteShape ||
          op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table;
@@ -199,6 +289,27 @@ std::string FormatEdit(const Edit& e) {
     case Op::Table:
       s += " " + at + " " + e.arg;
       for (int n : e.nums) s += " " + std::to_string(n);
+      break;
+    case Op::Comment: {
+      s += " " + std::to_string(e.slide) + " " + e.arg;
+      const std::string which = e.nums.empty() ? "0" : std::to_string(e.nums[0]);
+      const std::string author = " A" + std::to_string(e.count);
+      if (e.arg == "add") s += " " + Num(e.dx) + " " + Num(e.dy) + author + " " + Quote(e.text);
+      else if (e.arg == "reply") s += " " + which + author + " " + Quote(e.text);
+      else if (e.arg == "edit") s += " " + which + " " + Quote(e.text);
+      else if (e.arg == "move") s += " " + which + " " + Num(e.dx) + " " + Num(e.dy);
+      else if (e.arg != "delete-all") s += " " + which;
+      break;
+    }
+    case Op::Transition: s += " " + std::to_string(e.slide) + " " + e.text; break;
+    case Op::TransitionAll: s += " " + std::to_string(e.slide); break;
+    case Op::Anim:
+      s += " " + std::to_string(e.slide) + " " + e.arg + " " + (e.arg == "add" ? std::to_string(e.shape) : JoinIndexes(e.nums));
+      if (!e.text.empty()) s += " " + e.text;
+      break;
+    case Op::Media:
+      s += " " + std::to_string(e.slide) + " " + e.arg + " " + std::to_string(e.count) + " " + Num(e.dx) + " " + Num(e.dy) +
+           " " + Num(e.w) + " " + Num(e.h);
       break;
   }
   if (!e.target.empty()) s += " # " + e.target;
@@ -272,6 +383,59 @@ bool ParseEdit(std::string_view line, Edit& e) {
       e.arg = std::string(NextWord(s));
       return !e.arg.empty() && ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
              ToDouble(NextWord(s), e.h) && s.empty();
+    }
+    case Op::Media: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      int variant = 0;
+      if (e.arg.empty() || !ToInt(NextWord(s), variant) || variant < 0) return false;
+      e.count = static_cast<uint32_t>(variant);
+      return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
+             ToDouble(NextWord(s), e.h) && s.empty();
+    }
+    case Op::Comment: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (!IsCommentAction(e.arg)) return false;
+      if (e.arg == "delete-all") return s.empty();
+      auto author = [&](std::string_view w) {
+        int n = 0;
+        if (w.size() < 2 || w.front() != 'A' || !ToInt(w.substr(1), n) || n < 0) return false;
+        e.count = static_cast<uint32_t>(n);
+        return true;
+      };
+      if (e.arg == "add")
+        return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && author(NextWord(s)) && Unquote(s, e.text) && s.empty();
+      int which = 0;
+      if (!ToInt(NextWord(s), which) || which < 0) return false;
+      e.nums = {which};
+      if (e.arg == "reply") return author(NextWord(s)) && Unquote(s, e.text) && s.empty();
+      if (e.arg == "edit") return Unquote(s, e.text) && s.empty();
+      if (e.arg == "move") return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && s.empty();
+      return s.empty();  // delete, resolve, reopen
+    }
+    case Op::Transition: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.text = std::string(NextWord(s));
+      return !e.text.empty() && SpecFields(e.text, fields) && s.empty();
+    }
+    case Op::TransitionAll: return ToInt(NextWord(s), e.slide) && s.empty();
+    case Op::Anim: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (!IsAnimAction(e.arg)) return false;
+      const std::string_view what = NextWord(s);
+      if (e.arg == "add") {
+        int id = 0;
+        if (!ToInt(what, id) || id < 0) return false;
+        e.shape = static_cast<uint32_t>(id);
+      } else if (!ParseIndexes(what, e.nums)) {
+        return false;
+      }
+      e.text = std::string(NextWord(s));
+      return SpecFields(e.text, fields) && s.empty();
     }
     default: break;
   }
@@ -356,6 +520,82 @@ namespace ob = fw::slide::objects;
 
 std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
 
+#if FW_SLIDE_COMMENTS
+// Who comments in the torture test (Edit::count picks one).
+constexpr const char* kAuthors[] = {"Ada Lovelace", "Charles Babbage", "Grace Hopper", "Zo\xC3\xAB \xC3\x85ngstr\xC3\xB6m"};
+
+// Each slide's comments, one per line, as the comments pane lists them (the undo, redo and read-back
+// checks): id, thread, author, time, place, resolved, format and text. Places in eighths of a point.
+std::vector<std::string> CommentLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < slides; ++i) {
+    const std::vector<ed::Comment> list = ed::SlideComments(editor, i);
+    for (size_t k = 0; k < list.size(); ++k) {
+      const ed::Comment& c = list[k];
+      std::string line = "slide " + std::to_string(i) + " comment " + std::to_string(k) + " " + c.id;
+      if (!c.parent.empty()) line += " reply to " + c.parent;
+      line += " by \"" + fw::WideToUtf8(c.author) + "\" (" + fw::WideToUtf8(c.initials) + ") " + c.created + (c.utc ? " utc" : "");
+      if (c.hasPos) line += " at " + std::to_string(std::llround(c.pos.x * 8)) + "," + std::to_string(std::llround(c.pos.y * 8));
+      if (c.shape) line += " on shape " + std::to_string(c.shape);
+      if (c.resolved) line += " resolved";
+      if (c.legacy) line += " legacy";
+      out.push_back(line + " " + Quote(fw::WideToUtf8(c.text)));
+    }
+  }
+  return out;
+}
+#endif
+
+#if FW_SLIDE_TIMING
+template <size_t N>
+int IndexOf(const char* const (&names)[N], std::string_view v) {
+  for (size_t i = 0; i < N; ++i)
+    if (v == names[i]) return static_cast<int>(i);
+  return -1;
+}
+
+std::string Ms(double ms) { return std::to_string(std::llround(ms)); }
+
+// Each slide's transition and main sequence, as the Transitions tab and the Animation Pane show them.
+std::vector<std::string> TimingLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < slides; ++i) {
+    const ed::TransitionInfo t = ed::GetTransition(editor, i);
+    const std::string at = "slide " + std::to_string(i);
+    if (t.effect != ed::TransitionEffect::None || t.advanceAfterMs >= 0 || !t.advanceOnClick)
+      out.push_back(at + " transition " + Utf8(ed::TransitionName(t.effect)) + " option " + std::to_string(t.option) + " " +
+                    Ms(t.durationMs) + " ms, click " + (t.advanceOnClick ? "yes" : "no") + ", after " + Ms(t.advanceAfterMs) +
+                    (t.sound ? ", sound" : ""));
+    std::u16string whyNot;
+    const std::vector<ed::AnimEffect> seq = ed::MainSequence(editor, i, &whyNot);
+    if (!whyNot.empty()) out.push_back(at + " sequence kept: " + Utf8(whyNot));
+    for (size_t k = 0; k < seq.size(); ++k) {
+      const ed::AnimEffect& a = seq[k];
+      out.push_back(at + " effect " + std::to_string(k) + " shape " + std::to_string(a.shape) + " paragraph " +
+                    std::to_string(a.paragraph) + " " + Utf8(ed::AnimName(a.anim)) + " class " +
+                    std::to_string(static_cast<int>(a.cls)) + " option " + std::to_string(a.option) + " " +
+                    kTriggerNames[static_cast<size_t>(a.trigger) % std::size(kTriggerNames)] + " " + Ms(a.durationMs) +
+                    " ms, delay " + Ms(a.delayMs) + (a.editable ? "" : ", kept"));
+    }
+  }
+  return out;
+}
+#endif
+
+#if FW_TORTURE_EXTRA
+std::vector<std::string> ExtraLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+#if FW_SLIDE_COMMENTS
+  out = CommentLines(editor, slides);
+#endif
+#if FW_SLIDE_TIMING
+  std::vector<std::string> t = TimingLines(editor, slides);
+  out.insert(out.end(), t.begin(), t.end());
+#endif
+  return out;
+}
+#endif
+
 // Through p2-model's edit API (slide/edit/Edit.h) and its writer (Save.h), as the tab's commands do.
 class EditTarget : public DeckTarget {
  public:
@@ -384,6 +624,19 @@ class EditTarget : public DeckTarget {
   }
   bool RedoSteps(int steps) override { return steps <= 0 || static_cast<bool>(editor_.Redo(static_cast<size_t>(steps))); }
   bool CanUndo() const override { return editor_.CanUndo(); }
+#if FW_TORTURE_EXTRA
+  std::vector<std::string> Extra() override { return ExtraLines(editor_, deck_->SlideCount()); }
+#endif
+#if FW_SLIDE_COMMENTS
+  std::vector<size_t> CommentCounts() override { return ed::CommentCounts(editor_); }
+#endif
+#if FW_SLIDE_TIMING
+  std::vector<size_t> EffectCounts() override {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < deck_->SlideCount(); ++i) out.push_back(ed::MainSequence(editor_, i).size());
+    return out;
+  }
+#endif
 
  private:
   ed::Result Run(const Edit& e, std::string& why) {
@@ -539,6 +792,40 @@ class EditTarget : public DeckTarget {
       case Op::Crop:
       case Op::Table: why = "fwtool was built without fwslideobjects"; return {};
 #endif
+#if FW_SLIDE_COMMENTS
+      case Op::Comment: return CommentEdit(e, slide, text, why);
+#else
+      case Op::Comment: why = "fwtool was built without the comment operations"; return {};
+#endif
+#if FW_SLIDE_TIMING
+      case Op::Transition:
+      case Op::TransitionAll:
+      case Op::Anim: return TimingEdit(e, slide, why);
+#else
+      case Op::Transition:
+      case Op::TransitionAll:
+      case Op::Anim: why = "fwtool was built without the timing operations"; return {};
+#endif
+#if FW_SLIDE_MEDIA
+      case Op::Media: {
+        // The bytes are never decoded: a short stand-in per extension and variant, so the same variant
+        // twice shares a part and another one adds one.
+        ed::MediaInsert m;
+        m.extension = e.arg;
+        m.video = e.arg == "mp4" || e.arg == "mov" || e.arg == "wmv";
+        const std::string stand = "fwtool torture " + e.arg + " " + std::to_string(e.count);
+        m.bytes.assign(stand.begin(), stand.end());
+        m.poster = TinyPng();
+        m.name = m.video ? L"clip." + std::wstring(e.arg.begin(), e.arg.end()) : std::wstring();
+        m.durationMs = 1000.0 * (e.count + 1);
+        const draw::Rect r{static_cast<float>(e.dx), static_cast<float>(e.dy), static_cast<float>(e.dx + e.w),
+                           static_cast<float>(e.dy + e.h)};
+        uint32_t id = 0;
+        return editor_.InsertMedia(slide, std::move(m), r, &id);
+      }
+#else
+      case Op::Media: why = "fwtool was built without the media operation"; return {};
+#endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
         hf.slideNumber = e.arg.find('n') != std::string::npos;
@@ -593,14 +880,7 @@ class EditTarget : public DeckTarget {
       }
       return editor_.InsertShape(slide, xml, &id);
     }
-    if (what == "picture") {
-      static const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-                                     0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-                                     0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
-                                     0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-                                     0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 1x1 PNG
-      return editor_.InsertPicture(slide, std::vector<uint8_t>(std::begin(kPng), std::end(kPng)), r, L"A picture", &id);
-    }
+    if (what == "picture") return editor_.InsertPicture(slide, TinyPng(), r, L"A picture", &id);
     if (what.starts_with("table:")) {
       const size_t xAt = what.find('x', 6);
       const int rows = xAt == std::string::npos ? 0 : std::atoi(what.substr(6, xAt - 6).c_str());
@@ -638,6 +918,105 @@ class EditTarget : public DeckTarget {
     }
     why = "unknown insert " + what;
     return {};
+  }
+#endif
+
+#if FW_SLIDE_COMMENTS
+  // As the comments pane does: a new thread, or the comment at its place in the slide's list.
+  ed::Result CommentEdit(const Edit& e, size_t slide, const std::wstring& text, std::string& why) {
+    if (e.arg == "delete-all")
+      return ed::DeleteAllComments(editor_, e.slide < 0 ? std::vector<size_t>{} : std::vector<size_t>{slide});
+    if (e.slide < 0 || slide >= deck_->SlideCount()) {
+      why = "no slide " + std::to_string(e.slide);
+      return {};
+    }
+    ed::CommentAuthor who;
+    who.name = fw::Utf8ToWide(kAuthors[e.count % std::size(kAuthors)]);
+    const draw::Point at{static_cast<float>(e.dx), static_cast<float>(e.dy)};
+    if (e.arg == "add") return ed::AddComment(editor_, slide, at, text, who);
+    const std::vector<ed::Comment> list = ed::SlideComments(editor_, slide);
+    const size_t which = e.nums.empty() ? 0 : static_cast<size_t>(std::max(e.nums[0], 0));
+    if (which >= list.size()) {
+      why = "no comment " + std::to_string(which) + " on slide " + std::to_string(slide);
+      return {};
+    }
+    const std::string& id = list[which].id;
+    if (e.arg == "reply") return ed::ReplyToComment(editor_, slide, id, text, who);
+    if (e.arg == "edit") return ed::EditComment(editor_, slide, id, text);
+    if (e.arg == "delete") return ed::DeleteComment(editor_, slide, id);
+    if (e.arg == "resolve" || e.arg == "reopen") return ed::ResolveComment(editor_, slide, id, e.arg == "resolve");
+    return ed::MoveComment(editor_, slide, id, at);
+  }
+#endif
+
+#if FW_SLIDE_TIMING
+  // As the Transitions and Animations tabs and the Animation Pane do, from the edit's spec.
+  ed::Result TimingEdit(const Edit& e, size_t slide, std::string& why) {
+    if (e.slide < 0 || slide >= deck_->SlideCount()) {
+      why = "no slide " + std::to_string(e.slide);
+      return {};
+    }
+    if (e.op == Op::TransitionAll) return ed::ApplyTransitionToAll(editor_, slide);
+    std::vector<std::pair<std::string, std::string>> fields;
+    SpecFields(e.text, fields);
+    ed::TransitionPatch tp;
+    std::optional<ed::Anim> anim;
+    std::optional<ed::AnimTrigger> trigger;
+    std::optional<int> option;
+    std::optional<double> duration, delay;
+    bool byParagraph = false;
+    int at = -1;
+    for (const auto& [k, v] : fields) {
+      const double n = std::atof(v.c_str());
+      if (k == "e" && e.op == Op::Transition) {
+        const int i = IndexOf(kTransitionNames, v);
+        if (i < 0) return why = "unknown transition " + v, ed::Result{};
+        tp.effect = static_cast<ed::TransitionEffect>(i);
+      } else if (k == "e") {
+        const int i = IndexOf(kAnimNames, v);
+        if (i < 0) return why = "unknown animation " + v, ed::Result{};
+        anim = static_cast<ed::Anim>(i);
+      } else if (k == "t") {
+        const int i = IndexOf(kTriggerNames, v);
+        if (i < 0) return why = "unknown trigger " + v, ed::Result{};
+        trigger = static_cast<ed::AnimTrigger>(i);
+      } else if (k == "o") option = std::atoi(v.c_str());
+      else if (k == "d") duration = n;
+      else if (k == "y") delay = n;
+      else if (k == "c") tp.advanceOnClick = v == "1";
+      else if (k == "a") tp.advanceAfterMs = n;
+      else if (k == "p") byParagraph = v == "1";
+      else if (k == "at") at = std::atoi(v.c_str());
+      else return why = "unknown field " + k, ed::Result{};
+    }
+    if (e.op == Op::Transition) {
+      tp.option = option;
+      tp.durationMs = duration;
+      return ed::SetTransition(editor_, {slide}, tp);
+    }
+    const std::vector<size_t> effects(e.nums.begin(), e.nums.end());
+    if (e.arg == "add") {
+      ed::AnimSpec spec;
+      spec.anim = anim.value_or(ed::Anim::Fade);
+      spec.option = option.value_or(-1);
+      spec.durationMs = duration;
+      spec.trigger = trigger.value_or(ed::AnimTrigger::OnClick);
+      spec.delayMs = delay.value_or(0);
+      spec.byParagraph = byParagraph;
+      return ed::AddAnimation(editor_, slide, e.shape, spec, at);
+    }
+    if (e.arg == "change") {
+      if (!anim) return why = "change without e=", ed::Result{};
+      return ed::ChangeAnimation(editor_, slide, effects, *anim);
+    }
+    if (e.arg == "option") return ed::SetAnimationOption(editor_, slide, effects, option.value_or(0));
+    if (e.arg == "timing") {
+      ed::AnimTimingPatch p;
+      p.trigger = trigger, p.durationMs = duration, p.delayMs = delay;
+      return ed::SetAnimationTiming(editor_, slide, effects, p);
+    }
+    if (e.arg == "move") return ed::MoveAnimations(editor_, slide, effects, static_cast<size_t>(std::max(at, 0)));
+    return ed::RemoveAnimations(editor_, slide, effects);
   }
 #endif
 
@@ -731,10 +1110,12 @@ class Generator {
  public:
   explicit Generator(uint64_t seed) : rng_(seed) {}
 
-  Edit Next(sl::Presentation& deck) {
+  Edit Next(DeckTarget& target) {
+    comments_ = target.CommentCounts();
+    effects_ = target.EffectCounts();
     for (int tries = 0; tries < 50; ++tries) {
       Edit e;
-      if (Make(deck, e)) return e;
+      if (Make(target.Deck(), e)) return e;
     }
     Edit e;
     e.op = Op::Undo;
@@ -753,6 +1134,15 @@ class Generator {
         {Op::DeleteSlide, 5}, {Op::MoveSlide, 6}, {Op::Hide, 2}, {Op::Layout, 4}, {Op::Notes, 3},
         {Op::Undo, 4}, {Op::Redo, 2}, {Op::Save, 1}, {Op::Theme, 1}, {Op::MasterShapes, 1}, {Op::HeaderFooter, 2},
         {Op::Insert, 5}, {Op::Crop, 2}, {Op::Table, 3},
+#if FW_SLIDE_COMMENTS
+        {Op::Comment, 6},
+#endif
+#if FW_SLIDE_TIMING
+        {Op::Transition, 5}, {Op::TransitionAll, 1}, {Op::Anim, 9},
+#endif
+#if FW_SLIDE_MEDIA
+        {Op::Media, 2},
+#endif
     };
     uint32_t total = 0;
     for (const auto& w : kWeights) total += w.weight;
@@ -791,6 +1181,19 @@ class Generator {
         e.dx = std::round(rng_.Between(0, std::max(0.0, size.width - e.w)));
         e.dy = std::round(rng_.Between(0, std::max(0.0, size.height - e.h)));
         e.target = e.arg;
+        return true;
+      }
+      case Op::Media: {
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        e.arg = rng_.Pick(kMediaExtensions);
+        e.count = rng_.Below(3);
+        const draw::Size size = deck.SlideSize();
+        e.w = std::round(rng_.Between(20, size.width * 0.6));
+        e.h = std::round(rng_.Between(20, size.height * 0.6));
+        e.dx = std::round(rng_.Between(0, std::max(0.0, size.width - e.w)));
+        e.dy = std::round(rng_.Between(0, std::max(0.0, size.height - e.h)));
+        e.target = e.arg + " variant " + std::to_string(e.count);
         return true;
       }
       case Op::MasterShapes: {
@@ -848,6 +1251,125 @@ class Generator {
         do e.to = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
         while (e.to == e.slide);
         if (!deck.Sections().empty()) e.target = "a deck with sections";
+        return true;
+      }
+      case Op::Comment: {
+        if (!slides) return false;
+        // New threads most, then replies and edits; resolve on a legacy comment must be refused.
+        static constexpr const char* kActions[] = {"add",    "add",    "add",     "add",    "reply", "reply", "reply", "edit",
+                                                   "edit",   "delete", "delete",  "resolve", "reopen", "move", "delete-all"};
+        e.arg = rng_.Pick(kActions);
+        const draw::Size size = deck.SlideSize();
+        if (e.arg == "delete-all") {
+          e.slide = rng_.Chance(50) ? -1 : static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          e.target = e.slide < 0 ? "every slide's comments" : "a slide's comments";
+          return true;
+        }
+        if (e.arg == "add") {
+          e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          e.dx = std::round(rng_.Between(0, size.width));
+          e.dy = std::round(rng_.Between(0, size.height));
+          e.count = rng_.Below(4);
+          e.text = CommentText();
+          e.target = "a new thread";
+          return true;
+        }
+        std::vector<int> with;
+        for (size_t i = 0; i < comments_.size() && i < static_cast<size_t>(slides); ++i)
+          if (comments_[i]) with.push_back(static_cast<int>(i));
+        if (with.empty()) return false;
+        e.slide = with[rng_.Below(static_cast<uint32_t>(with.size()))];
+        e.nums = {static_cast<int>(rng_.Below(static_cast<uint32_t>(comments_[static_cast<size_t>(e.slide)])))};
+        if (e.arg == "reply") e.count = rng_.Below(4), e.text = CommentText();
+        else if (e.arg == "edit") e.text = CommentText();
+        else if (e.arg == "move") e.dx = std::round(rng_.Between(0, size.width)), e.dy = std::round(rng_.Between(0, size.height));
+        e.target = "a comment";
+        return true;
+      }
+      case Op::TransitionAll:
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        return true;
+      case Op::Transition: {
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        // Mostly a new effect (the gallery), now and then only its timing (as on a transition
+        // Featherweight can't set); options, durations and times now and then out of range (refused).
+        std::string spec;
+        auto add = [&](const std::string& f) { spec += (spec.empty() ? "" : ",") + f; };
+        if (rng_.Chance(80)) add(std::string("e=") + rng_.Pick(kTransitionNames));
+        if (rng_.Chance(40)) add("o=" + std::to_string(rng_.Below(9)));
+        if (rng_.Chance(40)) {
+          static constexpr int kMs[] = {10, 250, 500, 700, 750, 1000, 1500, 2500, 59000, 5, 60000};
+          add("d=" + std::to_string(rng_.Pick(kMs)));
+        }
+        if (rng_.Chance(30)) add(std::string("c=") + (rng_.Chance(70) ? "1" : "0"));
+        if (rng_.Chance(30)) {
+          static constexpr long long kAfter[] = {-1, 0, 2000, 15000, 86400000, 86400001};
+          add("a=" + std::to_string(rng_.Pick(kAfter)));
+        }
+        if (spec.empty()) add("d=" + std::to_string(500 + 250 * rng_.Below(8)));
+        e.text = spec;
+        e.target = "a transition";
+        return true;
+      }
+      case Op::Anim: {
+        if (!slides) return false;
+        static constexpr const char* kActions[] = {"add", "add", "add", "add", "add", "add", "change", "change",
+                                                   "option", "option", "timing", "timing", "timing", "move",
+                                                   "move", "remove", "remove"};
+        e.arg = rng_.Pick(kActions);
+        std::string spec;
+        auto add = [&](const std::string& f) { spec += (spec.empty() ? "" : ",") + f; };
+        static constexpr int kMs[] = {10, 250, 500, 750, 1000, 2000, 59000, 5, 60000};
+        static constexpr int kDelays[] = {0, 250, 500, 1000, 59000, 60000};
+        if (e.arg == "add") {
+          e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          std::vector<ShapeInfo> all;
+          CollectShapes(deck.GetSlide(static_cast<size_t>(e.slide))->shapes, true, all);
+          std::vector<const sl::Shape*> choices;
+          // Shapes on the slide itself; one inside a group now and then (refused).
+          for (const ShapeInfo& i : all)
+            if (i.topLevel || rng_.Chance(10)) choices.push_back(i.shape);
+          if (choices.empty()) return false;
+          const sl::Shape& s = *choices[rng_.Below(static_cast<uint32_t>(choices.size()))];
+          e.shape = s.id;
+          add(std::string("e=") + rng_.Pick(kAnimNames));
+          if (rng_.Chance(40)) add("o=" + std::to_string(rng_.Below(9)));
+          if (rng_.Chance(50)) add("d=" + std::to_string(rng_.Pick(kMs)));
+          if (rng_.Chance(70)) add(std::string("t=") + rng_.Pick(kTriggerNames));
+          if (rng_.Chance(40)) add("y=" + std::to_string(rng_.Pick(kDelays)));
+          if (rng_.Chance(20)) add("p=1");
+          if (rng_.Chance(40)) {
+            const size_t n = static_cast<size_t>(e.slide) < effects_.size() ? effects_[static_cast<size_t>(e.slide)] : 0;
+            add("at=" + std::to_string(rng_.Below(static_cast<uint32_t>(n + 2))));
+          }
+          e.text = spec;
+          e.target = Describe(s);
+          return true;
+        }
+        // The other actions: effects of a slide that has some.
+        std::vector<int> with;
+        for (size_t i = 0; i < effects_.size() && i < static_cast<size_t>(slides); ++i)
+          if (effects_[i]) with.push_back(static_cast<int>(i));
+        if (with.empty()) return false;
+        e.slide = with[rng_.Below(static_cast<uint32_t>(with.size()))];
+        const uint32_t n = static_cast<uint32_t>(effects_[static_cast<size_t>(e.slide)]);
+        const uint32_t count = 1 + rng_.Below(std::min<uint32_t>(n, 3));
+        for (uint32_t k = 0; k < count; ++k) {
+          // Now and then an index past the end (refused).
+          const int idx = static_cast<int>(rng_.Chance(5) ? n + rng_.Below(3) : rng_.Below(n));
+          if (std::find(e.nums.begin(), e.nums.end(), idx) == e.nums.end()) e.nums.push_back(idx);
+        }
+        if (e.arg == "change") add(std::string("e=") + rng_.Pick(kAnimNames));
+        else if (e.arg == "option") add("o=" + std::to_string(rng_.Below(9)));
+        else if (e.arg == "timing") {
+          if (rng_.Chance(50)) add(std::string("t=") + rng_.Pick(kTriggerNames));
+          if (rng_.Chance(50)) add("d=" + std::to_string(rng_.Pick(kMs)));
+          if (rng_.Chance(50) || spec.empty()) add("y=" + std::to_string(rng_.Pick(kDelays)));
+        } else if (e.arg == "move") add("at=" + std::to_string(rng_.Below(n)));
+        e.text = spec;
+        e.target = std::to_string(e.nums.size()) + (e.nums.size() == 1 ? " effect" : " effects");
         return true;
       }
       default: break;
@@ -973,7 +1495,18 @@ class Generator {
     }
   }
 
+  // A comment's text: mostly what's typed into shapes, now and then paragraphs, nothing (refused),
+  // only spaces (refused), characters XML can't hold (dropped) and characters beyond the BMP.
+  std::string CommentText() {
+    static constexpr const char* kOwn[] = {"Please check this.", "First paragraph\nSecond paragraph", "", "   ",
+                                           "bell\x01 and vertical\x0Btab", "\xF0\x9D\x84\x9E music and \xF0\x9F\x99\x82"};
+    if (rng_.Chance(30)) return rng_.Pick(kOwn);
+    return kTyped[rng_.Below(static_cast<uint32_t>(std::size(kTyped)))];
+  }
+
   Rng rng_;
+  std::vector<size_t> comments_;  // per slide, as the target counts them before each edit
+  std::vector<size_t> effects_;   // the main sequence's effects per slide, likewise
 };
 
 // ---- The deck, one fact per line (undo and read-back checks)
@@ -1050,6 +1583,14 @@ std::vector<std::string> Digest(sl::Presentation& deck) {
     for (size_t i : show.slides) line += " " + std::to_string(i);
     out.push_back(line);
   }
+  return out;
+}
+
+// The deck as edited so far: the model's digest and what the target holds beyond it (comments).
+std::vector<std::string> State(DeckTarget& target) {
+  std::vector<std::string> out = Digest(target.Deck());
+  std::vector<std::string> extra = target.Extra();
+  out.insert(out.end(), extra.begin(), extra.end());
   return out;
 }
 
@@ -1219,6 +1760,31 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
         if (!fallback && hadFallback.contains(id))
           return Failure{"fallback", name + ": shape " + id + " in mc:AlternateContent lost its mc:Fallback"};
   }
+  // Every time node (p:cTn) of a written slide's timing has an id of its own, unless the original
+  // already repeated it (P3's timing operations number new nodes after the slide's highest).
+  for (const std::string& name : r.written) {
+    if (name.find("ppt/slides/slide") == std::string::npos || !again->ReadPart(name, b).Ok()) continue;
+    auto repeated = [](const std::vector<uint8_t>& bytes) {
+      std::set<std::string> seen, twice;
+      pugi::xml_document doc;
+      if (!doc.load_buffer(bytes.data(), bytes.size())) return twice;
+      std::vector<pugi::xml_node> stack{doc.document_element()};
+      while (!stack.empty()) {
+        pugi::xml_node n = stack.back();
+        stack.pop_back();
+        std::string_view el = n.name();
+        if (el == "p:cTn" || el.ends_with(":cTn") || el == "cTn")
+          if (!seen.insert(n.attribute("id").value()).second) twice.insert(n.attribute("id").value());
+        for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
+          if (c.type() == pugi::node_element) stack.push_back(c);
+      }
+      return twice;
+    };
+    std::set<std::string> had;
+    if (orig.pkg->ReadPart(name, a).Ok()) had = repeated(a);
+    for (const std::string& id : repeated(b))
+      if (!had.contains(id)) return Failure{"timing", name + ": two time nodes (p:cTn) have the id " + id};
+  }
   // Saved without edits: nothing written, the same parts in the same order, the same zip records.
   if (r.done == 0) {
     if (!r.written.empty()) return Failure{"unchanged", "saving without edits wrote " + r.written.front()};
@@ -1237,7 +1803,15 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
   std::vector<std::string> readBack = Digest(*deck);
   for (const std::string& p : deck->Problems())
     if (!Listed(orig.problems, p)) return Failure{"model", p};
-  std::vector<std::string> edited = Digest(target.Deck());
+#if FW_TORTURE_EXTRA
+  {
+    // The comments and timing as an editor of the saved copy lists them.
+    ed::Editor reread(*deck);
+    std::vector<std::string> lines = ExtraLines(reread, deck->SlideCount());
+    readBack.insert(readBack.end(), lines.begin(), lines.end());
+  }
+#endif
+  std::vector<std::string> edited = State(target);
   if (std::string diff = FirstDifference(edited, readBack); !diff.empty()) {
     r.edited = Joined(edited), r.readBack = Joined(readBack);
     return Failure{"readback", diff};
@@ -1274,11 +1848,11 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     r.failure = Failure{"open", st.message};
     return r;
   }
-  std::vector<std::string> undoBase = Digest(target->Deck());  // where undoing everything leads
+  std::vector<std::string> undoBase = State(*target);  // where undoing everything leads
   Generator gen(seed);
   const size_t count = replay ? replay->size() : edits;
   for (size_t i = 0; i < count; ++i) {
-    Edit e = replay ? (*replay)[i] : gen.Next(target->Deck());
+    Edit e = replay ? (*replay)[i] : gen.Next(*target);
     r.applied.push_back(e);
     if (!current.empty()) {
       std::ofstream cur(current, std::ios::trunc);
@@ -1287,7 +1861,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     }
     if (e.op == Op::Save) {
       if ((r.failure = CheckSave(orig, *target, r))) return r;
-      if (!target->CanUndo()) undoBase = Digest(target->Deck());
+      if (!target->CanUndo()) undoBase = State(*target);
       ++r.done;
       continue;
     }
@@ -1302,11 +1876,11 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
   }
   // Undo everything: the deck as opened; redo it all: the deck as edited. (Up to the editor's 100
   // steps: a round with more doesn't get back to the start.)
-  const std::vector<std::string> edited = Digest(target->Deck());
+  const std::vector<std::string> edited = State(*target);
   if (r.done > 0 && r.done < 90) {
     const int steps = target->UndoAll();
     if (steps >= 0) {
-      if (std::string diff = FirstDifference(undoBase, Digest(target->Deck())); !diff.empty()) {
+      if (std::string diff = FirstDifference(undoBase, State(*target)); !diff.empty()) {
         r.failure = Failure{"undo", "after undoing " + std::to_string(steps) + " steps: " + diff};
         return r;
       }
@@ -1314,7 +1888,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
         r.failure = Failure{"redo", "redoing " + std::to_string(steps) + " steps failed"};
         return r;
       }
-      if (std::string diff = FirstDifference(edited, Digest(target->Deck())); !diff.empty()) {
+      if (std::string diff = FirstDifference(edited, State(*target)); !diff.empty()) {
         r.failure = Failure{"redo", "after redoing " + std::to_string(steps) + " steps: " + diff};
         return r;
       }

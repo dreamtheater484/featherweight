@@ -19,6 +19,7 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/TextFind.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
@@ -107,6 +108,8 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  // p3-review: Ctrl+Alt+M, New Comment, wherever the keyboard is (in text being edited too).
+  if (vk == 'M' && (mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && Ready()) return CmdNewComment;
   if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
   // p2-objects: the objects' keys, and undo and redo wherever the keys are.
   const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
@@ -138,6 +141,8 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (CommentsPanel::Owns(cmd)) return Comments().Query(cmd);  // p3-review
+  if (CommandState ps; ProtectCommandState(cmd, ps)) return ps;  // p3-review: Encrypt with Password
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
@@ -149,7 +154,9 @@ CommandState PresentationView::QueryCommand(int cmd) {
   };
   if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return clipboardName(s);  // p2-objects
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
+  if (PictureCommand(cmd, &s)) return s;    // P3, p3-files: Export's PNG pictures
   if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
+  if (AnimCommandState(cmd, s)) return s;   // p3-anim: transitions and animations
   if (TextEditing::Names(cmd) && cmd != CmdCopy) return clipboardName(s = text_->Query(cmd));  // named, unavailable
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
@@ -226,6 +233,11 @@ std::vector<int> PresentationView::Commands() {
     if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
   for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
   for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
+  // p3-review: the comments' commands.
+  for (int cmd : {CmdNewComment, CmdReviewPane, CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments, CmdPrevComment,
+                  CmdNextComment, CmdShowCommentMarkup, CmdEncryptPassword})
+    out.push_back(cmd);
+  for (int cmd : AnimCommands()) out.push_back(cmd);  // p3-anim
   return out;
 }
 
@@ -235,9 +247,16 @@ bool PresentationView::Execute(int cmd) {
     text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
     return true;
   }
+  if (ProtectCommand(cmd)) return true;  // p3-review: Encrypt with Password
+  if (CommentsPanel::Owns(cmd)) {  // p3-review
+    if (cmd == CmdNewComment) text_->End();
+    return Comments().Execute(cmd);
+  }
   if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
   if (SlideCommand(cmd)) return true;  // P2: the slides' commands
+  if (AnimCommand(cmd)) return true;   // p3-anim: transitions and animations
+  if (PictureCommand(cmd, nullptr)) return true;  // P3, p3-files
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdPresentation:

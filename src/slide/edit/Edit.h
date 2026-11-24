@@ -51,6 +51,7 @@ enum ChangeFlag : uint32_t {
   kAdded = 1u << 3,     // a new slide (inserted, duplicated, copied in, or back by undo)
   kRemoved = 1u << 4,   // gone (index -1)
   kNumber = 1u << 5,    // its slide number changed and it shows one
+  kComments = 1u << 6,  // its comments (p3-review: the comments pane and markers)
 };
 
 struct SlideChange {

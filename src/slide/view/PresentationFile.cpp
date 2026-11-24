@@ -98,6 +98,7 @@ bool PresentationFile::FinishSave(std::wstring& error) {
     return false;
   }
   fw::slide::edit::CommitSave(*r->editor, r->plan);
+  keyChanged_ = false;  // the file has the password now
   SaveDone(r->job, r->result);
   Changed(*r->editor);  // edited while it saved: still unsaved
   return true;
@@ -109,13 +110,21 @@ bool PresentationFile::Save(fw::slide::edit::Editor& editor, const std::wstring&
 }
 
 void PresentationFile::Changed(const fw::slide::edit::Editor& editor) {
-  FileSession::Changed(editor.Modified(), {});
-  if (editor.Modified()) Edited(0);
+  const bool modified = editor.Modified() || keyChanged_;  // a new or removed password too (p3-review)
+  FileSession::Changed(modified, {});
+  if (modified) Edited(0);
 }
 
 void PresentationFile::Autosave(fw::slide::edit::Editor& editor) {
   // A recovered deck is unsaved before any edit too.
   if (run_ || (!editor.Modified() && !Dirty()) || !AutosaveDue()) return;
+  if (Protected()) {
+    // p3-review: a password-protected deck is never in clear, even in the recovery folder: the whole
+    // deck, encrypted with its key (FileSession::WriteAutosave), in place of a journal.
+    std::vector<uint8_t> bytes;
+    if (fw::slide::edit::SaveToBytes(editor, bytes).Ok()) WriteAutosave(std::move(bytes));
+    return;
+  }
   const auto bytes = editor.Deck().GetPackage().GetSnapshot().Bytes();
   if (WriteJournal(std::span<const uint8_t>(bytes.data(), bytes.size()), "pptx", journal_.All(editor),
                    journal_.Unwritten(editor)))

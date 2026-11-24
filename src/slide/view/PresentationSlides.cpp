@@ -15,6 +15,7 @@
 #include "slide/Presentation.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "slide/edit/Comments.h"
 #include "slide/edit/Edit.h"
 #include "slide/edit/Save.h"
 #include "slide/view/NotesEdit.h"
@@ -553,6 +554,12 @@ void PresentationView::OnSlideEdits(const edit::Changes& c) {
   const std::vector<uint32_t> before = editIds_;
   editIds_ = SlideIds();
   const bool all = c.allSlides || c.slideSize;
+  // p3-review: comments alone changed: the markers and the pane follow, the slides stay as drawn.
+  if (edit::CommentsOnly(c)) {
+    host_.ViewStateChanged();
+    host_.ViewInvalidate();
+    return;
+  }
   // What the deck prepared follows the slides, then goes for the ones that changed (their model
   // objects were read again: what was built from them is stale).
   if (c.slideList) deck_->Reorder(OldIndexes(before, editIds_));

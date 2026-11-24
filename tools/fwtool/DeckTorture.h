@@ -48,6 +48,24 @@ enum class Op : uint8_t {
   Crop,         // picture `shape`: dx, dy, w, h are the fractions cut from the left, top, right, bottom
   Table,        // table `shape`; arg: insert-row, delete-row, insert-col, delete-col (nums: at, count),
                 // merge (nums: row0 col0 row1 col1), split (nums: row col)
+  // Comments (p3-review, slide/edit/Comments.h): on `slide`, the comment `nums[0]` in the slide's
+  // list (SlideComments: each thread, then its replies), as the comments pane does. arg: add (at dx, dy
+  // points; author `count`; `text`), reply (author `count`; `text`), edit (`text`), delete, delete-all
+  // (`slide` -1: every slide), resolve, reopen, move (to dx, dy).
+  Comment,
+  // Transitions and animations (p3-anim, slide/edit/TimingOps.h). `text` is a spec, comma-separated
+  // key=value without spaces. Transition: `slide`'s transition, spec e=<effect>,o=<option>,d=<ms>,
+  // c=<0|1 advance on click>,a=<ms advance after, -1 off>, each optional (no e: only timing).
+  // TransitionAll: Apply To All from `slide`. Anim, arg: add (shape `shape`; spec e=<anim>,o=,d=,
+  // t=<click|with|after>,y=<delay ms>,p=<1: by paragraph>,at=<index>), change (e=), option (o=),
+  // timing (t=,d=,y=), move (at=), remove; the effects are `nums` (indexes into the main sequence).
+  Transition,
+  TransitionAll,
+  Anim,
+  // Video and audio (p3-present, Editor::InsertMedia, as Insert > Video and Audio does): on `slide`,
+  // arg the file's extension (mp4, mov, wmv: video; wav, mp3, m4a: audio), `count` the bytes' variant
+  // (the same variant twice shares a media part), at (dx, dy) points, `w` x `h` points.
+  Media,
 };
 
 // One edit, as reproducers keep it. Slides are indexes at the moment the edit is applied; shapes are
@@ -72,7 +90,11 @@ struct Edit {
 //   type 2#5 end "text" / notes 2 "text" / move 2#5 12.5 -30 / resize 2#5 1.2 0.8 / rotate 2#5 45 /
 //   delete 2#5 / group 2#5,7,9 / ungroup 2#11 / order 2#5 front / format 2#5 fill=C00000 /
 //   undo 2 / redo 1 / save / theme 0 dark / master-shapes 2 off / header-footer -1 nf "footer text" /
-//   insert 2 shape:rightArrow 100 80 200 120 / crop 2#5 0.1 0 0.2 0 / table 2#5 merge 0 0 1 1,
+//   insert 2 shape:rightArrow 100 80 200 120 / crop 2#5 0.1 0 0.2 0 / table 2#5 merge 0 0 1 1 /
+//   comment 2 add 120 80 A1 "text" / comment 2 reply 0 A2 "text" / comment 2 edit 1 "text" /
+//   comment 2 delete 1 / comment -1 delete-all / comment 2 resolve 0 / comment 2 move 0 300 200 /
+//   transition 2 e=push,o=1,d=1000 / transition-all 2 / anim 2 add 5 e=fly-in,t=after,y=250 /
+//   anim 2 timing 0,1 d=750 / anim 2 move 1 at=0 / anim 2 remove 0,
 //   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);
@@ -98,6 +120,12 @@ class DeckTarget {
   virtual int UndoAll() { return -1; }
   virtual bool RedoSteps(int steps) { return steps == 0; }
   virtual bool CanUndo() const { return false; }
+  // What the deck holds beyond the model's slides and shapes, one fact per line (P3: each slide's
+  // comments), for the undo, redo and read-back checks; and how many comments each slide has, for
+  // the edits that pick one.
+  virtual std::vector<std::string> Extra() { return {}; }
+  virtual std::vector<size_t> CommentCounts() { return {}; }
+  virtual std::vector<size_t> EffectCounts() { return {}; }  // the main sequence's effects per slide
   // The parts the last Save wrote or removed (every other part must be copied byte for byte).
   std::vector<std::string> written;
 };

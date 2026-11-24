@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 
+#include "draw/OfficeArt.h"
 #include "draw/Shapes.h"
 #include "draw/Xml.h"
 
@@ -143,42 +144,6 @@ std::vector<float> VmlDash(std::string_view v) {
   }
   if (custom.size() % 2) custom.push_back(custom.back());
   return custom;
-}
-
-// Office's shape type numbers (o:spt) with a DrawingML preset of the same shape.
-std::string_view PresetForSpt(int spt) {
-  struct Map {
-    int spt;
-    std::string_view preset;
-  };
-  static constexpr Map kMap[] = {
-      {1, "rect"}, {2, "roundRect"}, {3, "ellipse"}, {4, "diamond"}, {5, "triangle"}, {6, "rtTriangle"},
-      {7, "parallelogram"}, {8, "trapezoid"}, {9, "hexagon"}, {10, "octagon"}, {11, "plus"}, {12, "star5"},
-      {13, "rightArrow"}, {15, "homePlate"}, {16, "cube"}, {20, "line"}, {21, "plaque"}, {22, "can"},
-      {23, "donut"}, {32, "straightConnector1"}, {33, "bentConnector2"}, {34, "bentConnector3"},
-      {35, "bentConnector4"}, {36, "bentConnector5"}, {37, "curvedConnector2"}, {38, "curvedConnector3"},
-      {39, "curvedConnector4"}, {40, "curvedConnector5"}, {53, "ribbon"}, {54, "ribbon2"}, {55, "chevron"},
-      {56, "pentagon"}, {57, "noSmoking"}, {58, "star8"}, {59, "star16"}, {60, "star32"}, {61, "wedgeRectCallout"},
-      {62, "wedgeRoundRectCallout"}, {63, "wedgeEllipseCallout"}, {64, "wave"}, {65, "foldedCorner"},
-      {66, "leftArrow"}, {67, "downArrow"}, {68, "upArrow"}, {69, "leftRightArrow"}, {70, "upDownArrow"},
-      {71, "irregularSeal1"}, {72, "irregularSeal2"}, {73, "lightningBolt"}, {74, "heart"}, {75, "rect"},
-      {76, "quadArrow"}, {84, "bevel"}, {85, "leftBracket"}, {86, "rightBracket"}, {87, "leftBrace"},
-      {88, "rightBrace"}, {89, "leftUpArrow"}, {90, "bentUpArrow"}, {91, "bentArrow"}, {92, "star24"},
-      {93, "stripedRightArrow"}, {94, "notchedRightArrow"}, {95, "blockArc"}, {96, "smileyFace"},
-      {97, "verticalScroll"}, {98, "horizontalScroll"}, {99, "circularArrow"}, {109, "flowChartProcess"},
-      {110, "flowChartDecision"}, {111, "flowChartInputOutput"}, {112, "flowChartPredefinedProcess"},
-      {113, "flowChartInternalStorage"}, {114, "flowChartDocument"}, {115, "flowChartMultidocument"},
-      {116, "flowChartTerminator"}, {117, "flowChartPreparation"}, {118, "flowChartManualInput"},
-      {119, "flowChartManualOperation"}, {120, "flowChartConnector"}, {121, "flowChartPunchedCard"},
-      {122, "flowChartPunchedTape"}, {123, "flowChartSummingJunction"}, {124, "flowChartOr"},
-      {125, "flowChartCollate"}, {126, "flowChartSort"}, {127, "flowChartExtract"}, {128, "flowChartMerge"},
-      {129, "flowChartOfflineStorage"}, {130, "flowChartOnlineStorage"}, {131, "flowChartMagneticTape"},
-      {132, "flowChartMagneticDisk"}, {133, "flowChartMagneticDrum"}, {134, "flowChartDisplay"},
-      {135, "flowChartDelay"}, {183, "sun"}, {184, "moon"}, {185, "bracketPair"}, {186, "bracePair"},
-      {187, "star4"}, {188, "doubleWave"}, {202, "rect"}};
-  for (const Map& m : kMap)
-    if (m.spt == spt) return m.preset;
-  return {};
 }
 
 // A number as Geometry reads it, to 1/1000 of a unit. (std::to_chars for doubles would bring
