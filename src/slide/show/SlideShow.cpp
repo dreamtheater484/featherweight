@@ -261,7 +261,7 @@ class Show final : public anim::FrameSource, private PresenterHost {
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
   // The display queue model: this present shows at the refresh after it, never before the one after
   // the previous present's. `count`: refreshes that go without a new frame count as missed.
-  void TrackVblank(bool count);
+  void TrackVblank(bool count, double start, double waited);
   void WriteBench();
   // The bench ignores the mouse and the keyboard (a click or a key changes nothing: Roy, 2026-11-24,
   // "mouse movement or a click in a running program should generally not be a throw away"); only an
@@ -360,12 +360,23 @@ class Show final : public anim::FrameSource, private PresenterHost {
   };
   std::vector<SlowFrame> slow_;  // late frames in transitions, the first 40
   double waitMax_ = 0, drawMax_ = 0, presentMax_ = 0;
-  // DXGI's frame statistics, sampled after every present during transitions: refreshes against
-  // presents that reached the screen.
   // Refreshes with no new frame: each present's vblank interval (on DWM's clock) against the last.
   UINT64 vblank0_ = 0, vblankPeriod_ = 0;
   long long lastVblank_ = -1;
   int vblankMissed_ = 0;
+  // The first transition's frames, its warm-up too: what the queue model above made of each present
+  // against DXGI's own statistics (which present was on screen at which refresh), to tell a refresh
+  // that really had no new frame from the model's guess. Refresh numbers count from vblank0_.
+  struct FrameLog {
+    double start, wait, draw, present, phase;  // phase: where in its refresh the present returned (0..1)
+    long long vblank, shown, syncVblank;
+    int missed;
+    bool warm;
+    UINT lastPresent, presentCount, presentRefresh, syncRefresh;
+    HRESULT statsHr;
+    int mode;  // DXGI_FRAME_PRESENTATION_MODE (composed 0, overlay 1, none 2, failed 3), -1 unknown
+  };
+  std::vector<FrameLog> frameLog_;
 };
 
 Show* g_show = nullptr;
@@ -936,7 +947,7 @@ void Show::Frame() {
   Draw(now);
   if (!warming) BenchFrame(start, Now() - start, inTransition, waited);  // the warm-up is no part of any motion
   // Its frames still fill the display queue the first counted frames join: the model sees them too.
-  else if (bench_) TrackVblank(false);
+  else if (bench_) TrackVblank(false, start, waited);
   if (wasMoving && !Moving()) AfterSettle(Now());
   else if (!Animating()) PostMessageW(hwnd_, kMsgPrerender, 0, 0);  // a video stopped: the next slide now
 }
@@ -1821,11 +1832,11 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
     ++benchTransitions_.back().frames;
   }
   lastFrame_ = start;
-  if (inTransition) TrackVblank(true);
+  if (inTransition) TrackVblank(true, start, waitMs);
   else lastVblank_ = -1;
 }
 
-void Show::TrackVblank(bool count) {
+void Show::TrackVblank(bool count, double start, double waited) {
   {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
@@ -1843,12 +1854,53 @@ void Show::TrackVblank(bool count) {
       // after the previous frame's (frames wait their turn). A refresh between two frames shown is
       // one with no new frame.
       long long shown = lastVblank_ >= 0 ? std::max(lastVblank_ + 1, index + 1) : index + 1;
+      int missed = 0;
       if (count && lastVblank_ >= 0 && shown > lastVblank_ + 1) {
-        int missed = static_cast<int>(shown - lastVblank_ - 1);
+        missed = static_cast<int>(shown - lastVblank_ - 1);
         vblankMissed_ += missed;
         if (!benchTransitions_.empty()) benchTransitions_.back().vblankMissed += missed;
       }
       lastVblank_ = shown;
+      if (benchTransitions_.size() == 1 && frameLog_.size() < 600 && swap_) {
+        FrameLog f{};
+        f.start = start;
+        f.wait = waited;
+        f.draw = drawMs_;
+        f.present = presentMs_;
+        f.phase = static_cast<double>((static_cast<UINT64>(qpc.QuadPart) - vblank0_) % vblankPeriod_) / vblankPeriod_;
+        f.vblank = index;
+        f.shown = shown;
+        f.missed = missed;
+        f.warm = !count;
+        f.mode = -1;
+        swap_->GetLastPresentCount(&f.lastPresent);
+        LARGE_INTEGER sync{};
+        ComPtr<IDXGISwapChainMedia> media;
+        if (SUCCEEDED(swap_.As(&media))) {
+          DXGI_FRAME_STATISTICS_MEDIA s{};
+          f.statsHr = media->GetFrameStatisticsMedia(&s);
+          if (SUCCEEDED(f.statsHr)) {
+            f.presentCount = s.PresentCount;
+            f.presentRefresh = s.PresentRefreshCount;
+            f.syncRefresh = s.SyncRefreshCount;
+            sync = s.SyncQPCTime;
+            f.mode = static_cast<int>(s.CompositionMode);
+          }
+        } else {
+          DXGI_FRAME_STATISTICS s{};
+          f.statsHr = swap_->GetFrameStatistics(&s);
+          if (SUCCEEDED(f.statsHr)) {
+            f.presentCount = s.PresentCount;
+            f.presentRefresh = s.PresentRefreshCount;
+            f.syncRefresh = s.SyncRefreshCount;
+            sync = s.SyncQPCTime;
+          }
+        }
+        f.syncVblank = sync.QuadPart ? std::llround(static_cast<double>(sync.QuadPart - static_cast<long long>(vblank0_)) /
+                                                    static_cast<double>(vblankPeriod_))
+                                     : LLONG_MIN;
+        frameLog_.push_back(f);
+      }
     }
   }
 }
@@ -1903,6 +1955,24 @@ void Show::WriteBench() {
              "    {\"slide\": %zu, \"kind\": %d, \"frames\": %d, \"missed\": %d, \"lateStarts\": %d, \"worstMs\": %.2f}%s\n",
              t.slide + 1, static_cast<int>(t.kind), t.frames, t.vblankMissed, t.dropped, t.worstMs,
              i + 1 < benchTransitions_.size() ? "," : "");
+    json += buf;
+  }
+  json += "  ],\n";
+  // Times in ms from the first frame; vblank, shown and syncVblank: refreshes from the first
+  // frame's (syncVblank null: DXGI gave no time). pc/prc/src: DXGI's PresentCount,
+  // PresentRefreshCount and SyncRefreshCount; last: GetLastPresentCount.
+  json += "  \"firstTransitionFrames\": [\n";
+  for (size_t i = 0; i < frameLog_.size(); ++i) {
+    const FrameLog& f = frameLog_[i];
+    char sync[24] = "null";
+    if (f.syncVblank != LLONG_MIN) snprintf(sync, sizeof(sync), "%lld", f.syncVblank);
+    snprintf(buf, sizeof(buf),
+             "    {\"t\": %.3f, \"warm\": %s, \"wait\": %.3f, \"draw\": %.3f, \"present\": %.3f, \"vblank\": %lld, "
+             "\"phase\": %.2f, \"shown\": %lld, \"missed\": %d, \"last\": %u, \"hr\": \"0x%08lx\", \"mode\": %d, "
+             "\"pc\": %u, \"prc\": %u, \"src\": %u, \"syncVblank\": %s}%s\n",
+             f.start - frameLog_[0].start, f.warm ? "true" : "false", f.wait, f.draw, f.present, f.vblank, f.phase,
+             f.shown, f.missed, f.lastPresent, static_cast<unsigned long>(f.statsHr), f.mode, f.presentCount,
+             f.presentRefresh, f.syncRefresh, sync, i + 1 < frameLog_.size() ? "," : "");
     json += buf;
   }
   json += "  ]\n}\n";
