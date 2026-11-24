@@ -3,7 +3,7 @@
 add_library(fwslideodp STATIC Odp.cpp OdpGeometry.cpp)
 target_include_directories(fwslideodp PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideodp PUBLIC fwpkg fwdraw fwcore)
-target_compile_options(fwslideodp PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy /O1>)
+target_compile_options(fwslideodp PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/Gy /O1>)
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slide_odp.cpp")

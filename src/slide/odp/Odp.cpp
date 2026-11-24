@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <map>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -32,14 +31,29 @@ using pugi::xml_node;
 using Chain = std::vector<xml_node>;  // a style, its parents, ..., the family's default: most specific first
 namespace odf = pkg::odf;
 
-constexpr std::string_view kDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
-constexpr std::string_view kNs =
-    " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""
-    " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
-    " xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"";
-constexpr std::string_view kRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
-constexpr std::string_view kCt = "application/vnd.openxmlformats-officedocument.presentationml.";
-constexpr std::string_view kRelsOpen = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
+// The package's fixed pieces, as literals the compiler joins (no strings built for them).
+#define DECL "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+#define NS                                                                    \
+  " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""        \
+  " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"" \
+  " xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\""
+#define REL "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+#define CT "application/vnd.openxmlformats-officedocument.presentationml."
+#define RELS DECL "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+#define CLRMAP                                                                                           \
+  "<p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" " \
+  "accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/>"
+#define SPTREE "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
+
+// Appends `parts` to `out`: no temporary strings, much less code than a chain of +.
+void Cat(std::string& out, std::initializer_list<std::string_view> parts) {
+  for (std::string_view p : parts) out.append(p);
+}
+std::string Str(std::initializer_list<std::string_view> parts) {
+  std::string s;
+  Cat(s, parts);
+  return s;
+}
 constexpr const char* kText = "style:text-properties";
 constexpr const char* kPara = "style:paragraph-properties";
 constexpr const char* kGraphic = "style:graphic-properties";
@@ -72,11 +86,11 @@ double Opacity(std::string_view v) {
 }
 
 std::string Srgb(const std::string& hex, double opacity = 1) {
-  std::string s = "<a:srgbClr val=\"" + hex + "\"";
-  if (opacity >= 0.9995) return s + "/>";
-  return s + "><a:alpha val=\"" + N(std::llround(opacity * 100000)) + "\"/></a:srgbClr>";
+  std::string s = Str({"<a:srgbClr val=\"", hex, "\""});
+  if (opacity >= 0.9995) return Str({s, "/>"});
+  return Str({s, "><a:alpha val=\"", N(std::llround(opacity * 100000)), "\"/></a:srgbClr>"});
 }
-std::string Solid(const std::string& hex, double opacity = 1) { return "<a:solidFill>" + Srgb(hex, opacity) + "</a:solidFill>"; }
+std::string Solid(const std::string& hex, double opacity = 1) { return Str({"<a:solidFill>", Srgb(hex, opacity), "</a:solidFill>"}); }
 
 // A color scaled by an intensity (ODF gradients' start and end intensity).
 std::string Scaled(std::string hex, double intensity) {
@@ -168,15 +182,16 @@ struct Part {
   uint32_t nextId = 2;
   bool master = false;  // a master page: styles.xml's automatic styles
   int bodies = 0;       // placeholders numbered so far (idx)
-  std::map<std::string, std::string> ids;
+  std::vector<std::pair<std::string, std::string>> ids;  // type and target, its id
 
   std::string Rel(std::string_view type, std::string_view target, bool external = false) {
-    std::string key = std::string(type) + '\n' + std::string(target);
-    if (auto it = ids.find(key); it != ids.end()) return it->second;
-    std::string id = "rId" + N(nextRel++);
-    rels += "<Relationship Id=\"" + id + "\" Type=\"" + std::string(kRel) + std::string(type) + "\" Target=\"" +
-            Esc(target) + "\"" + (external ? " TargetMode=\"External\"" : "") + "/>";
-    ids.emplace(std::move(key), id);
+    const std::string key = Str({type, "\n", target});
+    for (const auto& [k, id] : ids)
+      if (k == key) return id;
+    std::string id = Str({"rId", N(nextRel++)});
+    Cat(rels, {"<Relationship Id=\"", id, "\" Type=\"" REL, type, "\" Target=\"", Esc(target), "\"",
+               external ? " TargetMode=\"External\"/>" : "/>"});
+    ids.emplace_back(key, id);
     return id;
   }
 };
@@ -199,14 +214,14 @@ struct Bounds {
 // a:xfrm; a group's also maps its children's coordinates (`children`: as they are).
 std::string Xfrm(const Box& b, const Bounds* children = nullptr) {
   std::string s = "<a:xfrm";
-  if (const int64_t rot = std::llround(b.rot * 60000) % 21600000; rot > 0) s += " rot=\"" + N(rot) + "\"";
+  if (const int64_t rot = std::llround(b.rot * 60000) % 21600000; rot > 0) Cat(s, {" rot=\"", N(rot), "\""});
   if (b.flipH) s += " flipH=\"1\"";
   if (b.flipV) s += " flipV=\"1\"";
-  s += "><a:off x=\"" + N(b.x) + "\" y=\"" + N(b.y) + "\"/><a:ext cx=\"" + N(b.w) + "\" cy=\"" + N(b.h) + "\"/>";
+  Cat(s, {"><a:off x=\"", N(b.x), "\" y=\"", N(b.y), "\"/><a:ext cx=\"", N(b.w), "\" cy=\"", N(b.h), "\"/>"});
   if (children)
-    s += "<a:chOff x=\"" + N(children->l) + "\" y=\"" + N(children->t) + "\"/><a:chExt cx=\"" + N(children->r - children->l) +
-         "\" cy=\"" + N(children->b - children->t) + "\"/>";
-  return s + "</a:xfrm>";
+    Cat(s, {"<a:chOff x=\"", N(children->l), "\" y=\"", N(children->t), "\"/><a:chExt cx=\"", N(children->r - children->l),
+         "\" cy=\"", N(children->b - children->t), "\"/>"});
+  return Str({s, "</a:xfrm>"});
 }
 
 // Where a shape is: svg:x/y/width/height, then draw:transform (which moves the box's centre and
@@ -246,7 +261,7 @@ std::string PresetOf(std::string_view type) {
   return {};
 }
 
-std::string Preset(std::string_view prst) { return "<a:prstGeom prst=\"" + std::string(prst) + "\"><a:avLst/></a:prstGeom>"; }
+std::string Preset(std::string_view prst) { return Str({"<a:prstGeom prst=\"", std::string(prst), "\"><a:avLst/></a:prstGeom>"}); }
 
 class Converter {
  public:
@@ -295,7 +310,7 @@ class Converter {
   pkg::XmlDom content_, styles_;
   Styles st_;
   std::vector<std::pair<std::string, std::vector<uint8_t>>> media_;  // ppt/media name, bytes
-  std::map<std::string, std::string, std::less<>> mediaOf_;          // ODF href -> media name ("" if unreadable)
+  std::vector<std::pair<std::string, std::string>> mediaOf_;        // ODF href -> media name ("" if unreadable)
   uint64_t mediaBytes_ = 0;
   std::vector<std::string> layoutMasters_;                            // master page names, by layout
   std::vector<std::pair<std::string, std::string>> layouts_;          // xml, rels
@@ -316,7 +331,7 @@ std::string Converter::Gradient(xml_node g, double opacity) const {
   end = Scaled(end, Opacity(Attr(g, "draw:end-intensity")));
   const double border = std::clamp(Percent(Attr(g, "draw:border")), 0.0, 100.0);
   auto stop = [&](double pos, const std::string& c) {
-    return "<a:gs pos=\"" + N(std::llround(std::clamp(pos, 0.0, 100.0) * 1000)) + "\">" + Srgb(c, opacity) + "</a:gs>";
+    return Str({"<a:gs pos=\"", N(std::llround(std::clamp(pos, 0.0, 100.0) * 1000)), "\">", Srgb(c, opacity), "</a:gs>"});
   };
   std::string stops;
   std::string shape;
@@ -336,7 +351,7 @@ std::string Converter::Gradient(xml_node g, double opacity) const {
     if (ang < 0) ang += 360;
     if (style == "axial") stops = stop(0, start) + stop(50, end) + stop(100, start);
     else stops = stop(0, start) + (border > 0 ? stop(border, start) : "") + stop(100, end);
-    shape = "<a:lin ang=\"" + N(std::llround(ang * 60000) % 21600000) + "\" scaled=\"0\"/>";
+    shape = Str({"<a:lin ang=\"", N(std::llround(ang * 60000) % 21600000), "\" scaled=\"0\"/>"});
   } else {
     // Radial and the rest: the end color at the centre (draw:cx, draw:cy), the start color outside.
     double cx = Percent(Attr(g, "draw:cx")), cy = Percent(Attr(g, "draw:cy"));
@@ -345,10 +360,10 @@ std::string Converter::Gradient(xml_node g, double opacity) const {
     stops = stop(0, end) + (border > 0 ? stop(100 - border, start) : "") + stop(100, start);
     const bool round = style == "radial" || style == "ellipsoid";
     auto pct = [](double v) { return N(std::llround(std::clamp(v, -1000.0, 1000.0) * 1000)); };
-    shape = std::string("<a:path path=\"") + (round ? "circle" : "rect") + "\"><a:fillToRect l=\"" + pct(cx) + "\" t=\"" + pct(cy) +
-            "\" r=\"" + pct(100 - cx) + "\" b=\"" + pct(100 - cy) + "\"/></a:path>";
+    shape = Str({"<a:path path=\"", (round ? "circle" : "rect"), "\"><a:fillToRect l=\"", pct(cx), "\" t=\"", pct(cy),
+            "\" r=\"", pct(100 - cx), "\" b=\"", pct(100 - cy), "\"/></a:path>"});
   }
-  return "<a:gradFill rotWithShape=\"1\"><a:gsLst>" + stops + "</a:gsLst>" + shape + "</a:gradFill>";
+  return Str({"<a:gradFill rotWithShape=\"1\"><a:gsLst>", stops, "</a:gsLst>", shape, "</a:gradFill>"});
 }
 
 std::string Converter::Fill(const Chain& chain, const char* element, Part& part) {
@@ -368,11 +383,11 @@ std::string Converter::Fill(const Chain& chain, const char* element, Part& part)
     xml_node i = st_.Named('i', Prop(chain, element, "draw:fill-image-name"));
     const std::string media = i ? Image(Attr(i, "xlink:href")) : std::string();
     if (media.empty()) return {};
-    std::string s = "<a:blipFill dpi=\"0\" rotWithShape=\"1\"><a:blip r:embed=\"" + part.Rel("image", "../media/" + media) + "\"";
+    std::string s = Str({"<a:blipFill dpi=\"0\" rotWithShape=\"1\"><a:blip r:embed=\"", part.Rel("image", "../media/" + media), "\""});
     s += opacity < 0.9995 ? "><a:alphaModFix amt=\"" + N(std::llround(opacity * 100000)) + "\"/></a:blip>" : "/>";
     if (Prop(chain, element, "style:repeat") == "repeat") s += "<a:tile tx=\"0\" ty=\"0\" sx=\"100000\" sy=\"100000\" flip=\"none\" algn=\"tl\"/>";
     else s += "<a:stretch><a:fillRect/></a:stretch>";
-    return s + "</a:blipFill>";
+    return Str({s, "</a:blipFill>"});
   }
   return "<a:noFill/>";  // none, and hatches
 }
@@ -384,10 +399,10 @@ std::string Converter::Line(const Chain& chain, bool connector) const {
   const int64_t w = std::max<int64_t>(0, Emu(Prop(chain, kGraphic, "svg:stroke-width")));
   std::string color = odf::Color(Prop(chain, kGraphic, "svg:stroke-color"));
   if (color.empty()) color = "000000";
-  std::string s = "<a:ln w=\"" + N(stroke.empty() ? 9525 : w) + "\"";
+  std::string s = Str({"<a:ln w=\"", N(stroke.empty() ? 9525 : w), "\""});
   const std::string_view cap = Prop(chain, kGraphic, "svg:stroke-linecap");
   s += cap == "round" ? " cap=\"rnd\"" : cap == "square" ? " cap=\"sq\"" : " cap=\"flat\"";
-  s += ">" + Solid(color, Opacity(Prop(chain, kGraphic, "svg:stroke-opacity")));
+  Cat(s, {">", Solid(color, Opacity(Prop(chain, kGraphic, "svg:stroke-opacity")))});
   if (stroke == "dash") {
     if (xml_node d = st_.Named('d', Prop(chain, kGraphic, "draw:stroke-dash"))) {
       // Lengths as percentages of the line's width, or absolute.
@@ -424,11 +439,11 @@ std::string Converter::Line(const Chain& chain, bool connector) const {
       type = "diamond";
     const double ratio = static_cast<double>(Emu(Prop(chain, kGraphic, width))) / static_cast<double>(std::max<int64_t>(w, 9525));
     const char* size = ratio <= 2.5 ? "sm" : ratio <= 4.5 ? "med" : "lg";
-    return std::string("<a:") + tag + " type=\"" + type + "\" w=\"" + size + "\" len=\"" + size + "\"/>";
+    return Str({"<a:", tag, " type=\"", type, "\" w=\"", size, "\" len=\"", size, "\"/>"});
   };
   s += end("headEnd", "draw:marker-start", "draw:marker-start-width");
   s += end("tailEnd", "draw:marker-end", "draw:marker-end-width");
-  return s + "</a:ln>";
+  return Str({s, "</a:ln>"});
 }
 
 std::string Converter::Effects(const Chain& chain) const {
@@ -440,16 +455,18 @@ std::string Converter::Effects(const Chain& chain) const {
   int64_t dir = std::llround(std::atan2(dy, dx) * 180 / 3.14159265358979 * 60000);
   if (dir < 0) dir += 21600000;
   const int64_t blur = std::max<int64_t>(0, Emu(Prop(chain, kGraphic, "draw:shadow-blur")));
-  return "<a:effectLst><a:outerShdw blurRad=\"" + N(blur) + "\" dist=\"" + N(std::llround(std::hypot(dx, dy))) + "\" dir=\"" +
-         N(dir % 21600000) + "\" algn=\"ctr\" rotWithShape=\"0\">" + Srgb(color, Opacity(Prop(chain, kGraphic, "draw:shadow-opacity"))) +
-         "</a:outerShdw></a:effectLst>";
+  return Str({"<a:effectLst><a:outerShdw blurRad=\"", N(blur), "\" dist=\"", N(std::llround(std::hypot(dx, dy))), "\" dir=\"",
+         N(dir % 21600000), "\" algn=\"ctr\" rotWithShape=\"0\">", Srgb(color, Opacity(Prop(chain, kGraphic, "draw:shadow-opacity"))),
+         "</a:outerShdw></a:effectLst>"});
 }
 
 std::string Converter::Image(std::string_view href) {
   while (href.starts_with("./")) href.remove_prefix(2);
   if (href.empty() || href.find("://") != std::string_view::npos || href.starts_with("/") || href.starts_with("..")) return {};
-  if (auto it = mediaOf_.find(href); it != mediaOf_.end()) return it->second;
-  std::string& name = mediaOf_[std::string(href)];
+  for (const auto& [from, to] : mediaOf_)
+    if (from == href) return to;
+  mediaOf_.emplace_back(href, std::string());
+  std::string& name = mediaOf_.back().second;
   const pkg::ZipEntry* e = zip_.Find(href);
   std::vector<uint8_t> bytes;
   if (!e || mediaBytes_ + e->uncompressedSize > limits_.maxTotalSize || !zip_.Read(*e, bytes).Ok() || bytes.size() < 8) return {};
@@ -465,7 +482,7 @@ std::string Converter::Image(std::string_view href) {
   else if (bytes.size() > 44 && b[0] == 1 && b[40] == ' ' && b[41] == 'E' && b[42] == 'M' && b[43] == 'F') ext = "emf";
   if (!ext) return {};
   mediaBytes_ += bytes.size();
-  name = "image" + N(static_cast<int64_t>(media_.size()) + 1) + "." + ext;
+  name = Str({"image", N(static_cast<int64_t>(media_.size()) + 1), ".", ext});
   media_.emplace_back(name, std::move(bytes));
   return name;
 }
@@ -493,7 +510,7 @@ struct Converter::Runs {
   std::string_view link;
 
   void Flush() {
-    if (!text.empty()) out += "<a:r>" + props + "<a:t>" + Esc(text) + "</a:t></a:r>";
+    if (!text.empty()) Cat(out, {"<a:r>", props, "<a:t>", Esc(text), "</a:t></a:r>"});
     text.clear();
   }
   void Append(const std::string& rp, std::string_view s) {
@@ -538,18 +555,18 @@ std::string Converter::Bullet(xml_node lvl, Part& part) {
   const std::string_view kind = lvl.name();
   xml_node tp = lvl.child(kText);
   std::string s;
-  if (std::string c = odf::Color(Attr(tp, "fo:color")); !c.empty()) s += "<a:buClr>" + Srgb(c) + "</a:buClr>";
+  if (std::string c = odf::Color(Attr(tp, "fo:color")); !c.empty()) Cat(s, {"<a:buClr>", Srgb(c), "</a:buClr>"});
   std::string_view size = Attr(tp, "fo:font-size");
   if (size.empty()) size = Attr(lvl, "text:bullet-relative-size");
-  if (const double p = Percent(size); p > 0) s += "<a:buSzPct val=\"" + N(std::llround(std::clamp(p, 25.0, 400.0) * 1000)) + "\"/>";
-  else if (const auto pt = odf::Points(size)) s += "<a:buSzPts val=\"" + N(std::llround(std::clamp(*pt, 1.0, 4000.0) * 100)) + "\"/>";
+  if (const double p = Percent(size); p > 0) Cat(s, {"<a:buSzPct val=\"", N(std::llround(std::clamp(p, 25.0, 400.0) * 1000)), "\"/>"});
+  else if (const auto pt = odf::Points(size)) Cat(s, {"<a:buSzPts val=\"", N(std::llround(std::clamp(*pt, 1.0, 4000.0) * 100)), "\"/>"});
   std::string font = FirstFamily(Attr(tp, "fo:font-family"));
   if (font.empty() && !Attr(tp, "style:font-name").empty()) font = st_.Font(Attr(tp, "style:font-name"));
-  if (!font.empty()) s += "<a:buFont typeface=\"" + Esc(font) + "\"/>";
+  if (!font.empty()) Cat(s, {"<a:buFont typeface=\"", Esc(font), "\"/>"});
   if (kind == "text:list-level-style-bullet") {
     const std::string_view c = Attr(lvl, "text:bullet-char");
     if (c.empty()) return "<a:buNone/>";
-    return s + "<a:buChar char=\"" + Esc(c) + "\"/>";
+    return Str({s, "<a:buChar char=\"", Esc(c), "\"/>"});
   }
   if (kind == "text:list-level-style-number") {
     const std::string_view f = Attr(lvl, "style:num-format"), pre = Attr(lvl, "style:num-prefix"), suf = Attr(lvl, "style:num-suffix");
@@ -560,23 +577,23 @@ std::string Converter::Bullet(xml_node lvl, Part& part) {
     else if (suf == ")") type += "ParenR";
     else if (suf == "." || std::string_view(scheme) != "arabic") type += "Period";
     else type += suf.empty() ? "Plain" : "Period";
-    s += "<a:buAutoNum type=\"" + type + "\"";
-    if (const int start = std::atoi(Attr(lvl, "text:start-value").data()); start > 1 && start < 32768) s += " startAt=\"" + N(start) + "\"";
-    return s + "/>";
+    Cat(s, {"<a:buAutoNum type=\"", type, "\""});
+    if (const int start = std::atoi(Attr(lvl, "text:start-value").data()); start > 1 && start < 32768) Cat(s, {" startAt=\"", N(start), "\""});
+    return Str({s, "/>"});
   }
   if (kind == "text:list-level-style-image") {
     const std::string media = Image(Attr(lvl, "xlink:href"));
-    if (!media.empty()) return s + "<a:buBlip><a:blip r:embed=\"" + part.Rel("image", "../media/" + media) + "\"/></a:buBlip>";
-    return s + "<a:buChar char=\"\xE2\x80\xA2\"/>";
+    if (!media.empty()) return Str({s, "<a:buBlip><a:blip r:embed=\"", part.Rel("image", "../media/" + media), "\"/></a:buBlip>"});
+    return Str({s, "<a:buChar char=\"\xE2\x80\xA2\"/>"});
   }
   return "<a:buNone/>";
 }
 
 std::string Converter::RunProps(const Chain& c, const char* tag, std::string_view link) const {
-  std::string a = std::string("<") + tag;
+  std::string a = Str({"<", tag});
   const std::string_view lang = Prop(c, kText, "fo:language"), country = Prop(c, kText, "fo:country");
   if (!lang.empty() && lang != "zxx" && lang != "none")
-    a += " lang=\"" + Esc(lang) + (country.empty() || country == "none" ? "" : "-" + Esc(country)) + "\"";
+    Cat(a, {" lang=\"", Esc(lang), (country.empty() || country == "none" ? "" : "-" + Esc(country)), "\""});
   // The size: the first absolute one, scaled by the percentages before it.
   double factor = 1, size = 18;
   for (xml_node s : c) {
@@ -591,7 +608,7 @@ std::string Converter::RunProps(const Chain& c, const char* tag, std::string_vie
       break;
     }
   }
-  a += " sz=\"" + N(std::llround(std::clamp(size * factor, 1.0, 4000.0) * 100)) + "\"";
+  Cat(a, {" sz=\"", N(std::llround(std::clamp(size * factor, 1.0, 4000.0) * 100)), "\""});
   if (const std::string_view w = Prop(c, kText, "fo:font-weight"); !w.empty())
     a += (w == "bold" || std::atoi(w.data()) >= 600) ? " b=\"1\"" : " b=\"0\"";
   if (const std::string_view i = Prop(c, kText, "fo:font-style"); !i.empty()) a += (i == "italic" || i == "oblique") ? " i=\"1\"" : " i=\"0\"";
@@ -603,7 +620,7 @@ std::string Converter::RunProps(const Chain& c, const char* tag, std::string_vie
                   : uStyle == "long-dash" ? "dashLong" : uStyle == "dot-dash" ? "dotDash" : uStyle == "dot-dot-dash" ? "dotDotDash"
                   : uStyle == "wave" ? (dbl ? "wavyDbl" : "wavy") : dbl ? "dbl" : "sng";
     if (bold && u != "none" && u != "dbl" && u != "wavyDbl") u = u == "sng" ? "heavy" : u == "wavy" ? "wavyHeavy" : u + "Heavy";
-    a += " u=\"" + u + "\"";
+    Cat(a, {" u=\"", u, "\""});
   }
   const std::string_view strike = Prop(c, kText, "style:text-line-through-style");
   if (!strike.empty())
@@ -612,30 +629,30 @@ std::string Converter::RunProps(const Chain& c, const char* tag, std::string_vie
   if (Prop(c, kText, "fo:text-transform") == "uppercase") a += " cap=\"all\"";
   else if (Prop(c, kText, "fo:font-variant") == "small-caps") a += " cap=\"small\"";
   if (const std::string_view sp = Prop(c, kText, "fo:letter-spacing"); !sp.empty() && sp != "normal")
-    if (const auto pt = odf::Points(sp); pt && *pt != 0) a += " spc=\"" + N(std::llround(std::clamp(*pt, -4000.0, 4000.0) * 100)) + "\"";
+    if (const auto pt = odf::Points(sp); pt && *pt != 0) Cat(a, {" spc=\"", N(std::llround(std::clamp(*pt, -4000.0, 4000.0) * 100)), "\""});
   if (const std::string_view pos = Prop(c, kText, "style:text-position"); !pos.empty()) {
     const std::string_view first = pos.substr(0, pos.find(' '));
     const double p = first == "super" ? 33 : first == "sub" ? -33 : Percent(first);
-    if (p != 0 && p > -1000 && p < 1000) a += " baseline=\"" + N(std::llround(p * 1000)) + "\"";
+    if (p != 0 && p > -1000 && p < 1000) Cat(a, {" baseline=\"", N(std::llround(p * 1000)), "\""});
   }
   std::string kids;
   if (Prop(c, kText, "style:use-window-font-color") != "true")
     if (std::string col = odf::Color(Prop(c, kText, "fo:color")); !col.empty()) kids += Solid(col);
-  if (std::string hl = odf::Color(Prop(c, kText, "fo:background-color")); !hl.empty()) kids += "<a:highlight>" + Srgb(hl) + "</a:highlight>";
+  if (std::string hl = odf::Color(Prop(c, kText, "fo:background-color")); !hl.empty()) Cat(kids, {"<a:highlight>", Srgb(hl), "</a:highlight>"});
   auto face = [&](const char* tag2, const char* family, const char* name) {
     std::string f = FirstFamily(Prop(c, kText, family));
     if (f.empty()) {
       const std::string_view n = Prop(c, kText, name);
       if (!n.empty()) f = st_.Font(n);
     }
-    if (!f.empty()) kids += std::string("<a:") + tag2 + " typeface=\"" + Esc(f) + "\"/>";
+    if (!f.empty()) Cat(kids, {"<a:", tag2, " typeface=\"", Esc(f), "\"/>"});
   };
   face("latin", "fo:font-family", "style:font-name");
   face("ea", "style:font-family-asian", "style:font-name-asian");
   face("cs", "style:font-family-complex", "style:font-name-complex");
-  if (!link.empty()) kids += "<a:hlinkClick r:id=\"" + std::string(link) + "\"/>";
-  if (kids.empty()) return a + "/>";
-  return a + ">" + kids + "</" + tag + ">";
+  if (!link.empty()) Cat(kids, {"<a:hlinkClick r:id=\"", std::string(link), "\"/>"});
+  if (kids.empty()) return Str({a, "/>"});
+  return Str({a, ">", kids, "</", tag, ">"});
 }
 
 void Converter::Inline(xml_node node, const Chain& chain, const std::string& props, Part& part, Runs& runs, int depth) {
@@ -664,7 +681,7 @@ void Converter::Inline(xml_node node, const Chain& chain, const std::string& pro
       runs.space = runs.start = false;
     } else if (k == "text:line-break") {
       runs.Flush();
-      runs.out += "<a:br>" + props + "</a:br>";
+      Cat(runs.out, {"<a:br>", props, "</a:br>"});
       runs.space = false;
       runs.start = true;
     } else if (k == "text:a") {
@@ -680,7 +697,7 @@ void Converter::Inline(xml_node node, const Chain& chain, const std::string& pro
       char id[48];
       std::snprintf(id, sizeof id, "{5C7A0B6E-0D9A-4F3B-9E1C-%012X}", ++fields_);
       const char* type = k == "text:page-number" ? "slidenum" : k == "text:date" ? "datetime1" : "datetime10";
-      runs.out += std::string("<a:fld id=\"") + id + "\" type=\"" + type + "\">" + props + "<a:t>" + Esc(n.text().get()) + "</a:t></a:fld>";
+      Cat(runs.out, {"<a:fld id=\"", id, "\" type=\"", type, "\">", props, "<a:t>", Esc(n.text().get()), "</a:t></a:fld>"});
       runs.space = runs.start = false;
     } else if (k == "text:soft-page-break" || k == "text:bookmark" || k == "text:bookmark-start" || k == "text:bookmark-end" ||
                k == "office:annotation" || k == "office:annotation-end" || k == "text:note") {
@@ -699,7 +716,7 @@ void Converter::Paragraph(xml_node p, const Chain& shape, Part& part, xml_node l
   xml_node lvl = list ? ListLevel(list, level) : xml_node();
 
   std::string pPr = "<a:pPr";
-  if (list && level > 0) pPr += " lvl=\"" + N(std::min(level, 8)) + "\"";
+  if (list && level > 0) Cat(pPr, {" lvl=\"", N(std::min(level, 8)), "\""});
   std::string_view ml = Prop(pc, kPara, "fo:margin-left"), ti = Prop(pc, kPara, "fo:text-indent");
   int64_t marL = Emu(ml), indent = Emu(ti);
   if (lvl && ml.empty()) {
@@ -712,23 +729,23 @@ void Converter::Paragraph(xml_node p, const Chain& shape, Part& part, xml_node l
     }
   }
   marL = std::clamp<int64_t>(marL, 0, 51206400), indent = std::clamp<int64_t>(indent, -51206400, 51206400);
-  if (marL) pPr += " marL=\"" + N(marL) + "\"";
-  if (indent) pPr += " indent=\"" + N(indent) + "\"";
+  if (marL) Cat(pPr, {" marL=\"", N(marL), "\""});
+  if (indent) Cat(pPr, {" indent=\"", N(indent), "\""});
   const std::string_view align = Prop(pc, kPara, "fo:text-align");
   if (align == "center") pPr += " algn=\"ctr\"";
   else if (align == "end" || align == "right") pPr += " algn=\"r\"";
   else if (align == "justify") pPr += Prop(pc, kPara, "fo:text-align-last") == "justify" ? " algn=\"dist\"" : " algn=\"just\"";
   else pPr += " algn=\"l\"";
-  if (const int64_t tab = Emu(Prop(pc, kPara, "style:tab-stop-distance")); tab > 0) pPr += " defTabSz=\"" + N(tab) + "\"";
+  if (const int64_t tab = Emu(Prop(pc, kPara, "style:tab-stop-distance")); tab > 0) Cat(pPr, {" defTabSz=\"", N(tab), "\""});
   if (Prop(pc, kPara, "style:writing-mode") == "rl-tb") pPr += " rtl=\"1\"";
   std::string kids;
   const std::string_view lh = Prop(pc, kPara, "fo:line-height");
-  if (const double pct = Percent(lh); pct > 0) kids += "<a:lnSpc><a:spcPct val=\"" + N(std::llround(std::min(pct, 13200.0) * 1000)) + "\"/></a:lnSpc>";
+  if (const double pct = Percent(lh); pct > 0) Cat(kids, {"<a:lnSpc><a:spcPct val=\"", N(std::llround(std::min(pct, 13200.0) * 1000)), "\"/></a:lnSpc>"});
   else if (const auto pt = odf::Points(lh.empty() ? Prop(pc, kPara, "style:line-height-at-least") : lh); pt && *pt > 0)
-    kids += "<a:lnSpc><a:spcPts val=\"" + N(std::llround(std::min(*pt, 1584.0) * 100)) + "\"/></a:lnSpc>";
+    Cat(kids, {"<a:lnSpc><a:spcPts val=\"", N(std::llround(std::min(*pt, 1584.0) * 100)), "\"/></a:lnSpc>"});
   auto spacing = [&](const char* tag, const char* attr) {
     if (const auto pt = odf::Points(Prop(pc, kPara, attr)); pt && *pt > 0)
-      kids += std::string("<a:") + tag + "><a:spcPts val=\"" + N(std::llround(std::min(*pt, 1584.0) * 100)) + "\"/></a:" + tag + ">";
+      Cat(kids, {"<a:", tag, "><a:spcPts val=\"", N(std::llround(std::min(*pt, 1584.0) * 100)), "\"/></a:", tag, ">"});
   };
   spacing("spcBef", "fo:margin-top");
   spacing("spcAft", "fo:margin-bottom");
@@ -743,19 +760,19 @@ void Converter::Paragraph(xml_node p, const Chain& shape, Part& part, xml_node l
       if (++count > 32) break;
       const std::string_view type = Attr(t, "style:type");
       const int64_t pos = std::clamp<int64_t>(Emu(Attr(t, "style:position")) + marL, 0, 51206400);
-      tabs += "<a:tab pos=\"" + N(pos) + "\" algn=\"" + (type == "center" ? "ctr" : type == "right" ? "r" : type == "char" ? "dec" : "l") + "\"/>";
+      Cat(tabs, {"<a:tab pos=\"", N(pos), "\" algn=\"", (type == "center" ? "ctr" : type == "right" ? "r" : type == "char" ? "dec" : "l"), "\"/>"});
     }
     break;
   }
-  if (!tabs.empty()) kids += "<a:tabLst>" + tabs + "</a:tabLst>";
-  out += "<a:p>" + pPr + ">" + kids + "</a:pPr>";
+  if (!tabs.empty()) Cat(kids, {"<a:tabLst>", tabs, "</a:tabLst>"});
+  Cat(out, {"<a:p>", pPr, ">", kids, "</a:pPr>"});
 
   Runs runs;
   const std::string props = RunProps(pc, "a:rPr");
   runs.end = RunProps(pc, "a:endParaRPr");
   Inline(p, pc, props, part, runs, 0);
   runs.Flush();
-  out += runs.out + runs.end + "</a:p>";
+  Cat(out, {runs.out, runs.end, "</a:p>"});
 }
 
 void Converter::Paragraphs(xml_node parent, const Chain& shape, Part& part, xml_node list, int level, bool header, int depth,
@@ -791,7 +808,7 @@ std::string Converter::BodyPr(const Chain& c) const {
   auto inset = [&](const char* attr, const char* side) {
     std::string_view v = Prop(c, kGraphic, attr);
     if (v.empty()) v = Prop(c, kGraphic, "fo:padding");
-    if (!v.empty()) s += std::string(" ") + side + "=\"" + N(std::max<int64_t>(0, Emu(v))) + "\"";
+    if (!v.empty()) Cat(s, {" ", side, "=\"", N(std::max<int64_t>(0, Emu(v))), "\""});
   };
   inset("fo:padding-left", "lIns");
   inset("fo:padding-top", "tIns");
@@ -806,7 +823,7 @@ std::string Converter::BodyPr(const Chain& c) const {
     s += "<a:normAutofit/>";
   else if (Prop(c, kGraphic, "draw:auto-grow-height") == "true")
     s += "<a:spAutoFit/>";
-  return s + "</a:bodyPr>";
+  return Str({s, "</a:bodyPr>"});
 }
 
 std::string Converter::TextBody(xml_node container, const Chain& chain, Part& part, const char* tag) {
@@ -815,9 +832,9 @@ std::string Converter::TextBody(xml_node container, const Chain& chain, Part& pa
   if (paras.empty()) {
     Chain c = chain;
     st_.AddDefault(c, "paragraph");
-    paras = "<a:p>" + RunProps(c, "a:endParaRPr") + "</a:p>";
+    paras = Str({"<a:p>", RunProps(c, "a:endParaRPr"), "</a:p>"});
   }
-  return std::string("<") + tag + ">" + BodyPr(chain) + "<a:lstStyle/>" + paras + "</" + tag + ">";
+  return Str({"<", tag, ">", BodyPr(chain), "<a:lstStyle/>", paras, "</", tag, ">"});
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -834,10 +851,10 @@ Chain Converter::ShapeChain(xml_node el, bool master) const {
 std::string Converter::Names(xml_node el, Part& part, std::string_view fallback) {
   const uint32_t id = part.nextId++;
   std::string_view name = Attr(el, "draw:name");
-  std::string s = "<p:cNvPr id=\"" + N(id) + "\" name=\"" + (name.empty() ? std::string(fallback) + " " + N(id) : Esc(name)) + "\"";
+  std::string s = Str({"<p:cNvPr id=\"", N(id), "\" name=\"", (name.empty() ? std::string(fallback) + " " + N(id) : Esc(name)), "\""});
   const std::string_view desc = el.child("svg:desc").text().get();
-  if (!desc.empty()) s += " descr=\"" + Esc(desc) + "\"";
-  return s + "/>";
+  if (!desc.empty()) Cat(s, {" descr=\"", Esc(desc), "\""});
+  return Str({s, "/>"});
 }
 
 void Converter::Sp(xml_node el, xml_node text, const std::string& geometry, const Box& box, const Chain& chain, Part& part,
@@ -846,20 +863,20 @@ void Converter::Sp(xml_node el, xml_node text, const std::string& geometry, cons
   const std::string_view cls = Attr(el, "presentation:class");
   std::string ph;
   if (cls == "title") ph = "<p:ph type=\"title\"/>";
-  else if (cls == "subtitle") ph = "<p:ph type=\"subTitle\" idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "outline" || cls == "text" || cls == "object") ph = "<p:ph idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "graphic") ph = "<p:ph type=\"pic\" idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "chart") ph = "<p:ph type=\"chart\" idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "table") ph = "<p:ph type=\"tbl\" idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "orgchart") ph = "<p:ph type=\"dgm\" idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "subtitle") ph = Str({"<p:ph type=\"subTitle\" idx=\"", N(++part.bodies), "\"/>"});
+  else if (cls == "outline" || cls == "text" || cls == "object") ph = Str({"<p:ph idx=\"", N(++part.bodies), "\"/>"});
+  else if (cls == "graphic") ph = Str({"<p:ph type=\"pic\" idx=\"", N(++part.bodies), "\"/>"});
+  else if (cls == "chart") ph = Str({"<p:ph type=\"chart\" idx=\"", N(++part.bodies), "\"/>"});
+  else if (cls == "table") ph = Str({"<p:ph type=\"tbl\" idx=\"", N(++part.bodies), "\"/>"});
+  else if (cls == "orgchart") ph = Str({"<p:ph type=\"dgm\" idx=\"", N(++part.bodies), "\"/>"});
   else if (cls == "header" || cls == "notes" || cls == "handout") return;  // slides have none
   else if (cls == "date-time") ph = "<p:ph type=\"dt\" sz=\"half\" idx=\"10\"/>";
   else if (cls == "footer") ph = "<p:ph type=\"ftr\" sz=\"quarter\" idx=\"11\"/>";
   else if (cls == "page-number") ph = "<p:ph type=\"sldNum\" sz=\"quarter\" idx=\"12\"/>";
-  out += "<p:sp><p:nvSpPr>" + Names(el, part, ph.empty() ? "Shape" : "Placeholder");
+  Cat(out, {"<p:sp><p:nvSpPr>", Names(el, part, ph.empty() ? "Shape" : "Placeholder")});
   out += ph.empty() ? (textBox ? "<p:cNvSpPr txBox=\"1\"/>" : "<p:cNvSpPr/>") : "<p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr>";
-  out += "<p:nvPr>" + ph + "</p:nvPr></p:nvSpPr><p:spPr>" + Xfrm(box) + geometry + Fill(chain, kGraphic, part) + Line(chain, false) +
-         Effects(chain) + "</p:spPr>";
+  Cat(out, {"<p:nvPr>", ph, "</p:nvPr></p:nvSpPr><p:spPr>", Xfrm(box), geometry, Fill(chain, kGraphic, part), Line(chain, false),
+         Effects(chain), "</p:spPr>"});
   if (text) out += TextBody(text, chain, part, "p:txBody");
   out += "</p:sp>";
 }
@@ -867,9 +884,9 @@ void Converter::Sp(xml_node el, xml_node text, const std::string& geometry, cons
 void Converter::Picture(xml_node el, xml_node image, const Box& box, const Chain& chain, Part& part, std::string& out) {
   const std::string media = Image(Attr(image, "xlink:href"));
   if (media.empty()) return;
-  out += "<p:pic><p:nvPicPr>" + Names(el, part, "Picture") +
-         "<p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed=\"" +
-         part.Rel("image", "../media/" + media) + "\"";
+  Cat(out, {"<p:pic><p:nvPicPr>", Names(el, part, "Picture"),
+         "<p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed=\"",
+         part.Rel("image", "../media/" + media), "\""});
   const double opacity = Opacity(Prop(chain, kGraphic, "draw:image-opacity"));
   out += opacity < 0.9995 ? "><a:alphaModFix amt=\"" + N(std::llround(opacity * 100000)) + "\"/></a:blip>" : "/>";
   // A crop: fo:clip's "rect(top, right, bottom, left)", lengths of the picture at its own size.
@@ -886,12 +903,12 @@ void Converter::Picture(xml_node el, xml_node image, const Box& box, const Chain
     const draw::Size natural = NaturalSize(media);
     if (natural.width > 0 && natural.height > 0 && (side[0] || side[1] || side[2] || side[3])) {
       auto pct = [](double v, double of) { return N(std::llround(std::clamp(v / of, -10.0, 10.0) * 100000)); };
-      out += "<a:srcRect l=\"" + pct(side[3], natural.width) + "\" t=\"" + pct(side[0], natural.height) + "\" r=\"" +
-             pct(side[1], natural.width) + "\" b=\"" + pct(side[2], natural.height) + "\"/>";
+      Cat(out, {"<a:srcRect l=\"", pct(side[3], natural.width), "\" t=\"", pct(side[0], natural.height), "\" r=\"",
+             pct(side[1], natural.width), "\" b=\"", pct(side[2], natural.height), "\"/>"});
     }
   }
-  out += "<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>" + Xfrm(box) + Preset("rect") + Fill(chain, kGraphic, part) +
-         Line(chain, false) + Effects(chain) + "</p:spPr></p:pic>";
+  Cat(out, {"<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>", Xfrm(box), Preset("rect"), Fill(chain, kGraphic, part),
+         Line(chain, false), Effects(chain), "</p:spPr></p:pic>"});
 }
 
 void Converter::Table(xml_node el, xml_node table, const Box& box, Part& part, std::string& out) {
@@ -931,14 +948,14 @@ void Converter::Table(xml_node el, xml_node table, const Box& box, Part& part, s
   // Which cells a merged one covers: 1 to the right (hMerge), 2 below (vMerge), 3 both.
   std::vector<uint8_t> covered(rows.size() * width, 0);
   std::string grid;
-  for (int64_t w : cols) grid += "<a:gridCol w=\"" + N(w) + "\"/>";
+  for (int64_t w : cols) Cat(grid, {"<a:gridCol w=\"", N(w), "\"/>"});
   std::string body;
   for (size_t r = 0; r < rows.size() && written_ + body.size() <= limits_.maxTotalSize; ++r) {
     Chain rc;
     st_.Add(rc, "table-row", Attr(rows[r], "table:style-name"), part.master);
     std::string_view hv = Prop(rc, "style:table-row-properties", "style:row-height");
     if (hv.empty()) hv = Prop(rc, "style:table-row-properties", "style:min-row-height");
-    body += "<a:tr h=\"" + N(std::max<int64_t>(0, Emu(hv))) + "\">";
+    Cat(body, {"<a:tr h=\"", N(std::max<int64_t>(0, Emu(hv))), "\">"});
     size_t col = 0;
     for (xml_node cell : rows[r].children()) {
       const std::string_view k = cell.name();
@@ -952,8 +969,8 @@ void Converter::Table(xml_node el, xml_node table, const Box& box, Part& part, s
         const int cs = std::clamp(cell.attribute("table:number-columns-spanned").as_int(1), 1, static_cast<int>(width - col));
         const int rs = std::clamp(cell.attribute("table:number-rows-spanned").as_int(1), 1, static_cast<int>(rows.size() - r));
         if (k == "table:table-cell" && !cov && (cs > 1 || rs > 1)) {
-          if (cs > 1) tc += " gridSpan=\"" + N(cs) + "\"";
-          if (rs > 1) tc += " rowSpan=\"" + N(rs) + "\"";
+          if (cs > 1) Cat(tc, {" gridSpan=\"", N(cs), "\""});
+          if (rs > 1) Cat(tc, {" rowSpan=\"", N(rs), "\""});
           for (int dr = 0; dr < rs; ++dr)
             for (int dc = 0; dc < cs; ++dc)
               if (dr || dc) covered[(r + dr) * width + col + dc] |= static_cast<uint8_t>((dc ? 1 : 0) | (dr ? 2 : 0));
@@ -966,14 +983,14 @@ void Converter::Table(xml_node el, xml_node table, const Box& box, Part& part, s
         if (paras.empty()) {
           Chain e = cc;
           st_.AddDefault(e, "paragraph");
-          paras = "<a:p>" + RunProps(e, "a:endParaRPr") + "</a:p>";
+          paras = Str({"<a:p>", RunProps(e, "a:endParaRPr"), "</a:p>"});
         }
-        tc += "><a:txBody><a:bodyPr/><a:lstStyle/>" + paras + "</a:txBody><a:tcPr";
+        Cat(tc, {"><a:txBody><a:bodyPr/><a:lstStyle/>", paras, "</a:txBody><a:tcPr"});
         const char* cp = "style:table-cell-properties";
         auto margin = [&](const char* attr, const char* name) {
           std::string_view v = Prop(cc, cp, attr);
           if (v.empty()) v = Prop(cc, cp, "fo:padding");
-          if (!v.empty()) tc += std::string(" ") + name + "=\"" + N(std::max<int64_t>(0, Emu(v))) + "\"";
+          if (!v.empty()) Cat(tc, {" ", name, "=\"", N(std::max<int64_t>(0, Emu(v))), "\""});
         };
         margin("fo:padding-left", "marL");
         margin("fo:padding-right", "marR");
@@ -990,26 +1007,26 @@ void Converter::Table(xml_node el, xml_node table, const Box& box, Part& part, s
           const auto b = odf::ParseBorder(v);
           if (!b) continue;
           if (b->none) {
-            tc += std::string("<a:") + tag + " w=\"0\"><a:noFill/></a:" + tag + ">";
+            Cat(tc, {"<a:", tag, " w=\"0\"><a:noFill/></a:", tag, ">"});
             continue;
           }
-          tc += std::string("<a:") + tag + " w=\"" + N(std::llround(b->width * 12700)) + "\">" + Solid(b->color.empty() ? "000000" : b->color) +
-                (b->style == "dashed" ? "<a:prstDash val=\"dash\"/>" : b->style == "dotted" ? "<a:prstDash val=\"sysDot\"/>" : "") +
-                "</a:" + tag + ">";
+          Cat(tc, {"<a:", tag, " w=\"", N(std::llround(b->width * 12700)), "\">", Solid(b->color.empty() ? "000000" : b->color),
+                (b->style == "dashed" ? "<a:prstDash val=\"dash\"/>" : b->style == "dotted" ? "<a:prstDash val=\"sysDot\"/>" : ""),
+                "</a:", tag, ">"});
         }
         if (std::string bg = odf::Color(Prop(cc, cp, "fo:background-color")); !bg.empty()) tc += Solid(bg);
         else if (Prop(cc, cp, "fo:background-color") == "transparent") tc += "<a:noFill/>";
-        body += tc + "</a:tcPr></a:tc>";
+        Cat(body, {tc, "</a:tcPr></a:tc>"});
       }
     }
     for (; col < width; ++col) body += "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></a:txBody><a:tcPr/></a:tc>";
     body += "</a:tr>";
   }
-  out += "<p:graphicFrame><p:nvGraphicFramePr>" + Names(el, part, "Table") +
+  Cat(out, {"<p:graphicFrame><p:nvGraphicFramePr>", Names(el, part, "Table"),
          "<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp=\"1\"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>"
-         "<p:xfrm><a:off x=\"" + N(box.x) + "\" y=\"" + N(box.y) + "\"/><a:ext cx=\"" + N(box.w) + "\" cy=\"" + N(box.h) +
+         "<p:xfrm><a:off x=\"", N(box.x), "\" y=\"", N(box.y), "\"/><a:ext cx=\"", N(box.w), "\" cy=\"", N(box.h),
          "\"/></p:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr/>"
-         "<a:tblGrid>" + grid + "</a:tblGrid>" + body + "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+         "<a:tblGrid>", grid, "</a:tblGrid>", body, "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"});
 }
 
 void Converter::Frame(xml_node el, Part& part, std::string& out, Bounds* bounds) {
@@ -1057,8 +1074,8 @@ void Converter::Connector(xml_node el, Part& part, std::string& out, Bounds* bou
   const char* prst = std::string_view(el.name()) == "draw:line" || type == "line" || type == "lines" ? "line"
                      : type == "curve" ? "curvedConnector3" : "bentConnector3";
   const Chain chain = ShapeChain(el, part.master);
-  out += "<p:cxnSp><p:nvCxnSpPr>" + Names(el, part, "Connector") + "<p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>" + Xfrm(b) +
-         Preset(prst) + Line(chain, true) + Effects(chain) + "</p:spPr></p:cxnSp>";
+  Cat(out, {"<p:cxnSp><p:nvCxnSpPr>", Names(el, part, "Connector"), "<p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>", Xfrm(b),
+         Preset(prst), Line(chain, true), Effects(chain), "</p:spPr></p:cxnSp>"});
   if (bounds) bounds->Add(b);
 }
 
@@ -1085,8 +1102,8 @@ void Converter::Shapes(xml_node parent, Part& part, std::string& out, int depth,
       } else if (k == "draw:rect" && !Attr(el, "draw:corner-radius").empty()) {
         const double r = static_cast<double>(Emu(Attr(el, "draw:corner-radius")));
         const double side = static_cast<double>(std::max<int64_t>(1, std::min(box.w, box.h)));
-        geometry = "<a:prstGeom prst=\"roundRect\"><a:avLst><a:gd name=\"adj\" fmla=\"val " +
-                   N(std::llround(std::clamp(r / side, 0.0, 0.5) * 100000)) + "\"/></a:avLst></a:prstGeom>";
+        geometry = Str({"<a:prstGeom prst=\"roundRect\"><a:avLst><a:gd name=\"adj\" fmla=\"val ",
+                   N(std::llround(std::clamp(r / side, 0.0, 0.5) * 100000)), "\"/></a:avLst></a:prstGeom>"});
       } else {
         geometry = Preset(k == "draw:rect" ? "rect" : "ellipse");
       }
@@ -1105,8 +1122,8 @@ void Converter::Shapes(xml_node parent, Part& part, std::string& out, int depth,
       if (!inner.any) continue;
       Box b;
       b.x = inner.l, b.y = inner.t, b.w = inner.r - inner.l, b.h = inner.b - inner.t;
-      out += "<p:grpSp><p:nvGrpSpPr>" + names + "<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>" + Xfrm(b, &inner) +
-             "</p:grpSpPr>" + children + "</p:grpSp>";
+      Cat(out, {"<p:grpSp><p:nvGrpSpPr>", names, "<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>", Xfrm(b, &inner),
+             "</p:grpSpPr>", children, "</p:grpSp>"});
       if (bounds) bounds->Add(b);
     }
   }
@@ -1120,7 +1137,7 @@ std::string Converter::Background(xml_node page, bool master, Part& part) {
   st_.Add(c, "drawing-page", Attr(page, "draw:style-name"), master);
   const std::string fill = Fill(c, kPage, part);
   if (fill.empty()) return {};
-  return "<p:bg><p:bgPr>" + fill + "<a:effectLst/></p:bgPr></p:bg>";
+  return Str({"<p:bg><p:bgPr>", fill, "<a:effectLst/></p:bgPr></p:bg>"});
 }
 
 int Converter::LayoutOf(std::string_view masterName) {
@@ -1154,10 +1171,8 @@ std::string Converter::Layout(xml_node mp, Part& part) {
   std::string shapes;
   Shapes(mp, part, shapes, 0, nullptr);
   written_ += shapes.size();
-  return std::string(kDecl) + "<p:sldLayout" + std::string(kNs) + " preserve=\"1\" userDrawn=\"1\"><p:cSld name=\"" + Esc(name) + "\">" +
-         Background(mp, true, part) +
-         "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>" + shapes +
-         "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>";
+  return Str({DECL "<p:sldLayout" NS " preserve=\"1\" userDrawn=\"1\"><p:cSld name=\"", Esc(name), "\">", Background(mp, true, part),
+              SPTREE, shapes, "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>"});
 }
 
 pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
@@ -1190,12 +1205,11 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
     if (written_ > limits_.maxTotalSize) return pkg::Status::Fail(pkg::Status::Code::TooLarge, "The presentation is too large to open.");
     Chain pc;
     st_.Add(pc, "drawing-page", Attr(page, "draw:style-name"), false);
-    std::string sld = std::string(kDecl) + "<p:sld" + std::string(kNs);
+    std::string sld = DECL "<p:sld" NS;
     if (Prop(pc, kPage, "presentation:background-objects-visible") == "false") sld += " showMasterSp=\"0\"";
     if (Prop(pc, kPage, "presentation:visibility") == "hidden") sld += " show=\"0\"";
-    sld += "><p:cSld>" + Background(page, false, part) +
-           "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>" + shapes +
-           "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>";
+    Cat(sld, {"><p:cSld>", Background(page, false, part), SPTREE, shapes,
+              "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"});
     // The speaker notes: the notes frame's text, when there is some.
     const std::string n = N(static_cast<int64_t>(slides.size()) + 1);
     xml_node notes = page.child("presentation:notes");
@@ -1216,16 +1230,15 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
       np.Rel("slide", "../slides/slide" + n + ".xml");
       const Box box = ReadBox(body.parent());
       std::string text = TextBody(body, ShapeChain(body.parent(), false), np, "p:txBody");
-      notes_.emplace_back(std::string(kDecl) + "<p:notes" + std::string(kNs) +
-                              "><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
-                              "<p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image Placeholder 1\"/><p:cNvSpPr><a:spLocks "
-                              "noGrp=\"1\" noRot=\"1\" noChangeAspect=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"sldImg\"/></p:nvPr></p:nvSpPr>"
-                              "<p:spPr/></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Notes Placeholder 2\"/><p:cNvSpPr><a:spLocks "
-                              "noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:spPr>" +
-                              (box.w > 0 && box.h > 0 ? Xfrm(box) : std::string()) + "</p:spPr>" + text +
-                              "</p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>",
+      notes_.emplace_back(Str({DECL "<p:notes" NS "><p:cSld>" SPTREE "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image "
+                               "Placeholder 1\"/><p:cNvSpPr><a:spLocks noGrp=\"1\" noRot=\"1\" noChangeAspect=\"1\"/></p:cNvSpPr><p:nvPr>"
+                               "<p:ph type=\"sldImg\"/></p:nvPr></p:nvSpPr><p:spPr/></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Notes "
+                               "Placeholder 2\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"body\" idx=\"1\"/>"
+                               "</p:nvPr></p:nvSpPr><p:spPr>",
+                               box.w > 0 && box.h > 0 ? Xfrm(box) : std::string(), "</p:spPr>", text,
+                               "</p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>"}),
                           n, std::move(np.rels));
-      part.Rel("notesSlide", "../notesSlides/notesSlide" + n + ".xml");
+      part.Rel("notesSlide", Str({"../notesSlides/notesSlide", n, ".xml"}));
     }
     slides.emplace_back(std::move(sld), std::move(part.rels));
   }
@@ -1243,106 +1256,97 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
   // The package.
   pkg::MemorySink sink;
   pkg::ZipWriter zip(sink);
-  auto put = [&](const std::string& name, std::string_view text) {
+  auto put = [&](std::string_view name, std::string_view text) {
     return zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
   };
-  std::string types = std::string(kDecl) +
-                      "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
-                      "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
-                      "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
-                      "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>"
-                      "<Default Extension=\"gif\" ContentType=\"image/gif\"/><Default Extension=\"bmp\" ContentType=\"image/bmp\"/>"
-                      "<Default Extension=\"tiff\" ContentType=\"image/tiff\"/><Default Extension=\"emf\" ContentType=\"image/x-emf\"/>"
-                      "<Default Extension=\"wmf\" ContentType=\"image/x-wmf\"/>"
-                      "<Override PartName=\"/ppt/presentation.xml\" ContentType=\"" + std::string(kCt) + "presentation.main+xml\"/>"
-                      "<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"" + std::string(kCt) + "slideMaster+xml\"/>"
-                      "<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>"
-                      "<Override PartName=\"/ppt/presProps.xml\" ContentType=\"" + std::string(kCt) + "presProps+xml\"/>"
-                      "<Override PartName=\"/ppt/tableStyles.xml\" ContentType=\"" + std::string(kCt) + "tableStyles+xml\"/>";
-  std::string presRels = std::string(kDecl) + std::string(kRelsOpen) +
-                         "<Relationship Id=\"rId1\" Type=\"" + std::string(kRel) + "slideMaster\" Target=\"slideMasters/slideMaster1.xml\"/>";
+  // A part with its relationships, and its content type.
+  std::string types = DECL "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+      "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+      "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+      "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>"
+      "<Default Extension=\"gif\" ContentType=\"image/gif\"/><Default Extension=\"bmp\" ContentType=\"image/bmp\"/>"
+      "<Default Extension=\"tiff\" ContentType=\"image/tiff\"/><Default Extension=\"emf\" ContentType=\"image/x-emf\"/>"
+      "<Default Extension=\"wmf\" ContentType=\"image/x-wmf\"/>"
+      "<Override PartName=\"/ppt/presentation.xml\" ContentType=\"" CT "presentation.main+xml\"/>"
+      "<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"" CT "slideMaster+xml\"/>"
+      "<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>"
+      "<Override PartName=\"/ppt/presProps.xml\" ContentType=\"" CT "presProps+xml\"/>"
+      "<Override PartName=\"/ppt/tableStyles.xml\" ContentType=\"" CT "tableStyles+xml\"/>";
+  auto part = [&](std::string_view folder, std::string_view kind, std::string_view n, std::string_view xml,
+                  std::string_view rels) {
+    const std::string name = Str({"ppt/", folder, "/", kind, n, ".xml"});
+    pkg::Status s = put(name, xml);
+    if (s.Ok()) s = put(Str({"ppt/", folder, "/_rels/", kind, n, ".xml.rels"}), Str({RELS, rels, "</Relationships>"}));
+    Cat(types, {"<Override PartName=\"/", name, "\" ContentType=\"" CT, kind, "+xml\"/>"});
+    return s;
+  };
+  std::string presRels = RELS "<Relationship Id=\"rId1\" Type=\"" REL "slideMaster\" Target=\"slideMasters/slideMaster1.xml\"/>";
   std::string slideIds;
-  for (size_t i = 0; i < slides.size(); ++i) {
-    const std::string n = N(static_cast<int64_t>(i) + 1);
-    if (pkg::Status s = put("ppt/slides/slide" + n + ".xml", slides[i].first); !s.Ok()) return s;
-    put("ppt/slides/_rels/slide" + n + ".xml.rels", std::string(kDecl) + std::string(kRelsOpen) + slides[i].second + "</Relationships>");
-    types += "<Override PartName=\"/ppt/slides/slide" + n + ".xml\" ContentType=\"" + std::string(kCt) + "slide+xml\"/>";
-    presRels += "<Relationship Id=\"rId" + N(static_cast<int64_t>(i) + 2) + "\" Type=\"" + std::string(kRel) + "slide\" Target=\"slides/slide" + n + ".xml\"/>";
-    slideIds += "<p:sldId id=\"" + N(static_cast<int64_t>(i) + 256) + "\" r:id=\"rId" + N(static_cast<int64_t>(i) + 2) + "\"/>";
+  int64_t rid = 2;
+  for (size_t i = 0; i < slides.size(); ++i, ++rid) {
+    const std::string n = N(static_cast<int64_t>(i) + 1), id = N(rid);
+    if (pkg::Status s = part("slides", "slide", n, slides[i].first, slides[i].second); !s.Ok()) return s;
+    Cat(presRels, {"<Relationship Id=\"rId", id, "\" Type=\"" REL "slide\" Target=\"slides/slide", n, ".xml\"/>"});
+    Cat(slideIds, {"<p:sldId id=\"", N(static_cast<int64_t>(i) + 256), "\" r:id=\"rId", id, "\"/>"});
   }
-  int64_t rid = static_cast<int64_t>(slides.size()) + 2;
   slides.clear();
-  for (const char* type : {"theme", "presProps", "tableStyles"}) {
-    const std::string target = std::string_view(type) == "theme" ? "theme/theme1.xml" : std::string(type) + ".xml";
-    presRels += "<Relationship Id=\"rId" + N(rid++) + "\" Type=\"" + std::string(kRel) + type + "\" Target=\"" + target + "\"/>";
-  }
+  for (const char* type : {"theme", "presProps", "tableStyles"})
+    Cat(presRels, {"<Relationship Id=\"rId", N(rid++), "\" Type=\"" REL, type, "\" Target=\"",
+                   std::string_view(type) == "theme" ? "theme/theme1" : type, ".xml\"/>"});
   // The notes: a notes master (its own theme), and each slide's notes slide.
   std::string notesMasterId;
   if (!notes_.empty()) {
-    const std::string ph = "<p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph ";
-    put("ppt/notesMasters/notesMaster1.xml",
-        std::string(kDecl) + "<p:notesMaster" + std::string(kNs) +
-            "><p:cSld><p:bg><p:bgRef idx=\"1001\"><a:schemeClr val=\"bg1\"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" "
-            "name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image "
-            "Placeholder 1\"/>" + ph + "type=\"sldImg\" idx=\"2\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"1143000\" y=\"685800\"/>"
-            "<a:ext cx=\"4572000\" cy=\"3429000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/><a:ln w=\"12700\">"
-            "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" "
-            "name=\"Notes Placeholder 2\"/>" + ph + "type=\"body\" sz=\"quarter\" idx=\"3\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm>"
-            "<a:off x=\"685800\" y=\"4343400\"/><a:ext cx=\"5486400\" cy=\"4114800\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/>"
-            "</a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Click to edit Master text "
-            "styles</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" "
-            "accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" "
-            "hlink=\"hlink\" folHlink=\"folHlink\"/><p:notesStyle><a:lvl1pPr><a:defRPr sz=\"1200\"/></a:lvl1pPr></p:notesStyle>"
-            "</p:notesMaster>");
-    put("ppt/notesMasters/_rels/notesMaster1.xml.rels", std::string(kDecl) + std::string(kRelsOpen) + "<Relationship Id=\"rId1\" Type=\"" +
-                                                            std::string(kRel) + "theme\" Target=\"../theme/theme2.xml\"/></Relationships>");
-    put("ppt/theme/theme2.xml", std::string(kDecl) + std::string(draw::Theme::DefaultXml()));
-    types += "<Override PartName=\"/ppt/notesMasters/notesMaster1.xml\" ContentType=\"" + std::string(kCt) + "notesMaster+xml\"/>"
-             "<Override PartName=\"/ppt/theme/theme2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>";
-    notesMasterId = "rId" + N(rid++);
-    presRels += "<Relationship Id=\"" + notesMasterId + "\" Type=\"" + std::string(kRel) + "notesMaster\" Target=\"notesMasters/notesMaster1.xml\"/>";
-    for (auto& [xml, n, rels] : notes_) {
-      if (pkg::Status s = put("ppt/notesSlides/notesSlide" + n + ".xml", xml); !s.Ok()) return s;
-      put("ppt/notesSlides/_rels/notesSlide" + n + ".xml.rels", std::string(kDecl) + std::string(kRelsOpen) + rels + "</Relationships>");
-      types += "<Override PartName=\"/ppt/notesSlides/notesSlide" + n + ".xml\" ContentType=\"" + std::string(kCt) + "notesSlide+xml\"/>";
-    }
+#define PH "<p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph "
+    part("notesMasters", "notesMaster", "1",
+         DECL "<p:notesMaster" NS "><p:cSld><p:bg><p:bgRef idx=\"1001\"><a:schemeClr val=\"bg1\"/></p:bgRef></p:bg>" SPTREE
+         "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Slide Image Placeholder 1\"/>" PH "type=\"sldImg\" idx=\"2\"/></p:nvPr>"
+         "</p:nvSpPr><p:spPr><a:xfrm><a:off x=\"1143000\" y=\"685800\"/><a:ext cx=\"4572000\" cy=\"3429000\"/></a:xfrm><a:prstGeom "
+         "prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>"
+         "</a:ln></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Notes Placeholder 2\"/>" PH "type=\"body\" sz=\"quarter\" "
+         "idx=\"3\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"685800\" y=\"4343400\"/><a:ext cx=\"5486400\" cy=\"4114800\"/>"
+         "</a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr "
+         "lang=\"en-US\"/><a:t>Click to edit Master text styles</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>" CLRMAP
+         "<p:notesStyle><a:lvl1pPr><a:defRPr sz=\"1200\"/></a:lvl1pPr></p:notesStyle></p:notesMaster>",
+         "<Relationship Id=\"rId1\" Type=\"" REL "theme\" Target=\"../theme/theme2.xml\"/>");
+#undef PH
+    put("ppt/theme/theme2.xml", Str({DECL, draw::Theme::DefaultXml()}));
+    types += "<Override PartName=\"/ppt/theme/theme2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>";
+    notesMasterId = Str({"rId", N(rid++)});
+    Cat(presRels, {"<Relationship Id=\"", notesMasterId, "\" Type=\"" REL "notesMaster\" Target=\"notesMasters/notesMaster1.xml\"/>"});
+    for (auto& [xml, n, rels] : notes_)
+      if (pkg::Status s = part("notesSlides", "notesSlide", n, xml, rels); !s.Ok()) return s;
     notes_.clear();
   }
-  std::string layoutIds, masterRels = std::string(kDecl) + std::string(kRelsOpen);
+  std::string layoutIds, masterRels;
   for (size_t i = 0; i < layouts_.size(); ++i) {
     const std::string n = N(static_cast<int64_t>(i) + 1);
-    if (pkg::Status s = put("ppt/slideLayouts/slideLayout" + n + ".xml", layouts_[i].first); !s.Ok()) return s;
-    put("ppt/slideLayouts/_rels/slideLayout" + n + ".xml.rels", std::string(kDecl) + std::string(kRelsOpen) + layouts_[i].second + "</Relationships>");
-    types += "<Override PartName=\"/ppt/slideLayouts/slideLayout" + n + ".xml\" ContentType=\"" + std::string(kCt) + "slideLayout+xml\"/>";
-    masterRels += "<Relationship Id=\"rId" + n + "\" Type=\"" + std::string(kRel) + "slideLayout\" Target=\"../slideLayouts/slideLayout" + n + ".xml\"/>";
-    layoutIds += "<p:sldLayoutId id=\"" + N(2147483649LL + static_cast<int64_t>(i)) + "\" r:id=\"rId" + n + "\"/>";
+    if (pkg::Status s = part("slideLayouts", "slideLayout", n, layouts_[i].first, layouts_[i].second); !s.Ok()) return s;
+    Cat(masterRels, {"<Relationship Id=\"rId", n, "\" Type=\"" REL "slideLayout\" Target=\"../slideLayouts/slideLayout", n, ".xml\"/>"});
+    Cat(layoutIds, {"<p:sldLayoutId id=\"", N(2147483649LL + static_cast<int64_t>(i)), "\" r:id=\"rId", n, "\"/>"});
   }
-  masterRels += "<Relationship Id=\"rId" + N(static_cast<int64_t>(layouts_.size()) + 1) + "\" Type=\"" + std::string(kRel) +
-                "theme\" Target=\"../theme/theme1.xml\"/></Relationships>";
+  Cat(masterRels, {"<Relationship Id=\"rId", N(static_cast<int64_t>(layouts_.size()) + 1), "\" Type=\"" REL "theme\" Target=\"../theme/theme1.xml\"/>"});
   layouts_.clear();
-  // The master: white, empty, the default text styles (every paragraph and run says its own).
-  put("ppt/slideMasters/slideMaster1.xml",
-      std::string(kDecl) + "<p:sldMaster" + std::string(kNs) +
-          "><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>"
-          "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>"
-          "<p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" "
-          "accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/><p:sldLayoutIdLst>" +
-          layoutIds +
-          "</p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz=\"4400\"/></a:lvl1pPr></p:titleStyle>"
-          "<p:bodyStyle><a:lvl1pPr><a:defRPr sz=\"2800\"/></a:lvl1pPr></p:bodyStyle><p:otherStyle><a:lvl1pPr><a:defRPr sz=\"1800\"/>"
-          "</a:lvl1pPr></p:otherStyle></p:txStyles></p:sldMaster>");
-  put("ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels);
-  put("ppt/theme/theme1.xml", std::string(kDecl) + std::string(draw::Theme::DefaultXml()));
-  put("ppt/presProps.xml", std::string(kDecl) + "<p:presentationPr" + std::string(kNs) + "/>");
-  put("ppt/tableStyles.xml", std::string(kDecl) + "<a:tblStyleLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
-                                                  "def=\"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}\"/>");
-  put("ppt/presentation.xml", std::string(kDecl) + "<p:presentation" + std::string(kNs) +
-                                  " saveSubsetFonts=\"1\"><p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rId1\"/>"
-                                  "</p:sldMasterIdLst>" +
-                                  (notesMasterId.empty() ? "" : "<p:notesMasterIdLst><p:notesMasterId r:id=\"" + notesMasterId + "\"/></p:notesMasterIdLst>") +
-                                  (slideIds.empty() ? "" : "<p:sldIdLst>" + slideIds + "</p:sldIdLst>") +
-                                  "<p:sldSz cx=\"" + N(cx) + "\" cy=\"" + N(cy) + "\"/><p:notesSz cx=\"6858000\" cy=\"9144000\"/></p:presentation>");
-  put("ppt/_rels/presentation.xml.rels", presRels + "</Relationships>");
+  // The master: white, empty, the default text styles (every paragraph and run says its own). Its
+  // content type is in the list already.
+  const std::string master = Str({DECL "<p:sldMaster" NS "><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill>"
+                                  "<a:effectLst/></p:bgPr></p:bg>" SPTREE "</p:spTree></p:cSld>" CLRMAP "<p:sldLayoutIdLst>",
+                                  layoutIds,
+                                  "</p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz=\"4400\"/></a:lvl1pPr>"
+                                  "</p:titleStyle><p:bodyStyle><a:lvl1pPr><a:defRPr sz=\"2800\"/></a:lvl1pPr></p:bodyStyle><p:otherStyle>"
+                                  "<a:lvl1pPr><a:defRPr sz=\"1800\"/></a:lvl1pPr></p:otherStyle></p:txStyles></p:sldMaster>"});
+  put("ppt/slideMasters/slideMaster1.xml", master);
+  put("ppt/slideMasters/_rels/slideMaster1.xml.rels", Str({RELS, masterRels, "</Relationships>"}));
+  put("ppt/theme/theme1.xml", Str({DECL, draw::Theme::DefaultXml()}));
+  put("ppt/presProps.xml", DECL "<p:presentationPr" NS "/>");
+  put("ppt/tableStyles.xml", DECL "<a:tblStyleLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+                             "def=\"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}\"/>");
+  std::string presXml = DECL "<p:presentation" NS " saveSubsetFonts=\"1\"><p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" "
+                     "r:id=\"rId1\"/></p:sldMasterIdLst>";
+  if (!notesMasterId.empty()) Cat(presXml, {"<p:notesMasterIdLst><p:notesMasterId r:id=\"", notesMasterId, "\"/></p:notesMasterIdLst>"});
+  if (!slideIds.empty()) Cat(presXml, {"<p:sldIdLst>", slideIds, "</p:sldIdLst>"});
+  Cat(presXml, {"<p:sldSz cx=\"", N(cx), "\" cy=\"", N(cy), "\"/><p:notesSz cx=\"6858000\" cy=\"9144000\"/></p:presentation>"});
+  put("ppt/presentation.xml", presXml);
+  put("ppt/_rels/presentation.xml.rels", Str({presRels, "</Relationships>"}));
   for (auto& [name, bytes] : media_) {
     const bool packed = name.ends_with(".png") || name.ends_with(".jpeg") || name.ends_with(".gif");
     if (pkg::Status s = zip.Add("ppt/media/" + name, bytes, nullptr, packed ? pkg::ZipWriter::Compression::Store : pkg::ZipWriter::Compression::Deflate);
@@ -1351,9 +1355,8 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
     bytes.clear();
     bytes.shrink_to_fit();
   }
-  put("[Content_Types].xml", types + "</Types>");
-  put("_rels/.rels", std::string(kDecl) + std::string(kRelsOpen) + "<Relationship Id=\"rId1\" Type=\"" + std::string(kRel) +
-                         "officeDocument\" Target=\"ppt/presentation.xml\"/></Relationships>");
+  put("[Content_Types].xml", Str({types, "</Types>"}));
+  put("_rels/.rels", RELS "<Relationship Id=\"rId1\" Type=\"" REL "officeDocument\" Target=\"ppt/presentation.xml\"/></Relationships>");
   if (pkg::Status s = zip.Finish(); !s.Ok()) return s;
   pptx = std::move(sink.bytes);
   return pkg::Status();
