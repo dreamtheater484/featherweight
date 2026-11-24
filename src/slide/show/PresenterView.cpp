@@ -58,6 +58,8 @@ struct PresenterView::Impl {
   float thumbW = 0, thumbH = 0;
   // Where things were drawn last, for the mouse.
   D2D1_RECT_F current{}, next{}, notes{}, strip{}, pause{}, reset{}, smaller{}, larger{};
+  D2D1_RECT_F black{}, swap{}, end{};  // Black screen, Swap displays (full screen only), End show
+  bool windowed = false;               // beside a windowed show (Alt+F5): one monitor, nothing to swap
 
   void Paint();
   void RenderThumbs(float w, float h);
@@ -94,6 +96,7 @@ std::unique_ptr<PresenterView> PresenterView::Create(PresenterHost& host, Presen
   auto impl = std::make_unique<Impl>(host, deck, renderer);
   if (!monitor) return std::unique_ptr<PresenterView>(new PresenterView(std::move(impl)));  // off screen
   if (!registered) return nullptr;
+  impl->windowed = windowed;
   MONITORINFO mi{sizeof(mi)};
   GetMonitorInfoW(monitor, &mi);
   RECT r = mi.rcMonitor;
@@ -111,6 +114,15 @@ std::unique_ptr<PresenterView> PresenterView::Create(PresenterHost& host, Presen
   ShowWindow(impl->hwnd, SW_SHOWNOACTIVATE);
   SetTimer(impl->hwnd, kTimerClock, 1000, nullptr);  // the clock and the timer, while the show runs
   return std::unique_ptr<PresenterView>(new PresenterView(std::move(impl)));
+}
+
+void PresenterView::MoveTo(HMONITOR monitor) {
+  if (!impl_->hwnd || impl_->windowed || !monitor) return;
+  MONITORINFO mi{sizeof(mi)};
+  if (!GetMonitorInfoW(monitor, &mi)) return;
+  const RECT& r = mi.rcMonitor;
+  SetWindowPos(impl_->hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  InvalidateRect(impl_->hwnd, nullptr, FALSE);
 }
 
 void PresenterView::Update(const PresenterState& state) {
@@ -200,12 +212,26 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   v.reset = {pad + 260 * s, bar * 0.2f, pad + 350 * s, bar * 0.8f};
   button(v.pause, v.paused ? L"Resume" : L"Pause");
   button(v.reset, L"Reset");
+  // Before the clock: Black screen (lit while the show is black), Swap displays, End show.
+  const float bw = 112 * s, bgap = 10 * s, clockW = 150 * s;
+  v.end = {w - pad - clockW - bw, bar * 0.2f, w - pad - clockW, bar * 0.8f};
+  v.swap = v.windowed ? D2D1_RECT_F{} : D2D1_RECT_F{v.end.left - bgap - bw, v.end.top, v.end.left - bgap, v.end.bottom};
+  const float blackRight = (v.windowed ? v.end.left : v.swap.left) - bgap;
+  v.black = {blackRight - bw, v.end.top, blackRight, v.end.bottom};
+  if (v.state.blank == 1) {
+    dc->FillRoundedRectangle(D2D1::RoundedRect(v.black, 4 * s, 4 * s), accent.Get());
+    say(L"Black screen", label.Get(), v.black, text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+  } else {
+    button(v.black, L"Black screen");
+  }
+  if (!v.windowed) button(v.swap, L"Swap displays");
+  button(v.end, L"End show");
   const size_t count = v.renderer.SlideCount();
   if (v.state.slide != PresenterState::kEnd)
     swprintf(buf, 64, L"Slide %zu of %zu", v.state.slide + 1, count);
   else
     swprintf(buf, 64, L"End of slide show");
-  say(buf, label.Get(), {pad + 370 * s, 0, w / 2 + 200 * s, bar}, dim.Get());
+  say(buf, label.Get(), {pad + 370 * s, 0, std::max(pad + 370 * s, v.black.left - bgap), bar}, dim.Get());
   wchar_t clock[32] = L"";
   GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, nullptr, nullptr, clock, 32);
   say(clock, big.Get(), {w / 2, 0, w - pad, bar}, text.Get(), DWRITE_TEXT_ALIGNMENT_TRAILING);
@@ -227,12 +253,12 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
     dc->DrawRectangle(r, box.Get(), 1);
   };
   const bool atEnd = v.state.slide == PresenterState::kEnd;
-  slide(v.state.current, v.current, v.state.blank, atEnd ? L"End of slide show, click to exit." : nullptr);
+  slide(v.state.current.Get(), v.current, v.state.blank, atEnd ? L"End of slide show, click to exit." : nullptr);
   const float right = split + pad / 2, nextH = std::floor((bottom - top) * 0.42f);
   say(v.state.stepsLeft > 0 ? L"Next animation" : L"Next slide", label.Get(), {right, top, w - pad, top + 28 * s},
       dim.Get());
   v.next = Fit({right, top + 28 * s, w - pad, top + 28 * s + nextH}, size.width, size.height);
-  slide(v.state.next, v.next, 0, L"End of slide show");
+  slide(v.state.next.Get(), v.next, 0, L"End of slide show");
 
   // The notes, scrolled and zoomed; A- and A+ beside their heading.
   const float notesTop = v.next.bottom + pad;
@@ -349,6 +375,14 @@ LRESULT PresenterView::Impl::Proc(UINT m, WPARAM w, LPARAM l) {
         started = GetTickCount64();
         pausedTotal = 0;
         pausedAt = started;
+      } else if (Inside(black, x, y)) {
+        host.PresenterKey('B');  // the show's B: black, or back from black
+      } else if (Inside(end, x, y)) {
+        host.PresenterKey(VK_ESCAPE);  // ends the show and this view
+        return 0;
+      } else if (!windowed && Inside(swap, x, y)) {
+        host.PresenterSwap();
+        return 0;
       } else if (Inside(smaller, x, y) || Inside(larger, x, y)) {
         notesPt = std::clamp(notesPt + (Inside(larger, x, y) ? 2.f : -2.f), 10.f, 48.f);
       } else if (Inside(strip, x, y) && thumbW > 0) {
