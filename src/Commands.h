@@ -629,6 +629,8 @@ enum Cmd : int {
   CmdAnimEarlier,                // Timing > Move Earlier
   CmdAnimLater,                  // Timing > Move Later
   CmdAnimRemove,                 // the Animation Pane's Remove (Delete there)
+  CmdAnimAsOneObject = 3865,     // Effect Options > Sequence: As One Object (fixed: merges reorder blocks)
+  CmdAnimByParagraph = 3866,     // Effect Options > Sequence: By Paragraph
   // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
   // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
   CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
@@ -640,4 +642,9 @@ enum Cmd : int {
   // P3, p3-files: templates, picture export and .odp import, 3910-3949.
   CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
   CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder
+  // P3, p3-start: the start page, 3960-3969.
+  CmdShowRecentFiles = 3960,  // the setting: the start page and File > Open list the recent files
+  CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
+  CmdRecentRemove,            // Remove from list
+  CmdRecentLocation,          // Open file location
 };

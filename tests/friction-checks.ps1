@@ -31,11 +31,13 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
 
 # The window the steps' coordinates are for: a client area of 1072x686 (--size 1100x700 where they
-# were written), light theme. The style box is at 308,66; its list has Normal, No Spacing,
-# Heading 1-3, Title... 31 px apart from 102.
-$styleBox = "click:308,66"
-$styleNoSpacing = "click:300,132"
-$styleTitle = "click:279,255"
+# were written), light theme, with the ribbon (R1). At this width Home's Styles gallery shows two
+# styles, Normal and No Spacing; its More button (885,129) opens the grid, where Title ends the
+# first row. The Insert tab is at 139,55. The pages start 77 px lower than under the toolbar.
+$styleNoSpacing = "click:835,110"
+$styleMore = "click:885,129"
+$styleTitle = "click:1021,115"
+$insertTab = "click:139,55"
 $dash = [string][char]0x2013  # the script stays ASCII: PowerShell 5.1 reads it as ANSI
 $dot = [string][char]0x00B7
 
@@ -54,10 +56,10 @@ $flows = @(
     budget = 9  # Word: 6 clicks, 3 keys
     steps = @(
       "new|1C",                                   # the start screen's New document (or Ctrl+N)
-      "$styleBox|1C", "$styleNoSpacing|1C",       # the address lines without space between them
+      "$styleNoSpacing|1C",                       # the address lines without space between them: the gallery
       "key:esc|1K?",                              # finding F1: back to the page
       "type:Jane Doe|", "key:enter|", "type:1 Main Street|", "key:enter|", "type:3511 AB Utrecht|", "key:enter|", "key:enter|",
-      "cmd:1045|2C",                              # Insert > the date (two clicks in the Insert box)
+      "$insertTab|1C", "cmd:1045|2C",             # Insert, Date & Time, a format
       "key:enter|", "key:enter|",
       "type:Acme B.V.|", "key:enter|", "type:Postbus 12|", "key:enter|", "type:1000 AA Amsterdam|", "key:enter|", "key:enter|",
       "key:ctrl+shift+n|1K",                      # Normal for the body
@@ -77,10 +79,10 @@ $flows = @(
   },
   @{
     name = "cv"
-    budget = 12  # Word: 2 clicks, 9 keys; +1 click accepted: the style box is a list, not a gallery (plan section 5.2)
+    budget = 12  # Word: 2 clicks, 9 keys; +1 click accepted (F4): Title isn't in the gallery's first row
     steps = @(
       "new|1C",
-      "$styleBox|1C", "$styleTitle|1C",           # the name as Title
+      "$styleMore|1C", "$styleTitle|1C",          # the name as Title: the gallery's grid
       "key:esc|1K?",                              # finding F1
       "type:Jane Doe|", "key:enter|",             # Enter: the next paragraph is Normal (Title's w:next)
       "key:ctrl+shift+n|1K?",                     # finding F2
@@ -112,14 +114,14 @@ $flows = @(
     budget = 16  # Word: 10 clicks, 2 keys, 2 drags; +2 clicks accepted: a row in the middle from the context menu, not a handle
     steps = @(
       "|1C",                                      # double-click the attachment: it opens ready to edit
-      "dblclick:189,298|1C", "type:Chair|",       # the typo: double-click the word, type
-      "click:785,340|1C", "key:tab|1K", "type:Rug|",  # a row at the end: Tab in the last cell
-      "click:250,277|1C", "cmd:1156|2C",          # a row in the middle: right-click, Insert, Rows Below
-      "click:250,340|1C", "cmd:1159|2C",          # delete Lamp: right-click, Delete, Rows
-      "drag:560,256,760,256|1D", "cmd:1162|2C",   # merge Price and Total: select them, right-click, Merge Cells
-      "drag:410,300,480,300|1D!",                 # widen Item: drag its border
-      "click:250,277|1C?", "cmd:1173|1C?",        # finding F7: right-click, Properties (the Table panel)...
-      "click:905,390|1C?", "type:7|?", "key:enter|1K?",  # ...Column width: 7 cm
+      "dblclick:189,375|1C", "type:Chair|",       # the typo: double-click the word, type
+      "click:785,417|1C", "key:tab|1K", "type:Rug|",  # a row at the end: Tab in the last cell
+      "click:250,354|1C", "cmd:1156|2C",          # a row in the middle: right-click, Insert, Rows Below
+      "click:250,417|1C", "cmd:1159|2C",          # delete Lamp: right-click, Delete, Rows
+      "drag:560,333,760,333|1D", "cmd:1162|2C",   # merge Price and Total: select them, right-click, Merge Cells
+      "drag:410,377,480,377|1D!",                 # widen Item: drag its border
+      "click:250,354|1C?", "cmd:1173|1C?",        # finding F7: right-click, Properties (the Table panel)...
+      "click:905,467|1C?", "type:7|?", "key:enter|1K?",  # ...Column width: 7 cm
       "save:{out}|1K"                             # Ctrl+S
     )
     expect = @(

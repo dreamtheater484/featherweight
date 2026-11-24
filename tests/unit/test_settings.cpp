@@ -111,15 +111,45 @@ TEST(Settings_RecentFilesOfEveryKind) {
   for (size_t i = 0; i < 6 && i < again.recent.size(); ++i) CHECK(again.recent[i].path == s.recent[i].path);
 }
 
-TEST(Settings_KeepsTenRecentFiles) {
+TEST(Settings_Keeps25RecentFiles) {
   std::string text = "[Recent]\r\n";
-  for (int i = 1; i <= 14; ++i)
+  for (int i = 1; i <= 30; ++i)
     text += std::to_string(i) + "=C:\\f" + std::to_string(i) + ".pdf|" + std::to_string(100 - i) + "\r\n";
   TempIni file(text);
   Settings s;
   s.LoadFrom(file.Path());
   CHECK_EQ(s.recent.size(), static_cast<size_t>(Settings::kMaxRecent));
-  CHECK(s.recent.back().path == L"C:\\f10.pdf");
+  CHECK_EQ(Settings::kMaxRecent, 25);
+  CHECK(s.recent.back().path == L"C:\\f25.pdf");
+}
+
+TEST(Settings_PinnedRecentFilesStay) {
+  // p3-start: a pinned file is never pushed off a full list and stays when the list is cleared.
+  std::string text = "[Recent]\r\n";
+  for (int i = 1; i <= 25; ++i) text += std::to_string(i) + "=C:\\f" + std::to_string(i) + ".pdf|" + std::to_string(100 - i) + "\r\n";
+  TempIni file(text);
+  Settings s;
+  s.LoadFrom(file.Path());
+  CHECK(s.showRecent);
+  s.PinRecent(L"C:\\F25.PDF", true);  // the oldest
+  s.AddRecent(L"C:\\new.docx");
+  CHECK_EQ(s.recent.size(), static_cast<size_t>(25));
+  CHECK(s.recent.front().path == L"C:\\new.docx");
+  CHECK(s.recent.back().path == L"C:\\f25.pdf" && s.recent.back().pinned);  // f24 went instead
+  s.AddRecent(L"C:\\f25.pdf");  // opened again: still pinned, now on top
+  CHECK(s.recent.front().pinned);
+  s.showRecent = false;
+  CHECK(s.Save());
+  const std::string saved = file.Read();
+  CHECK(saved.find("1=C:\\f25.pdf|") != std::string::npos && saved.find("|pinned\r\n") != std::string::npos);
+  CHECK(saved.find("ShowRecentFiles=0") != std::string::npos);
+  Settings again;
+  again.LoadFrom(file.Path());
+  CHECK(!again.showRecent);
+  CHECK(again.recent.front().pinned && !again.recent[1].pinned);
+  again.ClearRecent();
+  CHECK_EQ(again.recent.size(), static_cast<size_t>(1));
+  CHECK(again.recent.front().path == L"C:\\f25.pdf");
 }
 
 TEST(Settings_DefaultAppOfferPerKind) {

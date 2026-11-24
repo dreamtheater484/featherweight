@@ -9,8 +9,8 @@ constexpr const wchar_t* kPdf[] = {L".pdf"};
 constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".odt", L".ott"};
 constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt"};  // .rtf and .txt come in D2
 constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv", L".xls", L".ods", L".ots"};
-constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppt", L".pps", L".pot"};
-constexpr const wchar_t* kPresentationLater[] = {L".odp"};
+constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppt", L".pps",
+                                              L".pot",  L".odp",  L".otp"};
 
 // Ships a kind: set `viewer` when its viewer is released, `editor` when its editor is.
 const FileKindInfo kKinds[] = {
@@ -21,7 +21,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
      L"Spreadsheets", kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
-     L"Presentation", L"Presentations", kPresentation, kPresentationLater, 3, true, false},  // the viewer ships in 3.1 (P1)
+     L"Presentation", L"Presentations", kPresentation, {}, 3, true, true},  // the viewer in 3.1 (P1), the editor in 4.0 (P2, P3)
 };
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kFileKindCount);
 

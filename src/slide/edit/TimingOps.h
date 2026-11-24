@@ -47,6 +47,8 @@ struct TransitionInfo {
   double advanceAfterMs = -1;  // -1: the slide doesn't advance by itself
   bool sound = false;          // a sound plays with it (kept; not changed here)
   std::string element;         // Other: the effect's element as written, "p15:prstTrans prst=curtains"
+  bool inherited = false;      // the slide has none of its own and plays its layout's (or master's), as
+                               // PowerPoint does; changing it writes the slide its own
 };
 TransitionInfo GetTransition(const Editor& ed, size_t slide);
 
@@ -92,7 +94,8 @@ struct AnimEffect {
   AnimClass cls = AnimClass::Other;  // also for Other (from presetClass)
   int option = 0;                    // index into AnimOptions(anim)
   AnimTrigger trigger = AnimTrigger::OnClick;
-  double durationMs = 0;  // how long it plays (0: at once)
+  double durationMs = 0;  // how long it plays once (0: at once), PowerPoint's Duration
+  double repeat = 1;      // how many times (repeatCount); 0: until the end of the slide
   double delayMs = 0;
   bool editable = false;  // its kind, options and duration can change (a common animation as PowerPoint writes it)
   int presetId = 0, presetSubtype = 0;  // as written (with cls, what an Other effect is: 26/0 is Bounce)
@@ -131,5 +134,10 @@ Result SetAnimationTiming(Editor& ed, size_t slide, const std::vector<size_t>& e
 // them (Move Earlier and Move Later, dragging in the Animation Pane). Triggers stay.
 Result MoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects, size_t to);
 Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects);
+// Effect Options › Sequence (As One Object, By Paragraph): the shape of `effect` animated as one
+// object, or a paragraph at a time. Its effects of that kind in a row become one effect per
+// paragraph, or one for the whole shape, with the first one's kind, option and timing. One undo step;
+// nothing changes when it fails (a shape without text can't go by paragraph).
+Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byParagraph);
 
 }  // namespace fw::slide::edit

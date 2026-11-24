@@ -71,7 +71,18 @@ std::string Spacing(const char* tag, int16_t v) {
 }
 
 // a:pPr's attributes and children (without the element itself): `attrs` and `inner`.
-void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::string& attrs, std::string& inner) {
+// TextAutoNumberSchemeEnum in order, as DrawingML names the schemes.
+constexpr const char* kAutoNumber[] = {
+    "alphaLcPeriod", "alphaUcPeriod", "arabicParenR", "arabicPeriod", "romanLcParenBoth", "romanLcParenR", "romanLcPeriod",
+    "romanUcPeriod", "alphaLcParenBoth", "alphaLcParenR", "alphaUcParenBoth", "alphaUcParenR", "arabicParenBoth",
+    "arabicPlain", "romanUcParenBoth", "romanUcParenR", "ea1ChsPlain", "ea1ChsPeriod", "circleNumDbPlain",
+    "circleNumWdWhitePlain", "circleNumWdBlackPlain", "ea1ChtPlain", "ea1ChtPeriod", "arabic1Minus", "arabic2Minus",
+    "hebrew2Minus", "ea1JpnKorPlain", "ea1JpnKorPeriod", "arabicDbPlain", "arabicDbPeriod", "thaiAlphaPeriod",
+    "thaiAlphaParenR", "thaiAlphaParenBoth", "thaiNumPeriod", "thaiNumParenR", "thaiNumParenBoth", "hindiAlphaPeriod",
+    "hindiNumPeriod", "ea1JpnChsDbPeriod", "hindiNumParenR", "hindiAlpha1Period"};
+
+void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::string& attrs, std::string& inner,
+               const Pf9* pf9 = nullptr) {
   if (level > 0) attrs += " lvl=\"" + Num(level) + "\"";
   if (pf.Has(kLeftMargin)) attrs += " marL=\"" + Num(Emu(pf.leftMargin)) + "\"";
   if (pf.Has(kLeftMargin) || pf.Has(kIndent)) attrs += " indent=\"" + Num(Emu(pf.indent - (pf.Has(kLeftMargin) ? pf.leftMargin : 0))) + "\"";
@@ -80,20 +91,31 @@ void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::st
     if (pf.align < 7) attrs += std::string(" algn=\"") + kAlgn[pf.align] + "\"";
   }
   if (pf.Has(kDefaultTab) && pf.defaultTab > 0) attrs += " defTabSz=\"" + Num(Emu(pf.defaultTab)) + "\"";
+  if (pf.Has(kTextDirection) && pf.textDirection == 1) attrs += " rtl=\"1\"";  // right to left
   if (pf.Has(kLineSpacing)) inner += Spacing("lnSpc", pf.lineSpacing);
   if (pf.Has(kSpaceBefore)) inner += Spacing("spcBef", pf.spaceBefore);
   if (pf.Has(kSpaceAfter)) inner += Spacing("spcAft", pf.spaceAfter);
   if (pf.bulletFlags & 1) {
     if (pf.bulletFlags & 4) inner += "<a:buClr>" + ColorXml(ColorOf(pf.bulletColor, cx, ColorOf(cf.color, cx, cx.scheme.rgb[1]))) + "</a:buClr>";
+    // The bullet's size: a share of the text's (25 to 400 %), or below zero its own, in hundredths of a point.
     if ((pf.bulletFlags & 8) && pf.bulletSize > 0) inner += "<a:buSzPct val=\"" + Num(std::clamp<int>(pf.bulletSize, 25, 400) * 1000LL) + "\"/>";
-    std::string font = pf.bulletFlags & 2 ? FontName(cx, pf.bulletFont) : std::string();
-    if (!font.empty()) inner += "<a:buFont typeface=\"" + Esc(font) + "\"/>";
-    uint32_t ch = pf.Has(kBulletChar) && pf.bulletChar ? pf.bulletChar : 0x2022;
-    if (ch >= 0xF000 && ch <= 0xF0FF) ch -= 0xF000;  // a symbol font's character, as DrawingML names it
-    if (ch < 0x20 || (ch >= 0xD800 && ch < 0xE000) || ch >= 0xFFFE) ch = 0x2022;
-    std::string c;
-    AppendUtf8(c, ch);
-    inner += "<a:buChar char=\"" + Esc(c) + "\"/>";
+    else if ((pf.bulletFlags & 8) && pf.bulletSize < 0)  // points
+      inner += "<a:buSzPts val=\"" + Num(std::clamp<int>(-pf.bulletSize, 1, 4000) * 100LL) + "\"/>";
+    if (pf9 && pf9->autoNumber == 1) {  // a number, in the text's font
+      const int scheme = pf9->scheme >= 0 && pf9->scheme < static_cast<int>(std::size(kAutoNumber)) ? pf9->scheme : 3;
+      inner += std::string("<a:buAutoNum type=\"") + kAutoNumber[scheme] + "\"";
+      if (pf9->start > 1 && pf9->start <= 32767) inner += " startAt=\"" + Num(pf9->start) + "\"";
+      inner += "/>";
+    } else {
+      std::string font = pf.bulletFlags & 2 ? FontName(cx, pf.bulletFont) : std::string();
+      if (!font.empty()) inner += "<a:buFont typeface=\"" + Esc(font) + "\"/>";
+      uint32_t ch = pf.Has(kBulletChar) && pf.bulletChar ? pf.bulletChar : 0x2022;
+      if (ch >= 0xF000 && ch <= 0xF0FF) ch -= 0xF000;  // a symbol font's character, as DrawingML names it
+      if (ch < 0x20 || (ch >= 0xD800 && ch < 0xE000) || ch >= 0xFFFE) ch = 0x2022;
+      std::string c;
+      AppendUtf8(c, ch);
+      inner += "<a:buChar char=\"" + Esc(c) + "\"/>";
+    }
   } else {
     inner += "<a:buNone/>";
   }
@@ -226,6 +248,48 @@ bool ReadMasterStyle(const Rec& r, MasterStyle& out) {
     if (level < 5) out.levels[level] = std::make_pair(pf, cf);
   }
   return true;
+}
+
+std::span<const uint8_t> Pp9Tag(std::span<const uint8_t> progTags) {
+  Records rs(progTags);
+  for (Rec r; rs.Next(r);) {
+    if (r.type != 0x138A) continue;  // ProgBinaryTag: its name, then its data
+    Records tag(r.body);
+    Rec name, data;
+    if (!tag.Next(name) || name.type != 0x0FBA || !tag.Next(data) || data.type != 0x138B) continue;
+    static constexpr char16_t kName[] = u"___PPT9";
+    if (name.body.size() != 14) continue;
+    bool same = true;
+    for (size_t i = 0; i < 7 && same; ++i) same = (name.body[2 * i] | name.body[2 * i + 1] << 8) == kName[i];
+    if (same) return data.body;
+  }
+  return {};
+}
+
+void ReadStyle9(std::span<const uint8_t> atom, std::vector<Pf9>& out) {
+  out.clear();
+  Bytes b(atom);  // PF9, CF9 and SI exceptions, in turn
+  while (b.Left() >= 12 && out.size() < 16) {
+    Pf9 p;
+    const uint32_t pf = b.U32();
+    if (pf & 0x00800000) b.I16();                     // bulletBlipRef
+    if (pf & 0x02000000) p.autoNumber = b.U16() != 0;  // fBulletHasAutoNumber
+    if (pf & 0x01000000) p.scheme = b.U16(), p.start = b.I16();
+    if (b.U32() & 0x00100000) b.U32();  // CF9: its masks, and with pp10ext the pp10 run id
+    const uint32_t si = b.U32();
+    if (si & 0x001) b.U16();  // spellInfo
+    if (si & 0x002) b.U16();  // lid
+    if (si & 0x004) b.U16();  // altLid
+    if (si & 0x040) b.U16();  // bidi
+    if (si & 0x020) b.U32();  // pp10runid, grammarError
+    if (si & 0x200) {         // smartTags
+      const uint32_t n = b.U32();
+      if (n > 4096) break;
+      b.Skip(4 * n);
+    }
+    if (!b.Ok()) break;
+    out.push_back(p);
+  }
 }
 
 void ReadText(std::span<const uint8_t> records, Text& out, const std::function<std::string(uint32_t)>& link) {
@@ -361,6 +425,7 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
     Pf pf;
     Cf base;
     Layered(cx, text.type, level, pf, base, text.placeholder);
+    const Pf styled = pf;
     if (text.ruler) {
       if (text.ruler->leftMargin[level]) pf.leftMargin = *text.ruler->leftMargin[level], pf.mask |= 1u << kLeftMargin;
       if (text.ruler->indent[level]) pf.indent = *text.ruler->indent[level], pf.mask |= 1u << kIndent;
@@ -368,13 +433,28 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
       if (!text.ruler->tabs.empty()) pf.tabs = text.ruler->tabs, pf.mask |= 1u << kTabStops;
     }
     if (pr) pf.Over(pr->pf);
+    // A ruler's text offset at or left of the bullet doesn't take a bulleted paragraph's hanging indent
+    // away: PowerPoint keeps the style's for it (the ruler records an unbulleted paragraph's margin).
+    if ((pf.bulletFlags & 1) && text.ruler && text.ruler->leftMargin[level] && !(pr && pr->pf.Has(kLeftMargin)) &&
+        pf.leftMargin <= pf.indent && styled.Has(kLeftMargin) && styled.leftMargin > pf.indent)
+      pf.leftMargin = styled.leftMargin;
+    // PowerPoint 2007's own margin and indent for the paragraph, when its copy of the text matches.
+    if (const size_t i = static_cast<size_t>(paragraphs) - 1; i < text.indents.size() && text.indents[i]) {
+      const auto unit = [](double emu) { return static_cast<int16_t>(std::clamp<long long>(std::llround(emu / kEmuPerUnit), -32768, 32767)); };
+      pf.leftMargin = unit(text.indents[i]->first), pf.indent = unit(text.indents[i]->first + text.indents[i]->second);
+      pf.mask |= 1u << kLeftMargin | 1u << kIndent;
+    }
     const auto cfFor = [&](size_t at) {
       Cf cf = base;
       if (const Cf* c = cfAt(at)) cf.Over(*c);
       return cf;
     };
+    // PowerPoint 2000's paragraph additions: the entry the first character's own CF run names.
+    const Pf9* pf9 = nullptr;
+    const Cf* own = cfAt(start);
+    if (const size_t rt = own && (own->mask & 0x3C00) ? (own->style >> 10) & 0xF : 0; rt < text.pf9.size()) pf9 = &text.pf9[rt];
     std::string attrs, inner;
-    ParaProps(pf, cfFor(start), cx, level, attrs, inner);
+    ParaProps(pf, cfFor(start), cx, level, attrs, inner, pf9);
     out += "<a:p><a:pPr" + attrs + ">" + inner + "</a:pPr>";
     // Runs: split where the character properties, a link or a field change, and at line breaks.
     size_t i = start;
@@ -399,10 +479,14 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
       const Cf runCf = cfFor(i);
       const Cf* run = cfAt(i);
       const TextLink* lk = linkAt(i);
+      const auto spacing = [&](size_t at) { return at < text.spacing.size() ? text.spacing[at] : 0; };
+      const int spc = spacing(i);
       size_t j = i + 1;
-      while (j < end && s[j] != u'\v' && cfAt(j) == run && linkAt(j) == lk && !fieldAt(j)) ++j;
+      while (j < end && s[j] != u'\v' && cfAt(j) == run && linkAt(j) == lk && !fieldAt(j) && spacing(j) == spc) ++j;
       const std::string rel = lk && linkRel ? linkRel(lk->target) : std::string();
-      out += "<a:r>" + RunProps("rPr", runCf, cx, rel) + "<a:t>" + Esc(s.substr(i, j - i)) + "</a:t></a:r>";
+      std::string rPr = RunProps("rPr", runCf, cx, rel);
+      if (spc) rPr.insert(6, " spc=\"" + Num(spc) + "\"");  // after "<a:rPr"
+      out += "<a:r>" + rPr + "<a:t>" + Esc(s.substr(i, j - i)) + "</a:t></a:r>";
       i = j;
     }
     out += RunProps("endParaRPr", cfFor(end), cx) + "</a:p>";
@@ -421,7 +505,10 @@ std::string LevelStylesXml(const Context& cx, int type) {
     std::string attrs, inner;
     ParaProps(pf, cf, cx, 0, attrs, inner);
     const std::string tag = "a:lvl" + Num(level + 1) + "pPr";
-    out += "<" + tag + attrs + ">" + inner + RunProps("defRPr", cf, cx) + "</" + tag + ">";
+    std::string def = RunProps("defRPr", cf, cx);
+    const int style = type == kTitle ? 0 : type == kBody ? 1 : type == kOther ? 2 : -1;
+    if (style >= 0 && cx.kern[style][level] > 0) def.insert(9, " kern=\"" + Num(cx.kern[style][level]) + "\"");  // after "<a:defRPr"
+    out += "<" + tag + attrs + ">" + inner + def + "</" + tag + ">";
   }
   return out;
 }

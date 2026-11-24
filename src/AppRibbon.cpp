@@ -269,7 +269,7 @@ ui::FilePage::Model App::CurrentFilePage() {
   // Open: browse, then the recent files.
   auto& open = m.entries[FP::kOpen];
   open.push_back(entry(CmdOpen, L"Browse…", icon::FolderOpen, L"Ctrl+O"));
-  if (!settings_.recent.empty()) {
+  if (!settings_.recent.empty() && settings_.showRecent) {
     open.push_back(heading(L"Recent"));
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
       const std::wstring& path = settings_.recent[i].path;
@@ -328,6 +328,12 @@ ui::FilePage::Model App::CurrentFilePage() {
   auto& exp = m.entries[FP::kExport];
   exp.push_back(command(CmdExportPdf, icon::PDF, L"The pages as a PDF file, as they look"));
   own(RibbonFilePlace::Export, exp, false);
+  // With nothing else to export (documents, workbooks), Export is Export PDF at once, as Print is
+  // the dialog at once: File, Export, Enter, as ⋯, Export PDF, Enter was (the friction review, R1).
+  if (exp.size() == 1) {
+    m.run[FP::kExport] = CmdExportPdf;
+    m.enabled[FP::kExport] = QueryCommand(CmdExportPdf).enabled;
+  }
 
   // Options: the app's, then this kind of tab's.
   auto& opt = m.entries[FP::kOptions];
@@ -341,6 +347,7 @@ ui::FilePage::Model App::CurrentFilePage() {
   opt.push_back(heading(L"Reading"));
   opt.push_back(command(CmdToggleInvert, 0, {}, true));
   opt.push_back(command(CmdToggleHighlight, 0, {}, true));
+  opt.push_back(command(CmdShowRecentFiles, 0, {}, true));
   if (ready && v->Kind() == TabKind::Document) {
     opt.push_back(heading(L"Editing"));
     for (int cmd : {CmdToggleSpelling, CmdToggleAutoCorrect, CmdRuler}) opt.push_back(command(cmd, 0, {}, true));

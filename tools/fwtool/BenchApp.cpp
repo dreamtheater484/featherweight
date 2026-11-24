@@ -41,10 +41,17 @@ std::wstring RegString(HKEY root, const std::wstring& key) {
 
 // Why a launch isn't safe right now, or empty.
 std::string Unsafe() {
+  // FW_BENCH_BESIDE_RUNNING=1: the measured build has --sandbox (it never looks for a running copy, has
+  // its own window class and settings), so it may run beside an idle Featherweight the user has open
+  // (Roy, 2026-11-24: 4.0's timings over Remote Desktop while his copy stays open). Only for such builds.
+  wchar_t beside[4] = {};
+  const bool besideRunning = GetEnvironmentVariableW(L"FW_BENCH_BESIDE_RUNNING", beside, 4) && beside[0] == L'1';
   if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, L"Local\\Featherweight-7d1c2f0e-instance")) {
     CloseHandle(m);
-    return "Featherweight is running. Close it first: a copy started without --sandbox (0.9.4 and other older "
-           "builds) would hand its file to it.";
+    if (!besideRunning)
+      return "Featherweight is running. Close it first: a copy started without --sandbox (0.9.4 and other older "
+             "builds) would hand its file to it. A build with --sandbox may run beside it with "
+             "FW_BENCH_BESIDE_RUNNING=1.";
   }
   // A Featherweight registered from a folder that no longer exists makes an older build point "Open with" at
   // whatever copy starts next: the copy measured here.

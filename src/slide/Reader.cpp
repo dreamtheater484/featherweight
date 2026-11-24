@@ -345,6 +345,9 @@ void Loader::LoadSlide(Presentation& deck, size_t index) {
     if (pugi::xml_node over = A(P(s->root, "clrMapOvr"), "overrideClrMapping")) s->colorMap = draw::ColorMap::Read(over);
     s->hidden = !Bool(s->root, "show", true);
     s->transition = RawChild(s->root, "transition");
+    // A slide without its own plays its layout's transition, else its master's (as PowerPoint).
+    if (!s->transition && layout) s->transition = RawChild(layout->root, "transition");
+    if (!s->transition && s->master) s->transition = RawChild(s->master->root, "transition");
     s->timing = RawChild(s->root, "timing");
   }
   Slide* raw = s.get();

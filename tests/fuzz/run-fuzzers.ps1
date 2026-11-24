@@ -76,6 +76,8 @@ $all = [ordered]@{
   # Presentations (P1): the .pptx reader, every slide's inheritance resolved, read by fwdraw.
   fuzz_pptx    = @{ Seeds = @("$seeds\pptx", "$seeds\package", "$office\presentations", "$regressions\pptx"); MaxLen = 131072 }
   # Slide show timing (P1): transitions and the timing tree read, every step played; poses stay finite and in range.
+  # OpenDocument presentation import (P3): every .odp converts to a presentation that opens, passes the check and reads without problems, or is refused.
+  fuzz_odp     = @{ Seeds = @("$seeds\odp", "$regressions\odp"); MaxLen = 65536 }
   fuzz_timing  = @{ Seeds = @("$seeds\timing", "$regressions\timing"); MaxLen = 65536 }
   # PowerPoint 97-2003 presentations (P3): every .ppt converts to a .pptx that opens, passes the check and reads, or is refused.
   fuzz_ppt     = @{ Seeds = @("$seeds\ppt", "$regressions\ppt"); MaxLen = 131072 }
