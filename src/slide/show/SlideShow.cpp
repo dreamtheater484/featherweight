@@ -30,6 +30,7 @@
 #include "slide/Presentation.h"
 #include "slide/show/MediaPlayer.h"
 #include "slide/show/PresenterView.h"
+#include "slide/show/ShowDraw.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/Timing.h"
 #include "ui/Anim.h"
@@ -59,7 +60,6 @@ constexpr int kWarmupFrames = 4;
 // display went without a new frame).
 constexpr double kLateStart = 1.8;
 
-double Smooth(double p) { return p * p * (3 - 2 * p); }
 
 // What a target of the timing is drawn from.
 struct Sprite {
@@ -732,58 +732,7 @@ Pose Show::PoseOfSprite(const Scene& s, int i) const {
 
 void Show::DrawSprite(Scene& s, int i, const Pose& pose) {
   const Sprite& sp = s.sprites[static_cast<size_t>(i)];
-  if (!pose.visible || pose.opacity <= 0.001f || !sp.bitmap) return;  // drawn ahead (one BeginDraw at a time)
-  float cx = (sp.box.left + sp.box.right) / 2, cy = (sp.box.top + sp.box.bottom) / 2;
-  D2D1_MATRIX_3X2_F m = M::Translation(-cx, -cy) * M::Scale(pose.sx, pose.sy) * M::Rotation(pose.rotation) *
-                        M::Translation(cx + pose.dx * slideW_, cy + pose.dy * slideH_);
-  D2D1_MATRIX_3X2_F saved;
-  dc_->GetTransform(&saved);
-  dc_->SetTransform(m * saved);
-  D2D1_RECT_F clips[2];
-  int n = 0;
-  const Reveal& rv = pose.reveal;
-  if (rv.kind != Reveal::None) {
-    const D2D1_RECT_F& b = sp.box;
-    D2D1_RECT_F r = sp.rect;
-    float f = std::clamp(rv.shown, 0.f, 1.f);
-    if (rv.kind == Reveal::Wipe) {
-      switch (rv.side) {
-        case Side::Up: r.bottom = b.top + (b.bottom - b.top) * f; break;     // from the top
-        case Side::Left: r.right = b.left + (b.right - b.left) * f; break;   // from the left
-        case Side::Right: r.left = b.right - (b.right - b.left) * f; break;  // from the right
-        default: r.top = b.bottom - (b.bottom - b.top) * f; break;           // from the bottom
-      }
-      clips[n++] = r;
-    } else if (rv.outward) {
-      if (rv.vertical) {
-        float half = (b.right - b.left) * f / 2, c = (b.left + b.right) / 2;
-        r.left = c - half;
-        r.right = c + half;
-      } else {
-        float half = (b.bottom - b.top) * f / 2, c = (b.top + b.bottom) / 2;
-        r.top = c - half;
-        r.bottom = c + half;
-      }
-      clips[n++] = r;
-    } else {
-      D2D1_RECT_F a = r, z = r;
-      if (rv.vertical) {
-        a.right = b.left + (b.right - b.left) * f / 2;
-        z.left = b.right - (b.right - b.left) * f / 2;
-      } else {
-        a.bottom = b.top + (b.bottom - b.top) * f / 2;
-        z.top = b.bottom - (b.bottom - b.top) * f / 2;
-      }
-      clips[n++] = a;
-      clips[n++] = z;
-    }
-  }
-  for (int k = 0; k < std::max(1, n); ++k) {
-    if (n) dc_->PushAxisAlignedClip(clips[k], D2D1_ANTIALIAS_MODE_ALIASED);
-    dc_->DrawBitmap(sp.bitmap.Get(), sp.rect, pose.opacity, D2D1_INTERPOLATION_MODE_LINEAR, nullptr, nullptr);
-    if (n) dc_->PopAxisAlignedClip();
-  }
-  dc_->SetTransform(saved);
+  DrawPosed(dc_.Get(), sp.bitmap.Get(), sp.rect, sp.box, pose, slideW_, slideH_);  // ShowDraw (shared with Preview)
 }
 
 // Draws pieces into `target` (cleared first): runs of static parts through the renderer, sprites
@@ -940,98 +889,9 @@ void Show::DrawEnd() {
 }
 
 void Show::DrawTransition(double p) {
-  const Transition& t = cur_->transition;
-  ID2D1Bitmap1* b = cur_->frame.Get();
-  ID2D1Bitmap1* a = from_.Get();
-  const float W = static_cast<float>(fw_), H = static_cast<float>(fh_);
-  dc_->Clear({0, 0, 0, 1});
-  auto put = [&](ID2D1Bitmap1* bmp, float x, float y, float opacity = 1) {
-    if (bmp) dc_->DrawBitmap(bmp, D2D1::RectF(x, y, x + W, y + H), opacity, D2D1_INTERPOLATION_MODE_LINEAR);
-  };
-  auto clipped = [&](ID2D1Bitmap1* bmp, D2D1_RECT_F clip) {
-    dc_->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
-    put(bmp, 0, 0);
-    dc_->PopAxisAlignedClip();
-  };
-  float sx = 0, sy = 0;  // the direction of motion
-  switch (t.side) {
-    case Side::Left: sx = -1; break;
-    case Side::Up: sy = -1; break;
-    case Side::Right: sx = 1; break;
-    case Side::Down: sy = 1; break;
-    case Side::LeftUp: sx = -1, sy = -1; break;
-    case Side::RightUp: sx = 1, sy = -1; break;
-    case Side::LeftDown: sx = -1, sy = 1; break;
-    case Side::RightDown: sx = 1, sy = 1; break;
-  }
-  const float e = static_cast<float>(Smooth(p)), f = static_cast<float>(p);
-  switch (t.kind) {
-    case TransitionKind::Fade:
-      if (t.throughBlack) {
-        if (f < 0.5f) put(a, 0, 0, 1 - 2 * f);
-        else put(b, 0, 0, 2 * f - 1);
-      } else {
-        put(a, 0, 0);
-        put(b, 0, 0, f);
-      }
-      break;
-    case TransitionKind::Push:
-      put(a, sx * e * W, sy * e * H);
-      put(b, sx * (e - 1) * W, sy * (e - 1) * H);
-      break;
-    case TransitionKind::Cover:
-      put(a, 0, 0);
-      put(b, sx * (e - 1) * W, sy * (e - 1) * H);
-      break;
-    case TransitionKind::Uncover:
-      put(b, 0, 0);
-      put(a, sx * e * W, sy * e * H);
-      break;
-    case TransitionKind::Wipe: {
-      // dir is where the edge moves: "u" wipes from the bottom up.
-      put(a, 0, 0);
-      D2D1_RECT_F r = D2D1::RectF(0, 0, W, H);
-      if (sx < 0) r.left = W * (1 - f);
-      else if (sx > 0) r.right = W * f;
-      else if (sy < 0) r.top = H * (1 - f);
-      else r.bottom = H * f;
-      clipped(b, r);
-      break;
-    }
-    case TransitionKind::Split: {
-      put(a, 0, 0);
-      if (!t.in) {
-        clipped(b, t.vertical ? D2D1::RectF(W * (1 - f) / 2, 0, W * (1 + f) / 2, H)
-                              : D2D1::RectF(0, H * (1 - f) / 2, W, H * (1 + f) / 2));
-      } else if (t.vertical) {
-        clipped(b, D2D1::RectF(0, 0, W * f / 2, H));
-        clipped(b, D2D1::RectF(W - W * f / 2, 0, W, H));
-      } else {
-        clipped(b, D2D1::RectF(0, 0, W, H * f / 2));
-        clipped(b, D2D1::RectF(0, H - H * f / 2, W, H));
-      }
-      break;
-    }
-    case TransitionKind::Zoom: {
-      // In: the new slide grows from the middle; out: the old one shrinks into it.
-      D2D1_MATRIX_3X2_F saved;
-      dc_->GetTransform(&saved);
-      if (t.in) {
-        put(a, 0, 0);
-        float s = 0.25f + 0.75f * e;
-        dc_->SetTransform(M::Scale(s, s, D2D1::Point2F(W / 2, H / 2)) * saved);
-        put(b, 0, 0, f);
-      } else {
-        put(b, 0, 0);
-        float s = 1 - 0.75f * e;
-        dc_->SetTransform(M::Scale(s, s, D2D1::Point2F(W / 2, H / 2)) * saved);
-        put(a, 0, 0, 1 - f);
-      }
-      dc_->SetTransform(saved);
-      break;
-    }
-    case TransitionKind::None: put(b, 0, 0); break;
-  }
+  // ShowDraw (shared with the editor's Preview): the old slide (or black) to the new one.
+  DrawTransitionFrame(dc_.Get(), cur_->transition, from_.Get(), cur_->frame.Get(), static_cast<float>(fw_),
+                      static_cast<float>(fh_), p);
 }
 
 void Show::EndTransition(double now) {
