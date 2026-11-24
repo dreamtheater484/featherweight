@@ -56,6 +56,15 @@
 #else
 #define FW_SLIDE_COMMENTS 0
 #endif
+// p3-anim's transitions and animations.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/TimingOps.h")
+#include "slide/edit/TimingOps.h"
+#define FW_SLIDE_TIMING 1
+#else
+#define FW_SLIDE_TIMING 0
+#endif
+// What the deck holds beyond the model's digest, read through an editor (comments, timing).
+#define FW_TORTURE_EXTRA (FW_SLIDE_COMMENTS || FW_SLIDE_TIMING)
 
 namespace fwtool {
 namespace decktorture {
@@ -76,8 +85,21 @@ constexpr struct {
     {Op::Format, "format"},      {Op::Undo, "undo"},            {Op::Redo, "redo"},
     {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
     {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
-    {Op::Table, "table"},        {Op::Comment, "comment"},
+    {Op::Table, "table"},        {Op::Comment, "comment"},      {Op::Transition, "transition"},
+    {Op::TransitionAll, "transition-all"}, {Op::Anim, "anim"},
 };
+
+// Names in specs, in the order of TimingOps.h's TransitionEffect (without Other), Anim (without
+// Other) and AnimTrigger.
+constexpr const char* kTransitionNames[] = {"none", "cut", "fade", "push", "wipe", "split", "uncover", "cover", "zoom"};
+constexpr const char* kAnimNames[] = {"appear",   "fade",      "fly-in",   "float-in", "split",     "wipe",
+                                      "zoom",     "grow-shrink", "spin",   "disappear", "fade-out", "fly-out",
+                                      "float-out", "split-out", "wipe-out", "zoom-out"};
+constexpr const char* kTriggerNames[] = {"click", "with", "after"};
+
+bool IsAnimAction(std::string_view a) {
+  return a == "add" || a == "change" || a == "option" || a == "timing" || a == "move" || a == "remove";
+}
 
 // Comment actions and the ones that name a comment (nums[0]: its place in SlideComments).
 bool IsCommentAction(std::string_view a) {
@@ -170,6 +192,41 @@ bool ParseShapeRef(std::string_view s, int& slide, std::vector<uint32_t>& ids) {
   return !ids.empty();
 }
 
+// "0,2,3" -> {0, 2, 3}.
+bool ParseIndexes(std::string_view s, std::vector<int>& out) {
+  out.clear();
+  for (std::string_view rest = s; !rest.empty();) {
+    size_t comma = rest.find(',');
+    int n = 0;
+    if (!ToInt(rest.substr(0, comma), n) || n < 0) return false;
+    out.push_back(n);
+    rest.remove_prefix(comma == std::string_view::npos ? rest.size() : comma + 1);
+  }
+  return !out.empty();
+}
+
+std::string JoinIndexes(const std::vector<int>& v) {
+  std::string s;
+  for (size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
+  return s;
+}
+
+// A spec's fields: "e=fade,d=700" -> {e: fade, d: 700}. False for a field without '=' or a spec with
+// a space (it's one word in an edit line).
+bool SpecFields(std::string_view spec, std::vector<std::pair<std::string, std::string>>& out) {
+  out.clear();
+  if (spec.find(' ') != std::string_view::npos) return false;
+  for (std::string_view rest = spec; !rest.empty();) {
+    size_t comma = rest.find(',');
+    std::string_view f = rest.substr(0, comma);
+    size_t eq = f.find('=');
+    if (eq == std::string_view::npos || eq == 0) return false;
+    out.emplace_back(std::string(f.substr(0, eq)), std::string(f.substr(eq + 1)));
+    rest.remove_prefix(comma == std::string_view::npos ? rest.size() : comma + 1);
+  }
+  return true;
+}
+
 bool IsShapeOp(Op op) {
   return op == Op::Type || op == Op::Move || op == Op::Resize || op == Op::Rotate || op == Op::DeleteShape ||
          op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table;
@@ -226,6 +283,12 @@ std::string FormatEdit(const Edit& e) {
       else if (e.arg != "delete-all") s += " " + which;
       break;
     }
+    case Op::Transition: s += " " + std::to_string(e.slide) + " " + e.text; break;
+    case Op::TransitionAll: s += " " + std::to_string(e.slide); break;
+    case Op::Anim:
+      s += " " + std::to_string(e.slide) + " " + e.arg + " " + (e.arg == "add" ? std::to_string(e.shape) : JoinIndexes(e.nums));
+      if (!e.text.empty()) s += " " + e.text;
+      break;
   }
   if (!e.target.empty()) s += " # " + e.target;
   return s;
@@ -319,6 +382,29 @@ bool ParseEdit(std::string_view line, Edit& e) {
       if (e.arg == "edit") return Unquote(s, e.text) && s.empty();
       if (e.arg == "move") return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && s.empty();
       return s.empty();  // delete, resolve, reopen
+    }
+    case Op::Transition: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.text = std::string(NextWord(s));
+      return !e.text.empty() && SpecFields(e.text, fields) && s.empty();
+    }
+    case Op::TransitionAll: return ToInt(NextWord(s), e.slide) && s.empty();
+    case Op::Anim: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (!IsAnimAction(e.arg)) return false;
+      const std::string_view what = NextWord(s);
+      if (e.arg == "add") {
+        int id = 0;
+        if (!ToInt(what, id) || id < 0) return false;
+        e.shape = static_cast<uint32_t>(id);
+      } else if (!ParseIndexes(what, e.nums)) {
+        return false;
+      }
+      e.text = std::string(NextWord(s));
+      return SpecFields(e.text, fields) && s.empty();
     }
     default: break;
   }
@@ -429,6 +515,56 @@ std::vector<std::string> CommentLines(ed::Editor& editor, size_t slides) {
 }
 #endif
 
+#if FW_SLIDE_TIMING
+template <size_t N>
+int IndexOf(const char* const (&names)[N], std::string_view v) {
+  for (size_t i = 0; i < N; ++i)
+    if (v == names[i]) return static_cast<int>(i);
+  return -1;
+}
+
+std::string Ms(double ms) { return std::to_string(std::llround(ms)); }
+
+// Each slide's transition and main sequence, as the Transitions tab and the Animation Pane show them.
+std::vector<std::string> TimingLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < slides; ++i) {
+    const ed::TransitionInfo t = ed::GetTransition(editor, i);
+    const std::string at = "slide " + std::to_string(i);
+    if (t.effect != ed::TransitionEffect::None || t.advanceAfterMs >= 0 || !t.advanceOnClick)
+      out.push_back(at + " transition " + Utf8(ed::TransitionName(t.effect)) + " option " + std::to_string(t.option) + " " +
+                    Ms(t.durationMs) + " ms, click " + (t.advanceOnClick ? "yes" : "no") + ", after " + Ms(t.advanceAfterMs) +
+                    (t.sound ? ", sound" : ""));
+    std::u16string whyNot;
+    const std::vector<ed::AnimEffect> seq = ed::MainSequence(editor, i, &whyNot);
+    if (!whyNot.empty()) out.push_back(at + " sequence kept: " + Utf8(whyNot));
+    for (size_t k = 0; k < seq.size(); ++k) {
+      const ed::AnimEffect& a = seq[k];
+      out.push_back(at + " effect " + std::to_string(k) + " shape " + std::to_string(a.shape) + " paragraph " +
+                    std::to_string(a.paragraph) + " " + Utf8(ed::AnimName(a.anim)) + " class " +
+                    std::to_string(static_cast<int>(a.cls)) + " option " + std::to_string(a.option) + " " +
+                    kTriggerNames[static_cast<size_t>(a.trigger) % std::size(kTriggerNames)] + " " + Ms(a.durationMs) +
+                    " ms, delay " + Ms(a.delayMs) + (a.editable ? "" : ", kept"));
+    }
+  }
+  return out;
+}
+#endif
+
+#if FW_TORTURE_EXTRA
+std::vector<std::string> ExtraLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+#if FW_SLIDE_COMMENTS
+  out = CommentLines(editor, slides);
+#endif
+#if FW_SLIDE_TIMING
+  std::vector<std::string> t = TimingLines(editor, slides);
+  out.insert(out.end(), t.begin(), t.end());
+#endif
+  return out;
+}
+#endif
+
 // Through p2-model's edit API (slide/edit/Edit.h) and its writer (Save.h), as the tab's commands do.
 class EditTarget : public DeckTarget {
  public:
@@ -457,9 +593,18 @@ class EditTarget : public DeckTarget {
   }
   bool RedoSteps(int steps) override { return steps <= 0 || static_cast<bool>(editor_.Redo(static_cast<size_t>(steps))); }
   bool CanUndo() const override { return editor_.CanUndo(); }
+#if FW_TORTURE_EXTRA
+  std::vector<std::string> Extra() override { return ExtraLines(editor_, deck_->SlideCount()); }
+#endif
 #if FW_SLIDE_COMMENTS
-  std::vector<std::string> Extra() override { return CommentLines(editor_, deck_->SlideCount()); }
   std::vector<size_t> CommentCounts() override { return ed::CommentCounts(editor_); }
+#endif
+#if FW_SLIDE_TIMING
+  std::vector<size_t> EffectCounts() override {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < deck_->SlideCount(); ++i) out.push_back(ed::MainSequence(editor_, i).size());
+    return out;
+  }
 #endif
 
  private:
@@ -621,6 +766,15 @@ class EditTarget : public DeckTarget {
 #else
       case Op::Comment: why = "fwtool was built without the comment operations"; return {};
 #endif
+#if FW_SLIDE_TIMING
+      case Op::Transition:
+      case Op::TransitionAll:
+      case Op::Anim: return TimingEdit(e, slide, why);
+#else
+      case Op::Transition:
+      case Op::TransitionAll:
+      case Op::Anim: why = "fwtool was built without the timing operations"; return {};
+#endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
         hf.slideNumber = e.arg.find('n') != std::string::npos;
@@ -751,6 +905,77 @@ class EditTarget : public DeckTarget {
   }
 #endif
 
+#if FW_SLIDE_TIMING
+  // As the Transitions and Animations tabs and the Animation Pane do, from the edit's spec.
+  ed::Result TimingEdit(const Edit& e, size_t slide, std::string& why) {
+    if (e.slide < 0 || slide >= deck_->SlideCount()) {
+      why = "no slide " + std::to_string(e.slide);
+      return {};
+    }
+    if (e.op == Op::TransitionAll) return ed::ApplyTransitionToAll(editor_, slide);
+    std::vector<std::pair<std::string, std::string>> fields;
+    SpecFields(e.text, fields);
+    ed::TransitionPatch tp;
+    std::optional<ed::Anim> anim;
+    std::optional<ed::AnimTrigger> trigger;
+    std::optional<int> option;
+    std::optional<double> duration, delay;
+    bool byParagraph = false;
+    int at = -1;
+    for (const auto& [k, v] : fields) {
+      const double n = std::atof(v.c_str());
+      if (k == "e" && e.op == Op::Transition) {
+        const int i = IndexOf(kTransitionNames, v);
+        if (i < 0) return why = "unknown transition " + v, ed::Result{};
+        tp.effect = static_cast<ed::TransitionEffect>(i);
+      } else if (k == "e") {
+        const int i = IndexOf(kAnimNames, v);
+        if (i < 0) return why = "unknown animation " + v, ed::Result{};
+        anim = static_cast<ed::Anim>(i);
+      } else if (k == "t") {
+        const int i = IndexOf(kTriggerNames, v);
+        if (i < 0) return why = "unknown trigger " + v, ed::Result{};
+        trigger = static_cast<ed::AnimTrigger>(i);
+      } else if (k == "o") option = std::atoi(v.c_str());
+      else if (k == "d") duration = n;
+      else if (k == "y") delay = n;
+      else if (k == "c") tp.advanceOnClick = v == "1";
+      else if (k == "a") tp.advanceAfterMs = n;
+      else if (k == "p") byParagraph = v == "1";
+      else if (k == "at") at = std::atoi(v.c_str());
+      else return why = "unknown field " + k, ed::Result{};
+    }
+    if (e.op == Op::Transition) {
+      tp.option = option;
+      tp.durationMs = duration;
+      return ed::SetTransition(editor_, {slide}, tp);
+    }
+    const std::vector<size_t> effects(e.nums.begin(), e.nums.end());
+    if (e.arg == "add") {
+      ed::AnimSpec spec;
+      spec.anim = anim.value_or(ed::Anim::Fade);
+      spec.option = option.value_or(-1);
+      spec.durationMs = duration;
+      spec.trigger = trigger.value_or(ed::AnimTrigger::OnClick);
+      spec.delayMs = delay.value_or(0);
+      spec.byParagraph = byParagraph;
+      return ed::AddAnimation(editor_, slide, e.shape, spec, at);
+    }
+    if (e.arg == "change") {
+      if (!anim) return why = "change without e=", ed::Result{};
+      return ed::ChangeAnimation(editor_, slide, effects, *anim);
+    }
+    if (e.arg == "option") return ed::SetAnimationOption(editor_, slide, effects, option.value_or(0));
+    if (e.arg == "timing") {
+      ed::AnimTimingPatch p;
+      p.trigger = trigger, p.durationMs = duration, p.delayMs = delay;
+      return ed::SetAnimationTiming(editor_, slide, effects, p);
+    }
+    if (e.arg == "move") return ed::MoveAnimations(editor_, slide, effects, static_cast<size_t>(std::max(at, 0)));
+    return ed::RemoveAnimations(editor_, slide, effects);
+  }
+#endif
+
   std::unique_ptr<sl::Presentation> deck_;
   ed::Editor editor_;  // after deck_: it goes first
 };
@@ -843,6 +1068,7 @@ class Generator {
 
   Edit Next(DeckTarget& target) {
     comments_ = target.CommentCounts();
+    effects_ = target.EffectCounts();
     for (int tries = 0; tries < 50; ++tries) {
       Edit e;
       if (Make(target.Deck(), e)) return e;
@@ -866,6 +1092,9 @@ class Generator {
         {Op::Insert, 5}, {Op::Crop, 2}, {Op::Table, 3},
 #if FW_SLIDE_COMMENTS
         {Op::Comment, 6},
+#endif
+#if FW_SLIDE_TIMING
+        {Op::Transition, 5}, {Op::TransitionAll, 1}, {Op::Anim, 9},
 #endif
     };
     uint32_t total = 0;
@@ -995,6 +1224,92 @@ class Generator {
         else if (e.arg == "edit") e.text = CommentText();
         else if (e.arg == "move") e.dx = std::round(rng_.Between(0, size.width)), e.dy = std::round(rng_.Between(0, size.height));
         e.target = "a comment";
+        return true;
+      }
+      case Op::TransitionAll:
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        return true;
+      case Op::Transition: {
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        // Mostly a new effect (the gallery), now and then only its timing (as on a transition
+        // Featherweight can't set); options, durations and times now and then out of range (refused).
+        std::string spec;
+        auto add = [&](const std::string& f) { spec += (spec.empty() ? "" : ",") + f; };
+        if (rng_.Chance(80)) add(std::string("e=") + rng_.Pick(kTransitionNames));
+        if (rng_.Chance(40)) add("o=" + std::to_string(rng_.Below(9)));
+        if (rng_.Chance(40)) {
+          static constexpr int kMs[] = {10, 250, 500, 700, 750, 1000, 1500, 2500, 59000, 5, 60000};
+          add("d=" + std::to_string(rng_.Pick(kMs)));
+        }
+        if (rng_.Chance(30)) add(std::string("c=") + (rng_.Chance(70) ? "1" : "0"));
+        if (rng_.Chance(30)) {
+          static constexpr long long kAfter[] = {-1, 0, 2000, 15000, 86400000, 86400001};
+          add("a=" + std::to_string(rng_.Pick(kAfter)));
+        }
+        if (spec.empty()) add("d=" + std::to_string(500 + 250 * rng_.Below(8)));
+        e.text = spec;
+        e.target = "a transition";
+        return true;
+      }
+      case Op::Anim: {
+        if (!slides) return false;
+        static constexpr const char* kActions[] = {"add", "add", "add", "add", "add", "add", "change", "change",
+                                                   "option", "option", "timing", "timing", "timing", "move",
+                                                   "move", "remove", "remove"};
+        e.arg = rng_.Pick(kActions);
+        std::string spec;
+        auto add = [&](const std::string& f) { spec += (spec.empty() ? "" : ",") + f; };
+        static constexpr int kMs[] = {10, 250, 500, 750, 1000, 2000, 59000, 5, 60000};
+        static constexpr int kDelays[] = {0, 250, 500, 1000, 59000, 60000};
+        if (e.arg == "add") {
+          e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          std::vector<ShapeInfo> all;
+          CollectShapes(deck.GetSlide(static_cast<size_t>(e.slide))->shapes, true, all);
+          std::vector<const sl::Shape*> choices;
+          // Shapes on the slide itself; one inside a group now and then (refused).
+          for (const ShapeInfo& i : all)
+            if (i.topLevel || rng_.Chance(10)) choices.push_back(i.shape);
+          if (choices.empty()) return false;
+          const sl::Shape& s = *choices[rng_.Below(static_cast<uint32_t>(choices.size()))];
+          e.shape = s.id;
+          add(std::string("e=") + rng_.Pick(kAnimNames));
+          if (rng_.Chance(40)) add("o=" + std::to_string(rng_.Below(9)));
+          if (rng_.Chance(50)) add("d=" + std::to_string(rng_.Pick(kMs)));
+          if (rng_.Chance(70)) add(std::string("t=") + rng_.Pick(kTriggerNames));
+          if (rng_.Chance(40)) add("y=" + std::to_string(rng_.Pick(kDelays)));
+          if (rng_.Chance(20)) add("p=1");
+          if (rng_.Chance(40)) {
+            const size_t n = static_cast<size_t>(e.slide) < effects_.size() ? effects_[static_cast<size_t>(e.slide)] : 0;
+            add("at=" + std::to_string(rng_.Below(static_cast<uint32_t>(n + 2))));
+          }
+          e.text = spec;
+          e.target = Describe(s);
+          return true;
+        }
+        // The other actions: effects of a slide that has some.
+        std::vector<int> with;
+        for (size_t i = 0; i < effects_.size() && i < static_cast<size_t>(slides); ++i)
+          if (effects_[i]) with.push_back(static_cast<int>(i));
+        if (with.empty()) return false;
+        e.slide = with[rng_.Below(static_cast<uint32_t>(with.size()))];
+        const uint32_t n = static_cast<uint32_t>(effects_[static_cast<size_t>(e.slide)]);
+        const uint32_t count = 1 + rng_.Below(std::min<uint32_t>(n, 3));
+        for (uint32_t k = 0; k < count; ++k) {
+          // Now and then an index past the end (refused).
+          const int idx = static_cast<int>(rng_.Chance(5) ? n + rng_.Below(3) : rng_.Below(n));
+          if (std::find(e.nums.begin(), e.nums.end(), idx) == e.nums.end()) e.nums.push_back(idx);
+        }
+        if (e.arg == "change") add(std::string("e=") + rng_.Pick(kAnimNames));
+        else if (e.arg == "option") add("o=" + std::to_string(rng_.Below(9)));
+        else if (e.arg == "timing") {
+          if (rng_.Chance(50)) add(std::string("t=") + rng_.Pick(kTriggerNames));
+          if (rng_.Chance(50)) add("d=" + std::to_string(rng_.Pick(kMs)));
+          if (rng_.Chance(50) || spec.empty()) add("y=" + std::to_string(rng_.Pick(kDelays)));
+        } else if (e.arg == "move") add("at=" + std::to_string(rng_.Below(n)));
+        e.text = spec;
+        e.target = std::to_string(e.nums.size()) + (e.nums.size() == 1 ? " effect" : " effects");
         return true;
       }
       default: break;
@@ -1131,6 +1446,7 @@ class Generator {
 
   Rng rng_;
   std::vector<size_t> comments_;  // per slide, as the target counts them before each edit
+  std::vector<size_t> effects_;   // the main sequence's effects per slide, likewise
 };
 
 // ---- The deck, one fact per line (undo and read-back checks)
@@ -1384,6 +1700,31 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
         if (!fallback && hadFallback.contains(id))
           return Failure{"fallback", name + ": shape " + id + " in mc:AlternateContent lost its mc:Fallback"};
   }
+  // Every time node (p:cTn) of a written slide's timing has an id of its own, unless the original
+  // already repeated it (P3's timing operations number new nodes after the slide's highest).
+  for (const std::string& name : r.written) {
+    if (name.find("ppt/slides/slide") == std::string::npos || !again->ReadPart(name, b).Ok()) continue;
+    auto repeated = [](const std::vector<uint8_t>& bytes) {
+      std::set<std::string> seen, twice;
+      pugi::xml_document doc;
+      if (!doc.load_buffer(bytes.data(), bytes.size())) return twice;
+      std::vector<pugi::xml_node> stack{doc.document_element()};
+      while (!stack.empty()) {
+        pugi::xml_node n = stack.back();
+        stack.pop_back();
+        std::string_view el = n.name();
+        if (el == "p:cTn" || el.ends_with(":cTn") || el == "cTn")
+          if (!seen.insert(n.attribute("id").value()).second) twice.insert(n.attribute("id").value());
+        for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
+          if (c.type() == pugi::node_element) stack.push_back(c);
+      }
+      return twice;
+    };
+    std::set<std::string> had;
+    if (orig.pkg->ReadPart(name, a).Ok()) had = repeated(a);
+    for (const std::string& id : repeated(b))
+      if (!had.contains(id)) return Failure{"timing", name + ": two time nodes (p:cTn) have the id " + id};
+  }
   // Saved without edits: nothing written, the same parts in the same order, the same zip records.
   if (r.done == 0) {
     if (!r.written.empty()) return Failure{"unchanged", "saving without edits wrote " + r.written.front()};
@@ -1402,11 +1743,11 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
   std::vector<std::string> readBack = Digest(*deck);
   for (const std::string& p : deck->Problems())
     if (!Listed(orig.problems, p)) return Failure{"model", p};
-#if FW_SLIDE_COMMENTS
+#if FW_TORTURE_EXTRA
   {
-    // The comments as an editor of the saved copy lists them.
+    // The comments and timing as an editor of the saved copy lists them.
     ed::Editor reread(*deck);
-    std::vector<std::string> lines = CommentLines(reread, deck->SlideCount());
+    std::vector<std::string> lines = ExtraLines(reread, deck->SlideCount());
     readBack.insert(readBack.end(), lines.begin(), lines.end());
   }
 #endif

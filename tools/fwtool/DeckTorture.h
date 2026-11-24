@@ -53,6 +53,15 @@ enum class Op : uint8_t {
   // points; author `count`; `text`), reply (author `count`; `text`), edit (`text`), delete, delete-all
   // (`slide` -1: every slide), resolve, reopen, move (to dx, dy).
   Comment,
+  // Transitions and animations (p3-anim, slide/edit/TimingOps.h). `text` is a spec, comma-separated
+  // key=value without spaces. Transition: `slide`'s transition, spec e=<effect>,o=<option>,d=<ms>,
+  // c=<0|1 advance on click>,a=<ms advance after, -1 off>, each optional (no e: only timing).
+  // TransitionAll: Apply To All from `slide`. Anim, arg: add (shape `shape`; spec e=<anim>,o=,d=,
+  // t=<click|with|after>,y=<delay ms>,p=<1: by paragraph>,at=<index>), change (e=), option (o=),
+  // timing (t=,d=,y=), move (at=), remove; the effects are `nums` (indexes into the main sequence).
+  Transition,
+  TransitionAll,
+  Anim,
 };
 
 // One edit, as reproducers keep it. Slides are indexes at the moment the edit is applied; shapes are
@@ -79,7 +88,9 @@ struct Edit {
 //   undo 2 / redo 1 / save / theme 0 dark / master-shapes 2 off / header-footer -1 nf "footer text" /
 //   insert 2 shape:rightArrow 100 80 200 120 / crop 2#5 0.1 0 0.2 0 / table 2#5 merge 0 0 1 1 /
 //   comment 2 add 120 80 A1 "text" / comment 2 reply 0 A2 "text" / comment 2 edit 1 "text" /
-//   comment 2 delete 1 / comment -1 delete-all / comment 2 resolve 0 / comment 2 move 0 300 200,
+//   comment 2 delete 1 / comment -1 delete-all / comment 2 resolve 0 / comment 2 move 0 300 200 /
+//   transition 2 e=push,o=1,d=1000 / transition-all 2 / anim 2 add 5 e=fly-in,t=after,y=250 /
+//   anim 2 timing 0,1 d=750 / anim 2 move 1 at=0 / anim 2 remove 0,
 //   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);
@@ -110,6 +121,7 @@ class DeckTarget {
   // the edits that pick one.
   virtual std::vector<std::string> Extra() { return {}; }
   virtual std::vector<size_t> CommentCounts() { return {}; }
+  virtual std::vector<size_t> EffectCounts() { return {}; }  // the main sequence's effects per slide
   // The parts the last Save wrote or removed (every other part must be copied byte for byte).
   std::vector<std::string> written;
 };
