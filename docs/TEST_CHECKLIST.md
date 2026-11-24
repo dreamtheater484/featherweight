@@ -723,7 +723,7 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
   - slide-pages drew 152 of them, 2,285 of 2,517 slides;
   - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60.
 
-  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn. Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` ___ of ___. These are `fwtool convert`'s saves, the app's import and Save As `.pptx`, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
+  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn. Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` ___ of ___. These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
 - [ ] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). The coordinator restated the criterion on 2026-11-24 (p3-plan): SSIM ≥ 0.999 against P1's page renderer (`pagepngs`) at the same size. Against the PDF, the bar is ≥ 0.99, or ≥ 0.95 on slides with dense small text.
 
   Measured with `scripts\picture-export-check.ps1` on the public set (18 decks, every slide exported as PNG), 4.0's final code, 2026-11-24:
