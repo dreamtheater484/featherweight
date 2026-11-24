@@ -48,12 +48,17 @@ function Write-Json($value, [string]$path) {
 if ($Child) {
   [void][Reflection.Assembly]::LoadWithPartialName("Microsoft.Office.Interop.PowerPoint")
   function E([string]$type, [string]$name) { [int][Enum]::Parse([type]"Microsoft.Office.Interop.PowerPoint.$type", $name) }
-  $result = [ordered]@{ pid = @(); powerpoint = $null; files = @(); notes = @() }
+  $result = [ordered]@{ pid = @(); powerpoint = $null; files = @(); notes = @(); failed = @() }
   $pp = $null; $open = New-Object Collections.ArrayList
   function Add-File([string]$path, [string]$what) { $script:result.files += [pscustomobject]@{ path = $path; what = $what } }
   function Note([string]$s) { $script:result.notes += $s }
   function New-Deck { $d = $pp.Presentations.Add(0); [void]$open.Add($d); $d }  # no window
   function Close-Deck($d) { try { $d.Close() } catch {}; $open.Remove($d); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($d) }
+  # A part that fails is recorded and its decks closed; the other parts still run.
+  function Fail-Section([string]$name, $err) {
+    $script:result.failed += "${name}: $($err.Exception.Message) (line $($err.InvocationInfo.ScriptLineNumber))"
+    foreach ($d in @($open)) { Close-Deck $d }
+  }
   function Add-Slide($d, [string]$layout, [string]$title) {
     $s = $d.Slides.Add($d.Slides.Count + 1, (E PpSlideLayout $layout))
     if ($title -and $s.Shapes.HasTitle) { $s.Shapes.Title.TextFrame.TextRange.Text = $title }
@@ -86,6 +91,7 @@ if ($Child) {
     $sound = Get-ChildItem C:\Windows\Media -File -Filter "Windows Ding.wav" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $sound) { $sound = Get-ChildItem C:\Windows\Media -File -Filter *.wav | Sort-Object Length | Select-Object -First 1 }
 
+    try {
     # ---- Transitions: one slide each. [effect, duration s, advance after s (0: on click only)]
     $d = New-Deck
     $transitions = @(
@@ -100,7 +106,10 @@ if ($Child) {
       $s = Add-Slide $d "ppLayoutText" "Transition: $($t[0] -replace '^ppEffect', '')"
       $s.Shapes.Item(2).TextFrame.TextRange.Text = "Duration $($t[1]) s`rAdvance: " + $(if ($t[2]) { "on click or after $($t[2]) s" } else { "on click" })
       $st = $s.SlideShowTransition
-      $st.EntryEffect = (E PpEntryEffect $t[0])
+      # Some PpEntryEffect values are animations only ("not valid for transitions"): noted, slide kept
+      # with a fade, so the deck still has one slide per name tried.
+      try { $st.EntryEffect = (E PpEntryEffect $t[0]) }
+      catch { Note "transitions: PowerPoint refuses $($t[0]) as a transition; a fade instead"; $st.EntryEffect = (E PpEntryEffect ppEffectFadeSmoothly) }
       try { if ($t[1] -gt 0) { $st.Duration = $t[1] } } catch { Note "transitions: $($t[0]) takes no duration: $($_.Exception.Message)" }
       $st.AdvanceOnClick = -1
       if ($t[2]) { $st.AdvanceOnTime = -1; $st.AdvanceTime = $t[2] }
@@ -116,6 +125,8 @@ if ($Child) {
     $f = Join-Path $Made "transitions-template.potx"; $d.SaveCopyAs($f, (E PpSaveAsFileType ppSaveAsOpenXMLTemplate)); Add-File $f "transitions.pptx as a template (for the .pot copy)"
     Close-Deck $d
 
+    } catch { Fail-Section "transitions" $_ }
+    try {
     # ---- Animations
     $d = New-Deck
     function Add-Effect($s, $shape, [string]$effect, [int]$trigger, [double]$duration, [double]$delay, [string]$direction, [switch]$Exit, [int]$level = 0) {
@@ -185,6 +196,8 @@ if ($Child) {
     $d.Password = ""
     Close-Deck $d
 
+    } catch { Fail-Section "animations" $_ }
+    try {
     # ---- Comments
     $d = New-Deck
     $s1 = Add-Slide $d "ppLayoutText" "Comments on this slide"
@@ -207,6 +220,8 @@ if ($Child) {
     $f = Join-Path $Made "comments.pptx"; $d.SaveAs($f, $pptx); Add-File $f "comments by three authors on two slides, a thread of two replies on slide 1"
     Close-Deck $d
 
+    } catch { Fail-Section "comments" $_ }
+    try {
     # ---- Media: a video PowerPoint makes, a Windows sound, a linked video.
     $clip = Join-Path $Made "media\clip.mp4"
     $d = New-Deck
@@ -236,6 +251,8 @@ if ($Child) {
     $f = Join-Path $Made "media.pptx"; $d.SaveAs($f, $pptx); Add-File $f "an embedded video with its poster frame, an embedded sound that plays automatically ($($sound.Name)), a video linked to made\media\clip.mp4"
     Close-Deck $d
 
+    } catch { Fail-Section "media" $_ }
+    try {
     # ---- A screened deck as an encrypted .ppt
     if ($EncryptSource) {
       $d = $pp.Presentations.Open($EncryptSource, -1, 0, 0); [void]$open.Add($d)
@@ -246,6 +263,8 @@ if ($Child) {
       Close-Deck $d
     }
 
+    } catch { Fail-Section "encrypted .ppt" $_ }
+    try {
     # ---- Each encrypted file opens with the test password and is what it should be.
     foreach ($x in @($result.files | Where-Object { $_.what -match 'encrypted' })) {
       $bytes = [IO.File]::ReadAllBytes($x.path)
@@ -257,6 +276,7 @@ if ($Child) {
       Note ("{0}: compound file {1}, {2}; opens with the test password: {3} slides" -f (Split-Path -Leaf $x.path), $cfb, $kind, $d.Slides.Count)
       Close-Deck $d
     }
+    } catch { Fail-Section "encryption check" $_ }
   } catch {
     $result.error = $_.Exception.Message + " (line " + $_.InvocationInfo.ScriptLineNumber + ")"
   } finally {
@@ -327,11 +347,14 @@ Write-Json ([ordered]@{
   powerpoint = $r.powerpoint
   note = "Decks PowerPoint built from a blank presentation (scripts\make-deck-edge-cases.ps1), and the encrypted copies; test password '$testPassword'. No downloads: PowerPoint's own content and Windows' sounds."
   error = $r.error
+  failed = @($r.failed)
   notes = @($r.notes)
   files = $files
 }) (Join-Path $made "manifest.json")
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 $files | ForEach-Object { "{0}: {1}" -f $_.file, $(if ($_.error) { "FAILED ($($_.error))" } else { "$($_.bytes) bytes" }) }
 @($r.notes) | ForEach-Object { "note: $_" }
+@($r.failed) | ForEach-Object { "FAILED part: $_" }
 if ($r.error) { "FAILED: $($r.error)"; exit 1 }
+if (@($r.failed).Count) { exit 1 }
 "made $($files.Count) files; made\manifest.json"
