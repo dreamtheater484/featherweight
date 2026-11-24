@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "draw/Images.h"
 #include "draw/Theme.h"
 #include "pkg/Odf.h"
 #include "pkg/Snapshot.h"
@@ -270,6 +271,7 @@ class Converter {
   std::string Line(const Chain& chain, bool connector) const;
   std::string Effects(const Chain& chain) const;
   std::string Image(std::string_view href);  // the part name in ppt/media, or empty
+  draw::Size NaturalSize(const std::string& media) const;  // points, as the picture records it; 0 when unknown
 
   // Text
   struct Runs;
@@ -466,6 +468,16 @@ std::string Converter::Image(std::string_view href) {
   name = "image" + N(static_cast<int64_t>(media_.size()) + 1) + "." + ext;
   media_.emplace_back(name, std::move(bytes));
   return name;
+}
+
+draw::Size Converter::NaturalSize(const std::string& media) const {
+  for (const auto& [name, bytes] : media_)
+    if (name == media) {
+      // Only the header is read.
+      if (auto image = draw::Image::Open(bytes)) return image->NaturalSize();
+      break;
+    }
+  return {};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -835,7 +847,12 @@ void Converter::Sp(xml_node el, xml_node text, const std::string& geometry, cons
   std::string ph;
   if (cls == "title") ph = "<p:ph type=\"title\"/>";
   else if (cls == "subtitle") ph = "<p:ph type=\"subTitle\" idx=\"" + N(++part.bodies) + "\"/>";
-  else if (cls == "outline" || cls == "text") ph = "<p:ph idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "outline" || cls == "text" || cls == "object") ph = "<p:ph idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "graphic") ph = "<p:ph type=\"pic\" idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "chart") ph = "<p:ph type=\"chart\" idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "table") ph = "<p:ph type=\"tbl\" idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "orgchart") ph = "<p:ph type=\"dgm\" idx=\"" + N(++part.bodies) + "\"/>";
+  else if (cls == "header" || cls == "notes" || cls == "handout") return;  // slides have none
   else if (cls == "date-time") ph = "<p:ph type=\"dt\" sz=\"half\" idx=\"10\"/>";
   else if (cls == "footer") ph = "<p:ph type=\"ftr\" sz=\"quarter\" idx=\"11\"/>";
   else if (cls == "page-number") ph = "<p:ph type=\"sldNum\" sz=\"quarter\" idx=\"12\"/>";
@@ -855,6 +872,24 @@ void Converter::Picture(xml_node el, xml_node image, const Box& box, const Chain
          part.Rel("image", "../media/" + media) + "\"";
   const double opacity = Opacity(Prop(chain, kGraphic, "draw:image-opacity"));
   out += opacity < 0.9995 ? "><a:alphaModFix amt=\"" + N(std::llround(opacity * 100000)) + "\"/></a:blip>" : "/>";
+  // A crop: fo:clip's "rect(top, right, bottom, left)", lengths of the picture at its own size.
+  if (std::string_view clip = Prop(chain, kGraphic, "fo:clip"); clip.starts_with("rect(")) {
+    clip.remove_prefix(5);
+    double side[4] = {0, 0, 0, 0};
+    for (double& s : side) {
+      while (!clip.empty() && (clip.front() == ' ' || clip.front() == ',')) clip.remove_prefix(1);
+      const size_t end = clip.find_first_of(" ,)");
+      const auto pt = odf::Points(clip.substr(0, end));
+      s = pt ? *pt : 0;  // "auto": none
+      clip.remove_prefix(end == std::string_view::npos ? clip.size() : end);
+    }
+    const draw::Size natural = NaturalSize(media);
+    if (natural.width > 0 && natural.height > 0 && (side[0] || side[1] || side[2] || side[3])) {
+      auto pct = [](double v, double of) { return N(std::llround(std::clamp(v / of, -10.0, 10.0) * 100000)); };
+      out += "<a:srcRect l=\"" + pct(side[3], natural.width) + "\" t=\"" + pct(side[0], natural.height) + "\" r=\"" +
+             pct(side[1], natural.width) + "\" b=\"" + pct(side[2], natural.height) + "\"/>";
+    }
+  }
   out += "<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>" + Xfrm(box) + Preset("rect") + Fill(chain, kGraphic, part) +
          Line(chain, false) + Effects(chain) + "</p:spPr></p:pic>";
 }

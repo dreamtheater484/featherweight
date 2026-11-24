@@ -49,6 +49,10 @@ const std::string kStyles = std::string("<?xml version=\"1.0\" encoding=\"UTF-8\
     "<draw:frame presentation:style-name=\"a2\" svg:x=\"0.5in\" svg:y=\"0.5in\" svg:width=\"9in\" svg:height=\"1in\" "
     "presentation:class=\"title\" presentation:placeholder=\"false\"><draw:text-box><text:p><text:span text:style-name=\"a3\">"
     "Click to edit Master title style</text:span></text:p></draw:text-box></draw:frame>"
+    "<draw:frame svg:x=\"0.5in\" svg:y=\"2in\" svg:width=\"9in\" svg:height=\"3in\" presentation:class=\"object\">"
+    "<draw:text-box><text:p>Click to edit Master text styles</text:p></draw:text-box></draw:frame>"
+    "<draw:frame svg:x=\"0in\" svg:y=\"0in\" svg:width=\"1in\" svg:height=\"1in\" presentation:class=\"header\">"
+    "<draw:text-box><text:p>Header</text:p></draw:text-box></draw:frame>"
     "</style:master-page></office:master-styles></office:document-styles>";
 
 const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content") + std::string(kNs) +
@@ -74,6 +78,7 @@ const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8
     "svg:stroke-color=\"#000000\" draw:marker-end=\"arrow\" draw:marker-end-width=\"3pt\"/></style:style>"
     "<style:style style:family=\"table-cell\" style:name=\"a10\"><style:table-cell-properties fo:background-color=\"#CCCCCC\" "
     "fo:border=\"1pt solid #000000\" style:vertical-align=\"middle\"/></style:style>"
+    "<style:style style:family=\"graphic\" style:name=\"a12\"><style:graphic-properties fo:clip=\"rect(0pt, 0.375pt, 0pt, auto)\"/></style:style>"
     "<style:style style:family=\"table-column\" style:name=\"a11\"><style:table-column-properties style:column-width=\"2in\"/></style:style>"
     "</office:automatic-styles><office:body><office:presentation>"
     // Slide 1
@@ -105,7 +110,7 @@ const std::string kContent = std::string("<?xml version=\"1.0\" encoding=\"UTF-8
     "<draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:enhanced-path=\"M 0 0 L 21600 0 21600 21600 0 21600 Z N\"/></draw:custom-shape>"
     "</draw:g>"
     "<draw:connector draw:name=\"Arrow 6\" draw:style-name=\"a9\" draw:type=\"line\" svg:x1=\"9in\" svg:y1=\"5in\" svg:x2=\"8in\" svg:y2=\"4.5in\"/>"
-    "<draw:frame draw:name=\"Picture 7\" svg:x=\"0in\" svg:y=\"0in\" svg:width=\"1in\" svg:height=\"1in\"><draw:image xlink:href=\"media/image1.png\"/>"
+    "<draw:frame draw:name=\"Picture 7\" draw:style-name=\"a12\" svg:x=\"0in\" svg:y=\"0in\" svg:width=\"1in\" svg:height=\"1in\"><draw:image xlink:href=\"media/image1.png\"/>"
     "<svg:desc>A dot</svg:desc></draw:frame>"
     "<presentation:notes><draw:page-thumbnail presentation:class=\"page\" svg:x=\"1in\" svg:y=\"0.75in\" svg:width=\"5in\" svg:height=\"3in\"/>"
     "<draw:frame presentation:class=\"notes\" svg:x=\"0.75in\" svg:y=\"4.75in\" svg:width=\"6in\" svg:height=\"4.5in\"><draw:text-box>"
@@ -155,6 +160,8 @@ TEST(slide_odp_converts_a_presentation) {
   CHECK_EQ(deck->Layouts().size(), size_t{1});
   CHECK(deck->Layouts()[0]->name == "Title Slide");
   CHECK(deck->Layouts()[0]->FindPlaceholder(slide::PlaceholderType::Title) != nullptr);
+  // A master page's other presentation objects are placeholders too (never drawn on slides); a header has no place.
+  CHECK(deck->Layouts()[0]->shapes.size() == 2 && deck->Layouts()[0]->shapes[1].placeholder.type == slide::PlaceholderType::Object);
   CHECK(deck->Layouts()[0]->root.child("p:cSld").child("p:bg"));
 
   const slide::Slide* s = deck->GetSlide(0);
@@ -212,6 +219,9 @@ TEST(slide_odp_converts_a_presentation) {
   CHECK(s->shapes[5].kind == Kind::Connector && s->shapes[5].flipH && s->shapes[5].flipV);
   CHECK(std::string_view(s->shapes[5].node.child("p:spPr").child("a:ln").child("a:tailEnd").attribute("type").value()) == "triangle");
   CHECK(s->shapes[6].kind == Kind::Picture && s->shapes[6].description == "A dot");
+  // Cropped by half its width (1 pixel at 96 dpi is 0.75 pt) on the right.
+  pugi::xml_node crop = s->shapes[6].node.child("p:blipFill").child("a:srcRect");
+  CHECK(std::string_view(crop.attribute("r").value()) == "50000" && std::string_view(crop.attribute("l").value()) == "0");
 
   // The speaker notes keep their text; a slide without notes has none.
   CHECK(s->NotesText() == L"Say hello\nthen wave");
