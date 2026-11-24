@@ -123,6 +123,24 @@ elseif(MODE STREQUAL "slide")
   run(slide-table 1366x768 light "insert:table|3x3;ribbon:Table Layout;ribboncheck" "${FILES}/simple.pptx")
   run(slide-text 800x600 light "edit:title;ribboncheck" "${FILES}/simple.pptx")
   run(slide-design 1366x768 dark "ribbon:Design;ribboncheck" "${FILES}/layouts.pptx")
+  # p3-anim: Transitions and Animations at each width (an animation added, the pane open, its effect
+  # picked); the gallery on a picked effect changes that effect only.
+  foreach(size ${sizes})
+    run(slide-transitions-${size} ${size} light "transition:4;ribbon:Transitions;ribboncheck" "${FILES}/simple.pptx")
+    run(slide-animations-${size} ${size} dark "insert:shape|rect|100,100,200,120;animadd:3;animpane;animpick:1;ribbon:Animations;ribboncheck"
+        "${FILES}/simple.pptx")
+  endforeach()
+  # Preview held half way: Push from the slide before, and an animation flying in.
+  run(slide-preview-transition 1024x700 light "slide:2;transition:3;preview:transition@500;ribboncheck" "${FILES}/simple.pptx")
+  run(slide-preview-animation 1024x700 dark "insert:shape|rect|100,100,200,120;animadd:3;preview:animations@250;ribboncheck"
+      "${FILES}/simple.pptx")
+  execute_process(COMMAND "${EXE}" --snapshot "${OUT}/slide-anim-change.png" --size 1366x768 --theme light
+                          --script "insert:shape|rect|100,100,200,120;animadd:3;animadd:12;animpick:2;anim:6;animdump"
+                          "${FILES}/simple.pptx"
+                  RESULT_VARIABLE code ERROR_VARIABLE err TIMEOUT 120)
+  if(NOT code EQUAL 0 OR NOT err MATCHES "animdump: 1\\. shape [0-9]+ Fly In option 0, click" OR NOT err MATCHES "animdump: 2\\. shape [0-9]+ Wipe option 0, click")
+    message(FATAL_ERROR "The Animations gallery didn't change the picked effect (${code}):\n${err}")
+  endif()
 else()
   message(FATAL_ERROR "MODE: screens, word, sheet or slide")
 endif()

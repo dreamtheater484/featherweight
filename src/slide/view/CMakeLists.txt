@@ -26,14 +26,16 @@ add_library(fwslideview STATIC PresentationView.cpp PresentationCommands.cpp Pre
   PresentationSlides.cpp PresentationDesign.cpp NotesEdit.cpp  # P2, p2-slides
   PresentationFile.cpp PresentationSave.cpp  # p2-model: saving and recovery
   PresentationText.cpp  # P2, p2-text
+  PresentationComments.cpp PresentationProtect.cpp  # P3, p3-review
   PresentationRibbon.cpp  # R1, r1-slide
+  PresentationAnim.cpp  # P3, p3-anim
   PictureExport.cpp)  # P3, p3-files
 target_include_directories(fwslideview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwslideview PUBLIC fwslideviewcore fwslideobjects)
 target_compile_options(fwslideview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 # Commands, menus and printing run once per click: compiled for size.
 set_source_files_properties(PresentationCommands.cpp PresentationPrint.cpp PresentationSlides.cpp PresentationDesign.cpp NotesEdit.cpp PresentationFile.cpp PresentationSave.cpp
-  PresentationText.cpp PresentationRibbon.cpp PictureExport.cpp PROPERTIES
+  PresentationText.cpp PresentationRibbon.cpp PresentationComments.cpp PresentationProtect.cpp PresentationAnim.cpp PictureExport.cpp PROPERTIES
   COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 
 if(TARGET fw_tests)

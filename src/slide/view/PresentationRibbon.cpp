@@ -1,7 +1,7 @@
 // The presentation tab's ribbon (R1, r1-slide; plan §5.6): PowerPoint 2021/365's tabs, groups and
 // buttons in PowerPoint's order, each on a command the shortcuts, menus and command search already
-// run. Buttons PowerPoint has and Featherweight doesn't are left out; Transitions, Animations, Table
-// Design and Chart Design come with the commands that fill them (P3). The table of every PowerPoint
+// run. Buttons PowerPoint has and Featherweight doesn't are left out; Table Design and Chart Design
+// come with the commands that fill them. Transitions and Animations are p3-anim's (PresentationAnim.cpp). The table of every PowerPoint
 // control and where it went is in r1-slide's state note; docs/r1-plan.md has the decisions.
 
 #include <algorithm>
@@ -15,6 +15,7 @@
 #include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
@@ -364,7 +365,10 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdSlideSizeMenu, icon::SlideSize, S::Large, L"Slide\nSize", L"S", S::Large);
   add(CmdFormatBackground, icon::FormatBackground, S::Large, L"Format\nBackground", L"F", S::Large);
 
-  // ---- Slide Show (Transitions and Animations come with P3's commands)
+  // ---- Transitions and Animations (p3-anim, PresentationAnim.cpp)
+  BuildAnimTabs(m);
+
+  // ---- Slide Show
   b.Tab(L"Slide Show", L"S");
   b.Group(L"Start Slide Show");
   add(CmdSlideShowFromStart, icon::Slideshow, S::Large, L"From\nBeginning", L"B");
@@ -389,6 +393,13 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Tab(L"Review", L"R");
   b.Group(L"Proofing");
   add(CmdSpelling, icon::Spelling, S::Large, L"Spelling", L"S");
+  // p3-review: PowerPoint 365's Comments group.
+  b.Group(L"Comments");
+  add(CmdNewComment, icon::Comment, S::Large, L"New\nComment", L"C");
+  split(CmdDeleteThread, icon::Delete, S::Large, L"Delete", L"D", {CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments});
+  add(CmdPrevComment, icon::ChevronUp, S::Large, L"Previous", L"V");
+  add(CmdNextComment, icon::ChevronDown, S::Large, L"Next", L"N");
+  split(CmdReviewPane, icon::Comment, S::Large, L"Show\nComments", L"H", {CmdReviewPane, CmdShowCommentMarkup});
 
   // ---- View
   b.Tab(L"View", L"W");
@@ -464,6 +475,17 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     f.setting = e.setting;
     f.choice = !e.setting;
     if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
+    m.file.push_back(std::move(f));
+  }
+  // p3-review: File > Info > Protect Presentation.
+  {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Info;
+    f.cmd = CmdEncryptPassword;
+    f.label = L"Protect Presentation: Encrypt with Password";
+    f.description = file_ && file_->Protected() ? L"A password is required to open this presentation."
+                                                : L"Require a password to open this presentation.";
+    f.glyph = icon::Lock;
     m.file.push_back(std::move(f));
   }
   // File › Export (P3, p3-files): the slides as PNG pictures.

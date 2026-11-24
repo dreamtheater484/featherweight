@@ -118,6 +118,7 @@ int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
 int RunSlides(const Options& options);
+int RunTiming(const Options& options);  // timing: transitions and animations per slide (P3, p3-anim)
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);

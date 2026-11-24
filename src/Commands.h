@@ -595,6 +595,36 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+  // Transitions and animations (P3, p3-anim): 3830-3879.
+  CmdTransitionPreview = 3830,   // Transitions > Preview: the current slide's transition in the editor
+  CmdTransitionStyles,           // Transitions > the gallery (its choices pick the effect)
+  CmdTransitionOptionsMenu,      // Transitions > Effect Options ▾
+  CmdTransitionOption,           // + index into the effect's options (up to 8)
+  CmdTransitionDuration = 3841,  // Transitions > Timing > Duration (a spin box, seconds)
+  CmdTransitionApplyAll,         // Transitions > Timing > Apply To All
+  CmdTransitionOnClick,          // Advance Slide: On Mouse Click
+  CmdTransitionAfter,            // Advance Slide: After
+  CmdTransitionAfterTime,        // the After box (seconds)
+  CmdAnimPreview,                // Animations > Preview: the current slide's animations in the editor
+  CmdAnimStyles,                 // Animations > the gallery (its choices set the selection's animation)
+  CmdAnimAddMenu,                // Animations > Add Animation ▾ (a gallery that adds one more)
+  CmdAnimOptionsMenu,            // Animations > Effect Options ▾
+  CmdAnimOption,                 // + index into the animation's options (up to 8)
+  CmdAnimPane = 3858,            // Animations > Animation Pane
+  CmdAnimStart,                  // Timing > Start (On Click, With Previous, After Previous)
+  CmdAnimDuration,               // Timing > Duration (seconds)
+  CmdAnimDelay,                  // Timing > Delay (seconds)
+  CmdAnimEarlier,                // Timing > Move Earlier
+  CmdAnimLater,                  // Timing > Move Later
+  CmdAnimRemove,                 // the Animation Pane's Remove (Delete there)
+  // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
+  // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
+  CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
+  CmdDeleteAllComments,           // Delete All Comments in This Presentation
+  CmdPrevComment,                 // Review > Previous: the thread before, across slides
+  CmdNextComment,
+  CmdShowCommentMarkup,           // Show Comments ▾ > Show Markup: the markers on the slides
+  CmdEncryptPassword = 3890,      // File > Info > Protect Presentation > Encrypt with Password
   // P3, p3-files: templates, picture export and .odp import, 3910-3949.
   CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
   CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder

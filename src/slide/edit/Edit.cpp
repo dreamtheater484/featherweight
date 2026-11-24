@@ -318,6 +318,19 @@ void Editor::Impl::Remove(std::string_view part) {
 
 void Editor::Impl::Touched(std::string_view slidePart, uint32_t shape) { work.shapes[pkg::PartKey(slidePart)].insert(shape); }
 
+void Editor::Impl::CommentsChanged(std::string_view slidePart) { work.comments.insert(pkg::PartKey(slidePart)); }
+
+namespace {
+
+// p3-review: slide `id`'s comments changed (the slide is reported with kComments).
+void ReportComments(Changes& out, uint32_t id, int index) {
+  auto it = std::find_if(out.slides.begin(), out.slides.end(), [&](const SlideChange& c) { return c.id == id; });
+  if (it == out.slides.end()) out.slides.push_back({id, index, kComments, {}});
+  else it->what |= kComments;
+}
+
+}  // namespace
+
 // ---- Calls and steps
 
 void Editor::Impl::BeginCall() {
@@ -430,6 +443,13 @@ void Editor::Impl::Publish() {
       }
     }
   }
+  for (const std::string& partKey : w.comments) {
+    for (const SlideEntry& e : list) {
+      if (pkg::PartKey(e.part) != partKey) continue;
+      step.comments.insert(e.id);
+      ReportComments(out, e.id, deck.SlideIndexOfId(e.id));
+    }
+  }
   if (ed.journal_) ed.journal_->Changed(store, keys);
 }
 
@@ -456,6 +476,7 @@ void Merge(Step& outer, Step& inner) {
   }
   outer.full = outer.full || inner.full;
   for (auto& [id, shapes] : inner.shapes) outer.shapes[id].insert(shapes.begin(), shapes.end());
+  outer.comments.insert(inner.comments.begin(), inner.comments.end());
 }
 
 }  // namespace
@@ -536,6 +557,10 @@ void Editor::Impl::Swap(Step& s, Changes& out) {
       it = out.slides.end() - 1;
     }
     it->shapes.insert(it->shapes.end(), shapes.begin(), shapes.end());
+  }
+  for (uint32_t id : s.comments) {
+    const int index = deck.SlideIndexOfId(id);
+    if (index >= 0) ReportComments(out, id, index);
   }
   if (ed.journal_) ed.journal_->Changed(store, keys);
 }

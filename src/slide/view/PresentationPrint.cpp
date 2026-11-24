@@ -20,6 +20,7 @@
 #include "draw/PrintJob.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlidePages.h"
 #include "text/Fonts.h"
@@ -340,10 +341,16 @@ void PresentationView::ApplyState(const FileState& s) {
 }
 
 bool PresentationView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (Ready() && Comments().ScriptOp(op, arg)) return true;  // p3-review: comment:new|text...
+  if (op == L"password") {  // p3-review: the password the next save writes (empty: none)
+    if (!SetFilePassword(arg)) std::fwprintf(stderr, L"password: this presentation can't be protected\n");
+    return true;
+  }
   if (SlideScriptOp(op, arg)) return true;  // P2: the slides' ops (PresentationSlides.cpp)
   if (PictureScriptOp(op, arg)) return true;  // P3, p3-files: slidepng:, slidepngs:
   if (text_->ScriptOp(op, arg, current_)) return true;  // p2-text: edit:, fontsize:, fontcolor:
   if (Ready() && Objects().ScriptOp(op, arg)) return true;  // p2-objects: insert:, shapefill:
+  if (AnimScriptOp(op, arg)) return true;  // p3-anim: transition:, anim:, animadd:, animpane, animpick:, animdump
   // slide:N (1-based) goes to a slide; printlayout:slides|notes|handouts6 chooses what prints and
   // exports; printhidden:1 prints hidden slides too; notes:0 hides the notes pane.
   if (op == L"slide") {

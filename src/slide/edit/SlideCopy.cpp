@@ -1,5 +1,7 @@
 #include "slide/edit/SlideCopy.h"
 
+#include "slide/edit/Comments.h"
+
 #include <random>
 
 namespace fw::slide::edit {
@@ -138,6 +140,7 @@ void SlideCopier::CopyRels(std::string_view src, std::string_view dst, std::stri
       for (const pkg::FoundRef& f : m_.registry.Find(root, pkg::RefKind::RelationshipId)) {
         if (f.attr && dropped.count(std::string(f.Value()))) pugi::xml_attribute(f.attr).set_value("");
       }
+      DropCommentRel(root);  // p3-review: the comments stayed behind, so their link goes
     }
   }
 }
