@@ -43,7 +43,8 @@ param(
   [switch]$Presenter,  # the presenter view on too (--show-presenter: on another monitor; the report's presenterView says if it was)
   [switch]$Windowed,   # --show-windowed: in windows, never full screen
   [switch]$IgnoreInput,
-  [int]$CpuLimit = 10
+  [int]$CpuLimit = 10,
+  [string]$ExpectSha256 = ''  # refuse (exit 5) if the exe's SHA-256 isn't this one at launch (an exe rebuilt in place)
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Exe) { $Exe = Join-Path $PSScriptRoot '..\..\..\build\Release\Featherweight.exe' }
@@ -189,6 +190,10 @@ while ((Get-Date) -lt $deadline) {
     $try++
     if (Test-Path $Report) { Remove-Item $Report }
     Write-Status "try ${try}: bench starts (idle $([math]::Round($idle)) s, console, not remote, not locked)"
+    if ($ExpectSha256 -and (Get-FileHash $Exe -Algorithm SHA256).Hash -ne $ExpectSha256.ToUpperInvariant()) {
+      Write-Status "the exe's SHA-256 isn't $ExpectSha256 any more (rebuilt?): not run"
+      exit 5
+    }
     $showArgs = @('--show', "`"$Deck`"", '--show-bench', "`"$Report`"")
     if ($Presenter) { $showArgs += '--show-presenter' }
     if ($Windowed) { $showArgs += '--show-windowed' }
