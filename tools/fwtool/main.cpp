@@ -325,7 +325,8 @@ int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
   fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
-  if (std::wstring(argv[1]) == L"convert" && (argc == 4 || (argc == 6 && std::wstring(argv[2]) == L"--password"))) {
+  // The count first: with no arguments argv[1] is null (fwtool alone then prints the usage below).
+  if ((argc == 4 || (argc == 6 && std::wstring(argv[2]) == L"--password")) && std::wstring(argv[1]) == L"convert") {
     const int at = argc == 6 ? 4 : 2;
     if (argc == 6) fwtool::legacyPassword = argv[3];
     fw::pkg::Status st;
