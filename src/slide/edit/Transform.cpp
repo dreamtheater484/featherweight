@@ -101,7 +101,9 @@ void Write(pugi::xml_node object, const Box& v) {
     if (on) (x.attribute(name) ? x.attribute(name) : x.append_attribute(name)).set_value("1");
     else x.remove_attribute(name);
   }
-  constexpr std::initializer_list<std::string_view> order = {"off", "ext", "chOff", "chExt"};
+  // static: a function-local constexpr initializer_list's array has automatic storage, which
+  // newer MSVC (CI's) rejects as not a constant expression.
+  static constexpr std::initializer_list<std::string_view> order = {"off", "ext", "chOff", "chExt"};
   pugi::xml_node off = Ensure(x, "off", order), ext = Ensure(x, "ext", order);
   SetInt(off, "x", v.x);
   SetInt(off, "y", v.y);
