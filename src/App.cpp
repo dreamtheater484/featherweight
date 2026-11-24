@@ -329,9 +329,11 @@ void App::Layout() {
     if (left - doc.left >= static_cast<LONG>(360 * ui_)) bannerArea.right = left;
   }
   banner_.Layout(bannerArea, ui_);
-  empty_.Layout(doc, ui_, settings_.recent, userTemplates_, settings_.showRecent);
+  // The start page only while it shows (0.1 ms a frame otherwise): closing the last tab lays it out again.
+  TabContent* v = Active();
+  if (!v) empty_.Layout(doc, ui_, settings_.recent, userTemplates_, settings_.showRecent);
   notes_.Layout(doc, ui_);
-  if (TabContent* v = Active()) v->SetViewport(doc, ui_);
+  if (v) v->SetViewport(doc, ui_);
 }
 
 std::wstring App::SearchStatus() {
