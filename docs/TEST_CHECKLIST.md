@@ -724,7 +724,13 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
   - slide-pages drew 152 of them, 2,285 of 2,517 slides;
   - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60.
 
-  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn. Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` 156 of 157. PowerPoint repairs the save of `odp\training\usgov-materials-to-support-learning-optional-slides.odp`, though it reads that `.odp` itself. The cause is on slide 2. Six lines in a group (the original's diagram) come from the `.odp` with zero height, and the converter maps their `draw:text-areas` through the viewBox (`src\slide\odp\OdpGeometry.cpp:475-485`, p3-files). That gives text rectangles of 0.6 to 2.3 billion EMU; one, `r="2336928472"`, is beyond 32 bits. The validator accepts them, since the schema's type is 64-bit. With only those six rectangles set to the shape's bounds, PowerPoint opens the deck without a repair (`build\odp-rect-confirm`). These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
+  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn.
+
+  Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` 156 of 157. These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
+  - PowerPoint repairs the save of `odp\training\usgov-materials-to-support-learning-optional-slides.odp`, though it reads that `.odp` itself.
+  - The cause is on slide 2. Six lines in a group (the original's diagram) come from the `.odp` with zero height, and the converter maps their `draw:text-areas` through the viewBox (`src\slide\odp\OdpGeometry.cpp:475-485`, p3-files).
+  - That gives text rectangles of 0.6 to 2.3 billion EMU; one, `r="2336928472"`, is beyond 32 bits. The validator accepts them, since the schema's type is 64-bit.
+  - With only those six rectangles set to the shape's bounds, PowerPoint opens the deck without a repair (`build\odp-rect-confirm`).
 - [ ] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). The coordinator restated the criterion on 2026-11-24 (p3-plan): SSIM ≥ 0.999 against P1's page renderer (`pagepngs`) at the same size. Against the PDF, the bar is ≥ 0.99, or ≥ 0.95 on slides with dense small text.
 
   Measured with `scripts\picture-export-check.ps1` on the public set (18 decks, every slide exported as PNG), 4.0's final code, 2026-11-24:
@@ -736,7 +742,7 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
   - Fixed: P1 to P4, P6, P8, P14 (4.0's flag: File, New, the template, 3 C against 4) and P16.
   - By design: P5 and P15.
   - Open: P9 and P12, a click more each inside the comment flow, which still ties. Also P10, P11 and P13, things comments can't do yet.
-- [ ] P1's and P2's parts above still pass. They do on 4.0's final code (6fe39e23, 2026-11-24). The exe's size and the quiet-PC timings of both parts are in the coordinator's 4.0 timing run (the row above).
+- [ ] P1's and P2's parts above still pass. They do on 4.0's final code (6fe39e23, 2026-11-24). The exe's size and the quiet-PC timings of both parts are in the coordinator's 4.0 timing run (the shipped exe's row above).
   - P1:
     - slides against PowerPoint's: 2,370 of 2,516 corpus slides, 94.20 %, and 92 of 97 public;
     - `fwtool check` 0 failed on all 170 original decks; the validator's counts on them are unchanged, since the files are;
