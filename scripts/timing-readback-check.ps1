@@ -3,7 +3,8 @@
   P3's read-back check for transitions and animations on decks Featherweight saved (docs/p3-plan.md,
   "Transitions and animations"; agreed with p3-anim). For each deck in -Decks:
   1. PowerPoint 2021 (scripts\powerpoint-readback.ps1 -SaveCopy) reads it through its object model
-     and saves it again as .pptx: <Out>\om\<name>.readback.json and <Out>\resaved\<stem>.pptx.
+     and saves it again as .pptx: <Out>\om\<name>.readback.json and <Out>\resaved\<name>.pptx (a
+     .pptx keeps its name; another kind keeps its extension too: links.ppsx.pptx).
   2. `fwtool timing` on Featherweight's file and on PowerPoint's save must print the same lines:
      PowerPoint understood the timing Featherweight wrote, and wrote back the same.
   3. The object model's numbers must match what `fwtool timing` reads from Featherweight's file: per
@@ -94,6 +95,8 @@ function Read-FileComments([string]$deck) {
       $threads = @()
       if ($srels) {
         foreach ($x in $srels.Relationships.Relationship) {
+          # Only comment parts: a hyperlink's target is a URL, which isn't a path (TargetMode="External").
+          if ($x.Type -notlike "*/relationships/comments" -or $x.TargetMode -eq "External") { continue }
           $cpart = [IO.Path]::GetFullPath([IO.Path]::Combine("C:\x\" + ($part -replace '/[^/]+$', '').Replace('/', '\'), $x.Target.Replace('/', '\'))).Substring(5).Replace('\', '/')
           if ($x.Target.StartsWith('/')) { $cpart = $x.Target.TrimStart('/') }
           if ($x.Type -like "*/2018/10/relationships/comments") {
@@ -141,7 +144,8 @@ foreach ($f in $files) {
   $key = $f.FullName.Substring($Decks.Length + 1) -replace '\\', '__'
   $r = [ordered]@{ deck = $f.FullName.Substring($Decks.Length + 1); status = "ok"; resave = @(); om = @(); comments = @(); commentThreads = 0 }
   if ($key -match '(^|__)protected__') { $r.status = "encrypted: not checked (fwtool timing takes no password)"; $results += $r; continue }
-  $copy = Join-Path $resaved ([IO.Path]::GetFileNameWithoutExtension($f.Name) + ".pptx")
+  # As powerpoint-readback.ps1 -SaveCopy names it: a .pptx by its name, another kind with its extension too.
+  $copy = Join-Path $resaved $(if ($f.Extension -ieq ".pptx") { $f.Name } else { $f.Name + ".pptx" })
   $json = Join-Path $om "$key.readback.json"
   if (-not (Test-Path $copy) -or -not (Test-Path $json)) { $r.status = "not read back"; $results += $r; continue }
   $ours = @(Get-TimingLines $f.FullName)
