@@ -70,6 +70,11 @@ constexpr wchar_t Settings = 0xE713;
 constexpr wchar_t Mail = 0xE715;
 constexpr wchar_t Contact = 0xE77B;  // a person
 constexpr wchar_t Report = 0xE9F9;   // a page with a chart
+constexpr wchar_t Pin = 0xE718;      // the start page's recent files (p3-start)
+constexpr wchar_t Unpin = 0xE77A;
+constexpr wchar_t Pinned = 0xE840;
+constexpr wchar_t View = 0xE890;     // an eye: show
+constexpr wchar_t Hide = 0xED1A;     // an eye, struck through
 
 // Custom vector icons drawn by DrawGlyph (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;

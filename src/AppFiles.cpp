@@ -199,19 +199,22 @@ void App::RecoverDocuments(bool open) {
 void App::CheckActiveFile() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
-  switch (v->CheckFileOnDisk()) {
-    case FileChange::None: return;
-    case FileChange::Changed:
-      banner_.Show(BannerKind::Warning,
-                   v->Title() + L" was changed by another program." +
-                       (v->Modified() ? L" Reloading it discards your changes here." : L""),
-                   {{kActReload, L"Reload", true}, {kActNotNow, L"Keep this version"}});
-      break;
-    case FileChange::Missing:
-      banner_.Show(BannerKind::Warning, v->Title() + L" was moved or deleted. Save it again to keep it.");
-      break;
-  }
+  const FileChange change = v->CheckFileOnDisk();
+  if (change == FileChange::None) return;
+  ShowFileNotice(v, change);
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ShowFileNotice(TabContent* v, FileChange change) {
+  // The tab owns the notice: ActivateTab and CloseTab put it away and bring it back.
+  fileNotice_ = change;
+  if (change == FileChange::Changed)
+    banner_.Show(BannerKind::Warning,
+                 v->Title() + L" was changed by another program." +
+                     (v->Modified() ? L" Reloading it discards your changes here." : L""),
+                 {{kActReload, L"Reload", true}, {kActNotNow, L"Keep this version"}}, 0, v);
+  else if (change == FileChange::Missing)
+    banner_.Show(BannerKind::Warning, v->Title() + L" was moved or deleted. Save it again to keep it.", {}, 0, v);
 }
 
 void App::ReloadActive() {
@@ -226,6 +229,7 @@ void App::ReloadActive() {
     return;
   }
   view->ApplyState(v->State());
+  std::erase_if(fileNotices_, [v](const auto& n) { return n.first == v; });  // the old view goes
   if (search_.IsOpen()) CloseSearch();
   panel_.Show(nullptr, false);
   toolbar_.Forget();  // the old view's own toolbar controls go with it
