@@ -50,8 +50,9 @@ std::vector<std::wstring> Monitors();
 // `Featherweight.exe --show <deck> [--show-bench <report.json>] [--show-capture <folder>]`: the deck
 // straight into a show, without the app's window: trying the show, the frame-rate bench, and the
 // pictures that check every transition and animation. Returns the exit code: 0, 1 when the deck
-// can't be opened, 2 when the bench dropped frames, 3 when the bench stopped on someone's input
-// (any key, click, wheel or mouse move, anywhere, or another program taking the focus).
+// can't be opened, 2 when the bench dropped frames, 3 when the bench was stopped early (Esc, Alt+F4,
+// closing it, or another program taking the focus). Other keys, clicks and the mouse change nothing
+// during the bench.
 int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {});
 
 }  // namespace fw::slide::show
