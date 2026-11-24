@@ -152,7 +152,7 @@ void PresentationView::StartPreview(bool transition, size_t fromEffect) {
     p->timing = show::ParseTiming(slide->timing);
     if (p->timing.main.steps.empty()) return;
     // The click the effect plays on: steps are the sequence's click groups.
-    const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+    const std::vector<ed::AnimEffect> seq = AnimNow().seq;
     // (A sequence that starts with the slide has that group as step 0; else the first click's is.)
     size_t clicks = 0;
     for (size_t i = 0; i < seq.size() && i <= fromEffect; ++i)
@@ -449,10 +449,27 @@ void PresentationView::AnimChanged() {
 // ---------------------------------------------------------------------------------------------
 // What the controls act on
 
+const PresentationView::AnimCache& PresentationView::AnimNow() {
+  if (!animCache_) animCache_ = std::make_unique<AnimCache>();
+  AnimCache& c = *animCache_;
+  edit::Editor* e = SlideEditor();
+  const uint64_t state = e ? e->StateId() : 0;
+  if (c.editor != e || c.state != state || c.edits != animEdits_ || c.slide != current_) {
+    const bool any = e && current_ < SlideCount();
+    c.seq = any ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
+    c.transition = any ? ed::GetTransition(*e, current_) : ed::TransitionInfo{};
+    c.editor = e;
+    c.state = state;
+    c.edits = animEdits_;
+    c.slide = current_;
+  }
+  return c;
+}
+
 std::vector<size_t> PresentationView::AnimTargets() {
   edit::Editor* e = SlideEditor();
   if (!e || !SlideCount()) return {};
-  const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+  const std::vector<ed::AnimEffect> seq = AnimNow().seq;
   const std::vector<uint32_t>& sel = Objects().Selection();
   std::vector<size_t> out;
   if (animPickedSlide_ == current_ && animPickedShapes_ == sel) {
@@ -472,7 +489,7 @@ void PresentationView::PickAnims(const std::vector<size_t>& effects) {
   std::sort(pick.begin(), pick.end());
   pick.erase(std::unique(pick.begin(), pick.end()), pick.end());
   // The shapes they animate are selected on the slide too, as PowerPoint does.
-  const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+  const std::vector<ed::AnimEffect> seq = AnimNow().seq;
   std::vector<uint32_t> shapes;
   for (size_t i : pick)
     if (i < seq.size() && seq[i].shape && std::find(shapes.begin(), shapes.end(), seq[i].shape) == shapes.end())
@@ -493,7 +510,7 @@ void PresentationView::ApplyAnim(int index, bool add) {
   if (!e || !SlideCount() || !CanEditSlides()) return;
   const std::vector<size_t> targets = AnimTargets();
   const std::vector<uint32_t> sel = Objects().Selection();
-  const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+  const std::vector<ed::AnimEffect> seq = AnimNow().seq;
   if (index < 0 || index > static_cast<int>(std::size(kAnimGallery))) return;
   const Presentation* deck = deck_->Model();
   const Slide* slide = deck ? const_cast<Presentation*>(deck)->GetSlide(current_) : nullptr;
@@ -530,7 +547,7 @@ void PresentationView::ApplyAnim(int index, bool add) {
 void PresentationView::BuildAnimTabs(RibbonModel& m) {
   edit::Editor* e = SlideEditor();
   const bool ready = Ready() && SlideCount() > 0 && e;
-  const ed::TransitionInfo tr = ready ? ed::GetTransition(*e, current_) : ed::TransitionInfo{};
+  const ed::TransitionInfo tr = ready ? AnimNow().transition : ed::TransitionInfo{};
   auto tab = [&](const wchar_t* name, const wchar_t* keyTip) {
     RibbonTab t;
     t.name = name;
@@ -641,7 +658,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
 
   // ---- Animations
   const std::vector<size_t> targets = ready ? AnimTargets() : std::vector<size_t>{};
-  const std::vector<ed::AnimEffect> seq = ready ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
+  const std::vector<ed::AnimEffect> seq = ready ? AnimNow().seq : std::vector<ed::AnimEffect>{};
   // What the selected effects have in common (none: the gallery shows None, the boxes are empty).
   int common = -1;
   ed::AnimTrigger trigger = ed::AnimTrigger::OnClick;
@@ -760,7 +777,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
   if (cmd < CmdTransitionPreview || cmd > CmdAnimByParagraph) return false;
   edit::Editor* e = SlideEditor();
   const bool ready = Ready() && SlideCount() > 0 && e;
-  const ed::TransitionInfo tr = ready ? ed::GetTransition(*e, current_) : ed::TransitionInfo{};
+  const ed::TransitionInfo tr = ready ? AnimNow().transition : ed::TransitionInfo{};
   const bool timed = tr.effect != ed::TransitionEffect::None && tr.effect != ed::TransitionEffect::Cut;
   if (cmd >= CmdTransitionOption && cmd < CmdTransitionOption + 8) {
     const std::vector<std::u16string> opts = ed::TransitionOptions(tr.effect);
@@ -772,7 +789,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
   }
   if (cmd >= CmdAnimOption && cmd < CmdAnimOption + 8) {
     const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
-    const std::vector<ed::AnimEffect> seq = ready ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
+    const std::vector<ed::AnimEffect> seq = ready ? AnimNow().seq : std::vector<ed::AnimEffect>{};
     ed::Anim a = t.empty() ? ed::Anim::Other : seq[t.front()].anim;
     int option = t.empty() ? -1 : seq[t.front()].option;
     bool editable = !t.empty();
@@ -824,7 +841,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
       s.label = L"Advance after (seconds)";
       break;
     case CmdAnimPreview:
-      s.enabled = ready && !ed::MainSequence(*e, current_).empty();
+      s.enabled = ready && !AnimNow().seq.empty();
       s.label = L"Preview the animations";
       break;
     case CmdAnimStyles:
@@ -839,7 +856,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     case CmdAnimAsOneObject:
     case CmdAnimByParagraph: {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
-      const std::vector<ed::AnimEffect> seq = ready ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
+      const std::vector<ed::AnimEffect> seq = ready ? AnimNow().seq : std::vector<ed::AnimEffect>{};
       const Slide* slide = ready && deck_->Model() ? const_cast<Presentation*>(deck_->Model())->GetSlide(current_) : nullptr;
       const bool sequence = SequenceApplies(slide, seq, t);
       if (cmd == CmdAnimOptionsMenu) {
@@ -864,7 +881,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
       break;
     case CmdAnimDuration: {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
-      const std::vector<ed::AnimEffect> seq = ready ? ed::MainSequence(*e, current_) : std::vector<ed::AnimEffect>{};
+      const std::vector<ed::AnimEffect> seq = ready ? AnimNow().seq : std::vector<ed::AnimEffect>{};
       s.enabled = !t.empty() && std::all_of(t.begin(), t.end(), [&](size_t k) { return seq[k].editable && seq[k].durationMs > 0; });
       s.label = L"Animation duration";
       break;
@@ -872,7 +889,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     case CmdAnimEarlier:
     case CmdAnimLater: {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
-      const size_t n = ready ? ed::MainSequence(*e, current_).size() : 0;
+      const size_t n = ready ? AnimNow().seq.size() : 0;
       s.enabled = !t.empty() && (cmd == CmdAnimEarlier ? t.front() > 0 : t.back() + 1 < n);
       s.label = cmd == CmdAnimEarlier ? L"Move animation earlier" : L"Move animation later";
       break;
@@ -913,7 +930,7 @@ bool PresentationView::AnimCommand(int cmd) {
       cmd == CmdAnimDuration || cmd == CmdAnimDelay)
     return true;  // their galleries, menus and boxes do the work
   if (!CanEditSlides()) return true;
-  const ed::TransitionInfo tr = ed::GetTransition(*e, current_);
+  const ed::TransitionInfo tr = AnimNow().transition;
   if (cmd >= CmdTransitionOption && cmd < CmdTransitionOption + 8) {
     ed::TransitionPatch p;
     p.option = cmd - CmdTransitionOption;
@@ -942,7 +959,7 @@ bool PresentationView::AnimCommand(int cmd) {
     case CmdAnimEarlier:
     case CmdAnimLater: {
       const std::vector<size_t> t = AnimTargets();
-      const size_t n = ed::MainSequence(*e, current_).size();
+      const size_t n = AnimNow().seq.size();
       if (t.empty() || (cmd == CmdAnimEarlier ? t.front() == 0 : t.back() + 1 >= n)) break;
       const size_t to = cmd == CmdAnimEarlier ? t.front() - 1 : t.front() + 1;
       if (Done(ed::MoveAnimations(*e, current_, t, to))) {
@@ -960,7 +977,7 @@ bool PresentationView::AnimCommand(int cmd) {
     case CmdAnimAsOneObject:
     case CmdAnimByParagraph: {
       // One picked effect per shape, the last first: each change leaves the effects before it in place.
-      const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+      const std::vector<ed::AnimEffect> seq = AnimNow().seq;
       std::vector<size_t> one;
       for (size_t k : AnimTargets())
         if (k < seq.size() && std::none_of(one.begin(), one.end(), [&](size_t j) { return seq[j].shape == seq[k].shape; }))
@@ -1018,10 +1035,10 @@ bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& 
     }
     PickAnims(pick);
   } else if (op == L"animdump") {
-    const ed::TransitionInfo t = ed::GetTransition(*e, current_);
+    const ed::TransitionInfo t = AnimNow().transition;
     fwprintf(stderr, L"animdump: transition %ls option %d, %.0f ms, click %d, after %.0f ms\n", W(ed::TransitionName(t.effect)).c_str(),
              t.option, t.durationMs, t.advanceOnClick ? 1 : 0, t.advanceAfterMs);
-    const std::vector<ed::AnimEffect> seq = ed::MainSequence(*e, current_);
+    const std::vector<ed::AnimEffect> seq = AnimNow().seq;
     const std::vector<size_t> targets = AnimTargets();
     for (size_t i = 0; i < seq.size(); ++i) {
       const ed::AnimEffect& a = seq[i];

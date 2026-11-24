@@ -55,6 +55,17 @@ class PresentationView::AnimationPane : public PanelContent {
   bool focus_ = false, pressed_ = false;
 };
 
+// The current slide's main sequence and transition, read again only when the editor, its state or the
+// slide changed (or after an edit notice): the ribbon queries every animation command each time it lays
+// out, and reading the sequence costs 0.05-0.1 ms in a 50-slide deck.
+struct PresentationView::AnimCache {
+  const edit::Editor* editor = nullptr;
+  uint64_t state = UINT64_MAX, edits = UINT64_MAX;
+  size_t slide = SIZE_MAX;
+  std::vector<edit::AnimEffect> seq;
+  edit::TransitionInfo transition;
+};
+
 // A preview playing over the slide in the editor: the slide's transition from the slide before it,
 // or its animations from an effect on, through the show's Timing reader and Animator.
 struct PresentationView::AnimPreview {
