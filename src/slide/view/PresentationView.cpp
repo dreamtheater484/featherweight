@@ -90,6 +90,10 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     error = Title() + L": " + why;
     return OpenResult::Failed;
   }
+  if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
+    untitled_ = L"Presentation" + std::to_wstring(newNumber_);
+    path_.clear();
+  }
   FileOpened();
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
@@ -100,6 +104,10 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();
   return OpenResult::Ok;
+}
+
+bool PresentationView::IsTemplate(const std::wstring& path) {
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm");
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }

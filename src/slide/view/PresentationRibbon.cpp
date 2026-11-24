@@ -466,6 +466,16 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
     m.file.push_back(std::move(f));
   }
+  // File › Export (P3, p3-files): the slides as PNG pictures.
+  for (const auto& [cmd, about] : {std::pair{CmdExportSlidePng, L"The slide you're on, as a picture"},
+                                   {CmdExportSlidesPng, L"Every slide as a picture, in a folder"}}) {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Export;
+    f.cmd = cmd;
+    f.glyph = icon::Picture;
+    f.description = about;
+    m.file.push_back(std::move(f));
+  }
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.
   if (const uint32_t id = Objects().TakeInserted()) m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
 }
