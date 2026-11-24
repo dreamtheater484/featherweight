@@ -208,7 +208,10 @@ foreach ($f in $files) {
     if ($pw) { $args_ += @("-Password", $pw) }
     if ($SaveCopy) {
       New-Item -ItemType Directory -Force $SaveCopy | Out-Null
-      $args_ += @("-CopyTo", "`"$(Join-Path ([IO.Path]::GetFullPath($SaveCopy)) ([IO.Path]::GetFileNameWithoutExtension($f.Key) + '.pptx'))`"")
+      # A .pptx keeps its name; another kind keeps its extension too (links.ppsx.pptx), so a .ppsx and a
+    # .pptx of the same name don't save over each other (timing-readback-check.ps1 names them alike).
+    $copyName = if ([IO.Path]::GetExtension($f.Key) -ieq ".pptx") { $f.Key } else { $f.Key + ".pptx" }
+    $args_ += @("-CopyTo", "`"$(Join-Path ([IO.Path]::GetFullPath($SaveCopy)) $copyName)`"")
     }
     $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $args_
     $finished = $p.WaitForExit($TimeoutSeconds * 1000)

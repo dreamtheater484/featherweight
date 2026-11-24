@@ -66,7 +66,8 @@ function Invoke-Compare([string[]]$CompareArgs) {
   & $Fwtool pdf-compare @CompareArgs 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath "$json.log" -Encoding utf8
 }
 
-$deckExt = '(?i)\.(pptx|pptm|ppsx|ppsm|potx|potm)$'
+# P3: PowerPoint 97-2003 and OpenDocument decks too (the .ppt and .odp corpora, -Folders ppt, odp).
+$deckExt = '(?i)\.(pptx|pptm|ppsx|ppsm|potx|potm|ppt|pps|pot|odp|otp)$'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $entries = @($manifest.files | Where-Object { $_.source -match $deckExt -and $Folders -contains ($_.source -split '/')[0] -and $_.pdf -and -not $_.error -and
                                               (-not $Only.Count -or $Only -contains $_.source) } | Sort-Object source)
