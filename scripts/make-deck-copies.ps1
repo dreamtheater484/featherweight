@@ -135,6 +135,9 @@ foreach ($folder in @("pptx") + $From) {
   if (-not (Test-Path $dir)) { throw "$corpusRoot has no $folder folder." }
   foreach ($f in Get-ChildItem $dir -Recurse -File | Where-Object { @(".pptx", ".ppsx", ".potx") -contains $_.Extension.ToLower() } | Sort-Object FullName) {
     $rel = $f.FullName.Substring($dir.Length + 1) -replace '\\', '/'
+    # Password-protected decks (made\protected\) would wait for their password; their encrypted
+    # .ppt copies are scripts\make-deck-edge-cases.ps1's.
+    if ($rel -match '(^|/)protected/') { continue }
     if ($Only -and -not @($Only | Where-Object { $rel -like "*$_*" }).Count) { continue }
     $sha = Get-Sha $f.FullName
     if ($folder -eq "pptx" -and -not $screened[$sha]) { "Not copied: pptx/$rel isn't a deck the screen passed (its hash isn't in tests\office\real-world.json)."; continue }

@@ -30,9 +30,12 @@ param(
   [string]$Out = "build\readback",
   [string]$Password,
   [string[]]$Compare = @(),
+  # Also PowerPoint's own save of each deck, as .pptx, into this folder (p3-anim's check: `fwtool
+  # timing` on Featherweight's file and on PowerPoint's save of it must print the same lines).
+  [string]$SaveCopy,
   [int]$TimeoutSeconds = 180,
   # Internal: one deck in this process.
-  [string]$Child, [string]$Source, [string]$ResultFile
+  [string]$Child, [string]$Source, [string]$ResultFile, [string]$CopyTo
 )
 
 $ErrorActionPreference = "Stop"
@@ -116,6 +119,10 @@ if ($Child) {
       $deck.slides += $slide
     }
     $result.deck = $deck
+    if ($CopyTo) {
+      if (Test-Path -LiteralPath $CopyTo) { Remove-Item -LiteralPath $CopyTo }
+      $d.SaveCopyAs($CopyTo, 24)  # ppSaveAsOpenXMLPresentation
+    }
   } catch {
     $result.error = $_.Exception.Message
   } finally {
@@ -178,8 +185,7 @@ $files = @(foreach ($d in $Decks) {
       ForEach-Object { $_ | Add-Member -NotePropertyName Key -NotePropertyValue ($_.FullName.Substring($base.Length + 1) -replace '\\', '__') -PassThru }
   } else { Get-Item -LiteralPath $d | ForEach-Object { $_ | Add-Member -NotePropertyName Key -NotePropertyValue $_.Name -PassThru } }
 })
-$outDir = [IO.Path]::GetFullPath((Join-Path $root $Out))
-if ([IO.Path]::IsPathRooted($Out)) { $outDir = $Out }
+$outDir = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { [IO.Path]::GetFullPath((Join-Path $root $Out)) }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-readback-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
@@ -200,6 +206,10 @@ foreach ($f in $files) {
     $pw = if ($Password) { $Password } elseif ($f.FullName -match '[\\/]protected[\\/]') { "featherweight" } else { $null }
     $args_ = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Child", "1", "-Source", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
     if ($pw) { $args_ += @("-Password", $pw) }
+    if ($SaveCopy) {
+      New-Item -ItemType Directory -Force $SaveCopy | Out-Null
+      $args_ += @("-CopyTo", "`"$(Join-Path ([IO.Path]::GetFullPath($SaveCopy)) ([IO.Path]::GetFileNameWithoutExtension($f.Key) + '.pptx'))`"")
+    }
     $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $args_
     $finished = $p.WaitForExit($TimeoutSeconds * 1000)
     if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
