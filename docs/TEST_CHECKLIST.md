@@ -736,4 +736,13 @@ Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Docum
   - Fixed: P1 to P4, P6, P8, P14 (4.0's flag: File, New, the template, 3 C against 4) and P16.
   - By design: P5 and P15.
   - Open: P9 and P12, a click more each inside the comment flow, which still ties. Also P10, P11 and P13, things comments can't do yet.
-- [ ] P1's and P2's parts above still pass.
+- [ ] P1's and P2's parts above still pass. They do on 4.0's final code (6fe39e23, 2026-11-24). The exe's size and the quiet-PC timings of both parts are in the coordinator's 4.0 timing run (the row above).
+  - P1:
+    - slides against PowerPoint's: 2,370 of 2,516 corpus slides, 94.20 %, and 92 of 97 public;
+    - `fwtool check` 0 failed on all 170 original decks; the validator's counts on them are unchanged, since the files are;
+    - `fuzz_pptx` and `fuzz_timing` 60 s each, no findings (`fuzz_timing` 470,868 runs).
+  - P2:
+    - `scripts\powerpoint-open-check-proof.ps1`: every broken deck is caught, and the clean one opens;
+    - the deck torture (P3's row above, which includes P2's edits): 0 failures, 0 new validator errors, 0 PowerPoint repairs; saved without edits, 0 repairs and 2,741 of 2,741 slides at SSIM ≥ 0.99;
+    - `scripts\build-deck.ps1`: fwtool check and the validator clean, PowerPoint opens it without a repair, 10 of 10 slides at SSIM ≥ 0.95 (slide 5, the chart, 0.961);
+    - `fuzz_pptx` with edits 60 s and replayed over the 146 real-world `.pptx` decks: no findings, and none open in `tests\fuzz\fuzz_pptx.cpp`.
