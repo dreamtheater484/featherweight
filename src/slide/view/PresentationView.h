@@ -181,7 +181,7 @@ class PresentationView : public TabContent {
   bool RibbonMenuState(int cmd, CommandState& s);
 
   // ---- Commands (PresentationCommands.cpp)
-  void StartShow(bool fromCurrent);
+  void StartShow(bool fromCurrent, bool presenterWindowed = false);
   void CopySlide(bool text, bool picture);
   void CopyNotes();
   void FollowLink(const SlideLink& link);

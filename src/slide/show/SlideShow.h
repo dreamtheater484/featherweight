@@ -36,6 +36,11 @@ struct ShowOptions {
   // Checking (--show-capture): no window on screen; every transition and animation step is drawn at
   // its middle and end, on a clock of its own, into PNG files in this folder.
   std::wstring captureDir;
+  // P3 (p3-present): the show in a window of its own instead of full screen (Alt+F5: with the presenter
+  // view beside it, as on one monitor; and any check that mustn't take the screen).
+  bool windowed = false;
+  // The presenter view: full screen on another monitor, or in a window of its own when windowed.
+  bool presenter = false;
 };
 
 // Starts a show of `deck` drawn by `renderer` (both outlive it). False when a show runs already or
@@ -52,6 +57,8 @@ std::vector<std::wstring> Monitors();
 // pictures that check every transition and animation. Returns the exit code: 0, 1 when the deck
 // can't be opened, 2 when the bench dropped frames, 3 when the bench stopped on someone's input
 // (any key, click, wheel or mouse move, anywhere, or another program taking the focus).
-int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {});
+// `--show-windowed`: the show in a window; `--show-presenter`: with the presenter view (P3).
+int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {},
+                  bool windowed = false, bool presenter = false);
 
 }  // namespace fw::slide::show

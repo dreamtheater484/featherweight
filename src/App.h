@@ -52,6 +52,7 @@ struct AppOptions {
   // --show <deck> [--show-bench <report.json>]: the deck straight into a slide show, without the
   // app's window (trying the show, and the frame-rate bench).
   std::wstring showPath, showBench, showCapture;
+  bool showWindowed = false, showPresenter = false;  // --show-windowed, --show-presenter (P3)
 };
 
 class App : public PdfHost, public DropHost {

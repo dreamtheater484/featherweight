@@ -43,6 +43,7 @@ constexpr CommandName kNames[] = {
     {CmdPresentation, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
+    {CmdPresenterView, L"Presenter view", L"Alt+F5"},
     {CmdNextPage, L"Next slide", L"Page Down"},
     {CmdPrevPage, L"Previous slide", L"Page Up"},
     {CmdFirstPage, L"First slide", L"Home"},
@@ -112,6 +113,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
   if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
+  if (vk == VK_F5 && alt && !ctrl && !shift) return CmdPresenterView;
   if (ctrl && !alt) {
     switch (vk) {
       case VK_OEM_PLUS:
@@ -154,6 +156,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
     case CmdPresentation:
     case CmdSlideShowFromStart:
     case CmdSlideShowFromCurrent:
+    case CmdPresenterView:
     case CmdZoomIn:
     case CmdZoomOut:
     case CmdZoomFitPage:
@@ -235,6 +238,7 @@ bool PresentationView::Execute(int cmd) {
     case CmdPresentation:
     case CmdSlideShowFromStart: StartShow(false); return true;
     case CmdSlideShowFromCurrent: StartShow(true); return true;
+    case CmdPresenterView: StartShow(true, true); return true;
     case CmdNextPage:
       if (current_ + 1 < n) GoToSlide(current_ + 1);
       return true;
@@ -609,7 +613,7 @@ void PresentationView::FollowLink(const SlideLink& link) {
 // ---------------------------------------------------------------------------
 // The slide show and the banner
 
-void PresentationView::StartShow(bool fromCurrent) {
+void PresentationView::StartShow(bool fromCurrent, bool presenterWindowed) {
   if (!Ready() || SlideCount() == 0 || fw::slide::show::Running()) return;
   Presentation* model = deck_->Model();
   if (!model) return;
@@ -620,6 +624,8 @@ void PresentationView::StartShow(bool fromCurrent) {
   o.owner = host_.ViewHwnd();
   o.monitor = showMonitor_ < static_cast<int>(fw::slide::show::Monitors().size()) ? showMonitor_ : -1;
   o.deckPath = path_;
+  // Alt+F5 (P3): the show and the presenter view, each in a window, as PowerPoint does on one monitor.
+  o.windowed = o.presenter = presenterWindowed;
   // The show ends on a slide: the tab shows it, as PowerPoint's normal view does.
   o.ended = [this](size_t slide) {
     showing_ = false;

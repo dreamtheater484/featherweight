@@ -343,13 +343,29 @@ bool Show::Create() {
   RECT r = mi.rcMonitor;
   capture_ = !opts_.captureDir.empty();
   if (capture_) r = {0, 0, 960, 540};  // off screen: never shown
-  hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, kClass, L"Slide show", WS_POPUP, r.left, r.top, r.right - r.left,
-                          r.bottom - r.top, opts_.owner, nullptr, GetModuleHandleW(nullptr), this);
-  if (!hwnd_) return false;
-  w_ = static_cast<UINT>(std::max(1L, r.right - r.left));
-  h_ = static_cast<UINT>(std::max(1L, r.bottom - r.top));
   draw::Size size = renderer_.SlideSize();
   if (size.width <= 0 || size.height <= 0) size = {720, 540};
+  DWORD style = WS_POPUP;
+  if (opts_.windowed && !capture_) {
+    // Half the work area's width, the slide's shape, in the monitor's left half (the presenter view
+    // takes the right): a fixed size, so the slide pictures never change size.
+    style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    const RECT& work = mi.rcWork;
+    const double maxW = (work.right - work.left) / 2.0 - 16, maxH = (work.bottom - work.top) * 0.7;
+    const long cw = std::max(320L, static_cast<long>(std::min(maxW, maxH * size.width / size.height)));
+    const long ch = std::max(180L, static_cast<long>(std::lround(cw * size.height / size.width)));
+    r = {work.left + 8, work.top + 8, work.left + 8 + cw, work.top + 8 + ch};
+    AdjustWindowRectEx(&r, style, FALSE, WS_EX_NOREDIRECTIONBITMAP);
+    OffsetRect(&r, work.left + 8 - r.left, work.top + 8 - r.top);
+  }
+  hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, kClass, L"Slide Show", style, r.left, r.top, r.right - r.left,
+                          r.bottom - r.top, opts_.owner, nullptr, GetModuleHandleW(nullptr), this);
+  if (!hwnd_) return false;
+  RECT client{};
+  GetClientRect(hwnd_, &client);
+  if (capture_) client = {0, 0, r.right - r.left, r.bottom - r.top};
+  w_ = static_cast<UINT>(std::max(1L, client.right - client.left));
+  h_ = static_cast<UINT>(std::max(1L, client.bottom - client.top));
   scale_ = std::min(w_ / size.width, h_ / size.height);
   slideW_ = size.width * scale_;
   slideH_ = size.height * scale_;
@@ -1755,7 +1771,8 @@ std::vector<std::wstring> Monitors() {
   return names;
 }
 
-int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir) {
+int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir, bool windowed,
+                  bool presenter) {
   fw::pkg::Status st;
   fw::pkg::Snapshot::Options so;
   auto snapshot = fw::pkg::Snapshot::Open(path, so, st);
@@ -1771,6 +1788,8 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
   o.deckPath = path;
   o.benchReport = benchReport;
   o.captureDir = captureDir;
+  o.windowed = windowed;
+  o.presenter = presenter;
   if (!Start(*deck, *renderer, o)) return 1;
   if (!captureDir.empty()) {
     int saved = g_show->CaptureAll();

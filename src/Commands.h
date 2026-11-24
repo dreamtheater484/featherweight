@@ -595,4 +595,7 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+
+  // Presenting (P3, p3-present): 3800-3829.
+  CmdPresenterView = 3800,  // Alt+F5: the show and the presenter view, each in a window of its own
 };

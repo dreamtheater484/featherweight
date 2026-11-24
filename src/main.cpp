@@ -74,6 +74,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     else if (a == L"--show") opts.showPath = next();
     else if (a == L"--show-bench") opts.showBench = next();
     else if (a == L"--show-capture") opts.showCapture = next();
+    else if (a == L"--show-windowed") opts.showWindowed = true;
+    else if (a == L"--show-presenter") opts.showPresenter = true;
     else if (!a.empty() && a[0] != L'-') opts.files.push_back(a);
   }
   LocalFree(argv);
