@@ -188,6 +188,7 @@ struct Text {
   std::optional<Ruler> ruler;
   std::vector<Field> fields;
   std::vector<TextLink> links;
+  bool placeholder = true;  // false: a text box's or shape's own text (other text: the document's style)
 };
 
 // Reads a text's records (TextHeaderAtom, TextCharsAtom or TextBytesAtom, StyleTextPropAtom,
@@ -207,16 +208,33 @@ struct Context {
   Scheme scheme;
   // Text styles by text type (0-8): the master's, with the document's defaults beneath.
   std::array<std::optional<MasterStyle>, 9> styles;
+  // The document's style for other text (its Environment's TextMasterStyleAtom), which text that isn't in a
+  // placeholder takes as PowerPoint does (a .pptx's defaultTextStyle), rather than the master's.
+  std::optional<MasterStyle> docOther;
   Pf basePf;
   Cf baseCf;
   bool notes = false;
 };
+
+// A master's shape as the shapes on slides that name it (hspMaster) inherit from it: its type and
+// properties.
+struct MasterShape {
+  uint16_t spt = 0;
+  std::map<uint16_t, uint32_t> props;
+  std::map<uint16_t, std::span<const uint8_t>> complex;
+};
+using ShapeIndex = std::map<uint32_t, MasterShape>;  // by shape id (unique in the document)
+// Adds a drawing's shapes to `index`.
+void IndexShapes(std::span<const uint8_t> drawing, ShapeIndex& index);
 
 // What a drawing (a slide's, master's or notes page's OfficeArt shapes) is written with.
 struct DrawingEnv {
   Context text;
   // The document's default shape properties (the drawing group's FOPT), beneath each shape's own.
   const std::map<uint16_t, uint32_t>* defaults = nullptr;
+  // The masters' shapes, for shapes that inherit from one (beneath the shape's own properties, above
+  // the defaults).
+  const ShapeIndex* masters = nullptr;
   // A BLIP store picture (pib, 1-based) as the relationship id of its media part; empty when none.
   std::function<std::string(uint32_t)> picture;
   // A hyperlink target (URL or ppaction) as a relationship id.

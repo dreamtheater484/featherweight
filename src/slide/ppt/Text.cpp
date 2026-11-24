@@ -38,17 +38,18 @@ int BaseType(int type) {
 }
 
 // The paragraph and character properties a text type has at `level` before its runs.
-void Layered(const Context& cx, int type, int level, Pf& pf, Cf& cf) {
+void Layered(const Context& cx, int type, int level, Pf& pf, Cf& cf, bool placeholder = true) {
   pf = cx.basePf;
   cf = cx.baseCf;
-  const auto layer = [&](int t) {
-    if (t < 0 || t > 8 || !cx.styles[t]) return;
+  const auto layer = [&](const std::optional<MasterStyle>& style) {
+    if (!style) return;
     for (int l = 0; l <= level && l < 5; ++l)
-      if (const auto& lv = cx.styles[t]->levels[l]) pf.Over(lv->first), cf.Over(lv->second);
+      if (const auto& lv = style->levels[l]) pf.Over(lv->first), cf.Over(lv->second);
   };
   const int base = BaseType(type);
-  layer(base);
-  if (type != base) layer(type);
+  if (base == kOther && !placeholder && cx.docOther) layer(cx.docOther);
+  else layer(cx.styles[base]);
+  if (type != base && type >= 0 && type <= 8) layer(cx.styles[type]);
 }
 
 uint32_t ColorOf(uint32_t c, const Context& cx, uint32_t fallback) {
@@ -359,7 +360,7 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
     const int level = pr ? std::min<int>(pr->level, 4) : 0;
     Pf pf;
     Cf base;
-    Layered(cx, text.type, level, pf, base);
+    Layered(cx, text.type, level, pf, base, text.placeholder);
     if (text.ruler) {
       if (text.ruler->leftMargin[level]) pf.leftMargin = *text.ruler->leftMargin[level], pf.mask |= 1u << kLeftMargin;
       if (text.ruler->indent[level]) pf.indent = *text.ruler->indent[level], pf.mask |= 1u << kIndent;

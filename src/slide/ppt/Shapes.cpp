@@ -108,6 +108,20 @@ class Writer {
     return out;
   }
 
+  // Every shape of a drawing (groups' too) into the index.
+  void Index(std::span<const uint8_t> drawing, ShapeIndex& index, int depth = 0) {
+    if (depth > 34 || index.size() > 200000) return;
+    Records rs(depth == 0 ? (Find(drawing, 0xF002) ? Find(drawing, 0xF002)->body : std::span<const uint8_t>()) : drawing);
+    for (Rec r; rs.Next(r);) {
+      if (r.type == 0xF003) {
+        Index(r.body, index, depth + 1);
+      } else if (r.type == 0xF004) {
+        Shape s = Read(r.body);
+        if (s.id) index[s.id] = MasterShape{s.spt, std::move(s.props), std::move(s.complex)};
+      }
+    }
+  }
+
  private:
   uint32_t Prop(const Shape& s, uint16_t pid, uint32_t def) const {
     if (auto it = s.props.find(pid); it != s.props.end()) return it->second;
@@ -219,6 +233,30 @@ class Writer {
       }
     }
     maxId_ = std::max(maxId_, s.id);
+    // A shape that names a master's shape (hspMaster) has that one's properties beneath its own, and
+    // its type when it has none of its own (FSP fHaveSpt).
+    if (env_.masters) {
+      const bool ownType = s.flags & 0x800;
+      uint32_t ref = s.props.count(0x0301) ? s.props.at(0x0301) : 0;
+      for (int depth = 0; ref && ref != s.id && depth < 8; ++depth) {
+        const auto it = env_.masters->find(ref);
+        if (it == env_.masters->end()) break;
+        const MasterShape& m = it->second;
+        if (!ownType && depth == 0) s.spt = m.spt;
+        for (const auto& [pid, v] : m.props) {
+          if (pid == 0x0301) continue;
+          auto [own, added] = s.props.emplace(pid, v);
+          // Boolean property sets (pid ...3F) merge bit by bit: a bit the shape doesn't set (its "use"
+          // bit 16 higher is clear) comes from the master's.
+          if (!added && (pid & 0x3F) == 0x3F) {
+            const uint32_t take = (v >> 16) & ~(own->second >> 16) & 0xFFFF;
+            own->second = (own->second & ~take) | (v & take) | (take << 16);
+          }
+        }
+        for (const auto& [pid, v] : m.complex) s.complex.emplace(pid, v);
+        ref = m.props.count(0x0301) ? m.props.at(0x0301) : 0;
+      }
+    }
     return s;
   }
 
@@ -587,6 +625,7 @@ class Writer {
     ReadText(s.textbox, t, env_.hyperlink);
     if (t.type < 0 || t.type > 8) t.type = s.placeholder >= 0 ? PlaceholderTextType(s) : kOther;
     if (env_.notes && s.placeholder == 0x0C) t.type = kNotes;
+    t.placeholder = s.placeholder >= 0;
     return true;
   }
 
@@ -653,6 +692,12 @@ class Writer {
 DrawingXmlOut DrawingXml(std::span<const uint8_t> drawing, const DrawingEnv& env) {
   Writer w(env);
   return w.Write(drawing);
+}
+
+void IndexShapes(std::span<const uint8_t> drawing, ShapeIndex& index) {
+  const DrawingEnv env;
+  Writer w(env);
+  w.Index(drawing, index);
 }
 
 }  // namespace fw::slide::ppt::detail

@@ -6,7 +6,9 @@
 #include "slide/ppt/Ppt.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -389,6 +391,7 @@ class Converter {
     DrawingEnv env;
     env.text = cx;
     env.defaults = &defaults_;
+    env.masters = &masterShapes_;
     env.master = master;
     env.picture = [this, &rels](uint32_t pib) -> std::string {
       const std::string target = Media(pib);
@@ -454,13 +457,21 @@ class Converter {
            solid + solid + solid + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>";
   }
 
-  // A PowerPoint 2007 or later master's own theme: RoundTripTheme12Atom's package.
-  static std::string RoundTripTheme(std::span<const uint8_t> master) {
+  // A PowerPoint 2007 or later master's own theme (RoundTripTheme12Atom's package), with the pictures
+  // it uses as media parts and `rels` its relationships. Empty when there's none, or when it refers to
+  // anything it doesn't carry.
+  std::string RoundTripTheme(std::span<const uint8_t> master, std::string& rels) {
+    rels.clear();
     const auto atom = Find(master, 0x040E);
     if (!atom || atom->body.size() < 22) return {};
     auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(atom->body.begin(), atom->body.end()));
     pkg::ZipReader zip;
     if (!snapshot || !zip.Open(*snapshot).Ok()) return {};
+    const auto read = [&zip](const std::string& name, std::vector<uint8_t>& bytes) {
+      for (const pkg::ZipEntry& e : zip.Entries())
+        if (e.name == name) return e.uncompressedSize <= (16u << 20) && zip.Read(e, bytes).Ok();
+      return false;
+    };
     for (const pkg::ZipEntry& e : zip.Entries()) {
       constexpr std::string_view kPrefix = "theme/theme/theme";
       if (e.name.rfind(kPrefix, 0) != 0 || e.name.size() < 4 || e.name.substr(e.name.size() - 4) != ".xml") continue;
@@ -470,6 +481,48 @@ class Converter {
       if (!doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8)) continue;
       const std::string_view root = doc.document_element().name();
       if (root.size() < 5 || root.substr(root.size() - 5) != "theme") continue;
+      // Its relationships: pictures become media parts of the deck; anything else, and any reference
+      // without a relationship, and the theme isn't used.
+      std::set<std::string> ids;
+      Rels out;
+      std::string relsXml;
+      std::vector<uint8_t> relsBytes;
+      const std::string relsName = "theme/theme/_rels/" + e.name.substr(12) + ".rels";
+      if (read(relsName, relsBytes)) {
+        pugi::xml_document r;
+        if (!r.load_buffer(relsBytes.data(), relsBytes.size())) return {};
+        for (pugi::xml_node rel : r.document_element().children()) {
+          const std::string id = rel.attribute("Id").as_string(), type = rel.attribute("Type").as_string(),
+                            target = rel.attribute("Target").as_string();
+          if (type.size() < 6 || type.substr(type.size() - 6) != "/image" || std::string_view(rel.attribute("TargetMode").as_string()) == "External")
+            return {};
+          // "../media/image1.jpeg" from theme/theme/.
+          if (target.rfind("../media/", 0) != 0 || target.find("..", 3) != std::string::npos) return {};
+          std::vector<uint8_t> picture;
+          if (!read("theme/media/" + target.substr(9), picture) || picture.empty()) return {};
+          std::string ext = target.substr(target.find_last_of('.') + 1);
+          for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (ext != "png" && ext != "jpeg" && ext != "jpg" && ext != "gif" && ext != "bmp" && ext != "tiff" && ext != "emf" && ext != "wmf") return {};
+          const std::string name = "image" + Num(static_cast<long long>(mediaParts_.size()) + 1) + "." + ext;
+          mediaParts_.push_back({name, std::move(picture)});
+          mediaExts_.insert(ext);
+          relsXml += "<Relationship Id=\"" + Esc(id) + "\" Type=\"" + Esc(type) + "\" Target=\"../media/" + name + "\"/>";
+          ids.insert(id);
+        }
+      }
+      bool known = true;
+      const std::function<void(pugi::xml_node)> walk = [&](pugi::xml_node n) {
+        for (pugi::xml_attribute a : n.attributes()) {
+          const std::string_view an = a.name();
+          if (an.rfind("r:", 0) == 0 && !ids.count(a.value())) known = false;
+        }
+        for (pugi::xml_node c : n.children()) walk(c);
+      };
+      walk(doc.document_element());
+      if (!known) return {};
+      if (!relsXml.empty())
+        rels = std::string(kDecl) + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" + relsXml +
+               "</Relationships>";
       return std::string(bytes.begin(), bytes.end());
     }
     return {};
@@ -487,6 +540,13 @@ class Converter {
     uint32_t nextLayoutId = 2147483648u;
     int themes = 0, layouts = 0;
 
+    // The masters' shapes, which shapes on slides inherit from.
+    for (const ListEntry& e : masters_)
+      if (const auto rec = Persist(e.persist); rec && (rec->type == 0x03F8 || rec->type == 0x03EE))
+        if (auto drawing = Find(rec->body, 0x040C)) IndexShapes(drawing->body, masterShapes_);
+    if (const auto rec = Persist(notesMaster_); rec && rec->type == 0x03F0)
+      if (auto drawing = Find(rec->body, 0x040C)) IndexShapes(drawing->body, masterShapes_);
+
     // Main masters first, each with a layout of its own; title masters become layouts of theirs.
     std::vector<Master> mains;
     std::map<uint32_t, std::pair<size_t, int>> layoutOf;  // master list id -> main master index, layout number
@@ -500,6 +560,7 @@ class Converter {
       m.cx.basePf = basePf_;
       m.cx.baseCf = baseCf_;
       for (int t = 0; t < 9; ++t) m.cx.styles[t] = envStyles_[t];
+      m.cx.docOther = envStyles_[kOther];
       Records rs(rec->body);
       for (Rec r; rs.Next(r);) {
         if (r.type == 0x0FA3 && r.inst < 9) {
@@ -547,9 +608,11 @@ class Converter {
       all.insert(all.end(), m.layouts.begin(), m.layouts.end());
       for (int l : all) layoutIds += "<p:sldLayoutId id=\"" + Num(++nextLayoutId) + "\" r:id=\"" + rels.Add("slideLayout", "../slideLayouts/slideLayout" + Num(l) + ".xml") + "\"/>";
       const int theme = ++themes;
-      std::string themeXml = RoundTripTheme(rec.body);
+      std::string themeRels;
+      std::string themeXml = RoundTripTheme(rec.body, themeRels);
       if (themeXml.empty()) themeXml = ThemeXml(m.cx, "Master " + Num(m.part));
       add("ppt/theme/theme" + Num(theme) + ".xml", std::move(themeXml), "application/vnd.openxmlformats-officedocument.theme+xml");
+      if (!themeRels.empty()) parts.push_back({"ppt/theme/_rels/theme" + Num(theme) + ".xml.rels", std::move(themeRels)});
       rels.Add("theme", "../theme/theme" + Num(theme) + ".xml");
       DrawingEnv env = EnvFor(m.cx, rels, nullptr, true);
       DrawingXmlOut d;
@@ -692,6 +755,7 @@ class Converter {
     defaults.baseCf = baseCf_;
     defaults.scheme = mains[0].cx.scheme;
     for (int t = 0; t < 9; ++t) defaults.styles[t] = envStyles_[t];
+    defaults.docOther = envStyles_[kOther];
     const long long cx = std::clamp<long long>(std::llround(slideW_ * kEmuPerUnit), 914400, 51206400);
     const long long cy = std::clamp<long long>(std::llround(slideH_ * kEmuPerUnit), 914400, 51206400);
     const long long ncx = std::clamp<long long>(std::llround(notesW_ * kEmuPerUnit), 1, 51206400);
@@ -718,8 +782,8 @@ class Converter {
                         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" "
                         "ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>";
     for (const std::string& ext : mediaExts_) {
-      const char* type = ext == "png" ? "image/png" : ext == "jpeg" ? "image/jpeg" : ext == "bmp" ? "image/bmp" : ext == "tiff" ? "image/tiff"
-                         : ext == "emf" ? "image/x-emf" : "image/x-wmf";
+      const char* type = ext == "png" ? "image/png" : ext == "jpeg" || ext == "jpg" ? "image/jpeg" : ext == "gif" ? "image/gif"
+                         : ext == "bmp" ? "image/bmp" : ext == "tiff" ? "image/tiff" : ext == "emf" ? "image/x-emf" : "image/x-wmf";
       types += "<Default Extension=\"" + ext + "\" ContentType=\"" + type + "\"/>";
     }
     parts.insert(parts.begin(), {"[Content_Types].xml", types + overrides + "</Types>"});
@@ -755,6 +819,7 @@ class Converter {
   std::array<std::optional<MasterStyle>, 9> envStyles_;
   std::span<const uint8_t> dgg_;
   std::map<uint16_t, uint32_t> defaults_;
+  ShapeIndex masterShapes_;
   std::map<uint32_t, std::string> hyperlinks_;
   std::vector<ListEntry> masters_, slides_, notes_;
   std::map<uint32_t, std::string> media_;
