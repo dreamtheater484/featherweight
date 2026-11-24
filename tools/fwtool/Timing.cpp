@@ -53,6 +53,7 @@ int RunTiming(const Options& options) {
       std::vector<std::u16string> opts = ed::TransitionOptions(t.effect);
       if (t.option >= 0 && t.option < static_cast<int>(opts.size()))
         std::printf(" (%s)", U8(opts[t.option]).c_str());
+      if (!t.element.empty()) std::printf(" <%s>", t.element.c_str());
       std::printf(" %.0f ms, click %d, after %.0f ms%s\n", t.durationMs, t.advanceOnClick ? 1 : 0, t.advanceAfterMs,
                   t.sound ? ", sound" : "");
       if (!why.empty()) std::printf("    animations not editable: %s\n", U8(why).c_str());
@@ -64,8 +65,9 @@ int RunTiming(const Options& options) {
         std::vector<std::u16string> ao = ed::AnimOptions(a.anim);
         if (a.anim != ed::Anim::Other && a.option >= 0 && a.option < static_cast<int>(ao.size()))
           std::printf(" (%s)", U8(ao[a.option]).c_str());
-        std::printf(", %s, %.0f ms, delay %.0f ms%s\n", TriggerName(a.trigger), a.durationMs, a.delayMs,
-                    a.editable ? "" : ", kept");
+        std::printf(", %s, %.0f ms, delay %.0f ms", TriggerName(a.trigger), a.durationMs, a.delayMs);
+        if (!a.editable) std::printf(", kept #%d/%d", a.presetId, a.presetSubtype);
+        std::printf("\n");
       }
     }
   }

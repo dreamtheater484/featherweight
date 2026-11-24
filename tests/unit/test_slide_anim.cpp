@@ -536,3 +536,64 @@ TEST(SlideAnimOddSequencesAreNotChanged) {
   CHECK_EQ(MainSequence(ed, 1).size(), 1u);
   CHECK(IdsUnique(x));
 }
+
+// A video's play step in the main sequence (p3-present's Playback › Start), with its media node and the
+// sequence that pauses it on a click, as PowerPoint writes them.
+TEST(SlideAnimMediaPlayStepTakesItsStart) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  const std::string play =
+      "<p:par><p:cTn id=\"5\" presetID=\"1\" presetClass=\"mediacall\" presetSubtype=\"0\" fill=\"hold\" nodeType=\"clickEffect\">"
+      "<p:stCondLst><p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:cmd type=\"call\" cmd=\"playFrom(0.0)\"><p:cBhvr>"
+      "<p:cTn id=\"6\" dur=\"12345\" fill=\"hold\"/><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl></p:cBhvr></p:cmd>"
+      "</p:childTnLst></p:cTn></p:par>";
+  const std::string media =
+      "<p:video><p:cMediaNode vol=\"80000\"><p:cTn id=\"7\" fill=\"hold\" display=\"0\"><p:stCondLst><p:cond delay=\"indefinite\"/>"
+      "</p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl></p:cMediaNode></p:video>"
+      "<p:seq concurrent=\"1\" nextAc=\"seek\"><p:cTn id=\"8\" restart=\"whenNotActive\" fill=\"hold\" evtFilter=\"cancelBubble\" "
+      "nodeType=\"interactiveSeq\"><p:stCondLst><p:cond evt=\"onClick\" delay=\"0\"><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl></p:cond>"
+      "</p:stCondLst><p:endSync evt=\"end\" delay=\"0\"><p:rtn val=\"all\"/></p:endSync><p:childTnLst><p:par><p:cTn id=\"9\" fill=\"hold\">"
+      "<p:stCondLst><p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:par><p:cTn id=\"10\" fill=\"hold\"><p:stCondLst>"
+      "<p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:par><p:cTn id=\"11\" presetID=\"2\" presetClass=\"mediacall\" "
+      "presetSubtype=\"0\" fill=\"hold\" nodeType=\"clickEffect\"><p:stCondLst><p:cond delay=\"0\"/></p:stCondLst><p:childTnLst>"
+      "<p:cmd type=\"call\" cmd=\"togglePause\"><p:cBhvr><p:cTn id=\"12\" dur=\"1\" fill=\"hold\"/><p:tgtEl><p:spTgt spid=\"3\"/>"
+      "</p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>"
+      "</p:childTnLst></p:cTn><p:nextCondLst><p:cond evt=\"onNextClick\" delay=\"0\"><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl></p:cond></p:nextCondLst></p:seq>";
+  std::string timing = TimingWith(play, "");
+  timing.insert(timing.find("</p:seq>") + 8, media);
+  CHECK(WriteSlide(ed, 0, std::string(kHead) + timing + "</p:sld>"));
+  std::u16string why;
+  std::vector<AnimEffect> seq = MainSequence(ed, 0, &why);
+  CHECK(why.empty());
+  CHECK_EQ(seq.size(), 1u);
+  if (seq.size() != 1) return;
+  CHECK(seq[0].anim == Anim::Other && seq[0].cls == AnimClass::Other && !seq[0].editable && seq[0].shape == 3);
+  CHECK(seq[0].presetId == 1 && seq[0].presetSubtype == 0);
+
+  // Start › Automatically: the play step follows the slide's start; the media node and the pause
+  // sequence stay as they were.
+  AnimTimingPatch automatically;
+  automatically.trigger = AnimTrigger::AfterPrevious;
+  CHECK(SetAnimationTiming(ed, 0, {0}, automatically));
+  std::string x = SlideXml(ed, 0);
+  CHECK(Has(x, "presetClass=\"mediacall\" presetSubtype=\"0\" fill=\"hold\" nodeType=\"afterEffect\""));
+  CHECK(Has(x, "evt=\"onBegin\""));
+  CHECK(Has(x, media));
+  CHECK(IdsUnique(x));
+  seq = MainSequence(ed, 0);
+  CHECK(!seq.empty() && seq[0].trigger == AnimTrigger::AfterPrevious);
+  // An animation added after it gets new ids; then back to In Click Sequence.
+  AnimSpec fade;
+  CHECK(AddAnimation(ed, 0, 2, fade));
+  AnimTimingPatch onClick;
+  onClick.trigger = AnimTrigger::OnClick;
+  CHECK(SetAnimationTiming(ed, 0, {0}, onClick));
+  x = SlideXml(ed, 0);
+  CHECK(Has(x, media));
+  CHECK(!Has(x, "evt=\"onBegin\""));
+  CHECK(IdsUnique(x));
+  seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 2u);
+  CHECK(seq.size() == 2 && seq[0].trigger == AnimTrigger::OnClick && seq[1].anim == Anim::Fade);
+}

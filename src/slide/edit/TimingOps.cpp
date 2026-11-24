@@ -207,6 +207,16 @@ TransitionInfo ReadTransition(pugi::xml_node root) {
       }
     }
   }
+  if (info.effect == TransitionEffect::Other) {
+    for (const auto& b : s.branches) {
+      pugi::xml_node e = EffectElement(b.transition);
+      if (!e) continue;
+      info.element = e.name();
+      for (pugi::xml_attribute a = e.first_attribute(); a; a = a.next_attribute())
+        info.element.append(" ").append(a.name()).append("=").append(a.value());
+      break;
+    }
+  }
   if (info.effect == TransitionEffect::None || info.effect == TransitionEffect::Cut) return info;
   info.durationMs = SpdMs(t.attribute("spd").value());
   for (const auto& b : s.branches) {
@@ -1225,6 +1235,8 @@ std::vector<AnimEffect> MainSequence(const Editor& ed, size_t slide, std::u16str
     a.durationMs = Length(e.cTn) * Repeat(e.cTn);
     a.delayMs = CondDelay(e.cTn);
     a.editable = c.def && c.editable;
+    a.presetId = static_cast<int>(Number(e.cTn.attribute("presetID").value(), 0));
+    a.presetSubtype = static_cast<int>(Number(e.cTn.attribute("presetSubtype").value(), 0));
     out.push_back(a);
   }
   return out;

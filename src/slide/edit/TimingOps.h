@@ -46,6 +46,7 @@ struct TransitionInfo {
   bool advanceOnClick = true;
   double advanceAfterMs = -1;  // -1: the slide doesn't advance by itself
   bool sound = false;          // a sound plays with it (kept; not changed here)
+  std::string element;         // Other: the effect's element as written, "p15:prstTrans prst=curtains"
 };
 TransitionInfo GetTransition(const Editor& ed, size_t slide);
 
@@ -94,6 +95,7 @@ struct AnimEffect {
   double durationMs = 0;  // how long it plays (0: at once)
   double delayMs = 0;
   bool editable = false;  // its kind, options and duration can change (a common animation as PowerPoint writes it)
+  int presetId = 0, presetSubtype = 0;  // as written (with cls, what an Other effect is: 26/0 is Bounce)
 };
 
 // The slide's main sequence, empty when it has none. `whyNot` gets why it can't be changed, empty
