@@ -19,7 +19,9 @@
   With the timings, P2's editing budgets on the 50-slide deck (fwtool bench --decks, through the edit
   API, each to the slide drawn again): a keystroke in a text box under 16 ms typical and 50 ms worst, new,
   duplicate, delete and move slide under 50 ms, undo under 50 ms; the ledger's deckEditing entries are
-  their baseline. A build without the deck edit API skips them with a note.
+  their baseline. A build without the deck edit API skips them with a note. P3's: nothing runs while
+  a deck with a 1080p video on its first slide is open in the editor (deck-video.pptx, made where
+  ffmpeg is on the PATH).
 
   Large files, with -Large: the very large files of plan section 11, which
   tests\office\make_budget_files.py makes in build\budgets: the 1-million-cell workbook ready in
@@ -242,7 +244,9 @@ if (($Timings -or $TrackTimings) -and $exe) {
   if (Test-Path $venvPython) {
     New-Item -ItemType Directory -Force $longDir | Out-Null
     & $venvPython -I tests\office\make_budget_files.py --decks $longDir | Out-Null
-    foreach ($d in "deck-50.pptx", "deck-typical.pptx") { if (Test-Path (Join-Path $longDir $d)) { $files += (Join-Path $longDir $d) } }
+    # deck-video.pptx (P3): nothing may run while a deck with a video on its first slide is open, and
+    # Media Foundation isn't loaded until a video plays. It's made only where ffmpeg is on the PATH.
+    foreach ($d in "deck-50.pptx", "deck-typical.pptx", "deck-video.pptx") { if (Test-Path (Join-Path $longDir $d)) { $files += (Join-Path $longDir $d) } }
   }
   ""
   & $Fwtool bench-app --runs $Runs --json $benchJson $exe @files | Out-Host

@@ -79,6 +79,8 @@ $all = [ordered]@{
   # OpenDocument presentation import (P3): every .odp converts to a presentation that opens, passes the check and reads without problems, or is refused.
   fuzz_odp     = @{ Seeds = @("$seeds\odp", "$regressions\odp"); MaxLen = 65536 }
   fuzz_timing  = @{ Seeds = @("$seeds\timing", "$regressions\timing"); MaxLen = 65536 }
+  # PowerPoint 97-2003 presentations (P3): every .ppt converts to a .pptx that opens, passes the check and reads, or is refused.
+  fuzz_ppt     = @{ Seeds = @("$seeds\ppt", "$regressions\ppt"); MaxLen = 131072 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

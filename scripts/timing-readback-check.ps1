@@ -8,8 +8,8 @@
      PowerPoint understood the timing Featherweight wrote, and wrote back the same.
   3. The object model's numbers must match what `fwtool timing` reads from Featherweight's file: per
      slide the transition's duration (when there is one), advance on click and after a time; per main
-     sequence effect, in order, the shape, paragraph, exit or not, trigger, duration and delay (1 ms
-     tolerance: PowerPoint reads Appear as 0.001 s).
+     sequence effect, in order, the shape, paragraph, exit or not, trigger, duration (one play) and
+     delay (1 ms tolerance: PowerPoint reads Appear as 0.001 s), and the repeat count.
   The summary goes to <Out>\summary.md and summary.json; exit 1 when a deck differs, 3 or 4 when
   PowerPoint couldn't run (as powerpoint-readback.ps1: run it again, or with -Reuse once it has).
 
@@ -51,9 +51,12 @@ function Read-Timing([string[]]$lines) {
     if ($l -match '^\s*slide (\d+): transition (.+?) (\d+) ms, click (\d), after (-?\d+) ms') {
       $cur = @{ transition = $Matches[2]; duration = [int]$Matches[3]; click = $Matches[4] -eq "1"; after = [int]$Matches[5]; effects = @() }
       $slides[[int]$Matches[1]] = $cur
-    } elseif ($cur -and $l -match '^\s*\d+\. shape (\d+)(?: paragraph (\d+))? (\w+) .*?, (click|with|after), (\d+) ms, delay (\d+) ms') {
+    } elseif ($cur -and $l -match '^\s*\d+\. shape (\d+)(?: paragraph (\d+))? (\w+) .*?, (click|with|after), (\d+) ms, delay (\d+) ms(?:, repeat (\d+|until the end of the slide))?') {
+      # Duration is one play, as PowerPoint's Timing shows it; repeat is printed only when it isn't 1.
+      $rep = $Matches[7]  # before another -match replaces $Matches
       $cur.effects += @{ shape = [int]$Matches[1]; paragraph = $(if ($Matches[2]) { [int]$Matches[2] + 1 } else { 0 })
-        class = $Matches[3]; trigger = $Matches[4]; duration = [int]$Matches[5]; delay = [int]$Matches[6] }
+        class = $Matches[3]; trigger = $Matches[4]; duration = [int]$Matches[5]; delay = [int]$Matches[6]
+        repeat = $(if (-not $rep) { 1 } elseif ($rep -match '^\d+$') { [int]$rep } else { $null }) }
     }
   }
   $slides
@@ -109,6 +112,8 @@ foreach ($f in $files) {
       if (-not [double]::IsInfinity($d) -and $e.effect -notmatch $mediaEffects -and [Math]::Abs([Math]::Round($d * 1000) - $y.duration) -gt 1) {
         $why += "duration $($e.duration) s (repeat $($e.repeat)) vs $($y.duration) ms" }
       if ([Math]::Abs([Math]::Round($e.delay * 1000) - $y.delay) -gt 1) { $why += "delay $($e.delay) s vs $($y.delay) ms" }
+      # Until the end of the slide: not compared (the object model's count for it isn't a number of plays).
+      if ($null -ne $y.repeat -and $null -ne $e.repeat -and [Math]::Abs([double]$e.repeat - $y.repeat) -gt 0.001) { $why += "repeat $($e.repeat) vs $($y.repeat)" }
       if ($why) { $r.om += "slide $($s.index) effect $($i + 1): " + ($why -join ", ") }
     }
   }

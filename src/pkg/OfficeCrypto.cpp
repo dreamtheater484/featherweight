@@ -477,6 +477,47 @@ struct DocKey {
   }
 };
 
+// An RC4 CryptoAPI EncryptionInfo (version 2.2 to 4.2: flags, header size, header, verifier): the key
+// for `password`, and the verifier to check it with.
+Result ReadCryptoApi(std::span<const uint8_t> info, std::wstring_view password, DocKey& key,
+                     std::span<const uint8_t>& verifier, std::span<const uint8_t>& verifierHash) {
+  if (info.size() < 12) return Result::Damaged;
+  const uint8_t* h = info.data();
+  const uint16_t major = U16(h), minor = U16(h + 2);
+  if (minor != 2 || major < 2 || major > 4) return Result::Unsupported;
+  const uint32_t eflags = U32(h + 4), headerSize = U32(h + 8);
+  if ((eflags & 0x24) != 0x04) return Result::Unsupported;  // CryptoAPI, not AES
+  if (headerSize < 32 || 12 + uint64_t(headerSize) + 4 + 16 + 16 + 4 + 20 > info.size()) return Result::Damaged;
+  const uint8_t* eh = h + 12;
+  const uint32_t algId = U32(eh + 8), algHash = U32(eh + 12);
+  uint32_t keyBits = U32(eh + 16);
+  if (keyBits == 0) keyBits = 40;
+  if ((algId != 0 && algId != 0x6801) || (algHash != 0 && algHash != 0x8004) || keyBits < 40 || keyBits > 128 || keyBits % 8)
+    return Result::Unsupported;
+  const uint8_t* v = eh + headerSize;
+  if (U32(v) != 16 || U32(v + 36) != 20) return Result::Damaged;
+  verifier = std::span(v + 20, 16);
+  verifierHash = std::span(v + 40, 20);
+  key.cryptoApi = true;
+  key.keyBytes = keyBits / 8;
+  Hasher sha1("SHA1");
+  key.base = sha1.Add(std::span(v + 4, 16)).Add(PasswordBytes(password)).Finish();  // H(salt + password)
+  return sha1.Ok() ? Result::Ok : Result::Unsupported;
+}
+
+// Whether the key is the password's: the verifier and its hash, one RC4 run with block 0's key.
+Result CheckVerifier(const DocKey& key, std::span<const uint8_t> verifier, std::span<const uint8_t> verifierHash) {
+  Bytes check(verifier.begin(), verifier.end());
+  check.insert(check.end(), verifierHash.begin(), verifierHash.end());
+  const Bytes k0 = key.Block(0);
+  if (k0.empty() || !Rc4(k0, Bytes(check), check.data())) return Result::Unsupported;
+  Hasher h(key.cryptoApi ? "SHA1" : "MD5");
+  const Bytes expected = h.Add(std::span(check).first(16)).Finish();
+  const bool right = h.Ok() && std::equal(expected.begin(), expected.end(), check.begin() + 16);
+  Wipe(check);
+  return right ? Result::Ok : Result::WrongPassword;
+}
+
 bool DecryptBlocks(const DocKey& key, Bytes& stream) {
   for (size_t at = 0; at < stream.size(); at += kRc4Block) {
     const Bytes k = key.Block(uint32_t(at / kRc4Block));
@@ -670,39 +711,11 @@ Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStrea
     if (!md5.Ok()) return Result::Unsupported;
   } else if (minor == 2 && major >= 2 && major <= 4) {
     // RC4 CryptoAPI: SHA-1 of the salted password.
-    const uint32_t eflags = U32(h + 4), headerSize = U32(h + 8);
-    if ((eflags & 0x24) != 0x04) return Result::Unsupported;  // CryptoAPI, not AES
-    if (headerSize < 32 || 12 + uint64_t(headerSize) + 4 + 16 + 16 + 4 + 20 > lKey) return Result::Damaged;
-    const uint8_t* eh = h + 12;
-    const uint32_t algId = U32(eh + 8), algHash = U32(eh + 12);
-    uint32_t keyBits = U32(eh + 16);
-    if (keyBits == 0) keyBits = 40;
-    if ((algId != 0 && algId != 0x6801) || (algHash != 0 && algHash != 0x8004) || keyBits < 40 || keyBits > 128 || keyBits % 8)
-      return Result::Unsupported;
-    const uint8_t* v = eh + headerSize;
-    if (U32(v) != 16 || U32(v + 36) != 20) return Result::Damaged;
-    salt = std::span(v + 4, 16);
-    verifier = std::span(v + 20, 16);
-    verifierHash = std::span(v + 40, 20);
-    key.cryptoApi = true;
-    key.keyBytes = keyBits / 8;
-    Hasher sha1("SHA1");
-    key.base = sha1.Add(salt).Add(PasswordBytes(password)).Finish();
-    if (!sha1.Ok()) return Result::Unsupported;
+    if (Result r = ReadCryptoApi(std::span(h, lKey), password, key, verifier, verifierHash); r != Result::Ok) return r;
   } else {
     return Result::Unsupported;
   }
-
-  // The verifier and its hash, one RC4 stream with block 0's key.
-  Bytes check(verifier.begin(), verifier.end());
-  check.insert(check.end(), verifierHash.begin(), verifierHash.end());
-  const Bytes k0 = key.Block(0);
-  if (k0.empty() || !Rc4(k0, Bytes(check), check.data())) return Result::Unsupported;
-  Hasher h2(key.cryptoApi ? "SHA1" : "MD5");
-  const Bytes expected = h2.Add(std::span(check).first(16)).Finish();
-  const bool right = std::equal(expected.begin(), expected.end(), check.begin() + 16);
-  Wipe(check);
-  if (!right) return Result::WrongPassword;
+  if (Result r = CheckVerifier(key, verifier, verifierHash); r != Result::Ok) return r;
 
   // Whole streams, block numbers from their start; then the parts that weren't encrypted back.
   Bytes wordPlain = *word, tablePlain = *table;
@@ -718,6 +731,32 @@ Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStrea
   out.wordDocument = std::move(wordPlain);
   out.tableStream = std::move(tablePlain);
   return Result::Ok;
+}
+
+Rc4Key::~Rc4Key() {
+  Wipe(base_);
+}
+
+Result Rc4Key::Open(std::span<const uint8_t> info, std::wstring_view password) {
+  DocKey key;
+  std::span<const uint8_t> verifier, verifierHash;
+  Result r = ReadCryptoApi(info, password, key, verifier, verifierHash);
+  if (r == Result::Ok) r = CheckVerifier(key, verifier, verifierHash);
+  if (r != Result::Ok) return r;
+  Wipe(base_);
+  base_ = key.base;
+  keyBytes_ = key.keyBytes;
+  return Result::Ok;
+}
+
+bool Rc4Key::Decrypt(uint32_t block, std::span<uint8_t> bytes) const {
+  if (base_.empty()) return false;
+  DocKey key;
+  key.cryptoApi = true;
+  key.keyBytes = keyBytes_;
+  key.base = base_;
+  const Bytes k = key.Block(block);
+  return !k.empty() && (bytes.empty() || Rc4(k, bytes, bytes.data()));
 }
 
 }  // namespace fw::pkg::crypto

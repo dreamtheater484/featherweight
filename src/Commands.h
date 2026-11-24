@@ -595,6 +595,18 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+
+  // Presenting (P3, p3-present): 3800-3829.
+  CmdPresenterView = 3800,  // Alt+F5: the show and the presenter view, each in a window of its own
+  CmdUsePresenterView,      // Slide Show > Use Presenter View: F5 opens it on another monitor (on by default)
+  CmdInsertVideo,           // Insert > Video: a video file, embedded, with its first frame as the poster
+  CmdInsertAudio,           // Insert > Audio: an audio file, embedded, shown as a speaker
+  CmdMediaVolume,           // Playback > Volume ▾ (Low, Medium, High, Mute)
+  CmdMediaLoop,             // Playback > Loop until Stopped
+  CmdMediaHide,             // Playback > Hide While Not Playing (audio: Hide During Show)
+  CmdMediaFullScreen,       // Playback > Play Full Screen (video)
+  CmdMediaAcrossSlides,     // Playback > Play Across Slides (audio)
+  CmdMediaStart,            // Playback > Start ▾ (In Click Sequence, Automatically, When Clicked On)
   // Transitions and animations (P3, p3-anim): 3830-3879.
   CmdTransitionPreview = 3830,   // Transitions > Preview: the current slide's transition in the editor
   CmdTransitionStyles,           // Transitions > the gallery (its choices pick the effect)

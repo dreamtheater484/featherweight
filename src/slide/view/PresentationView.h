@@ -196,7 +196,7 @@ class PresentationView : public TabContent {
   bool RibbonMenuState(int cmd, CommandState& s);
 
   // ---- Commands (PresentationCommands.cpp)
-  void StartShow(bool fromCurrent);
+  void StartShow(bool fromCurrent, bool presenterWindowed = false);
   void CopySlide(bool text, bool picture);
   void CopyNotes();
   void FollowLink(const SlideLink& link);
@@ -337,14 +337,15 @@ class PresentationView : public TabContent {
   ViewHost& host_;
   std::wstring path_;
   std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  std::wstring imported_;  // a .ppt's or .odp's file name: the tab is its copy (P3, p3-ppt and p3-files)
   bool newDeck_ = false;
   int newNumber_ = 0;  // OpenAsNew: the file is a template, and the tab a new presentation
-  std::wstring imported_;  // P3: the OpenDocument presentation the tab was converted from
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).
   std::unique_ptr<fw::slide::show::SlideRenderer> showRenderer_;
   int showMonitor_ = -1;
+  bool usePresenter_ = true;  // P3: Slide Show > Use Presenter View
   bool showing_ = false;
   std::unique_ptr<text::Fonts> fonts_;  // printing's and Export PDF's text (page numbers, notes)
   size_t current_ = 0;

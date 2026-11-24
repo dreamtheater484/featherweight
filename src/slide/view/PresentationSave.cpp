@@ -49,9 +49,7 @@ void PresentationView::FileOpened() {
   PresentationFile& f = File();
   if (newNumber_) {
     f.New(newNumber_);
-  } else if (!imported_.empty()) {
-    f.Copy(untitled_, imported_.substr(0, imported_.find_last_of(L'.')) + L".pptx", false);
-  } else if (!fromBytes_ && !newDeck_) {
+  } else if (!fromBytes_ && !newDeck_ && imported_.empty()) {  // a converted .ppt or .odp is a copy (Load)
     // An encrypted file (p3-review) opened from its decrypted copy: the file's own stamp.
     if (!protected_.empty()) f.Opened(path_, protectedStamp_);
     else if (Presentation* deck = deck_->Model()) f.Opened(path_, deck->GetPackage().GetSnapshot().GetStamp());

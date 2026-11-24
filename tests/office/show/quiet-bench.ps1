@@ -34,7 +34,8 @@ param(
   [string]$Log = '',   # also append the status lines here
   [int]$Tries = 3,
   [double]$MaxHours = 12,
-  [switch]$AbortTest
+  [switch]$AbortTest,
+  [switch]$Presenter   # the presenter view on too (--show-presenter: on another monitor; the report's presenterView says if it was)
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Exe) { $Exe = Join-Path $PSScriptRoot '..\..\..\build\Release\Featherweight.exe' }
@@ -179,6 +180,7 @@ while ((Get-Date) -lt $deadline) {
     if (Test-Path $Report) { Remove-Item $Report }
     Write-Status "try ${try}: bench starts (idle $([math]::Round($idle)) s, console, not remote, not locked)"
     $showArgs = @('--show', "`"$Deck`"", '--show-bench', "`"$Report`"")
+    if ($Presenter) { $showArgs += '--show-presenter' }
     $p = Start-Process -FilePath $Exe -ArgumentList $showArgs -PassThru
     $null = $p.Handle  # keeps the exit code readable after the process ends
     if ($AbortTest) {

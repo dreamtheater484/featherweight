@@ -79,7 +79,9 @@ int App::Run(const AppOptions& opts) {
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
-  if (!opts.showPath.empty()) return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture);
+  if (!opts.showPath.empty())
+    return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture, opts.showWindowed, opts.showPresenter,
+                                           opts.showMediaReport);
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;

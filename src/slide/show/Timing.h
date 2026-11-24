@@ -105,10 +105,16 @@ struct Pose {
 
 enum class EffectClass : uint8_t { None, Entrance, Exit, Emphasis, Path, Verb, Media };
 
+// What a <p:cmd type="call"> tells a video or audio (P3, p3-present): playFrom(s), togglePause, pause,
+// resume, stop.
+enum class MediaCommand : uint8_t { None, Play, TogglePause, Pause, Resume, Stop };
+
 // One animated property over time (a <p:set>, <p:anim>, <p:animEffect>, <p:animScale>, <p:animRot>
-// or <p:animMotion>), with its times resolved relative to the start of its step.
+// or <p:animMotion>), with its times resolved relative to the start of its step. A Command (a
+// <p:cmd type="call">) poses nothing: it tells its target's media what to do when it begins, and takes
+// no time (the steps after it don't wait for the media).
 struct Behavior {
-  enum Kind : uint8_t { Set, Anim, Effect, Scale, Rotate, Motion };
+  enum Kind : uint8_t { Set, Anim, Effect, Scale, Rotate, Motion, Command };
   enum Attr : uint8_t { Visibility, Opacity, X, Y, W, H, Rotation, Other };
   struct Key {
     double time = 0;  // 0..1 of the duration
@@ -140,6 +146,9 @@ struct Behavior {
   bool hasFrom = false, hasTo = false, hasBy = false;
   // Motion: the path as points in slide fractions, relative to the target, already flattened.
   std::vector<std::pair<float, float>> path;
+  // Command: what, and for Play where from (ms into the media).
+  MediaCommand command = MediaCommand::None;
+  double commandFromMs = 0;
 
   double End() const;  // ms after the step starts
 };
@@ -160,6 +169,25 @@ struct Sequence {
   std::vector<Step> steps;
 };
 
+// A video or audio as the timing plays it (a <p:video> or <p:audio> under the root).
+struct MediaNode {
+  uint32_t spid = 0;
+  bool video = true;
+  float volume = 0.5f;          // 0..1 (cMediaNode vol, in 1/100000)
+  bool mute = false;
+  bool loop = false;            // repeatCount="indefinite": until stopped
+  bool showWhenStopped = true;  // false: hidden while it doesn't play
+  bool fullScreen = false;      // a video played full screen (p:video fullScrn)
+  int slides = 1;               // numSld: the slides it plays across
+};
+
+// A media command as it fires.
+struct MediaEvent {
+  uint32_t spid = 0;
+  MediaCommand command = MediaCommand::None;
+  double fromMs = 0;
+};
+
 struct Timing {
   Sequence main;
   std::vector<Sequence> triggers;
@@ -170,6 +198,7 @@ struct Timing {
   // Shapes whose text is built by paragraph (bldP build="p" and similar), sorted.
   std::vector<uint32_t> byParagraph;
   int unsupportedEffects = 0;  // played as appear (or not at all, for emphasis)
+  std::vector<MediaNode> media;  // P3: the slide's videos and audio
 };
 
 // Reads <p:timing>. A null node gives an empty timing. Never fails: what it can't read is left out.
@@ -226,12 +255,17 @@ class Animator {
   const std::vector<std::pair<TargetKey, Pose>>& Poses() const { return poses_; }
   // Targets that move in the running steps (whose sprites must be redrawn each frame).
   const std::vector<TargetKey>& Moving() const { return moving_; }
+  // The media commands that fired since the last call, in order (P3). Start and FinishAll drop
+  // theirs: a slide built at once (coming back to it, a preview) plays nothing.
+  std::vector<MediaEvent> TakeMediaEvents() { return std::move(events_); }
 
  private:
   struct Run {
     const Step* step = nullptr;
     double start = 0;
+    double fired = -1;  // its media commands that begin up to here (ms into the step) have fired
   };
+  void Fire(Run& r, double upTo);
   Pose* Find(const TargetKey& key);
   void Apply(const Behavior& b, double local, bool settle);
   void Settle(const Step& step);
@@ -249,6 +283,7 @@ class Animator {
   std::vector<TargetKey> moving_;
   int mainNext_ = 0;
   std::vector<int> triggerNext_;
+  std::vector<MediaEvent> events_;
 };
 
 // ---------------------------------------------------------------------------------------------

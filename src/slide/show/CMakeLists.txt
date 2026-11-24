@@ -8,8 +8,10 @@ target_link_libraries(fwslideshow PUBLIC fwpkg fwcore)
 target_compile_options(fwslideshow PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 # The window, built against the app's shell (src/ui) and linked into the exe only.
-target_sources(Featherweight PRIVATE SlideShow.cpp DeckRenderer.cpp ShowDraw.cpp)  # ShowDraw: p3-anim, the editor's Preview
-target_link_libraries(Featherweight PRIVATE fwslideshow fwslide fwslide_render)
+target_sources(Featherweight PRIVATE SlideShow.cpp DeckRenderer.cpp PresenterView.cpp MediaPlayer.cpp
+  ShowDraw.cpp)  # ShowDraw: p3-anim, the editor's Preview
+# P3 media: Media Foundation's DLLs load at the first play (MediaPlayer.cpp); mfuuid is its GUIDs only.
+target_link_libraries(Featherweight PRIVATE fwslideshow fwslide fwslide_render mfuuid)
 
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slideshow.cpp")

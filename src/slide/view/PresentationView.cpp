@@ -87,11 +87,29 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
 OpenResult PresentationView::Load(const std::wstring& password, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  // p3-review: a password-protected presentation (or a recovered one) is a compound file, read whole
-  // and opened decrypted; until its password is given the tab shows the password card.
   pkg::crypto::Key key;
+  // A PowerPoint 97-2003 presentation (P3, p3-ppt) is converted, and the tab is a copy that Save As
+  // saves as a .pptx beside it: the .ppt itself is never written. An encrypted one asks for its
+  // password on the password card, and the .pptx it's saved as keeps the password.
+  std::vector<uint8_t> converted;
+  bool locked = false;
   bool odf = false;
-  if (!protected_.empty() || TakeProtected()) {
+  if (!newDeck_ && !fromBytes_ && protected_.empty() && ReadLegacyPresentation(path_, password, converted, why, locked)) {
+    if (converted.empty()) {
+      if (locked && why.empty()) {
+        needPassword_ = true;
+        return password.empty() ? OpenResult::NeedPassword : OpenResult::WrongPassword;
+      }
+      error = Title() + L": " + why;
+      return OpenResult::Failed;
+    }
+    needPassword_ = false;
+    if (locked) key = pkg::crypto::NewKey(password);
+    imported_ = Title();
+    deck_ = OpenDeckFromBytes(std::move(converted), why);
+  } else if (!protected_.empty() || TakeProtected()) {
+    // p3-review: a password-protected presentation (or a recovered one) is a compound file, read whole
+    // and opened decrypted; until its password is given the tab shows the password card.
     std::vector<uint8_t> plain;
     if (OpenResult r = Unlock(password, plain, key, error); r != OpenResult::Ok) return r;
     deck_ = OpenDeckFromBytes(std::move(plain), why);
@@ -101,6 +119,7 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
             : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
             : odf        ? OpenOpenDocument(path_, why)
                          : OpenDeck(path_, why);
+    if (odf) imported_ = Title();  // P3 (p3-files): an OpenDocument presentation is converted too
   }
   if (!deck_) {
     error = Title() + L": " + why;
@@ -109,10 +128,6 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
   if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
     untitled_ = L"Presentation" + std::to_wstring(newNumber_);
     path_.clear();
-  } else if (odf) {  // P3: converted, the tab is a copy that Save As saves as a .pptx; the file is left as it is
-    imported_ = path_;
-    untitled_ = FileNameOf(path_);
-    path_.clear();
   }
   FileOpened();
   if (!key.Empty()) {
@@ -120,16 +135,22 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
     protected_.clear();
     protected_.shrink_to_fit();
   }
-  if (!imported_.empty()) {
-    std::wstring base = untitled_.substr(0, untitled_.find_last_of(L'.'));
-    host_.ViewMessage(BannerKind::Info, untitled_ + L" is an OpenDocument presentation. Saving makes a new " + base +
-                                            L".pptx and leaves it as it is.");
-  }
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
-  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx")) && !util::UsingPrivateClipboard();
+  showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx") || EndsWithNoCase(path_, L".pps")) &&
+                 !util::UsingPrivateClipboard();
+  if (!imported_.empty() && !newNumber_) {  // a .pot or .otp is a template: a new presentation, as above
+    const size_t dot = path_.find_last_of(L'.');
+    const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
+    File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
+    host_.ViewMessage(BannerKind::Info, imported_ +
+                                            (odf ? L" is an OpenDocument presentation" : L" is a PowerPoint 97–2003 presentation") +
+                                            L". Saving makes a new " + stem + L".pptx and leaves it as it is.");
+    untitled_ = imported_;
+    path_.clear();  // Save is Save As
+  }
   SlideEditor();  // P2: the deck's Editor made and listened to before anything can edit it (OnEditorMade)
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();
@@ -137,7 +158,8 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
 }
 
 bool PresentationView::IsTemplate(const std::wstring& path) {
-  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm") || EndsWithNoCase(path, L".otp");
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm") || EndsWithNoCase(path, L".pot") ||
+         EndsWithNoCase(path, L".otp");  // .pot: p3-ppt, .otp: p3-files
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }

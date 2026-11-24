@@ -318,6 +318,8 @@ bool PresetPlayed(EffectClass cls, int id) {
       return id == 0 || id == 6 || id == 8;  // grow/shrink, spin
     case EffectClass::Path:
       return true;  // simplified (plan §8.2)
+    case EffectClass::Media:
+      return true;  // P3: its commands play the media
     default:
       return false;
   }
@@ -559,11 +561,40 @@ class Compiler {
     else if (name == "animScale") b.kind = Behavior::Scale;
     else if (name == "animRot") b.kind = Behavior::Rotate;
     else if (name == "animMotion") b.kind = Behavior::Motion;
-    else return;  // audio, video, cmd, animClr: P3 or not played
+    else if (name == "cmd" && Attr(node, "type") == "call") b.kind = Behavior::Command;  // P3: media
+    else return;  // audio, video (Timing::media), verbs, animClr: not played
     pugi::xml_node cBhvr = ChildP(node, "cBhvr");
     pugi::xml_node cTn = ChildP(cBhvr, "cTn");
     if (!cBhvr || !cTn || !ParseTarget(cBhvr, b.target)) return;
     b.effectClass = ctx.cls;
+    if (b.kind == Behavior::Command) {
+      // playFrom(seconds), togglePause, pause, resume, stop; anything else does nothing.
+      std::string_view c = Attr(node, "cmd");
+      std::string_view verb = c.substr(0, c.find('('));
+      if (verb == "playFrom" || verb == "play") {
+        b.command = MediaCommand::Play;
+        if (size_t open = c.find('('); open != std::string_view::npos) {
+          std::string_view arg = c.substr(open + 1);
+          double from;
+          if (ParseDouble(arg.substr(0, arg.find(')')), from)) b.commandFromMs = std::clamp(from * 1000, 0.0, 86400000.0);
+        }
+      } else if (verb == "togglePause") {
+        b.command = MediaCommand::TogglePause;
+      } else if (verb == "pause") {
+        b.command = MediaCommand::Pause;
+      } else if (verb == "resume") {
+        b.command = MediaCommand::Resume;
+      } else if (verb == "stop") {
+        b.command = MediaCommand::Stop;
+      } else {
+        return;
+      }
+      b.begin = ctx.begin + StartDelay(cTn);
+      b.duration = 0;  // the media plays on its own
+      ++behaviors_;
+      step_->behaviors.push_back(std::move(b));
+      return;
+    }
     if (pugi::xml_node names = ChildP(cBhvr, "attrNameLst"))
       if (pugi::xml_node first = ChildP(names, "attrName")) b.attr = ParseAttr(first.text().get());
     // An effect that isn't played as PowerPoint plays it appears (or disappears): only its
@@ -725,6 +756,25 @@ Timing ParseTiming(pugi::xml_node timing) {
   pugi::xml_node rootTn = ChildP(root, "cTn");
   bool haveMain = false;
   for (pugi::xml_node c = ChildP(rootTn, "childTnLst").first_child(); c; c = c.next_sibling()) {
+    if ((IsP(c, "video") || IsP(c, "audio")) && t.media.size() < 256) {
+      // P3: a video's or audio's settings.
+      pugi::xml_node node = ChildP(c, "cMediaNode");
+      pugi::xml_node cTn = ChildP(node, "cTn");
+      MediaNode m;
+      TargetKey key;
+      if (!node || !ParseTarget(node, key) || !key.spid) continue;
+      m.spid = key.spid;
+      m.video = IsP(c, "video");
+      double v;
+      if (ParseDouble(Attr(node, "vol"), v)) m.volume = static_cast<float>(std::clamp(v / 100000, 0.0, 1.0));
+      m.mute = Truthy(Attr(node, "mute"));
+      if (std::string_view show = Attr(node, "showWhenStopped"); !show.empty()) m.showWhenStopped = Truthy(show);
+      if (ParseDouble(Attr(node, "numSld"), v)) m.slides = static_cast<int>(std::clamp(v, 1.0, 10000.0));
+      m.loop = Attr(cTn, "repeatCount") == "indefinite";
+      m.fullScreen = m.video && Truthy(Attr(c, "fullScrn"));
+      t.media.push_back(m);
+      continue;
+    }
     if (!IsP(c, "seq")) continue;
     pugi::xml_node cTn = ChildP(c, "cTn");
     std::string_view type = Attr(cTn, "nodeType");
@@ -749,6 +799,7 @@ Timing ParseTiming(pugi::xml_node timing) {
   auto visit = [&](const Sequence& s) {
     for (const Step& step : s.steps) {
       for (const Behavior& b : step.behaviors) {
+        if (b.kind == Behavior::Command) continue;  // the media plays; the shape doesn't move
         AddUnique(t.targets, b.target);
         bool first = std::none_of(seen.begin(), seen.end(), [&](const TargetKey& k) { return Overlaps(k, b.target); });
         if (first && b.effectClass == EffectClass::Entrance) AddUnique(t.initiallyHidden, b.target);
@@ -761,6 +812,14 @@ Timing ParseTiming(pugi::xml_node timing) {
   };
   visit(t.main);
   for (const Sequence& s : t.triggers) visit(s);
+  // Hide While Not Playing (P3): the poster waits hidden; the show draws the video while it plays.
+  for (const MediaNode& m : t.media)
+    if (!m.showWhenStopped) {
+      TargetKey k;
+      k.spid = m.spid;
+      AddUnique(t.targets, k);
+      AddUnique(t.initiallyHidden, k);
+    }
   if (pugi::xml_node bld = ChildP(timing, "bldLst")) {
     for (pugi::xml_node p = bld.first_child(); p; p = p.next_sibling()) {
       if (!IsP(p, "bldP")) continue;
@@ -827,7 +886,17 @@ Pose* Animator::Find(const TargetKey& key) {
   return &poses_.back().second;
 }
 
+constexpr double kForever = 1e300;  // a step's media commands up to its end
+
+void Animator::Fire(Run& r, double upTo) {
+  for (const Behavior& b : r.step->behaviors)
+    if (b.kind == Behavior::Command && b.begin > r.fired && b.begin <= upTo && events_.size() < 1024)
+      events_.push_back({b.target.spid, b.command, b.commandFromMs});
+  r.fired = std::max(r.fired, upTo);
+}
+
 void Animator::Apply(const Behavior& b, double local, bool settle) {
+  if (b.kind == Behavior::Command) return;  // Fire tells the media
   double total = b.End() - b.begin;
   double p;
   bool ended = settle || local >= total;
@@ -955,6 +1024,7 @@ void Animator::Settle(const Step& step) {
 void Animator::StartStep(const Step* step, double now) { runs_.push_back({step, now}); }
 
 void Animator::Start(double now, bool begin) {
+  events_.clear();
   settled_.clear();
   history_.clear();
   historyNext_.clear();
@@ -981,7 +1051,10 @@ void Animator::BeginAuto(double now) {
 void Animator::Finish() {
   // Steps that would start after these run at once too: the whole chain ends.
   for (;;) {
-    for (const Run& r : runs_) Settle(*r.step);
+    for (Run& r : runs_) {
+      Fire(r, kForever);
+      Settle(*r.step);
+    }
     bool chained = !runs_.empty() && timing_ && mainNext_ < static_cast<int>(timing_->main.steps.size()) &&
                    timing_->main.steps[mainNext_].start != StepStart::Click &&
                    std::any_of(runs_.begin(), runs_.end(), [&](const Run& r) {
@@ -1012,7 +1085,16 @@ bool Animator::Trigger(uint32_t spid, double now) {
   for (size_t i = 0; i < timing_->triggers.size(); ++i) {
     const Sequence& s = timing_->triggers[i];
     if (s.triggerSpid != spid) continue;
-    if (triggerNext_[i] >= static_cast<int>(s.steps.size())) return false;
+    if (triggerNext_[i] >= static_cast<int>(s.steps.size())) {
+      // Done; but a click on a video pauses or plays it again each time (P3): a sequence of media
+      // commands only starts over.
+      const bool commands = !s.steps.empty() && std::all_of(s.steps.begin(), s.steps.end(), [](const Step& st) {
+        return std::all_of(st.behaviors.begin(), st.behaviors.end(),
+                           [](const Behavior& b) { return b.kind == Behavior::Command; });
+      });
+      if (!commands) return false;
+      triggerNext_[i] = 0;
+    }
     StartStep(&s.steps[triggerNext_[i]++], now);
     Update(now);
     return true;
@@ -1042,6 +1124,7 @@ void Animator::FinishAll(double now) {
     runs_.push_back({&timing_->main.steps[mainNext_++], now});
     Finish();
   }
+  events_.clear();  // built at once: nothing plays
 }
 
 void Animator::Update(double now) {
@@ -1052,6 +1135,7 @@ void Animator::Update(double now) {
     for (size_t i = 0; i < runs_.size(); ++i) {
       Run r = runs_[i];
       if (now < r.start + r.step->length) continue;
+      Fire(r, kForever);
       Settle(*r.step);
       runs_.erase(runs_.begin() + static_cast<std::ptrdiff_t>(i));
       const auto& steps = timing_->main.steps;
@@ -1068,8 +1152,10 @@ void Animator::Update(double now) {
 void Animator::Recompute(double now) {
   poses_ = settled_;
   moving_.clear();
-  for (const Run& r : runs_) {
+  for (Run& r : runs_) {
+    Fire(r, now - r.start);
     for (const Behavior& b : r.step->behaviors) {
+      if (b.kind == Behavior::Command) continue;
       Apply(b, now - r.start - b.begin, false);
       if (std::find(moving_.begin(), moving_.end(), b.target) == moving_.end()) moving_.push_back(b.target);
     }

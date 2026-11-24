@@ -23,6 +23,7 @@
 #include "slide/objects/ChartPart.h"
 #include "slide/objects/ObjectXml.h"
 #include "slide/render/SlideRender.h"
+#include "slide/show/MediaPlayer.h"
 #include "slide/view/Deck.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -51,6 +52,7 @@ constexpr float kFineNudge = 1;       // points: Ctrl+arrow
 constexpr float kGrid = 6;            // points: snapping when no guide matches
 constexpr UINT kMaxLayer = 4096;      // pixels: larger slides drag with outlines only
 constexpr size_t kMaxPictureFile = 64u << 20;
+constexpr size_t kMaxMediaFile = 1024u << 20;  // P3: a video or audio, embedded
 const D2D1_COLOR_F kGuideColor = Rgb(0xE8603C);  // smart guides, as PowerPoint's orange-red
 
 std::u16string U16(const wchar_t* s) { return std::u16string(reinterpret_cast<const char16_t*>(s)); }
@@ -102,6 +104,20 @@ bool HasText(pugi::xml_node body) {
 
 bool EmptyText(const ob::ObjectInfo& o) {
   return o.shape && o.shape->textNode && !o.placeholder && !o.shape->textBox && !HasText(o.shape->textNode);
+}
+
+// A media shape's kind: a:videoFile or a:quickTimeFile is a video; anything else (audio) not.
+bool MediaIsVideo(const fw::slide::Shape& sh) {
+  for (pugi::xml_node nv : sh.node.children())
+    for (pugi::xml_node pr : nv.children())
+      for (pugi::xml_node m : pr.children()) {
+        const char* n = m.name();
+        const char* colon = std::strchr(n, ':');
+        const std::string_view local = colon ? colon + 1 : n;
+        if (local == "videoFile" || local == "quickTimeFile") return true;
+        if (local == "audioFile" || local == "wavAudioFile" || local == "audioCd") return false;
+      }
+  return false;
 }
 
 std::vector<uint8_t> ReadFileBytes(const std::wstring& path) {
@@ -296,6 +312,14 @@ struct NamedCommand {
 constexpr NamedCommand kOther[] = {
     {CmdInsertShape, L"Insert shape", L""},
     {CmdInsertPicture, L"Insert pictures", L""},
+    {CmdInsertVideo, L"Insert video", L""},
+    {CmdInsertAudio, L"Insert audio", L""},
+    {CmdMediaVolume, L"Volume", L""},
+    {CmdMediaLoop, L"Loop until stopped", L""},
+    {CmdMediaHide, L"Hide while not playing", L""},
+    {CmdMediaFullScreen, L"Play full screen", L""},
+    {CmdMediaAcrossSlides, L"Play across slides", L""},
+    {CmdMediaStart, L"Start", L""},
     {CmdInsertTextBox, L"Insert a text box", L""},
     {CmdInsertTable, L"Insert a table", L""},
     {CmdInsertChart, L"Insert a chart", L""},
@@ -1932,10 +1956,30 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
       s.enabled = cells && (cmd == CmdTableSplitCell || r0 != r1 || c0 != c1);
       break;
     }
+    case CmdMediaVolume:
+    case CmdMediaStart:
+    case CmdMediaLoop:
+    case CmdMediaHide:
+    case CmdMediaFullScreen:
+    case CmdMediaAcrossSlides: {
+#if FW_SLIDE_EDIT
+      fw::slide::edit::MediaPlayback p;
+      bool video = false;
+      const bool have = editable && SelectedPlayback(&p, &video);
+      s.enabled = have && (cmd != CmdMediaFullScreen || video) && (cmd != CmdMediaAcrossSlides || !video);
+      s.checked = have && (cmd == CmdMediaLoop ? p.loop
+                           : cmd == CmdMediaHide ? p.hideWhenStopped
+                           : cmd == CmdMediaFullScreen ? p.fullScreen
+                           : cmd == CmdMediaAcrossSlides && p.acrossSlides);
+#endif
+      break;
+    }
     case CmdArrangeMenu:
     case CmdInsertShape:
     case CmdInsertTextBox:
     case CmdInsertPicture:
+    case CmdInsertVideo:
+    case CmdInsertAudio:
     case CmdInsertTable:
     case CmdInsertChart:
     case CmdChartColumn:
@@ -2043,6 +2087,28 @@ bool ObjectTool::Execute(int cmd) {
       const draw::Size s = host_.deck()->SlideSize();
       return InsertPictures(files, {s.width / 2, s.height / 2}, true);
     }
+#if FW_SLIDE_EDIT
+    case CmdMediaLoop:
+    case CmdMediaHide:
+    case CmdMediaFullScreen:
+    case CmdMediaAcrossSlides: {
+      fw::slide::edit::MediaPlayback p;
+      if (!SelectedPlayback(&p, nullptr)) return false;
+      bool& flag = cmd == CmdMediaLoop ? p.loop
+                   : cmd == CmdMediaHide ? p.hideWhenStopped
+                   : cmd == CmdMediaFullScreen ? p.fullScreen
+                   : p.acrossSlides;
+      flag = !flag;
+      return SetSelectedPlayback(p);
+    }
+#endif
+    case CmdInsertVideo:
+    case CmdInsertAudio: {
+      if (!Editable()) return false;
+      const bool video = cmd == CmdInsertVideo;
+      const std::wstring file = PickMediaFile(host_.window ? host_.window() : nullptr, video);
+      return file.empty() || InsertMediaFile(file, video);
+    }
     case CmdCut:
     case CmdCopy:
       if (selection_.empty() || textEditing_) return false;
@@ -2099,6 +2165,12 @@ ToolItem ObjectTool::Tool(int cmd) {
       t.enabled = Editable(false);
       t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::TextBox;
       t.tooltip = cmd == CmdInsertPicture ? L"Insert pictures" : L"Insert a text box";
+      break;
+    case CmdInsertVideo:
+    case CmdInsertAudio:
+      t.enabled = Editable(false);
+      t.glyph = cmd == CmdInsertVideo ? L'\xE714' : L'\xE8D6';  // the icon font's Video and Audio
+      t.tooltip = cmd == CmdInsertVideo ? L"Insert a video from a file" : L"Insert audio from a file";
       break;
     case CmdInsertShape:
       dropdown(L"Shapes", icon::Shapes, L"Insert a shape");
@@ -2178,7 +2250,8 @@ ObjectTool::Kinds ObjectTool::SelectionKinds() {
   Kinds k;
   for (uint32_t id : selection_)
     if (const ob::ObjectInfo* o = map_.Find(id)) {
-      if (o->kind == ob::ObjectKind::Picture) ++k.pictures;
+      if (o->shape && o->shape->media) ++(MediaIsVideo(*o->shape) ? k.videos : k.audios);
+      else if (o->kind == ob::ObjectKind::Picture) ++k.pictures;
       else if (o->shape && o->shape->kind == fw::slide::Shape::Kind::Table) ++k.tables;
       else if (o->kind == ob::ObjectKind::GraphicFrame) ++k.others;  // charts, diagrams
       else ++k.shapes;
@@ -2194,7 +2267,136 @@ uint32_t ObjectTool::TakeInserted() {
 
 bool ObjectTool::IsPicture(uint32_t id) {
   const ob::ObjectInfo* o = Map().Find(id);
-  return o && o->kind == ob::ObjectKind::Picture;
+  return o && o->kind == ob::ObjectKind::Picture && !(o->shape && o->shape->media);
+}
+
+bool ObjectTool::IsMedia(uint32_t id) {
+  const ob::ObjectInfo* o = Map().Find(id);
+  return o && o->shape && o->shape->media;
+}
+
+bool ObjectTool::SelectedPlayback(fw::slide::edit::MediaPlayback* p, bool* video) {
+#if FW_SLIDE_EDIT
+  Map();
+  if (selection_.size() != 1 || textEditing_ || !IsMedia(selection_[0])) return false;
+  Deck* deck = host_.deck();
+  return deck && deck->Editor() && deck->Editor()->GetMediaPlayback(host_.current(), selection_[0], p, video);
+#else
+  (void)p;
+  (void)video;
+  return false;
+#endif
+}
+
+bool ObjectTool::SetSelectedPlayback(const fw::slide::edit::MediaPlayback& p) {
+#if FW_SLIDE_EDIT
+  if (!Editable() || selection_.size() != 1) return false;
+  const fw::slide::edit::Result res = host_.deck()->Editor()->SetMediaPlayback(host_.current(), selection_[0], p);
+  if (!res) {
+    Refused(W(res.message));
+    return false;
+  }
+  Edited();
+  return true;
+#else
+  (void)p;
+  return false;
+#endif
+}
+
+bool ObjectTool::SelectedStart(int* start) {
+#if FW_SLIDE_EDIT
+  fw::slide::edit::MediaPlayback p;
+  fw::slide::edit::MediaStart s;
+  if (!start || !SelectedPlayback(&p, nullptr) ||
+      !host_.deck()->Editor()->GetMediaStart(host_.current(), selection_[0], &s))
+    return false;
+  *start = static_cast<int>(s);
+  return true;
+#else
+  (void)start;
+  return false;
+#endif
+}
+
+bool ObjectTool::SetSelectedStart(int start) {
+#if FW_SLIDE_EDIT
+  fw::slide::edit::MediaPlayback p;
+  if (start < 0 || start > 2 || !Editable() || !SelectedPlayback(&p, nullptr)) return false;
+  const fw::slide::edit::Result res = host_.deck()->Editor()->SetMediaStart(
+      host_.current(), selection_[0], static_cast<fw::slide::edit::MediaStart>(start));
+  if (!res) {
+    Refused(W(res.message));
+    return false;
+  }
+  Edited();
+  return true;
+#else
+  (void)start;
+  return false;
+#endif
+}
+
+bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {
+#if FW_SLIDE_EDIT
+  if (!Editable()) return false;
+  const size_t dot = file.find_last_of(L'.');
+  std::wstring ext = dot == std::wstring::npos ? std::wstring() : file.substr(dot);
+  for (wchar_t& c : ext) c = static_cast<wchar_t>(std::towlower(c));
+  const wchar_t* what = video ? L"video" : L"audio file";
+  if (!fw::slide::show::PlayableMediaExtension(ext)) {
+    Refused(std::wstring(L"That isn't a ") + what + L" Featherweight can insert.");
+    return false;
+  }
+  std::string read;
+  if (!util::ReadFileBytes(file, read, kMaxMediaFile)) {
+    Refused(L"Featherweight couldn't read " + file + L" (files up to 1 GB can be inserted).");
+    return false;
+  }
+  std::vector<uint8_t> bytes(read.begin(), read.end());
+  read.clear();
+  read.shrink_to_fit();
+  fw::slide::show::MediaInfo info;
+  if (!fw::slide::show::ReadMediaInfo(bytes, ext, video, &info)) {
+    Refused(std::wstring(L"Featherweight couldn't read that ") + what + L".");
+    return false;
+  }
+  std::vector<uint8_t> poster = video ? std::move(info.posterPng) : fw::slide::show::AudioIconPng(96);
+  if (poster.empty()) {
+    Refused(std::wstring(L"Featherweight couldn't read that ") + what + L".");
+    return false;
+  }
+  // A video at its size (96 dpi) fitted to the slide, centred; an audio as PowerPoint's speaker, centred.
+  Deck* deck = host_.deck();
+  const draw::Size slide = deck->SlideSize();
+  draw::Rect r = video ? ob::PlacePicture({info.width * 0.75f, info.height * 0.75f}, slide)
+                       : draw::Rect{slide.width / 2 - 19.2f, slide.height / 2 - 19.2f, slide.width / 2 + 19.2f,
+                                    slide.height / 2 + 19.2f};
+  const size_t slash = file.find_last_of(L"\\/");
+  fw::slide::edit::MediaInsert m;
+  m.video = video;
+  m.bytes = std::move(bytes);
+  m.extension = fw::WideToUtf8(ext);
+  m.poster = std::move(poster);
+  m.name = slash == std::wstring::npos ? file : file.substr(slash + 1);
+  m.durationMs = info.durationMs;
+  uint32_t id = 0;
+  const fw::slide::edit::Result res = deck->Editor()->InsertMedia(host_.current(), std::move(m), r, &id);
+  if (!res) {
+    Refused(W(res.message));
+    return false;
+  }
+  Edited();
+  Map();
+  selection_ = {id};
+  level_ = 0;
+  inserted_ = id;
+  return true;
+#else
+  (void)file;
+  (void)video;
+  return Editable();
+#endif
 }
 
 namespace {
@@ -2271,7 +2473,23 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
     const draw::Size s = host_.deck()->SlideSize();
     return InsertPictures({rest}, {s.width / 2, s.height / 2}, true) ? true : fail(L"not done");
   }
-  return fail(L"insert:table, chart, shape, textbox or picture");
+  if (what == L"video" || what == L"audio")  // insert:video|<file>, insert:audio|<file> (P3)
+    return InsertMediaFile(rest, what == L"video") ? true : fail(L"not done");
+  return fail(L"insert:table, chart, shape, textbox, picture, video or audio");
+}
+
+std::wstring PickMediaFile(HWND owner, bool video) {
+  std::vector<wchar_t> buf(32768, L'\0');
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof ofn;
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = video ? L"Videos\0*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.asf;*.mpg;*.mpeg;*.3gp\0All files\0*.*\0"
+                          : L"Audio\0*.mp3;*.m4a;*.aac;*.wav;*.wma\0All files\0*.*\0";
+  ofn.lpstrFile = buf.data();
+  ofn.nMaxFile = static_cast<DWORD>(buf.size());
+  ofn.lpstrTitle = video ? L"Insert Video" : L"Insert Audio";
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+  return GetOpenFileNameW(&ofn) ? std::wstring(buf.data()) : std::wstring();
 }
 
 std::vector<std::wstring> PickPictureFiles(HWND owner, bool several) {
