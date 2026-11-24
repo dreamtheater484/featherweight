@@ -704,7 +704,12 @@ class Writer {
   // or they refer to other parts.
   static bool MetroDoc(const Shape& s, pugi::xml_document& doc) {
     const auto it = s.complex.find(0x03A9);
-    return it != s.complex.end() && PackageXml(it->second, "drs/shapexml.xml", doc);
+    if (it == s.complex.end()) return false;
+    // Not picturexml.xml: the binary picture is often drawn with its frame and effects already, which
+    // its copy's spPr would add again (letters-home slide 52).
+    for (const char* part : {"drs/shapexml.xml", "drs/connectorxml.xml"})
+      if (PackageXml(it->second, part, doc)) return true;
+    return false;
   }
   // Its text keeps each paragraph's margin and indent, which the binary has only per level (a ruler); its
   // characters are masked, so they're taken when its paragraphs are as long as the text's.
@@ -734,7 +739,8 @@ class Writer {
     pugi::xml_document doc;
     if (!MetroDoc(s, doc)) return false;
     const pugi::xml_node root = doc.document_element();
-    if (std::string_view(root.name()) != "p:sp" && std::string_view(root.name()) != "p:cxnSp") return false;
+    const std::string_view kind = root.name();
+    if (kind != "p:sp" && kind != "p:cxnSp") return false;
     const pugi::xml_node props = root.child("p:spPr"), st = root.child("p:style");
     // Not when it refers to parts (r:), or uses a prefix other than a: and p: that what's copied doesn't declare.
     bool skip = !props;
@@ -786,7 +792,8 @@ class Writer {
                       "<p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr>" + ph + "</p:nvPr></p:nvPicPr><p:blipFill>" +
                       blip + "<a:srcRect" + crop + "/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>" + Xfrm(s) +
                       "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>";
-      // A picture's line shows only when the file turns it on.
+      // A picture's fill (behind its transparent parts) and line show only when the file turns them on.
+      if (bool bg = false; Bool(s, 0x01BF, 4, false)) x += FillXml(s, bg);
       if (Bool(s, 0x01FF, 3, false)) x += LineXml(s);
       return x + "</p:spPr></p:pic>";
     }
