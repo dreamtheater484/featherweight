@@ -595,4 +595,7 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+  // P3, p3-files: templates, picture export and .odp import, 3910-3949.
+  CmdExportSlidePng = 3910,      // File > Export: the current slide as a PNG picture
+  CmdExportSlidesPng,            // File > Export: every slide as PNG pictures, in a folder
 };
