@@ -451,37 +451,39 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 
 Decks to open: the public set in `tests\office\presentations` (one per feature, `tests\office\README.md`), PowerPoint's PDFs of them in `tests\office\reference\presentations`, and the real-world decks in `FeatherweightCorpus\pptx\<kind>\`. Open each one next to PowerPoint (or its PDF).
 
+Roy passed these checks on 2026-11-24, with the gate build (`ea3fe681` plus the slide-show bench's own fixes) as a portable copy. The test set has no `.pptm`, so the first row's `.pptm` part wasn't tried.
+
 ### Opening and viewing
 
-- [ ] Double-click a `.pptx`, a `.potx` and a `.pptm` in Explorer: each opens read-only in a presentation tab, the first slide shown at once; the `.pptm` says its macros are kept and never run.
-- [ ] `show.ppsx` opens straight into the slide show; Esc leaves it to the tab.
-- [ ] The thumbnails pane fills in while you look at the first slide; scrolling it is smooth; clicking a thumbnail shows that slide; hidden slides (`hidden-slides.pptx`) are marked and dimmed.
-- [ ] Page Up/Down, arrows, Home and End move between slides; zoom (Ctrl+wheel, fit slide) keeps the slide sharp; the notes pane shows `notes.pptx`'s notes, and the slide with none shows an empty pane.
-- [ ] Find (Ctrl+F) finds text on slides and in notes, jumps to the slide and marks the paragraph (and the words in the notes); Copy (Ctrl+C) copies the slide: paste into Word gives its picture, into Notepad its text. Right-click has Copy slide text, Copy slide as picture and Copy speaker notes.
-- [ ] `hyperlinks.pptx` in the tab: the pointer becomes a hand over a link, its tooltip says where it goes; Ctrl+click opens a web link in the browser and jumps to a linked slide.
-- [ ] The notes pane: drag its top edge to size it; the toolbar's notes button (or a double-click on the edge) hides and shows it.
-- [ ] Each public deck looks like PowerPoint's PDF: layouts and placeholders (an empty placeholder shows nothing), the theme's colors and fonts and the dark slide, autofit text at PowerPoint's size, bullets and numbering, tables and their styles, every chart kind, pictures (crop, rotation, flips, transparency, the SVG), groups, effects, backgrounds (master, layout, slide, picture, pattern), WordArt.
-- [ ] `embedded-fonts.pptx` shows its text in the pixel font (blocky 5×7 letters), not in Calibri; a real-world deck that embeds a font shows it too.
-- [ ] Slide sizes: 4:3, 16:9 and the portrait `hidden-slides.pptx` each fit the view.
+- [x] Double-click a `.pptx`, a `.potx` and a `.pptm` in Explorer: each opens read-only in a presentation tab, the first slide shown at once; the `.pptm` says its macros are kept and never run.
+- [x] `show.ppsx` opens straight into the slide show; Esc leaves it to the tab.
+- [x] The thumbnails pane fills in while you look at the first slide; scrolling it is smooth; clicking a thumbnail shows that slide; hidden slides (`hidden-slides.pptx`) are marked and dimmed.
+- [x] Page Up/Down, arrows, Home and End move between slides; zoom (Ctrl+wheel, fit slide) keeps the slide sharp; the notes pane shows `notes.pptx`'s notes, and the slide with none shows an empty pane.
+- [x] Find (Ctrl+F) finds text on slides and in notes, jumps to the slide and marks the paragraph (and the words in the notes); Copy (Ctrl+C) copies the slide: paste into Word gives its picture, into Notepad its text. Right-click has Copy slide text, Copy slide as picture and Copy speaker notes.
+- [x] `hyperlinks.pptx` in the tab: the pointer becomes a hand over a link, its tooltip says where it goes; Ctrl+click opens a web link in the browser and jumps to a linked slide.
+- [x] The notes pane: drag its top edge to size it; the toolbar's notes button (or a double-click on the edge) hides and shows it.
+- [x] Each public deck looks like PowerPoint's PDF: layouts and placeholders (an empty placeholder shows nothing), the theme's colors and fonts and the dark slide, autofit text at PowerPoint's size, bullets and numbering, tables and their styles, every chart kind, pictures (crop, rotation, flips, transparency, the SVG), groups, effects, backgrounds (master, layout, slide, picture, pattern), WordArt.
+- [x] `embedded-fonts.pptx` shows its text in the pixel font (blocky 5×7 letters), not in Calibri; a real-world deck that embeds a font shows it too.
+- [x] Slide sizes: 4:3, 16:9 and the portrait `hidden-slides.pptx` each fit the view.
 
 ### Slide show
 
-- [ ] F5 starts from the first slide, Shift+F5 from the current one, the ▶ button too; on a second monitor, the show is on the chosen one.
-- [ ] Click, Space, Enter, the arrow keys, Page Down move on; Backspace and Page Up go back; a number and Enter jumps; B and W black and white the screen; Esc ends the show; the cursor hides when the mouse is still.
-- [ ] `transitions.pptx`: fade, push, wipe, split, cover, uncover and zoom play smoothly at the display's refresh rate; dissolve, random bars, vortex and morph play as a fade; the push with a time moves on by itself after 2 s.
-- [ ] `animations.pptx`: the entrances, emphasis, exit and motion path play on click, with and after the previous ones; the first effect on slide 3 starts by itself; bullets fly in one by one; wheel and checkerboard play as appear; the trigger shows the cloud only when you click its button; the picture, chart and table animate.
-- [ ] `hyperlinks.pptx` during the show: the slide links jump (and the home buttons back), next, previous, first, last and end show do what they say, the mouse-over link jumps on hover, web and mail links open the browser and mail app (after the usual question).
-- [ ] `sections-custom-shows.pptx`: the button plays the custom show (slides 1, 4, 6) and comes back.
+- [x] F5 starts from the first slide, Shift+F5 from the current one, the ▶ button too; on a second monitor, the show is on the chosen one.
+- [x] Click, Space, Enter, the arrow keys, Page Down move on; Backspace and Page Up go back; a number and Enter jumps; B and W black and white the screen; Esc ends the show; the cursor hides when the mouse is still.
+- [x] `transitions.pptx`: fade, push, wipe, split, cover, uncover and zoom play smoothly at the display's refresh rate; dissolve, random bars, vortex and morph play as a fade; the push with a time moves on by itself after 2 s.
+- [x] `animations.pptx`: the entrances, emphasis, exit and motion path play on click, with and after the previous ones; the first effect on slide 3 starts by itself; bullets fly in one by one; wheel and checkerboard play as appear; the trigger shows the cloud only when you click its button; the picture, chart and table animate.
+- [x] `hyperlinks.pptx` during the show: the slide links jump (and the home buttons back), next, previous, first, last and end show do what they say, the mouse-over link jumps on hover, web and mail links open the browser and mail app (after the usual question).
+- [x] `sections-custom-shows.pptx`: the button plays the custom show (slides 1, 4, 6) and comes back.
 - [x] A 50-slide deck from the corpus presents without a stutter in its transitions (record the frame rate below). Measured: p1-show's frame bench (its 50-slide `bench50.pptx`, 50 transitions) at the console presents every transition at the display's 240 Hz; see P1's gate below and p1-plan's frame-bench decision of 2026-11-24.
 
 ### Printing and PDF
 
-- [ ] Print (Ctrl+P), with the toolbar's print layout box: full page slides (landscape for a wide deck), handouts (1, 2, 3, 4, 6, 9 per page; 3 with lines beside the slides) and notes pages (portrait), hidden slides left out unless ⋯ Print hidden slides is on; the dialog's page range picks slides ("2-4" prints those slides in the chosen layout), Current page prints the shown slide.
-- [ ] Export PDF: the same layouts; the PDF opens in Featherweight's PDF reader and in another reader, with the slides' text selectable and the links working.
+- [x] Print (Ctrl+P), with the toolbar's print layout box: full page slides (landscape for a wide deck), handouts (1, 2, 3, 4, 6, 9 per page; 3 with lines beside the slides) and notes pages (portrait), hidden slides left out unless ⋯ Print hidden slides is on; the dialog's page range picks slides ("2-4" prints those slides in the chosen layout), Current page prints the shown slide.
+- [x] Export PDF: the same layouts; the PDF opens in Featherweight's PDF reader and in another reader, with the slides' text selectable and the links working.
 
 ### Never damage a file
 
-- [ ] Open a deck, look around, play the show, close it: the file's bytes and date haven't changed (P1 doesn't save decks).
+- [x] Open a deck, look around, play the show, close it: the file's bytes and date haven't changed (P1 doesn't save decks).
 
 ### P1's gate (record the numbers)
 
