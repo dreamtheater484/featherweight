@@ -339,6 +339,13 @@ TEST(ppt_encrypted) {
   const Bytes pptx = ppt::ToPptx(streams, s3, L"featherweight");
   CHECK(s3.Ok());
   CHECK(pptx == plain);
+  // The fuzzer's encrypted seed: FW_PPT_SEED_ENCRYPTED=<file> fw_tests writes it there.
+  char seed[MAX_PATH];
+  if (GetEnvironmentVariableA("FW_PPT_SEED_ENCRYPTED", seed, MAX_PATH) > 0) {
+    const Bytes cfb = pkg::WriteCompoundFile({{"PowerPoint Document", built.document}, {"Current User", built.user}});
+    std::ofstream out(seed, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(cfb.data()), static_cast<std::streamsize>(cfb.size()));
+  }
   // A damaged session or encrypted object: a plain failure, never a crash.
   for (size_t cut : {built.persist.at(4) + 20, built.persist.at(2) + 3}) {
     Built b = built;

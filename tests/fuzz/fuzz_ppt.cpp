@@ -1,8 +1,8 @@
 // Fuzz target: the PowerPoint 97-2003 reader (src/slide/ppt, P3). Whatever .pptx it makes must be
 // one the package reader opens, fwtool check finds nothing wrong with, and the slide model reads
 // with every slide, its text resolved: the converter writes only what it has made sure of.
-// Seeds: tests/fuzz/seeds/ppt (a presentation built record by record: FW_PPT_SEED=<file> fw_tests
-// writes it; PowerPoint's own .ppt copies when p3-corpus has them).
+// Seeds: tests/fuzz/seeds/ppt (a presentation built record by record, and the same encrypted with the
+// password "featherweight": FW_PPT_SEED=<file> and FW_PPT_SEED_ENCRYPTED=<file> fw_tests ppt write them).
 //
 // An input is a compound file, or the "PowerPoint Document" stream itself (anything that isn't a
 // compound file, read without a "Current User" stream), so that mutations reach the records directly.
@@ -37,7 +37,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   };
   pkg::Status st;
   slide::ppt::NeedsPassword(get);
-  std::vector<uint8_t> pptx = slide::ppt::ToPptx(get, st);
+  // The encrypted seed's password: its records decrypt, so mutations reach the reader behind it
+  // (a presentation that isn't encrypted ignores it).
+  std::vector<uint8_t> pptx = slide::ppt::ToPptx(get, st, L"featherweight");
   if (pptx.empty()) return 0;
   auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(pptx)), pkg::Limits::Default(), st);
   if (!package) {
