@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <d2d1_1.h>
+#include <wrl/client.h>
 
 #include <memory>
 
@@ -21,8 +22,10 @@ class SlideRenderer;
 struct PresenterState {
   static constexpr size_t kEnd = static_cast<size_t>(-1);
   size_t slide = kEnd;               // the slide on screen; kEnd: the end of the show
-  ID2D1Bitmap1* current = nullptr;   // as the audience sees it now (null: black)
-  ID2D1Bitmap1* next = nullptr;      // what the next click shows (null: the end of the show)
+  // Held here, so a picture the show lets go of (a device lost, a swap of displays) stays drawable until
+  // the next Update.
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> current;  // as the audience sees it now (null: black)
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> next;     // what the next click shows (null: the end of the show)
   int stepsLeft = 0;                 // clicks left on this slide: `next` is this slide built
   int blank = 0;                     // 1 black screen, 2 white screen (B, W)
 };
@@ -35,6 +38,7 @@ class PresenterHost {
   virtual void PresenterGoTo(size_t slide) = 0;  // a slide clicked in the strip
   virtual void PresenterClosed() = 0;            // its window closed: the show ends
   virtual bool PresenterBusy() const = 0;        // the show moves: the clock waits (never a frame's cost)
+  virtual void PresenterSwap() = 0;              // Swap Displays: the show and the view trade monitors
 };
 
 class PresenterView {
@@ -49,6 +53,8 @@ class PresenterView {
 
   void Update(const PresenterState& state);
   HWND Window() const;
+  // Full screen on another monitor (Swap Displays); a windowed view stays where it is.
+  void MoveTo(HMONITOR monitor);
   // Draws the view into `dc` (a target of w x h pixels): the window's paint, and checks off screen.
   // Prepare first, outside the target's BeginDraw: it makes the strip's thumbnails.
   void Prepare(float w, float h);

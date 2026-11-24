@@ -70,7 +70,7 @@ class TitleBar {
   int tabCount_ = 0;
   float tabsLeft_ = 0, tabW_ = 0;
   Button min_, max_, close_, newTab_;
-  static constexpr int kQuickMax = 3;
+  static constexpr int kQuickMax = 4;  // Save, Undo, Redo and a tab's own (a presentation's From Beginning)
   Button quick_[kQuickMax], quickList_[kQuickMax];
   int quickCmd_[kQuickMax] = {};
   int quickCount_ = 0;
