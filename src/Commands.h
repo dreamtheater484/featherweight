@@ -595,4 +595,12 @@ enum Cmd : int {
   CmdSlideSpacingMenu,           // Home > Paragraph > Line Spacing ▾
   CmdSlideMonitorMenu,           // Slide Show > Monitor ▾
   CmdSlideZoomMenu,              // View > Zoom ▾
+  // Comments and password protection in presentations (P3, p3-review): 3880-3909. New Comment is
+  // the app's CmdNewComment (Ctrl+Alt+M), Show Comments CmdReviewPane, Delete CmdDeleteThread.
+  CmdDeleteSlideComments = 3880,  // Review > Delete ▾: Delete All Comments on Current Slide
+  CmdDeleteAllComments,           // Delete All Comments in This Presentation
+  CmdPrevComment,                 // Review > Previous: the thread before, across slides
+  CmdNextComment,
+  CmdShowCommentMarkup,           // Show Comments ▾ > Show Markup: the markers on the slides
+  CmdEncryptPassword = 3890,      // File > Info > Protect Presentation > Encrypt with Password
 };

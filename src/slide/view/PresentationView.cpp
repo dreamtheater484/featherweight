@@ -19,6 +19,7 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationPanels.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
@@ -413,6 +414,7 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
       if (cur) c.Stroke(s, p.searchCurrent, std::max(1.0f, ui_));
     }
   }
+  Comments().DrawMarkers(c, rc);  // p3-review: the comments' markers, over everything
   c.PopClip();
 }
 
@@ -539,6 +541,10 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   keysInThumbs_ = false;
   if (notesShown_ && Contains(notes_, fx, fy) && NotesMouseDown()) return;  // P2: typing notes
   if (Contains(view_, fx, fy)) {
+    if (Comments().MouseDown(fx, fy)) {  // p3-review: a comment's marker (picked, maybe dragged)
+      text_->End();
+      return;
+    }
     if (const SlideLink* link = LinkAt(x, y); link && (mods & kModCtrl)) {
       FollowLink(*link);
       return;
@@ -569,6 +575,7 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
 
 void PresentationView::OnMouseMove(int x, int y, UINT mods) {
   if (!deck_) return;
+  if (commentsPanel_ && commentsPanel_->MouseMove(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseMove(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -605,6 +612,7 @@ void PresentationView::OnMouseMove(int x, int y, UINT mods) {
 }
 
 void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
+  if (commentsPanel_ && commentsPanel_->MouseUp(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseUp(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -724,6 +732,8 @@ HCURSOR PresentationView::CursorAt(int x, int y) {
 }
 
 std::wstring PresentationView::TooltipAt(int x, int y) {
+  if (commentsPanel_ && Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p3-review
+    if (std::wstring tip = commentsPanel_->Tooltip(static_cast<float>(x), static_cast<float>(y)); !tip.empty()) return tip;
   if (const SlideLink* link = LinkAt(x, y)) {
     std::wstring tip = link->tooltip.empty() ? link->url : link->tooltip;
     return tip + (tip.empty() ? L"" : L"\n") + L"Ctrl+click to follow the link";

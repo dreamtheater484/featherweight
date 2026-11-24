@@ -67,6 +67,14 @@ Result ResolveComment(Editor& ed, size_t slide, std::string_view id, bool resolv
 // The thread's marker moved to `at` (slide points).
 Result MoveComment(Editor& ed, size_t slide, std::string_view id, draw::Point at);
 
+// Only comments changed (every slide reported has just kComments): nothing on the slides looks different.
+inline bool CommentsOnly(const Changes& c) {
+  if (c.slideList || c.allSlides || c.slideSize || c.sections || c.slides.empty()) return false;
+  for (const SlideChange& s : c.slides)
+    if (s.what != kComments) return false;
+  return true;
+}
+
 // ---- Internal (src/slide/edit): a copied slide (Duplicate, Reuse Slides) loses its comments; its
 // p188:commentRel, whose relationship was dropped, goes with them.
 void DropCommentRel(pugi::xml_node slideRoot);

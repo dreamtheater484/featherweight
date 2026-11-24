@@ -263,6 +263,10 @@ class PresentationView : public TabContent {
   bool DesignCommandState(int cmd, CommandState& s);
   bool DesignCommand(int cmd);
   void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
+  // Comments (P3, p3-review: PresentationComments.h): the pane, the markers, Review > Comments.
+  class CommentsPanel;
+  std::unique_ptr<CommentsPanel> commentsPanel_;
+  CommentsPanel& Comments();
   // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
   void SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all);
   std::vector<uint32_t> SlideIds() const;

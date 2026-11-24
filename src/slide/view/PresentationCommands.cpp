@@ -19,6 +19,7 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/TextFind.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
@@ -105,6 +106,8 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  // p3-review: Ctrl+Alt+M, New Comment, wherever the keyboard is (in text being edited too).
+  if (vk == 'M' && (mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && Ready()) return CmdNewComment;
   if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
   // p2-objects: the objects' keys, and undo and redo wherever the keys are.
   const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
@@ -135,6 +138,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (CommentsPanel::Owns(cmd)) return Comments().Query(cmd);  // p3-review
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
@@ -218,6 +222,10 @@ std::vector<int> PresentationView::Commands() {
     if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
   for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
   for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
+  // p3-review: the comments' commands.
+  for (int cmd : {CmdNewComment, CmdReviewPane, CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments, CmdPrevComment,
+                  CmdNextComment, CmdShowCommentMarkup})
+    out.push_back(cmd);
   return out;
 }
 
@@ -226,6 +234,10 @@ bool PresentationView::Execute(int cmd) {
   if (cmd == CmdSpelling && text_->Owns(cmd)) {  // p2-text: F7, maybe on another slide
     text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
     return true;
+  }
+  if (CommentsPanel::Owns(cmd)) {  // p3-review
+    if (cmd == CmdNewComment) text_->End();
+    return Comments().Execute(cmd);
   }
   if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects

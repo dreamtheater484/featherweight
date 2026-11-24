@@ -389,6 +389,13 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Tab(L"Review", L"R");
   b.Group(L"Proofing");
   add(CmdSpelling, icon::Spelling, S::Large, L"Spelling", L"S");
+  // p3-review: PowerPoint 365's Comments group.
+  b.Group(L"Comments");
+  add(CmdNewComment, icon::Comment, S::Large, L"New\nComment", L"C");
+  split(CmdDeleteThread, icon::Delete, S::Large, L"Delete", L"D", {CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments});
+  add(CmdPrevComment, icon::ChevronUp, S::Large, L"Previous", L"V");
+  add(CmdNextComment, icon::ChevronDown, S::Large, L"Next", L"N");
+  split(CmdReviewPane, icon::Comment, S::Large, L"Show\nComments", L"H", {CmdReviewPane, CmdShowCommentMarkup});
 
   // ---- View
   b.Tab(L"View", L"W");
