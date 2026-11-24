@@ -12,6 +12,8 @@
 #include "PkgTestUtil.h"
 #include "TestHarness.h"
 #include "pkg/Check.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
@@ -324,4 +326,24 @@ TEST(SlideReview_ProbeDecks) {
     CHECK(AddComment(ed, 0, {500, 300}, L"Modern beside legacy", {L"Cy Do", L""}));
     write("fw-mixed.pptx", Saved(ed));
   }
+  // An encrypted deck (agile encryption, as Featherweight saves one), password "Feather1".
+  write("fw-encrypted.pptx", fw::pkg::crypto::Encrypt(FileBytes(Generated() / "simple.pptx"), fw::pkg::crypto::NewKey(L"Feather1")));
+}
+
+// A presentation encrypted as Featherweight saves it opens with its password only, and is the deck.
+TEST(SlideReview_EncryptedDeckOpensWithItsPassword) {
+  namespace crypto = fw::pkg::crypto;
+  const std::vector<uint8_t> plain = FileBytes(Generated() / "simple.pptx");
+  const std::vector<uint8_t> file = crypto::Encrypt(plain, crypto::NewKey(L"Feather1"));
+  REQUIRE(!file.empty());
+  auto cf = fw::pkg::CompoundFile::Open(file);
+  REQUIRE(cf != nullptr);
+  CHECK(crypto::IsEncryptedPackage(*cf));
+  std::vector<uint8_t> out;
+  crypto::Key key;
+  CHECK(crypto::Decrypt(*cf, L"feather1", out, key) == crypto::Result::WrongPassword);
+  CHECK(crypto::Decrypt(*cf, L"Feather1", out, key) == crypto::Result::Ok);
+  auto deck = OpenBytes(out);
+  REQUIRE(deck != nullptr);
+  CHECK(deck->SlideCount() == 2);
 }

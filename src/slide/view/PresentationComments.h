@@ -106,4 +106,31 @@ class PresentationView::CommentsPanel : public PanelContent {
   uint64_t seenState_ = UINT64_MAX;
 };
 
+// File > Info > Protect Presentation > Encrypt with Password (PresentationProtect.cpp): a password set
+// (typed twice) or removed; the next save writes the file encrypted with it, or without one.
+class PresentationView::PasswordPanel : public PanelContent {
+ public:
+  explicit PasswordPanel(PresentationView& view);
+  std::wstring Title() const override { return L"Encrypt with password"; }
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
+  void Draw(gfx::Canvas& c) override;
+  void Open();
+
+ private:
+  class Box : public ComboBox {
+   public:
+    using ComboBox::TakeFocus;
+  };
+  void Encrypt();
+  void Remove();
+  PresentationView& v_;
+  Box password_, confirm_;
+  bool focusWanted_ = false;
+  PanelButton encrypt_, remove_;
+  std::wstring note_;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
+  D2D1_RECT_F noteRc_{};
+  float ui_ = 1;
+};
+
 }  // namespace fw::slide::view

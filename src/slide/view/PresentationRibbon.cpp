@@ -15,6 +15,7 @@
 #include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
@@ -471,6 +472,17 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     f.setting = e.setting;
     f.choice = !e.setting;
     if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
+    m.file.push_back(std::move(f));
+  }
+  // p3-review: File > Info > Protect Presentation.
+  {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Info;
+    f.cmd = CmdEncryptPassword;
+    f.label = L"Protect Presentation: Encrypt with Password";
+    f.description = file_ && file_->Protected() ? L"A password is required to open this presentation."
+                                                : L"Require a password to open this presentation.";
+    f.glyph = icon::Lock;
     m.file.push_back(std::move(f));
   }
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.

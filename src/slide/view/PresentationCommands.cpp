@@ -139,6 +139,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 
 CommandState PresentationView::QueryCommand(int cmd) {
   if (CommentsPanel::Owns(cmd)) return Comments().Query(cmd);  // p3-review
+  if (CommandState ps; ProtectCommandState(cmd, ps)) return ps;  // p3-review: Encrypt with Password
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
@@ -224,7 +225,7 @@ std::vector<int> PresentationView::Commands() {
   for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
   // p3-review: the comments' commands.
   for (int cmd : {CmdNewComment, CmdReviewPane, CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments, CmdPrevComment,
-                  CmdNextComment, CmdShowCommentMarkup})
+                  CmdNextComment, CmdShowCommentMarkup, CmdEncryptPassword})
     out.push_back(cmd);
   return out;
 }
@@ -235,6 +236,7 @@ bool PresentationView::Execute(int cmd) {
     text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
     return true;
   }
+  if (ProtectCommand(cmd)) return true;  // p3-review: Encrypt with Password
   if (CommentsPanel::Owns(cmd)) {  // p3-review
     if (cmd == CmdNewComment) text_->End();
     return Comments().Execute(cmd);
