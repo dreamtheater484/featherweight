@@ -199,17 +199,9 @@ class Converter {
         }
         case 0x03F2: Environment(r.body); break;
         case 0x040B:  // DrawingGroup
-          if (auto dgg = Find(r.body, 0xF000)) {
-            dgg_ = dgg->body;
-            if (auto opt = Find(dgg_, 0xF00B)) {
-              Bytes o(opt->body);
-              for (uint16_t i = 0; i < opt->inst && o.Ok(); ++i) {
-                const uint16_t opid = o.U16();
-                const uint32_t op = o.U32();
-                if (o.Ok() && !(opid & 0x8000)) defaults_[opid & 0x3FFF] = op;
-              }
-            }
-          }
+          // Its default shape properties (FOPT) are only for new shapes: PowerPoint draws a shape that
+          // leaves a property out with OfficeArt's own default.
+          if (auto dgg = Find(r.body, 0xF000)) dgg_ = dgg->body;
           break;
         case 0x0409: Hyperlinks(r.body); break;
         case 0x0FF0:
@@ -390,7 +382,6 @@ class Converter {
   DrawingEnv EnvFor(const Context& cx, Rels& rels, const ListEntry* outline, bool master) {
     DrawingEnv env;
     env.text = cx;
-    env.defaults = &defaults_;
     env.masters = &masterShapes_;
     env.master = master;
     env.picture = [this, &rels](uint32_t pib) -> std::string {
@@ -818,7 +809,6 @@ class Converter {
   Cf baseCf_;
   std::array<std::optional<MasterStyle>, 9> envStyles_;
   std::span<const uint8_t> dgg_;
-  std::map<uint16_t, uint32_t> defaults_;
   ShapeIndex masterShapes_;
   std::map<uint32_t, std::string> hyperlinks_;
   std::vector<ListEntry> masters_, slides_, notes_;

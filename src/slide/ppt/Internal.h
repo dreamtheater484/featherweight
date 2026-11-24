@@ -230,10 +230,7 @@ void IndexShapes(std::span<const uint8_t> drawing, ShapeIndex& index);
 // What a drawing (a slide's, master's or notes page's OfficeArt shapes) is written with.
 struct DrawingEnv {
   Context text;
-  // The document's default shape properties (the drawing group's FOPT), beneath each shape's own.
-  const std::map<uint16_t, uint32_t>* defaults = nullptr;
-  // The masters' shapes, for shapes that inherit from one (beneath the shape's own properties, above
-  // the defaults).
+  // The masters' shapes, for shapes that inherit from one (beneath the shape's own properties).
   const ShapeIndex* masters = nullptr;
   // A BLIP store picture (pib, 1-based) as the relationship id of its media part; empty when none.
   std::function<std::string(uint32_t)> picture;

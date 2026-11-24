@@ -124,17 +124,13 @@ class Writer {
 
  private:
   uint32_t Prop(const Shape& s, uint16_t pid, uint32_t def) const {
-    if (auto it = s.props.find(pid); it != s.props.end()) return it->second;
-    if (env_.defaults)
-      if (auto it = env_.defaults->find(pid); it != env_.defaults->end()) return it->second;
-    return def;
+    const auto it = s.props.find(pid);
+    return it != s.props.end() ? it->second : def;
   }
-  bool Has(const Shape& s, uint16_t pid) const { return s.props.count(pid) || (env_.defaults && env_.defaults->count(pid)); }
+  bool Has(const Shape& s, uint16_t pid) const { return s.props.count(pid) != 0; }
   // A boolean of a boolean property set: `bit`, used when bit + 16 is set.
   bool Bool(const Shape& s, uint16_t pid, int bit, bool def) const {
     if (auto it = s.props.find(pid); it != s.props.end() && (it->second >> (bit + 16) & 1)) return it->second >> bit & 1;
-    if (env_.defaults)
-      if (auto it = env_.defaults->find(pid); it != env_.defaults->end() && (it->second >> (bit + 16) & 1)) return it->second >> bit & 1;
     return def;
   }
 
@@ -457,7 +453,12 @@ class Writer {
     }
   }
 
+  // fillFocus is where the back color sits: 100 gives fill to back along the angle, 0 (and -100) back to
+  // fill, 50 back in the middle with fill at both edges (-50 the other way round). The shade colors run
+  // from fill (0) to back (1).
   std::string Gradient(const Shape& s, uint32_t type, uint32_t color, int alpha, uint32_t back, int backAlpha) const {
+    const int32_t focus = static_cast<int32_t>(Prop(s, 0x018C, 0));
+    const bool backFirst = focus == 0 || focus == -100;
     std::vector<std::pair<int, std::string>> stops;  // position (1/1000 %), color
     if (const auto it = s.complex.find(0x0197); it != s.complex.end() && it->second.size() >= 6) {
       const auto d = it->second;
@@ -466,13 +467,14 @@ class Writer {
         const uint8_t* p = d.data() + 6 + i * 8;
         const uint32_t c = p[0] | p[1] << 8 | p[2] << 16 | uint32_t{p[3]} << 24;
         const int32_t pos = static_cast<int32_t>(p[4] | p[5] << 8 | p[6] << 16 | uint32_t{p[7]} << 24);
-        stops.emplace_back(static_cast<int>(std::clamp(pos / 65536.0, 0.0, 1.0) * 100000), ColorXml(Rgb(s, c)));
+        const int at = static_cast<int>(std::clamp(pos / 65536.0, 0.0, 1.0) * 100000);
+        stops.emplace_back(backFirst ? 100000 - at : at, ColorXml(Rgb(s, c)));
       }
+      if (backFirst) std::reverse(stops.begin(), stops.end());
     }
     if (stops.size() < 2) {
       stops = {{0, ColorXml(color, alpha)}, {100000, ColorXml(back, backAlpha)}};
-      const int32_t focus = static_cast<int32_t>(Prop(s, 0x018C, 0));
-      if (focus == 100 || focus == -100) std::swap(stops[0].second, stops[1].second);
+      if (backFirst) std::swap(stops[0].second, stops[1].second);
       else if (focus == 50 || focus == -50) {
         const std::string edge = focus > 0 ? stops[0].second : stops[1].second, middle = focus > 0 ? stops[1].second : stops[0].second;
         stops = {{0, edge}, {50000, middle}, {100000, edge}};
