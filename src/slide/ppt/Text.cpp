@@ -262,11 +262,9 @@ std::span<const uint8_t> Pp9Tag(std::span<const uint8_t> progTags) {
   return {};
 }
 
-void ReadStyle9(std::span<const uint8_t> tag, std::vector<Pf9>& out) {
+void ReadStyle9(std::span<const uint8_t> atom, std::vector<Pf9>& out) {
   out.clear();
-  const auto atom = Find(tag, 0x0FAC);  // StyleTextProp9Atom: PF9, CF9 and SI exceptions, in turn
-  if (!atom) return;
-  Bytes b(atom->body);
+  Bytes b(atom);  // PF9, CF9 and SI exceptions, in turn
   while (b.Left() >= 12 && out.size() < 16) {
     Pf9 p;
     const uint32_t pf = b.U32();

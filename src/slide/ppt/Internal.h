@@ -186,8 +186,8 @@ struct Pf9 {
   int scheme = -1;      // TextAutoNumberSchemeEnum, -1 when not given
   int start = 1;
 };
-// The StyleTextProp9Atom's entries in a "___PPT9" tag's records.
-void ReadStyle9(std::span<const uint8_t> tag, std::vector<Pf9>& out);
+// A StyleTextProp9Atom's (0x0FAC) entries, from its body.
+void ReadStyle9(std::span<const uint8_t> atom, std::vector<Pf9>& out);
 // The "___PPT9" tag's records in a ProgTags container's body, or empty.
 std::span<const uint8_t> Pp9Tag(std::span<const uint8_t> progTags);
 

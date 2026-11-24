@@ -253,6 +253,27 @@ class Converter {
     return n;
   }
 
+  // The document's "___PPT9" tag: its OutlineTextProps9Container pairs an OutlineTextPropsHeaderExAtom
+  // (slide id, text type) with that outline text's StyleTextProp9Atom.
+  void OutlineStyle9(std::span<const uint8_t> tag) {
+    const auto container = Find(tag, 0x0FAE);
+    if (!container) return;
+    Records rs(container->body);
+    std::optional<std::pair<uint32_t, int>> key;
+    for (Rec r; rs.Next(r) && style9_.size() < 100000;) {
+      if (r.type == 0x0FAF) {
+        Bytes b(r.body);
+        const uint32_t slide = b.U32();
+        const uint32_t type = b.U32();
+        key.reset();
+        if (b.Ok() && type <= 8) key = std::make_pair(slide, static_cast<int>(type));
+      } else if (r.type == 0x0FAC && key) {
+        ReadStyle9(r.body, style9_[*key]);
+        key.reset();
+      }
+    }
+  }
+
   // ---- The document
 
   bool ReadDocument(pkg::Status& status) {
@@ -281,9 +302,18 @@ class Converter {
           else if (r.inst == 1) List(r.body, masters_);
           else if (r.inst == 2) List(r.body, notes_);
           break;
+        case 0x07D0:  // DocInfoList: its ProgTags
+          if (auto tags = Find(r.body, 0x1388)) OutlineStyle9(Pp9Tag(tags->body));
+          break;
+        case 0x1388: OutlineStyle9(Pp9Tag(r.body)); break;
         default: break;
       }
     }
+    // The outline texts' PowerPoint 2000 additions (numbered paragraphs), by slide and text type.
+    for (auto* list : {&slides_, &masters_, &notes_})
+      for (ListEntry& e : *list)
+        for (Text& t : e.texts)
+          if (auto it = style9_.find({e.id, t.type}); it != style9_.end()) t.pf9 = it->second;
     if (slideW_ <= 0 || slideH_ <= 0) slideW_ = 5760, slideH_ = 4320;
     if (notesW_ <= 0 || notesH_ <= 0) notesW_ = 4320, notesH_ = 5760;
     if (masters_.empty()) {
@@ -872,6 +902,7 @@ class Converter {
 
   std::vector<uint8_t> doc_, pictures_;
   std::map<uint32_t, uint32_t> persist_;
+  std::map<std::pair<uint32_t, int>, std::vector<Pf9>> style9_;  // outline texts' PF9, by slide id and text type
   uint32_t docPersist_ = 0, encryptPersist_ = 0;
   int32_t slideW_ = 0, slideH_ = 0, notesW_ = 0, notesH_ = 0;
   uint32_t notesMaster_ = 0;

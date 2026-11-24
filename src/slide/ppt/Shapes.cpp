@@ -632,7 +632,7 @@ class Writer {
     }
     t.type = -1;
     ReadText(s.textbox, t, env_.hyperlink);
-    if (!s.style9.empty()) ReadStyle9(s.style9, t.pf9);
+    if (auto atom = Find(s.style9, 0x0FAC)) ReadStyle9(atom->body, t.pf9);
     if (t.type < 0 || t.type > 8) t.type = s.placeholder >= 0 ? PlaceholderTextType(s) : kOther;
     if (env_.notes && s.placeholder == 0x0C) t.type = kNotes;
     t.placeholder = s.placeholder >= 0;
