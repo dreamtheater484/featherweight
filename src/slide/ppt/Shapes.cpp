@@ -5,19 +5,42 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
+#include <pugixml.hpp>
+
 #include "draw/OfficeArt.h"
+#include "pkg/Snapshot.h"
+#include "pkg/Zip.h"
 #include "slide/ppt/Internal.h"
 
 namespace fw::slide::ppt::detail {
+
+bool PackageXml(std::span<const uint8_t> package, std::string_view name, pugi::xml_document& doc) {
+  if (package.size() < 22) return false;
+  auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(package.begin(), package.end()));
+  pkg::ZipReader zip;
+  if (!snapshot || !zip.Open(*snapshot).Ok()) return false;
+  for (const pkg::ZipEntry& e : zip.Entries()) {
+    std::vector<uint8_t> bytes;
+    if (e.name == name && e.uncompressedSize <= (8u << 20) && zip.Read(e, bytes).Ok())
+      return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8);
+  }
+  return false;
+}
+
 namespace {
 
+struct XmlString : pugi::xml_writer {
+  std::string out;
+  void write(const void* data, size_t size) override { out.append(static_cast<const char*>(data), size); }
+};
+
 std::string Num(long long v) { return std::to_string(v); }
-long long Emu(double units) { return std::llround(units * kEmuPerUnit); }
 
 struct Shape {
   uint16_t spt = 0;
@@ -265,6 +288,8 @@ class Writer {
     std::string children;
     Shape self;
     bool first = true;
+    const double outer = unit_;
+    double rect[4], sp[4];
     Records rs(body);
     for (Rec r; rs.Next(r);) {
       if (r.type == 0xF004) {
@@ -272,6 +297,13 @@ class Writer {
         if (first) {
           self = std::move(s);
           first = false;
+          // The children's space, in EMUs per its unit: master units' when that fits in DrawingML's
+          // 32-bit coordinates, less when a group's space is larger (PowerPoint 2007 writes EMUs).
+          Bounds(self, rect);
+          std::copy_n(self.grouped && !top ? self.space : rect, 4, sp);
+          double most = 1;
+          for (int i = 0; i < 4; ++i) most = std::max({most, std::abs(sp[i]), std::abs(sp[i] - sp[i ^ 2])});
+          if (!top) unit_ = std::min(kEmuPerUnit, 1e9 / most);
           continue;
         }
         if (s.flags & 0x408) continue;  // deleted, or the background
@@ -282,20 +314,24 @@ class Writer {
       }
       if (count_ > 50000) break;
     }
+    const double inner = unit_;
+    unit_ = outer;
     if (top) return children;
     if (children.empty()) return {};
     // A group: its place in its parent and its own space for the children.
-    double rect[4];
-    Bounds(self, rect);
-    const double* sp = self.grouped ? self.space : rect;
     std::string x = "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"" + Num(IdOf(self)) + "\" name=\"" + NameOf(self, "Group") + "\"" +
                     (Hidden(self) ? " hidden=\"1\"" : "") + "/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm" +
-                    XfrmAttrs(self) + "><a:off x=\"" + Num(Emu(rect[0])) + "\" y=\"" + Num(Emu(rect[1])) + "\"/><a:ext cx=\"" +
-                    Num(Emu(std::max(0.0, rect[2] - rect[0]))) + "\" cy=\"" + Num(Emu(std::max(0.0, rect[3] - rect[1]))) +
-                    "\"/><a:chOff x=\"" + Num(Emu(sp[0])) + "\" y=\"" + Num(Emu(sp[1])) + "\"/><a:chExt cx=\"" +
-                    Num(Emu(std::max(0.0, sp[2] - sp[0]))) + "\" cy=\"" + Num(Emu(std::max(0.0, sp[3] - sp[1]))) +
-                    "\"/></a:xfrm></p:grpSpPr>";
+                    XfrmAttrs(self) + ">" + OffExt(rect, outer) + "<a:chOff x=\"" + Num(At(sp[0], inner)) + "\" y=\"" +
+                    Num(At(sp[1], inner)) + "\"/><a:chExt cx=\"" + Num(At(std::max(0.0, sp[2] - sp[0]), inner)) + "\" cy=\"" +
+                    Num(At(std::max(0.0, sp[3] - sp[1]), inner)) + "\"/></a:xfrm></p:grpSpPr>";
     return x + children + "</p:grpSp>";
+  }
+  // A coordinate in EMUs at `unit` EMUs per unit, within DrawingML's 32 bits.
+  static long long At(double v, double unit) { return std::llround(std::clamp(v * unit, -2147483647.0, 2147483647.0)); }
+  // a:off and a:ext for a rectangle (left, top, right, bottom).
+  static std::string OffExt(const double r[4], double unit) {
+    return "<a:off x=\"" + Num(At(r[0], unit)) + "\" y=\"" + Num(At(r[1], unit)) + "\"/><a:ext cx=\"" + Num(At(std::max(0.0, r[2] - r[0]), unit)) +
+           "\" cy=\"" + Num(At(std::max(0.0, r[3] - r[1]), unit)) + "\"/>";
   }
 
   uint32_t IdOf(const Shape& s) {
@@ -341,8 +377,7 @@ class Writer {
   std::string Xfrm(const Shape& s) const {
     double r[4];
     Bounds(s, r);
-    return "<a:xfrm" + XfrmAttrs(s) + "><a:off x=\"" + Num(Emu(r[0])) + "\" y=\"" + Num(Emu(r[1])) + "\"/><a:ext cx=\"" +
-           Num(Emu(std::max(0.0, r[2] - r[0]))) + "\" cy=\"" + Num(Emu(std::max(0.0, r[3] - r[1]))) + "\"/></a:xfrm>";
+    return "<a:xfrm" + XfrmAttrs(s) + ">" + OffExt(r, unit_) + "</a:xfrm>";
   }
 
   std::string Geometry(const Shape& s) const {
@@ -650,6 +685,43 @@ class Writer {
     return "<a:hlinkClick r:id=\"" + rel + "\"/>";
   }
 
+  // PowerPoint 2007's own DrawingML for a shape (the tertiary FOPT's metroBlob: a package whose
+  // drs/shapexml.xml is the p:sp): its spPr after the xfrm and its p:style keep what the binary
+  // properties can't (soft shadows, glows, gradient stops, theme references). False when there's none,
+  // or they refer to other parts.
+  static bool Metro(const Shape& s, std::string& spPr, std::string& style, bool& useBg) {
+    const auto it = s.complex.find(0x03A9);
+    pugi::xml_document doc;
+    if (it == s.complex.end() || !PackageXml(it->second, "drs/shapexml.xml", doc)) return false;
+    const pugi::xml_node root = doc.document_element();
+    if (std::string_view(root.name()) != "p:sp" && std::string_view(root.name()) != "p:cxnSp") return false;
+    const pugi::xml_node props = root.child("p:spPr"), st = root.child("p:style");
+    // Not when it refers to parts (r:), or uses a prefix other than a: and p: that what's copied doesn't declare.
+    bool skip = !props;
+    const std::function<void(pugi::xml_node, std::string)> walk = [&](pugi::xml_node n, std::string known) {
+      for (pugi::xml_attribute a : n.attributes())
+        if (std::string_view(a.name()).rfind("xmlns:", 0) == 0) known += std::string(a.name() + 6) + " ";
+      const auto ok = [&](std::string_view name) {
+        const std::string prefix(name.substr(0, name.find(':')));
+        return prefix.size() == name.size() || prefix == "a" || prefix == "p" || prefix == "xmlns" ||
+               (prefix != "r" && known.find(" " + prefix + " ") != std::string::npos);
+      };
+      skip |= !ok(n.name());
+      for (pugi::xml_attribute a : n.attributes()) skip |= !ok(a.name());
+      for (pugi::xml_node c : n.children()) walk(c, known);
+    };
+    for (pugi::xml_node c : props.children()) walk(c, " ");
+    walk(st, " ");
+    if (skip) return false;
+    XmlString p, y;
+    for (pugi::xml_node c : props.children())
+      if (std::string_view(c.name()) != "a:xfrm") c.print(p, "", pugi::format_raw);
+    if (st) st.print(y, "", pugi::format_raw);
+    spPr = std::move(p.out), style = std::move(y.out);
+    useBg = root.attribute("useBgFill").as_bool();
+    return true;
+  }
+
   std::string ShapeXml(const Shape& s) {
     if (!s.anchored) return {};
     const uint32_t id = IdOf(s);
@@ -682,11 +754,13 @@ class Writer {
     std::string fill = FillXml(s, useBg);
     const std::string_view preset = draw::PresetForSpt(s.spt);
     if (preset == "line" || (s.spt >= 32 && s.spt <= 40)) fill = "<a:noFill/>", useBg = false;
+    std::string props, style;
+    if (s.placeholder >= 0 || !Metro(s, props, style, useBg)) props = Geometry(s) + fill + LineXml(s) + EffectXml(s);
     const bool textBox = s.spt == 202 && s.placeholder < 0;
     std::string x = std::string("<p:sp") + (useBg ? " useBgFill=\"1\"" : "") + "><p:nvSpPr><p:cNvPr id=\"" + Num(id) + "\" name=\"" +
                     NameOf(s, s.placeholder >= 0 ? "Placeholder" : textBox ? "TextBox" : "Shape") + "\"" + hidden + cNvPrEnd +
                     "<p:cNvSpPr" + (textBox ? " txBox=\"1\"" : "") + "/><p:nvPr>" + (s.placeholder >= 0 ? Ph(s) : std::string()) +
-                    "</p:nvPr></p:nvSpPr><p:spPr>" + Xfrm(s) + Geometry(s) + fill + LineXml(s) + EffectXml(s) + "</p:spPr>";
+                    "</p:nvPr></p:nvSpPr><p:spPr>" + Xfrm(s) + props + "</p:spPr>" + style;
     Text t;
     if (TextOf(s, t) && (!t.chars.empty() || s.placeholder >= 0)) {
       x += "<p:txBody>" + BodyPr(s) + "<a:lstStyle/>" + ParagraphsXml(t, env_.text, env_.link) + "</p:txBody>";
@@ -695,6 +769,7 @@ class Writer {
   }
 
   const DrawingEnv& env_;
+  double unit_ = kEmuPerUnit;  // EMUs per unit of the group space being written
   uint32_t maxId_ = 1;
   size_t count_ = 0;
   std::set<uint32_t> ids_;

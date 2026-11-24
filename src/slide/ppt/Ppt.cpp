@@ -557,16 +557,26 @@ class Converter {
   // `type` in `container`, into `doc`; false when there's none.
   static bool RoundTripXml(std::span<const uint8_t> container, uint16_t type, std::string_view name, pugi::xml_document& doc) {
     const auto atom = Find(container, type);
-    if (!atom || atom->body.size() < 22) return false;
-    auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(atom->body.begin(), atom->body.end()));
-    pkg::ZipReader zip;
-    if (!snapshot || !zip.Open(*snapshot).Ok()) return false;
-    for (const pkg::ZipEntry& e : zip.Entries()) {
-      std::vector<uint8_t> bytes;
-      if (e.name == name && e.uncompressedSize <= (8u << 20) && zip.Read(e, bytes).Ok())
-        return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8);
+    return atom && PackageXml(atom->body, name, doc);
+  }
+
+  // A PowerPoint 2007 or later master's color mapping (RoundTripColorMapping12Atom: an a:clrMap) as
+  // p:clrMap's attributes; empty when there's none or it isn't one.
+  static std::string RoundTripClrMap(std::span<const uint8_t> master) {
+    const auto atom = Find(master, 0x040F);
+    pugi::xml_document doc;
+    if (!atom || !doc.load_buffer(atom->body.data(), atom->body.size())) return {};
+    static constexpr const char* kKeys[] = {"bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3",
+                                            "accent4", "accent5", "accent6", "hlink", "folHlink"};
+    std::string out;
+    for (const char* key : kKeys) {
+      const std::string_view v = doc.document_element().attribute(key).value();
+      bool known = v == "dk1" || v == "lt1" || v == "dk2" || v == "lt2";
+      for (const char* k : kKeys) known |= std::string_view(k).size() > 3 && v == k;  // accentN, hlink, folHlink
+      if (!known) return {};
+      out += std::string(out.empty() ? "" : " ") + key + "=\"" + std::string(v) + "\"";
     }
-    return false;
+    return out;
   }
 
   // A PowerPoint 2007 or later master's own theme (RoundTripTheme12Atom's package), with the pictures
@@ -728,8 +738,9 @@ class Converter {
       for (int l : all) layoutIds += "<p:sldLayoutId id=\"" + Num(++nextLayoutId) + "\" r:id=\"" + rels.Add("slideLayout", "../slideLayouts/slideLayout" + Num(l) + ".xml") + "\"/>";
       const int theme = ++themes;
       std::string themeRels;
-      std::string themeXml = RoundTripTheme(rec.body, themeRels);
+      std::string themeXml = RoundTripTheme(rec.body, themeRels), clrMap = kClrMap;
       if (themeXml.empty()) themeXml = ThemeXml(m.cx, "Master " + Num(m.part));
+      else if (std::string own = RoundTripClrMap(rec.body); !own.empty()) clrMap = std::move(own);  // with its own theme only
       add("ppt/theme/theme" + Num(theme) + ".xml", std::move(themeXml), "application/vnd.openxmlformats-officedocument.theme+xml");
       if (!themeRels.empty()) parts.push_back({"ppt/theme/_rels/theme" + Num(theme) + ".xml.rels", std::move(themeRels)});
       rels.Add("theme", "../theme/theme" + Num(theme) + ".xml");
@@ -738,7 +749,7 @@ class Converter {
       if (auto drawing = Find(rec.body, 0x040C)) d = DrawingXml(drawing->body, env);
       m.background = d.background;
       std::string xml = std::string(kDecl) + "<p:sldMaster" + kNs + "><p:cSld>" + Background(d.background) + "<p:spTree>" + kTree + d.shapes +
-                        "</p:spTree></p:cSld><p:clrMap " + kClrMap + "/><p:sldLayoutIdLst>" + layoutIds + "</p:sldLayoutIdLst><p:txStyles><p:titleStyle>" +
+                        "</p:spTree></p:cSld><p:clrMap " + clrMap + "/><p:sldLayoutIdLst>" + layoutIds + "</p:sldLayoutIdLst><p:txStyles><p:titleStyle>" +
                         LevelStylesXml(m.cx, kTitle) + "</p:titleStyle><p:bodyStyle>" + LevelStylesXml(m.cx, kBody) +
                         "</p:bodyStyle><p:otherStyle>" + LevelStylesXml(m.cx, kOther) + "</p:otherStyle></p:txStyles></p:sldMaster>";
       const std::string name = "ppt/slideMasters/slideMaster" + Num(m.part) + ".xml";
