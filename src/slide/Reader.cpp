@@ -568,11 +568,11 @@ void Loader::Refresh(Presentation& deck, const std::set<std::string>& parts, boo
     for (const auto& [key, theme] : deck.themes_) full = full || parts.count(key) > 0;
     std::string styles = TargetOfType(deck.RelationshipsOf(deck.presentationPart_), "tableStyles");
     full = full || changed(styles);
-    // Layouts no master lists are read as the slides naming them are, so which ones there are and
-    // their order follow the slides: when the slide list changes, everything is read again, so the
-    // deck lists the layouts a fresh read of it would (fuzz_pptx finding: a deck without masters,
-    // a slide deleted, its replayed journal listing one layout less).
-    if (!full && changed(deck.presentationPart_)) {
+    // Layouts no master lists (none, or one that can't be read) are read as the slides naming them
+    // are, so which ones there are and their order follow the slides: when the slide list or a slide
+    // changes, everything is read again, so the deck lists the layouts a fresh read of it would
+    // (fuzz_pptx findings: a deck without masters, a slide deleted; a damaged master, a layout set).
+    if (!full) {
       std::set<std::string> listed;
       for (const auto& m : deck.masters_) {
         ForEachChild(P(m->root, "sldLayoutIdLst"), [&](pugi::xml_node id) {
@@ -580,7 +580,14 @@ void Loader::Refresh(Presentation& deck, const std::set<std::string>& parts, boo
           return true;
         });
       }
-      for (const auto& l : deck.layouts_) full = full || !listed.count(pkg::PartKey(l->part));
+      bool unlisted = false;
+      for (const auto& l : deck.layouts_) unlisted = unlisted || !listed.count(pkg::PartKey(l->part));
+      // (A slide's layout can change while it isn't loaded, so any slide changed counts. Only such
+      // decks pay for it: a master that can't be read, layouts left off its list.)
+      if (unlisted) {
+        full = changed(deck.presentationPart_);
+        for (const auto& r : deck.slideRefs_) full = full || changed(r.part);
+      }
     }
   }
   bool presentation = full || changed(deck.presentationPart_);
