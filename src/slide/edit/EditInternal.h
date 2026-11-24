@@ -47,6 +47,7 @@ struct Step {
   bool typing = false;    // open for more typing (coalescing)
   TextTarget target;      // typing: where
   std::map<uint32_t, std::set<uint32_t>> shapes;  // slide id -> shape ids touched, for the view
+  std::set<uint32_t> comments;                     // slide ids whose comments changed (kComments)
   std::map<std::string, std::string> names;       // PartKey (rels: "rels:" + key) -> name as written
   bool Empty() const { return parts.empty() && rels.empty() && !typesSaved; }
 };
@@ -68,6 +69,7 @@ struct Editor::Impl {
     std::shared_ptr<pkg::ContentTypes> types;
     bool full = false;
     std::map<std::string, std::set<uint32_t>> shapes;  // slide part key -> shapes touched
+    std::set<std::string> comments;                    // slide part keys whose comments changed
     // Back to the file's own (a journal's replay): the store's edit of these goes, so a save copies
     // them byte for byte again. PartKey -> name.
     std::map<std::string, std::string> originalParts, originalRels;
@@ -97,6 +99,7 @@ struct Editor::Impl {
   void OriginalTypes();
   void Full() { work.full = true; }
   void Touched(std::string_view slidePart, uint32_t shape);
+  void CommentsChanged(std::string_view slidePart);  // p3-review: reported with kComments
 
   // ---- Steps
   std::vector<Step> undo, redo;

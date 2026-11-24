@@ -116,6 +116,13 @@ void PresentationFile::Changed(const fw::slide::edit::Editor& editor) {
 void PresentationFile::Autosave(fw::slide::edit::Editor& editor) {
   // A recovered deck is unsaved before any edit too.
   if (run_ || (!editor.Modified() && !Dirty()) || !AutosaveDue()) return;
+  if (Protected()) {
+    // p3-review: a password-protected deck is never in clear, even in the recovery folder: the whole
+    // deck, encrypted with its key (FileSession::WriteAutosave), in place of a journal.
+    std::vector<uint8_t> bytes;
+    if (fw::slide::edit::SaveToBytes(editor, bytes).Ok()) WriteAutosave(std::move(bytes));
+    return;
+  }
   const auto bytes = editor.Deck().GetPackage().GetSnapshot().Bytes();
   if (WriteJournal(std::span<const uint8_t>(bytes.data(), bytes.size()), "pptx", journal_.All(editor),
                    journal_.Unwritten(editor)))

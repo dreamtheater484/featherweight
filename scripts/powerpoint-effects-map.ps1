@@ -172,12 +172,12 @@ foreach ($entry in $slides) {
     $choice = $x.SelectSingleNode("/p:sld/mc:AlternateContent/mc:Choice", $ns)
     $fallback = $x.SelectSingleNode("/p:sld/mc:AlternateContent/mc:Fallback/p:transition", $ns)
     $tr = if ($choice) { $choice.SelectSingleNode("p:transition", $ns) } else { $x.SelectSingleNode("/p:sld/p:transition", $ns) }
-    $child = if ($tr) { @($tr.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.LocalName -ne 'sndAc' -and $_.LocalName -ne 'extLst' }) | Select-Object -First 1 } else { $null }
+    $inner = if ($tr) { @($tr.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.LocalName -ne 'sndAc' -and $_.LocalName -ne 'extLst' }) | Select-Object -First 1 } else { $null }
     $name = $title.Substring(3)
     $transitions += [ordered]@{
       ppEntryEffect = $name; value = Get-EnumValue PpEntryEffect $name
       requires = $(if ($choice) { $choice.GetAttribute("Requires") } else { $null })
-      element = Format-Element $child
+      element = Format-Element $inner
       transition = Format-Element $tr
       fallback = $(if ($fallback) { Format-Element (@($fallback.ChildNodes | Where-Object { $_.NodeType -eq 'Element' }) | Select-Object -First 1) } else { $null })
     }
@@ -208,5 +208,19 @@ $table = [ordered]@{
   effects = $effects
   directions = $directions
 }
-Write-Json $table (Join-Path $root $Json)
+# One entry a line (Windows PowerShell's indentation made it ten times the size).
+$lines = New-Object Collections.Generic.List[string]
+$lines.Add("{")
+$keys = @($table.Keys)
+for ($k = 0; $k -lt $keys.Count; $k++) {
+  $key = $keys[$k]; $v = $table[$key]; $comma = if ($k -lt $keys.Count - 1) { "," } else { "" }
+  if ($v -is [Array]) {
+    $lines.Add("  `"$key`": [")
+    for ($i = 0; $i -lt $v.Count; $i++) { $lines.Add("    " + (ConvertTo-Json $v[$i] -Compress -Depth 4) + $(if ($i -lt $v.Count - 1) { "," } else { "" })) }
+    $lines.Add("  ]$comma")
+  } else { $lines.Add("  `"$key`": " + (ConvertTo-Json $v -Compress) + $comma) }
+}
+$lines.Add("}")
+[IO.File]::WriteAllText((Join-Path $root $Json), (($lines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+$null = Get-Content (Join-Path $root $Json) -Raw -Encoding UTF8 | ConvertFrom-Json  # still JSON
 "{0} transitions, {1} effects, {2} directions, {3} refused -> {4}" -f $transitions.Count, $effects.Count, $directions.Count, @($made.refused).Count, $Json
