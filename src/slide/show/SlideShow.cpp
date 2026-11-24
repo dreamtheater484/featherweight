@@ -235,9 +235,9 @@ class Show final : public anim::FrameSource {
   // The bench.
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
   void WriteBench();
-  // The bench takes the screen of someone who may come back: any input since it started (anywhere,
-  // not only in the show) or another program taking the focus stops it at once.
-  bool BenchInterrupted() const;
+  // The bench ignores the mouse and the keyboard (a click or a key changes nothing: Roy, 2026-11-24,
+  // "mouse movement or a click in a running program should generally not be a throw away"); only an
+  // explicit stop (Esc, Alt+F4, closing it) or another program taking the focus ends it early.
   // Ends the show and deletes it: the caller returns at once, touching nothing of it.
   void AbortBench(const char* why);
 
@@ -282,8 +282,6 @@ class Show final : public anim::FrameSource {
   };
   bool bench_ = false;
   const char* benchAborted_ = nullptr;  // why the bench stopped early, or null
-  DWORD benchInput_ = 0;                // GetLastInputInfo's time when the bench started
-  POINT benchCursor_{};
   bool awake_ = false;  // the display and the PC kept on while the show runs
   bool capture_ = false;
   double clock_ = 1000;  // capture_: the show's own time
@@ -378,12 +376,6 @@ bool Show::Create() {
   // A show keeps the display and the PC awake while it runs (the power settings stay as they are).
   SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
   awake_ = true;
-  if (bench_) {
-    LASTINPUTINFO li{sizeof(li)};
-    GetLastInputInfo(&li);
-    benchInput_ = li.dwTime;
-    GetCursorPos(&benchCursor_);
-  }
   ShowWindow(hwnd_, SW_SHOW);
   SetForegroundWindow(hwnd_);
   SetFocus(hwnd_);
@@ -953,10 +945,6 @@ void Show::EndTransition(double now) {
 }
 
 void Show::Frame() {
-  if (BenchInterrupted()) {
-    AbortBench("input");
-    return;
-  }
   if (!EnsureDevice()) return;
   // While something moves, the show's frames come before other programs' work (a build, a sync):
   // a frame takes well under a millisecond, so this costs them nothing.
@@ -1483,18 +1471,19 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
     switch (m) {
       case WM_KEYDOWN:
       case WM_SYSKEYDOWN:
+        if (w == VK_ESCAPE) AbortBench("Esc");
+        else if (w == VK_F4 && GetKeyState(VK_MENU) < 0) AbortBench("closed");
+        return 0;  // other keys change nothing
+      case WM_CLOSE: AbortBench("closed"); return 0;
       case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
       case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
       case WM_MBUTTONDOWN:
       case WM_XBUTTONDOWN:
       case WM_MOUSEWHEEL:
-      case WM_MOUSEHWHEEL: AbortBench("input"); return 0;
-      case WM_MOUSEMOVE: {  // also sent when nothing moved (the window appearing under the cursor)
-        POINT pt;
-        GetCursorPos(&pt);
-        if (pt.x != benchCursor_.x || pt.y != benchCursor_.y) AbortBench("input");
-        return 0;
-      }
+      case WM_MOUSEHWHEEL: return 0;  // clicks and the wheel change nothing
+      case WM_MOUSEMOVE: ShowCursorNow(); return 0;  // the cursor shows; no mouse-over actions
       case WM_ACTIVATE: {
         DWORD pid = 0;
         if (l) GetWindowThreadProcessId(reinterpret_cast<HWND>(l), &pid);
@@ -1504,13 +1493,6 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
         }
         break;
       }
-      case WM_TIMER:
-      case kMsgPrerender:
-        if (BenchInterrupted()) {
-          AbortBench("input");
-          return 0;
-        }
-        break;
       default: break;
     }
   }
@@ -1657,12 +1639,6 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
   dxgiHave_ = inTransition;
 }
 
-bool Show::BenchInterrupted() const {
-  if (!bench_) return false;
-  LASTINPUTINFO li{sizeof(li)};
-  return GetLastInputInfo(&li) && li.dwTime != benchInput_;
-}
-
 void Show::AbortBench(const char* why) {
   benchAborted_ = why;
   DestroyWindow(hwnd_);  // writes the report and deletes the show
@@ -1787,7 +1763,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
     if (g_show->Animating()) g_show->Frame();
     else MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
-  if (g_benchAborted) return 3;  // stopped on someone's input: no result
+  if (g_benchAborted) return 3;  // stopped early (Esc, closed, the focus taken): no result
   return benchReport.empty() || g_benchPassed ? 0 : 2;
 }
 

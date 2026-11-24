@@ -17,12 +17,14 @@
 # CreateNew, holding who measures ("<session> <time> (pid N): <what>"), deleted when done. Anyone
 # else waits while it exists. A stale one (a crash) is never deleted here: it is reported and waited on.
 #
-# The bench takes the whole screen. It stops at once on any input, anywhere, or another program
-# taking the focus (exit code 3, "aborted" in the report) and the desktop comes back; this script
-# then waits for the next quiet spell and tries again, up to -Tries times.
+# The bench takes the whole screen. The mouse, clicks and keys change nothing in it (the cursor may
+# show); only Esc, Alt+F4 or another program taking the focus stop it early (exit code 3, "aborted"
+# in the report) and the desktop comes back; this script then waits for the next quiet spell and
+# tries again, up to -Tries times.
 #
-# -AbortTest: no CPU wait; starts the bench, moves the mouse by one pixel 3 s later and checks that
-# the show ends within a second with exit code 3.
+# -AbortTest: no CPU wait; starts the bench, moves the mouse by one pixel 2 s later (the bench must
+# go on), posts Esc to the show's window a second later and checks that the show ends within a
+# second with exit code 3.
 param(
   [string]$Exe = '',   # default: build\Release\Featherweight.exe of this checkout
   [string]$Deck = '',  # default: bench50.pptx next to this script
@@ -82,6 +84,13 @@ public static class QuietPc {
   public static bool OnConsole() {
     uint mine;
     return ProcessIdToSessionId(GetCurrentProcessId(), out mine) && mine == WTSGetActiveConsoleSessionId();
+  }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowW(string cls, string title);
+  [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  // Esc to the show's window only (WM_KEYDOWN VK_ESCAPE), never to whatever has the focus.
+  public static bool PostEscToShow() {
+    IntPtr h = FindWindowW("FeatherweightSlideShow", null);
+    return h != IntPtr.Zero && PostMessageW(h, 0x0100, (IntPtr)0x1B, IntPtr.Zero);
   }
   public static uint NudgeMouse() {  // the number of inputs sent: 2
     var inputs = new INPUT[2];
@@ -173,14 +182,17 @@ while ((Get-Date) -lt $deadline) {
     $p = Start-Process -FilePath $Exe -ArgumentList $showArgs -PassThru
     $null = $p.Handle  # keeps the exit code readable after the process ends
     if ($AbortTest) {
-      Start-Sleep -Seconds 3
-      $nudged = Get-Date
+      Start-Sleep -Seconds 2
       $sent = [QuietPc]::NudgeMouse()
+      if ($p.WaitForExit(1000)) { Write-Status "abort test FAILED: a mouse move ended the bench (exit code $($p.ExitCode))"; exit 1 }
+      $escAt = Get-Date
+      $posted = [QuietPc]::PostEscToShow()
       $ended = $p.WaitForExit(1000)
-      $ms = [math]::Round(((Get-Date) - $nudged).TotalMilliseconds)
-      if (-not $ended) { $p.Kill(); $p.WaitForExit(); Write-Status "abort test FAILED: the show still ran 1 s after the input (killed)"; exit 1 }
-      Write-Status "abort test: $sent inputs sent; exit code $($p.ExitCode) $ms ms after the input; report aborted: $((Get-Content $Report -Raw | ConvertFrom-Json).aborted)"
-      exit $(if ($p.ExitCode -eq 3) { 0 } else { 1 })
+      $ms = [math]::Round(((Get-Date) - $escAt).TotalMilliseconds)
+      if (-not $ended) { $p.Kill(); $p.WaitForExit(); Write-Status "abort test FAILED: the show still ran 1 s after Esc (posted: $posted; killed)"; exit 1 }
+      $r = Get-Content $Report -Raw | ConvertFrom-Json
+      Write-Status "abort test: a mouse move ($sent inputs) went on; Esc ended it after $ms ms, exit code $($p.ExitCode), report aborted: $($r.aborted) ($($r.abortReason))"
+      exit $(if ($p.ExitCode -eq 3 -and $r.abortReason -eq 'Esc') { 0 } else { 1 })
     }
     if (-not $p.WaitForExit(15 * 60 * 1000)) { $p.Kill(); $p.WaitForExit(); Write-Status 'the bench ran 15 minutes: killed'; exit 1 }
     $code = $p.ExitCode
@@ -188,7 +200,7 @@ while ((Get-Date) -lt $deadline) {
     Remove-Item $Lock -ErrorAction SilentlyContinue
   }
   if ($code -eq 3) {
-    Write-Status "try $try stopped on input; waiting for the next quiet spell"
+    Write-Status "try $try stopped early (Esc, closed or the focus taken); waiting for the next quiet spell"
     $window.Clear()
     if ($try -ge $Tries) { Write-Status "gave up after $try tries"; exit 3 }
     continue
