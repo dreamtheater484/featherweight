@@ -355,7 +355,7 @@ void PresentationView::CommentsPanel::Open(bool startNew) {
     at_ = {std::clamp(at_.x, 0.f, std::max(0.f, size.width - 20)), std::clamp(at_.y, 0.f, std::max(0.f, size.height - 20))};
     newThread_ = true;
     editing_.clear();
-    box_.SetText(L"");
+    box_.ReplaceText(L"");
     focusWanted_ = &box_;
   } else {
     newThread_ = picked_.empty();
@@ -435,7 +435,7 @@ bool PresentationView::CommentsPanel::Post(const std::wstring& text) {
       newThread_ = false;
     }
   }
-  if (r) box_.SetText(L"");
+  if (r) box_.ReplaceText(L"");
   return Done(r, L"Posted.");
 }
 
@@ -443,14 +443,24 @@ bool PresentationView::CommentsPanel::Reply(const std::wstring& text) {
   edit::Editor* ed = Ed();
   if (!ed || picked_.empty()) return false;
   const edit::Result r = edit::ReplyToComment(*ed, v_.current_, picked_, text, Writer());
-  if (r) box_.SetText(L"");
+  if (r) box_.ReplaceText(L"");
   return Done(r, L"Reply posted.");
 }
 
 void PresentationView::CommentsPanel::Edit() {
   if (picked_.empty()) return;
-  for (const edit::Comment& c : List())
-    if (c.id == picked_) box_.SetText(c.text);
+  for (const edit::Comment& c : List()) {
+    if (c.id != picked_) continue;
+    // The box holds one line of up to 256 characters: a longer comment, or one with line breaks, would
+    // lose text when saved from it, so it isn't edited here (never damage a file).
+    if (c.text.size() > 256 || c.text.find(L'\n') != std::wstring::npos) {
+      note_ = L"This comment is too long to edit here: reply to it instead.";
+      seenState_ = UINT64_MAX;
+      v_.host_.ViewInvalidate();
+      return;
+    }
+    box_.ReplaceText(c.text);
+  }
   editing_ = picked_;
   focusWanted_ = &box_;
   seenState_ = UINT64_MAX;

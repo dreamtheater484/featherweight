@@ -32,10 +32,16 @@ bool CompoundOnDisk(const std::wstring& path) {
 
 }  // namespace
 
+// Only an encrypted package is taken: another compound file (a .ppt) goes on to the importers.
 bool PresentationView::TakeProtected() {
   if (newDeck_) return false;
+  auto encrypted = [](std::span<const uint8_t> bytes) {
+    if (!pkg::CompoundFile::HasSignature(bytes)) return false;
+    auto cf = pkg::CompoundFile::Open(bytes);
+    return cf && pkg::crypto::IsEncryptedPackage(*cf);
+  };
   if (fromBytes_) {
-    if (!pkg::CompoundFile::HasSignature(bytes_)) return false;
+    if (!encrypted(bytes_)) return false;
     protected_ = std::move(bytes_);  // a recovered protected deck: its autosave, encrypted
     bytes_.clear();
     return true;
@@ -43,7 +49,7 @@ bool PresentationView::TakeProtected() {
   if (!CompoundOnDisk(path_)) return false;
   pkg::Status st;
   std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path_, {}, st);
-  if (!snap) return false;
+  if (!snap || !encrypted(snap->Bytes())) return false;
   const auto bytes = snap->Bytes();
   protected_.assign(bytes.begin(), bytes.end());
   protectedStamp_ = snap->GetStamp();
@@ -131,7 +137,7 @@ bool PresentationView::SetFilePassword(const std::wstring& password) {
   if (!Ready() || !SlideEditor()) return false;
   // A new key for the password (empty: none); the tab is unsaved until the next save writes it so.
   File().Protect(password.empty() ? pkg::crypto::Key() : pkg::crypto::NewKey(password));
-  File().Edited(0);
+  File().ProtectionChanged();
   host_.ViewStateChanged();
   return true;
 }
@@ -151,8 +157,8 @@ PresentationView::PasswordPanel::PasswordPanel(PresentationView& view) : v_(view
 }
 
 void PresentationView::PasswordPanel::Open() {
-  password_.SetText(L"");
-  confirm_.SetText(L"");
+  password_.ReplaceText(L"");
+  confirm_.ReplaceText(L"");
   note_ = v_.file_ && v_.file_->Protected() ? L"A password is needed to open this presentation." : L"";
   focusWanted_ = true;
 }
@@ -208,8 +214,8 @@ void PresentationView::PasswordPanel::Encrypt() {
     note_ = L"This presentation can't be protected.";
   } else {
     v_.SetFilePassword(pw);  // saving writes it encrypted
-    password_.SetText(L"");
-    confirm_.SetText(L"");
+    password_.ReplaceText(L"");
+    confirm_.ReplaceText(L"");
     note_ = L"Encrypted: the next save needs this password to open the file.";
     v_.host_.ViewStateChanged();
   }
