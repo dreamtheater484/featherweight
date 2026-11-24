@@ -328,6 +328,12 @@ ui::FilePage::Model App::CurrentFilePage() {
   auto& exp = m.entries[FP::kExport];
   exp.push_back(command(CmdExportPdf, icon::PDF, L"The pages as a PDF file, as they look"));
   own(RibbonFilePlace::Export, exp, false);
+  // With nothing else to export (documents, workbooks), Export is Export PDF at once, as Print is
+  // the dialog at once: File, Export, Enter, as ⋯, Export PDF, Enter was (the friction review, R1).
+  if (exp.size() == 1) {
+    m.run[FP::kExport] = CmdExportPdf;
+    m.enabled[FP::kExport] = QueryCommand(CmdExportPdf).enabled;
+  }
 
   // Options: the app's, then this kind of tab's.
   auto& opt = m.entries[FP::kOptions];
