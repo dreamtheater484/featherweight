@@ -102,6 +102,10 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     error = Title() + L": " + why;
     return OpenResult::Failed;
   }
+  if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
+    untitled_ = L"Presentation" + std::to_wstring(newNumber_);
+    path_.clear();
+  }
   FileOpened();
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
@@ -109,7 +113,7 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   // (--snapshot, which keep a clipboard of their own) stay in the tab, so their steps run on it.
   showPending_ = (deck_->StartsAsShow() || EndsWithNoCase(path_, L".ppsx") || EndsWithNoCase(path_, L".pps")) &&
                  !util::UsingPrivateClipboard();
-  if (!imported_.empty()) {
+  if (!imported_.empty() && !newNumber_) {  // a .pot is a template: a new presentation, as above
     const size_t dot = path_.find_last_of(L'.');
     const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
     File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
@@ -122,6 +126,10 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
   text_->Attach(deck_.get(), SlideEditor());  // p2-text: after the tab's listener; read-only without an editor
   LayoutParts();
   return OpenResult::Ok;
+}
+
+bool PresentationView::IsTemplate(const std::wstring& path) {
+  return EndsWithNoCase(path, L".potx") || EndsWithNoCase(path, L".potm") || EndsWithNoCase(path, L".pot");  // .pot: p3-ppt
 }
 
 std::wstring PresentationView::Title() const { return path_.empty() && !untitled_.empty() ? untitled_ : FileNameOf(path_); }

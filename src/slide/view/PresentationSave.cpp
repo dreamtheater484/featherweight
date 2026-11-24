@@ -47,7 +47,9 @@ bool PresentationView::Modified() const { return file_ && file_->Dirty(); }
 
 void PresentationView::FileOpened() {
   PresentationFile& f = File();
-  if (!fromBytes_ && !newDeck_ && imported_.empty()) {
+  if (newNumber_) {
+    f.New(newNumber_);
+  } else if (!fromBytes_ && !newDeck_ && imported_.empty()) {
     if (Presentation* deck = deck_->Model()) f.Opened(path_, deck->GetPackage().GetSnapshot().GetStamp());
     if (std::wstring inUse = f.InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
   }
