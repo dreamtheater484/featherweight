@@ -10,7 +10,7 @@ namespace usertemplates {
 
 // The folders, the options' first (those that exist), the default last (whether or not it exists).
 std::vector<std::wstring> Folders();
-// The templates there that a shipped editor opens (.dotx, .dotm, .ott; .xltx, .xltm, .ots; .potx, .potm), by
+// The templates there that a shipped editor opens (.dotx, .dotm, .ott; .xltx, .xltm, .ots; .potx, .potm, .otp), by
 // name, at most `max`.
 std::vector<std::wstring> List(size_t max);
 std::vector<std::wstring> List(size_t max, const std::vector<std::wstring>& folders);  // from these

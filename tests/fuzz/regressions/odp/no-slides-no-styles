@@ -1,0 +1,4 @@
+@mimetype
+application/vnd.oasis.opendocument.presentation-template
+@content.xml
+<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"><office:body><office:presentation/></office:body></office:document-content>
