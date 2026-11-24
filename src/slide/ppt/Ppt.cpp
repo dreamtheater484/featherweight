@@ -17,6 +17,7 @@
 #include <pugixml.hpp>
 
 #include "draw/OfficeArt.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "slide/ppt/Internal.h"
@@ -84,11 +85,14 @@ class Converter {
     doc_ = std::move(*docStream);
     if (auto pictures = streams("Pictures")) pictures_ = std::move(*pictures);
     if (!ReadPersist(streams, status)) return {};
-    if (encrypted) {
-      status = pkg::Status::Fail(pkg::Status::Code::Unsupported, "it is protected with a password, which Featherweight can't open yet.");
-      return {};
-    }
     if (stopAtEncryption) return {};
+    if (encrypted) {
+      if (!Decrypt(status)) return {};
+      if (!Persist(docPersist_) || Persist(docPersist_)->type != 0x03E8) {
+        status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+        return {};
+      }
+    }
     if (!ReadDocument(status)) return {};
     return Write(status);
   }
@@ -179,6 +183,74 @@ class Converter {
       return false;
     }
     return true;
+  }
+
+  // ---- Encryption ([MS-PPT] 2.3.7): RC4 CryptoAPI. Each persist object but the
+  // CryptSession10Container is encrypted, its header with it, with its persist id as the block
+  // number; each record of the Pictures stream with block 0. The UserEditAtoms and the persist
+  // directories stay clear.
+
+  bool Decrypt(pkg::Status& status) {
+    using pkg::crypto::Result;
+    const auto session = encryptPersist_ ? Persist(encryptPersist_) : std::nullopt;
+    pkg::crypto::Rc4Key key;
+    const Result r = session && session->type == 0x2F14 ? key.Open(session->body, password) : Result::Damaged;
+    if (r == Result::WrongPassword) {
+      status = pkg::Status::Fail(pkg::Status::Code::Rejected,
+                                 password.empty() ? "it is protected with a password." : "the password is wrong.");
+      return false;
+    }
+    if (r != Result::Ok) {
+      status = pkg::Status::Fail(r == Result::Damaged ? pkg::Status::Code::Damaged : pkg::Status::Code::Unsupported,
+                                 r == Result::Damaged ? "it seems to be damaged." : "it is protected in a way Featherweight doesn't support.");
+      return false;
+    }
+    std::set<uint32_t> done;  // a damaged directory may name a place twice
+    for (const auto& [id, at] : persist_)
+      if (id != encryptPersist_ && done.insert(at).second) DecryptRecord(key, id, doc_, at);
+    for (size_t at = 0; at < pictures_.size();) at += DecryptPicture(key, pictures_, at);
+    return true;
+  }
+
+  // A Pictures stream record (an OfficeArt BLIP), in place: each piece restarts block 0's key
+  // stream: the header, each 16-byte id, the metafile header (EMF, WMF, PICT) or the tag byte, then
+  // the picture. Returns the record's size, header included.
+  static size_t DecryptPicture(const pkg::crypto::Rc4Key& key, std::vector<uint8_t>& s, size_t at) {
+    if (s.size() - at < 8) return s.size() - at;
+    const std::span<uint8_t> all(s);
+    key.Decrypt(0, all.subspan(at, 8));
+    const uint16_t inst = static_cast<uint16_t>((s[at] | s[at + 1] << 8) >> 4), type = static_cast<uint16_t>(s[at + 2] | s[at + 3] << 8);
+    const uint64_t len = s[at + 4] | s[at + 5] << 8 | s[at + 6] << 16 | uint64_t{s[at + 7]} << 24;
+    const size_t end = at + static_cast<size_t>(std::min<uint64_t>(8 + len, s.size() - at));
+    size_t pos = at + 8;
+    auto piece = [&](size_t n) {
+      n = std::min(n, end - pos);
+      key.Decrypt(0, all.subspan(pos, n));
+      pos += n;
+    };
+    if (type >= 0xF018 && type <= 0xF117) {
+      const bool twoIds = inst == 0x3D5 || inst == 0x217 || inst == 0x543 || inst == 0x46B || inst == 0x6E3 || inst == 0x6E1 ||
+                          inst == 0x7A9 || inst == 0x6E5;
+      piece(16);
+      if (twoIds) piece(16);
+      piece(type == 0xF01A || type == 0xF01B || type == 0xF01C ? 34 : 1);
+    }
+    piece(end - pos);
+    return end - at;
+  }
+
+  // Decrypts the record at `at` in place, its header first to learn its size; returns its size,
+  // header included (the rest of the stream when it doesn't fit).
+  static size_t DecryptRecord(const pkg::crypto::Rc4Key& key, uint32_t block, std::vector<uint8_t>& s, size_t at) {
+    if (at >= s.size()) return 1;
+    if (s.size() - at < 8) return s.size() - at;
+    uint8_t head[8];
+    std::copy_n(s.begin() + at, 8, head);
+    if (!key.Decrypt(block, head)) return s.size() - at;
+    const uint64_t len = head[4] | head[5] << 8 | head[6] << 16 | uint64_t{head[7]} << 24;
+    const size_t n = static_cast<size_t>(std::min<uint64_t>(8 + len, s.size() - at));
+    key.Decrypt(block, std::span<uint8_t>(s).subspan(at, n));
+    return n;
   }
 
   // ---- The document

@@ -3,7 +3,9 @@
 #include "TestHarness.h"
 
 #include <windows.h>
+#include <bcrypt.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -13,10 +15,13 @@
 
 #include "pkg/Check.h"
 #include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
 #include "slide/ppt/Ppt.h"
+
+#pragma comment(lib, "bcrypt.lib")
 
 using namespace fw;
 using namespace fw::slide;
@@ -70,11 +75,14 @@ Bytes Drawing(const Bytes& shapes) {
 
 struct Built {
   Bytes document, user, pictures;
+  std::map<uint32_t, uint32_t> persist;  // persist id: offset
 };
 
 // A one-slide presentation: a master with a title style (Arial 44 pt, centered), and a slide whose
-// title placeholder has a red fill and the text "Hello" (bold) and "World".
-Built OneSlide() {
+// title placeholder has a red fill and the text "Hello" (bold) and "World". With `session` (a
+// CryptSession10Container), it is persist object 4 and the presentation says it is encrypted; the
+// other persist objects are left for the caller to encrypt.
+Built OneSlide(const Bytes& session = {}) {
   // The document.
   Bytes docAtom;
   for (int v : {5760, 4320, 4320, 5760, 1, 2, 0, 0}) Le(docAtom, static_cast<uint32_t>(v), 4);
@@ -141,10 +149,15 @@ Built OneSlide() {
   out.document.insert(out.document.end(), master.begin(), master.end());
   const uint32_t slideAt = static_cast<uint32_t>(out.document.size());
   out.document.insert(out.document.end(), slide.begin(), slide.end());
+  out.persist = {{1, 0}, {2, masterAt}, {3, slideAt}};
+  if (!session.empty()) {
+    out.persist[4] = static_cast<uint32_t>(out.document.size());
+    out.document.insert(out.document.end(), session.begin(), session.end());
+  }
   const uint32_t dirAt = static_cast<uint32_t>(out.document.size());
   Bytes dir;
-  Le(dir, 1 | 3u << 20, 4);
-  for (uint32_t v : {0u, masterAt, slideAt}) Le(dir, v, 4);
+  Le(dir, 1 | uint32_t(out.persist.size()) << 20, 4);
+  for (const auto& [id, at] : out.persist) Le(dir, at, 4);
   const Bytes directory = Rec(0, 0, 0x1772, dir);
   out.document.insert(out.document.end(), directory.begin(), directory.end());
   const uint32_t editAt = static_cast<uint32_t>(out.document.size());
@@ -152,13 +165,14 @@ Built OneSlide() {
   Le(edit, 256, 4);
   Le(edit, 0x0DBC, 2);
   edit.insert(edit.end(), {0, 3});
-  for (uint32_t v : {0u, dirAt, 1u, 4u}) Le(edit, v, 4);
+  for (uint32_t v : {0u, dirAt, 1u, uint32_t(out.persist.size()) + 1}) Le(edit, v, 4);
   Le(edit, 1, 2);
   Le(edit, 0, 2);
+  if (!session.empty()) Le(edit, 4, 4);  // encryptSessionPersistIdRef
   const Bytes userEdit = Rec(0, 0, 0x0FF5, edit);
   out.document.insert(out.document.end(), userEdit.begin(), userEdit.end());
   Bytes user;
-  for (uint32_t v : {0x14u, 0xE391C05Fu, editAt}) Le(user, v, 4);
+  for (uint32_t v : {0x14u, session.empty() ? 0xE391C05Fu : 0xF3D1C4DFu, editAt}) Le(user, v, 4);
   Le(user, 0, 2);
   Le(user, 0x03F4, 2);
   user.insert(user.end(), {3, 0, 0, 0});
@@ -174,6 +188,75 @@ ppt::StreamFn StreamsOf(const Built& b) {
     if (name == "Pictures" && !b.pictures.empty()) return b.pictures;
     return std::nullopt;
   };
+}
+
+Bytes Sha1(const Bytes& data) {
+  BCRYPT_ALG_HANDLE alg = nullptr;
+  Bytes out(20);
+  if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0))) {
+    BCryptHash(alg, nullptr, 0, const_cast<uint8_t*>(data.data()), ULONG(data.size()), out.data(), ULONG(out.size()));
+    BCryptCloseAlgorithmProvider(alg, 0);
+  }
+  return out;
+}
+
+void Rc4(const Bytes& key, uint8_t* data, size_t n) {
+  uint8_t s[256];
+  for (int i = 0; i < 256; ++i) s[i] = static_cast<uint8_t>(i);
+  for (int i = 0, j = 0; i < 256; ++i) {
+    j = (j + s[i] + key[i % key.size()]) & 255;
+    std::swap(s[i], s[j]);
+  }
+  for (size_t k = 0, i = 0, j = 0; k < n; ++k) {
+    i = (i + 1) & 255;
+    j = (j + s[i]) & 255;
+    std::swap(s[i], s[j]);
+    data[k] ^= s[(s[i] + s[j]) & 255];
+  }
+}
+
+// An RC4 CryptoAPI EncryptionInfo (version 4.2, 128-bit) for `password`, as [MS-OFFCRYPTO] 2.3.5.1
+// describes it: the header, then the salt and the verifier with its SHA-1, encrypted with block 0's key.
+Bytes EncryptionInfo(std::u16string_view password) {
+  Bytes info;
+  Le(info, 4, 2);
+  Le(info, 2, 2);
+  Le(info, 0x04, 4);  // fCryptoAPI
+  Le(info, 32, 4);    // the header's size
+  for (uint32_t v : {0x04u, 0u, 0x6801u, 0x8004u, 128u, 1u, 0u, 0u}) Le(info, v, 4);
+  Bytes salt(16), verifier(16);
+  for (int i = 0; i < 16; ++i) salt[i] = static_cast<uint8_t>(i * 7 + 1), verifier[i] = static_cast<uint8_t>(200 - i * 3);
+  Bytes h = salt;
+  for (char16_t c : password) Le(h, c, 2);
+  Bytes base = Sha1(h);
+  Le(base, 0, 4);
+  Bytes key0 = Sha1(base);
+  key0.resize(16);
+  Bytes check = verifier;
+  const Bytes hash = Sha1(verifier);
+  check.insert(check.end(), hash.begin(), hash.end());
+  Rc4(key0, check.data(), check.size());
+  Le(info, 16, 4);
+  info.insert(info.end(), salt.begin(), salt.end());
+  info.insert(info.end(), check.begin(), check.begin() + 16);
+  Le(info, 20, 4);
+  info.insert(info.end(), check.begin() + 16, check.end());
+  return info;
+}
+
+// OneSlide encrypted with `password` as PowerPoint encrypts it: each persist object but the
+// CryptSession10Container (4), its header with it, with its persist id as the block number.
+Built EncryptedSlide(std::u16string_view password) {
+  const Bytes info = EncryptionInfo(password);
+  Built b = OneSlide(Rec(0xF, 0, 0x2F14, info));
+  pkg::crypto::Rc4Key key;
+  CHECK(key.Open(info, std::wstring(password.begin(), password.end())) == pkg::crypto::Result::Ok);
+  for (const auto& [id, at] : b.persist) {
+    if (id == 4) continue;
+    const uint32_t len = b.document[at + 4] | b.document[at + 5] << 8 | b.document[at + 6] << 16 | uint32_t{b.document[at + 7]} << 24;
+    CHECK(key.Decrypt(id, std::span<uint8_t>(b.document).subspan(at, 8 + len)));  // RC4 both ways
+  }
+  return b;
 }
 
 std::unique_ptr<Presentation> Open(const Bytes& pptx) {
@@ -234,6 +317,35 @@ TEST(ppt_one_slide) {
   if (GetEnvironmentVariableA("FW_PPT_SEED", seed, MAX_PATH) > 0) {
     std::ofstream out(seed, std::ios::binary);
     out.write(reinterpret_cast<const char*>(cfb.data()), static_cast<std::streamsize>(cfb.size()));
+  }
+}
+
+TEST(ppt_encrypted) {
+  // RC4 CryptoAPI: asks for the password, refuses a wrong one, and with the right one reads as the
+  // same presentation unencrypted does.
+  pkg::Status st;
+  const Bytes plain = ppt::ToPptx(StreamsOf(OneSlide()), st);
+  CHECK(st.Ok());
+  const Built built = EncryptedSlide(u"featherweight");
+  const ppt::StreamFn streams = StreamsOf(built);
+  CHECK(ppt::IsPresentation(streams));
+  CHECK(ppt::NeedsPassword(streams));
+  for (const wchar_t* wrong : {L"", L"Featherweight"}) {
+    pkg::Status s2;
+    CHECK(ppt::ToPptx(streams, s2, wrong).empty());
+    CHECK(s2.code == pkg::Status::Code::Rejected);
+  }
+  pkg::Status s3;
+  const Bytes pptx = ppt::ToPptx(streams, s3, L"featherweight");
+  CHECK(s3.Ok());
+  CHECK(pptx == plain);
+  // A damaged session or encrypted object: a plain failure, never a crash.
+  for (size_t cut : {built.persist.at(4) + 20, built.persist.at(2) + 3}) {
+    Built b = built;
+    b.document[cut] ^= 0x5A;
+    pkg::Status s4;
+    const Bytes out = ppt::ToPptx(StreamsOf(b), s4, L"featherweight");
+    CHECK(out.empty() == !s4.Ok());
   }
 }
 

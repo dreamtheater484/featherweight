@@ -192,9 +192,10 @@ constexpr const char* kUsage =
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
-    "  fwtool convert <file.doc> <file.docx>\n"
+    "  fwtool convert [--password P] <file.doc> <file.docx>\n"
     "      Writes the .docx a Word 97-2003 document is read as (or the .xlsx an Excel 97-2003\n"
     "      workbook, .xls, is read as). Every other command reads .doc and .xls files this way too.\n"
+    "      --password opens an encrypted .ppt (also with other commands that take --password).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -242,6 +243,9 @@ std::string Display(const std::filesystem::path& file) {
   return fw::WideToUtf8(shown.generic_wstring());
 }
 
+// --password: opens an encrypted PowerPoint 97-2003 presentation.
+std::wstring legacyPassword;
+
 // A Word 97-2003 document as the .docx it's read as; empty (with `status`) when it isn't one or
 // can't be read.
 std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Status& status) {
@@ -258,7 +262,7 @@ std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Stat
     return fw::sheet::xls::ToXlsx([&cf](std::string_view name) { return cf->Stream(name); }, status);
   // A PowerPoint 97-2003 presentation (P3): the .pptx it's read as.
   if (cf && fw::slide::ppt::IsPresentation([&cf](std::string_view name) { return cf->Stream(name); }))
-    return fw::slide::ppt::ToPptx([&cf](std::string_view name) { return cf->Stream(name); }, status);
+    return fw::slide::ppt::ToPptx([&cf](std::string_view name) { return cf->Stream(name); }, status, legacyPassword);
   if (!cf || !cf->Stream("WordDocument")) {
     status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported,
                                    "not a Word 97-2003 document, Excel 97-2003 workbook or PowerPoint 97-2003 presentation");
@@ -309,13 +313,15 @@ int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
   fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
-  if (argc == 4 && std::wstring(argv[1]) == L"convert") {
+  if (std::wstring(argv[1]) == L"convert" && (argc == 4 || (argc == 6 && std::wstring(argv[2]) == L"--password"))) {
+    const int at = argc == 6 ? 4 : 2;
+    if (argc == 6) fwtool::legacyPassword = argv[3];
     fw::pkg::Status st;
-    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[2], st);
+    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[at], st);
     FILE* f = nullptr;
-    if (!docx.empty() && _wfopen_s(&f, argv[3], L"wb") != 0) f = nullptr;
+    if (!docx.empty() && _wfopen_s(&f, argv[at + 1], L"wb") != 0) f = nullptr;
     if (!f) {
-      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[2]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
+      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[at]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
       return 1;
     }
     std::fwrite(docx.data(), 1, docx.size(), f);
@@ -392,6 +398,7 @@ int wmain(int argc, wchar_t** argv) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
   }
+  fwtool::legacyPassword = options.password;
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"formulas") return fwtool::RunFormulas(options);
