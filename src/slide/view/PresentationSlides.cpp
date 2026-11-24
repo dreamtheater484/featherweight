@@ -550,6 +550,7 @@ void PresentationView::OnEditorMade(edit::Editor& ed) {
 }
 
 void PresentationView::OnSlideEdits(const edit::Changes& c) {
+  ++animEdits_;  // p3-anim: inside an edit group or typing the state id stays, the timing may not
   if (!deck_) return;
   const std::vector<uint32_t> before = editIds_;
   editIds_ = SlideIds();

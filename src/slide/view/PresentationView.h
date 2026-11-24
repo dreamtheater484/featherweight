@@ -309,6 +309,10 @@ class PresentationView : public TabContent {
   struct AnimPreview;
   std::unique_ptr<AnimationPane> animPane_;
   std::unique_ptr<AnimPreview> preview_;
+  struct AnimCache;
+  std::unique_ptr<AnimCache> animCache_;
+  uint64_t animEdits_ = 0;  // edit notices seen (OnSlideEdits): the cache reads again after each
+  const AnimCache& AnimNow();  // the current slide's sequence and transition, read once per edit
   std::vector<size_t> animPicked_;  // effects picked in the pane (main-sequence indexes on the current slide)
   size_t animPickedSlide_ = SIZE_MAX;
   std::vector<uint32_t> animPickedShapes_;  // the shapes selected then: clicking others drops the pick
