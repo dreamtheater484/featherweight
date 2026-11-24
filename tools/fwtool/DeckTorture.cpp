@@ -63,6 +63,13 @@
 #else
 #define FW_SLIDE_TIMING 0
 #endif
+// p3-present's video and audio insert: Editor::InsertMedia in Edit.h, which has no header of its own
+// to look for, so its source file tells whether it's there.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/MediaOps.cpp")
+#define FW_SLIDE_MEDIA 1
+#else
+#define FW_SLIDE_MEDIA 0
+#endif
 // What the deck holds beyond the model's digest, read through an editor (comments, timing).
 #define FW_TORTURE_EXTRA (FW_SLIDE_COMMENTS || FW_SLIDE_TIMING)
 
@@ -86,8 +93,20 @@ constexpr struct {
     {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
     {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
     {Op::Table, "table"},        {Op::Comment, "comment"},      {Op::Transition, "transition"},
-    {Op::TransitionAll, "transition-all"}, {Op::Anim, "anim"},
+    {Op::TransitionAll, "transition-all"}, {Op::Anim, "anim"}, {Op::Media, "media"},
+    {Op::MediaPlay, "media-play"},
 };
+constexpr const char* kMediaExtensions[] = {"mp4", "mov", "wmv", "wav", "mp3", "m4a"};
+
+// A 1x1 PNG: inserted pictures, and the posters of inserted video and audio.
+std::vector<uint8_t> TinyPng() {
+  static const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+                                 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+                                 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+                                 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+                                 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+  return std::vector<uint8_t>(std::begin(kPng), std::end(kPng));
+}
 
 // Names in specs, in the order of TimingOps.h's TransitionEffect (without Other), Anim (without
 // Other) and AnimTrigger.
@@ -229,7 +248,8 @@ bool SpecFields(std::string_view spec, std::vector<std::pair<std::string, std::s
 
 bool IsShapeOp(Op op) {
   return op == Op::Type || op == Op::Move || op == Op::Resize || op == Op::Rotate || op == Op::DeleteShape ||
-         op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table;
+         op == Op::Ungroup || op == Op::Order || op == Op::Format || op == Op::Crop || op == Op::Table ||
+         op == Op::MediaPlay;
 }
 
 }  // namespace
@@ -272,6 +292,7 @@ std::string FormatEdit(const Edit& e) {
       s += " " + at + " " + e.arg;
       for (int n : e.nums) s += " " + std::to_string(n);
       break;
+    case Op::MediaPlay: s += " " + at + " " + e.text; break;
     case Op::Comment: {
       s += " " + std::to_string(e.slide) + " " + e.arg;
       const std::string which = e.nums.empty() ? "0" : std::to_string(e.nums[0]);
@@ -288,6 +309,10 @@ std::string FormatEdit(const Edit& e) {
     case Op::Anim:
       s += " " + std::to_string(e.slide) + " " + e.arg + " " + (e.arg == "add" ? std::to_string(e.shape) : JoinIndexes(e.nums));
       if (!e.text.empty()) s += " " + e.text;
+      break;
+    case Op::Media:
+      s += " " + std::to_string(e.slide) + " " + e.arg + " " + std::to_string(e.count) + " " + Num(e.dx) + " " + Num(e.dy) +
+           " " + Num(e.w) + " " + Num(e.h);
       break;
   }
   if (!e.target.empty()) s += " # " + e.target;
@@ -362,6 +387,15 @@ bool ParseEdit(std::string_view line, Edit& e) {
       return !e.arg.empty() && ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
              ToDouble(NextWord(s), e.h) && s.empty();
     }
+    case Op::Media: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      int variant = 0;
+      if (e.arg.empty() || !ToInt(NextWord(s), variant) || variant < 0) return false;
+      e.count = static_cast<uint32_t>(variant);
+      return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
+             ToDouble(NextWord(s), e.h) && s.empty();
+    }
     case Op::Comment: {
       if (!ToInt(NextWord(s), e.slide)) return false;
       e.arg = std::string(NextWord(s));
@@ -421,6 +455,11 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Rotate: return ToDouble(NextWord(s), e.dx) && s.empty();
     case Op::DeleteShape:
     case Op::Ungroup: return s.empty();
+    case Op::MediaPlay: {
+      std::vector<std::pair<std::string, std::string>> fields;
+      e.text = std::string(NextWord(s));
+      return !e.text.empty() && SpecFields(e.text, fields) && s.empty();
+    }
     case Op::Order: {
       e.arg = std::string(NextWord(s));
       return (e.arg == "front" || e.arg == "back" || e.arg == "forward" || e.arg == "backward") && s.empty();
@@ -775,6 +814,53 @@ class EditTarget : public DeckTarget {
       case Op::TransitionAll:
       case Op::Anim: why = "fwtool was built without the timing operations"; return {};
 #endif
+#if FW_SLIDE_MEDIA
+      case Op::Media: {
+        // The bytes are never decoded: a short stand-in per extension and variant, so the same variant
+        // twice shares a part and another one adds one.
+        ed::MediaInsert m;
+        m.extension = e.arg;
+        m.video = e.arg == "mp4" || e.arg == "mov" || e.arg == "wmv";
+        const std::string stand = "fwtool torture " + e.arg + " " + std::to_string(e.count);
+        m.bytes.assign(stand.begin(), stand.end());
+        m.poster = TinyPng();
+        m.name = m.video ? L"clip." + std::wstring(e.arg.begin(), e.arg.end()) : std::wstring();
+        m.durationMs = 1000.0 * (e.count + 1);
+        const draw::Rect r{static_cast<float>(e.dx), static_cast<float>(e.dy), static_cast<float>(e.dx + e.w),
+                           static_cast<float>(e.dy + e.h)};
+        uint32_t id = 0;
+        return editor_.InsertMedia(slide, std::move(m), r, &id);
+      }
+      case Op::MediaPlay: {
+        std::vector<std::pair<std::string, std::string>> fields;
+        SpecFields(e.text, fields);
+        if (fields.size() == 1 && fields[0].first == "s") {
+          const std::string& v = fields[0].second;
+          return editor_.SetMediaStart(slide, e.shape,
+                                       v == "auto"      ? ed::MediaStart::Automatically
+                                       : v == "clicked" ? ed::MediaStart::WhenClickedOn
+                                                        : ed::MediaStart::InClickSequence);
+        }
+        ed::MediaPlayback p;
+        if (!editor_.GetMediaPlayback(slide, e.shape, &p)) {
+          why = "shape " + std::to_string(e.shape) + " has no media node in the slide's timing";
+          return {};
+        }
+        for (const auto& [k, v] : fields) {
+          const bool on = v == "1";
+          if (k == "v") p.volume = std::atoi(v.c_str()) / 100.0;
+          else if (k == "m") p.mute = on;
+          else if (k == "l") p.loop = on;
+          else if (k == "h") p.hideWhenStopped = on;
+          else if (k == "f") p.fullScreen = on;
+          else if (k == "a") p.acrossSlides = on;
+        }
+        return editor_.SetMediaPlayback(slide, e.shape, p);
+      }
+#else
+      case Op::Media:
+      case Op::MediaPlay: why = "fwtool was built without the media operations"; return {};
+#endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
         hf.slideNumber = e.arg.find('n') != std::string::npos;
@@ -829,14 +915,7 @@ class EditTarget : public DeckTarget {
       }
       return editor_.InsertShape(slide, xml, &id);
     }
-    if (what == "picture") {
-      static const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-                                     0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-                                     0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
-                                     0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-                                     0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 1x1 PNG
-      return editor_.InsertPicture(slide, std::vector<uint8_t>(std::begin(kPng), std::end(kPng)), r, L"A picture", &id);
-    }
+    if (what == "picture") return editor_.InsertPicture(slide, TinyPng(), r, L"A picture", &id);
     if (what.starts_with("table:")) {
       const size_t xAt = what.find('x', 6);
       const int rows = xAt == std::string::npos ? 0 : std::atoi(what.substr(6, xAt - 6).c_str());
@@ -1096,6 +1175,9 @@ class Generator {
 #if FW_SLIDE_TIMING
         {Op::Transition, 5}, {Op::TransitionAll, 1}, {Op::Anim, 9},
 #endif
+#if FW_SLIDE_MEDIA
+        {Op::Media, 2}, {Op::MediaPlay, 3},
+#endif
     };
     uint32_t total = 0;
     for (const auto& w : kWeights) total += w.weight;
@@ -1134,6 +1216,19 @@ class Generator {
         e.dx = std::round(rng_.Between(0, std::max(0.0, size.width - e.w)));
         e.dy = std::round(rng_.Between(0, std::max(0.0, size.height - e.h)));
         e.target = e.arg;
+        return true;
+      }
+      case Op::Media: {
+        if (!slides) return false;
+        e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+        e.arg = rng_.Pick(kMediaExtensions);
+        e.count = rng_.Below(3);
+        const draw::Size size = deck.SlideSize();
+        e.w = std::round(rng_.Between(20, size.width * 0.6));
+        e.h = std::round(rng_.Between(20, size.height * 0.6));
+        e.dx = std::round(rng_.Between(0, std::max(0.0, size.width - e.w)));
+        e.dy = std::round(rng_.Between(0, std::max(0.0, size.height - e.h)));
+        e.target = e.arg + " variant " + std::to_string(e.count);
         return true;
       }
       case Op::MasterShapes: {
@@ -1356,6 +1451,9 @@ class Generator {
         case Op::Table:
           if (s.kind == sl::Shape::Kind::Table) candidates.push_back(&s);
           break;
+        case Op::MediaPlay:
+          if (s.media) candidates.push_back(&s);
+          break;
         default:
           // Moving shapes inside groups now and then; mostly the slide's own.
           if (i.topLevel || rng_.Chance(25)) candidates.push_back(&s);
@@ -1405,6 +1503,24 @@ class Generator {
           case 7: e.arg = std::string("shadow=") + (rng_.Chance(70) ? "on" : "off"); break;
           default: e.arg = "color=" + color; break;
         }
+        return true;
+      }
+      case Op::MediaPlay: {
+        // The Start now and then; otherwise one to three playback settings, as the Playback tab sets them.
+        if (rng_.Chance(30)) {
+          static constexpr const char* kStarts[] = {"click", "auto", "clicked"};
+          e.text = std::string("s=") + rng_.Pick(kStarts);
+          return true;
+        }
+        static constexpr const char* kKeys[] = {"m", "l", "h", "f", "a"};
+        std::string spec;
+        static constexpr int kVolumes[] = {0, 25, 50, 80, 100};
+        if (rng_.Chance(40)) spec = "v=" + std::to_string(rng_.Pick(kVolumes));
+        for (uint32_t n = 1 + rng_.Below(3); n; --n) {
+          if (!spec.empty()) spec += ",";
+          spec += std::string(rng_.Pick(kKeys)) + "=" + (rng_.Chance(60) ? "1" : "0");
+        }
+        e.text = spec;
         return true;
       }
       case Op::Crop: {

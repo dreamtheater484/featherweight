@@ -10,6 +10,7 @@ add_library(fwdraw STATIC
   Eot.cpp
   Geometry.cpp
   Images.cpp
+  OfficeArt.cpp
   Painter.cpp
   Pdf.cpp
   PrintJob.cpp

@@ -14,6 +14,7 @@
 #include "slide/view/Deck.h"
 #include "slide/view/TextClip.h"
 #include "slide/view/TextFind.h"
+#include "slide/edit/Comments.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/TextFormat.h"
 #include "slide/view/TextModelEdit.h"
@@ -108,7 +109,7 @@ void TextEditing::Attach(Deck* deck, edit::Editor* editor) {
 }
 
 void TextEditing::Edited(const edit::Changes& c) {
-  if (!deck_) return;
+  if (!deck_ || edit::CommentsOnly(c)) return;  // p3-review: comments don't change the slide's text
   // What the slides were prepared from is gone (the editor read the touched slides again): those
   // are prepared again when next drawn.
   if (c.slideList || c.allSlides || c.slideSize) {

@@ -48,8 +48,15 @@ class PresentationFile : public FileSession {
   void Autosave(fw::slide::edit::Editor& editor);
   // Tells FileSession the deck's state after each change, undo and redo (the tab's change listener).
   void Changed(const fw::slide::edit::Editor& editor);
+  // The password changed (p3-review: Encrypt with Password): unsaved until a save writes it, whatever
+  // undo does to the deck's own edits.
+  void ProtectionChanged() {
+    keyChanged_ = true;
+    Edited(0);
+  }
 
  private:
+  bool keyChanged_ = false;
   struct Running;
   std::unique_ptr<Running> run_;
   fw::slide::edit::Journal journal_;

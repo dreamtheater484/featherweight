@@ -62,6 +62,15 @@ enum class Op : uint8_t {
   Transition,
   TransitionAll,
   Anim,
+  // Video and audio (p3-present, Editor::InsertMedia, as Insert > Video and Audio does): on `slide`,
+  // arg the file's extension (mp4, mov, wmv: video; wav, mp3, m4a: audio), `count` the bytes' variant
+  // (the same variant twice shares a media part), at (dx, dy) points, `w` x `h` points.
+  Media,
+  // A video's or audio's Playback tab (p3-present, Editor::SetMediaPlayback and SetMediaStart): media
+  // shape `shape` on `slide`; `text` is a spec, comma-separated key=value: v=<volume %>, m=<0|1 mute>,
+  // l=<loop>, h=<hide while not playing>, f=<full screen>, a=<across slides>; or s=<click|auto|clicked>
+  // alone, the Start (In Click Sequence, Automatically, When Clicked On). One undo step either way.
+  MediaPlay,
 };
 
 // One edit, as reproducers keep it. Slides are indexes at the moment the edit is applied; shapes are

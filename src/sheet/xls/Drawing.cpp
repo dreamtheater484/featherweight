@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "pkg/Zip.h"
+#include "draw/OfficeArt.h"
 #include "sheet/xls/Internal.h"
 
 namespace fw::sheet::xls::detail {
@@ -373,76 +373,8 @@ bool BlipPicture(std::span<const uint8_t> dgg, uint32_t pib, std::string& ext, s
   }
   if (fbse.size() < 36 + 8) return false;
   const size_t blipAt = 36 + fbse[33];  // after the FBSE's fields and its name
-  if (!ReadHeader(fbse, blipAt, fbse.size(), h)) return false;
-  Bytes b(fbse.subspan(h.body, h.end - h.body));
-  b.Skip(h.inst & 1 ? 32 : 16);  // one or two UIDs
-  switch (h.type) {
-    case 0xF01D: case 0xF02A: ext = "jpeg"; break;
-    case 0xF01E: ext = "png"; break;
-    case 0xF01F: ext = "bmp"; break;
-    case 0xF029: ext = "tiff"; break;
-    case 0xF01A: ext = "emf"; break;
-    case 0xF01B: ext = "wmf"; break;
-    default: return false;
-  }
-  if (h.type == 0xF01A || h.type == 0xF01B) {
-    // OfficeArtMetafileHeader: sizes, bounds, and the data deflated (zlib) or not.
-    const uint32_t size = b.U32();
-    int32_t bounds[4];
-    for (int32_t& v : bounds) v = static_cast<int32_t>(b.U32());
-    const int32_t emuW = static_cast<int32_t>(b.U32());
-    b.U32();
-    const uint32_t saved = b.U32();
-    const uint8_t compression = b.U8();
-    b.U8();
-    std::span<const uint8_t> data = b.Take(std::min<size_t>(saved, b.Left()));
-    if (!b.Ok() || size > (64u << 20)) return false;
-    if (compression == 0) {
-      if (data.size() > 2 && (data[0] & 0x0F) == 8 && ((data[0] << 8) | data[1]) % 31 == 0) data = data.subspan(2);
-      if (!pkg::Inflate(data, size, out)) return false;
-    } else {
-      out.assign(data.begin(), data.end());
-    }
-    if (h.type == 0xF01B && !(out.size() >= 4 && out[0] == 0xD7 && out[1] == 0xCD && out[2] == 0xC6 && out[3] == 0x9A)) {
-      // A WMF without its placeable header: one from the bounds, at their units per inch.
-      const int32_t w = bounds[2] - bounds[0];
-      const double inch = emuW > 0 && w > 0 ? w * 914400.0 / emuW : 1440;
-      uint16_t hdr[11] = {0xCDD7, 0x9AC6, 0, static_cast<uint16_t>(bounds[0]), static_cast<uint16_t>(bounds[1]),
-                          static_cast<uint16_t>(bounds[2]), static_cast<uint16_t>(bounds[3]),
-                          static_cast<uint16_t>(std::clamp(std::lround(inch), 1L, 65535L)), 0, 0, 0};
-      for (int i = 0; i < 10; ++i) hdr[10] ^= hdr[i];
-      std::vector<uint8_t> head(22);
-      for (int i = 0; i < 11; ++i) head[2 * i] = static_cast<uint8_t>(hdr[i]), head[2 * i + 1] = static_cast<uint8_t>(hdr[i] >> 8);
-      out.insert(out.begin(), head.begin(), head.end());
-    }
-    return !out.empty();
-  }
-  b.U8();  // tag
-  std::span<const uint8_t> data = b.Rest();
-  if (!b.Ok() || data.empty()) return false;
-  out.clear();
-  if (h.type == 0xF01F) {
-    // A DIB: a .bmp needs its file header, with where the pixels start.
-    if (data.size() < 40) return false;
-    Bytes info(data);
-    const uint32_t infoSize = info.U32();
-    info.Skip(10);
-    const uint16_t bits = info.U16();
-    const uint32_t compression = info.U32();
-    info.Skip(12);
-    const uint32_t used = info.U32();
-    if (infoSize < 12 || infoSize > data.size()) return false;
-    const uint64_t colors = used ? used : bits <= 8 ? (1u << bits) : 0;
-    const uint64_t offset = 14 + infoSize + colors * 4 + (compression == 3 && infoSize == 40 ? 12 : 0);
-    const uint64_t total = 14 + data.size();
-    if (offset > total) return false;
-    const uint8_t head[14] = {'B', 'M', static_cast<uint8_t>(total), static_cast<uint8_t>(total >> 8), static_cast<uint8_t>(total >> 16),
-                              static_cast<uint8_t>(total >> 24), 0, 0, 0, 0, static_cast<uint8_t>(offset),
-                              static_cast<uint8_t>(offset >> 8), static_cast<uint8_t>(offset >> 16), static_cast<uint8_t>(offset >> 24)};
-    out.assign(std::begin(head), std::end(head));
-  }
-  out.insert(out.end(), data.begin(), data.end());
-  return true;
+  if (blipAt >= fbse.size()) return false;
+  return draw::DecodeBlip(fbse.subspan(blipAt), ext, out);
 }
 
 }  // namespace fw::sheet::xls::detail

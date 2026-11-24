@@ -3,6 +3,7 @@
 
 #include "Commands.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Banner.h"
@@ -51,7 +52,9 @@ bool PresentationView::ObjectsTake(int cmd) const {
          cmd != CmdDuplicateObjects;
 }
 
-bool PresentationView::Dragging() const { return drag_ != Drag::None || (objects_ && objects_->Dragging()); }
+bool PresentationView::Dragging() const {
+  return drag_ != Drag::None || (objects_ && objects_->Dragging()) || (commentsPanel_ && commentsPanel_->Dragging());
+}
 
 bool PresentationView::TakesPictures(const std::vector<std::wstring>& files) const {
   return Ready() && SlideCount() > 0 && Objects().TakesPictures(files);

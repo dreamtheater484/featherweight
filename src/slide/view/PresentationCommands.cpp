@@ -19,6 +19,7 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/TextFind.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
@@ -43,6 +44,8 @@ constexpr CommandName kNames[] = {
     {CmdPresentation, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
+    {CmdPresenterView, L"Presenter view", L"Alt+F5"},
+    {CmdUsePresenterView, L"Use Presenter View", L""},
     {CmdNextPage, L"Next slide", L"Page Down"},
     {CmdPrevPage, L"Previous slide", L"Page Up"},
     {CmdFirstPage, L"First slide", L"Home"},
@@ -105,6 +108,8 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  // p3-review: Ctrl+Alt+M, New Comment, wherever the keyboard is (in text being edited too).
+  if (vk == 'M' && (mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && Ready()) return CmdNewComment;
   if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
   // p2-objects: the objects' keys, and undo and redo wherever the keys are.
   const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
@@ -112,6 +117,7 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
   if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
+  if (vk == VK_F5 && alt && !ctrl && !shift) return CmdPresenterView;
   if (ctrl && !alt) {
     switch (vk) {
       case VK_OEM_PLUS:
@@ -135,6 +141,8 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (CommentsPanel::Owns(cmd)) return Comments().Query(cmd);  // p3-review
+  if (CommandState ps; ProtectCommandState(cmd, ps)) return ps;  // p3-review: Encrypt with Password
   if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
   // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
@@ -156,6 +164,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
     case CmdPresentation:
     case CmdSlideShowFromStart:
     case CmdSlideShowFromCurrent:
+    case CmdPresenterView:
     case CmdZoomIn:
     case CmdZoomOut:
     case CmdZoomFitPage:
@@ -170,6 +179,10 @@ CommandState PresentationView::QueryCommand(int cmd) {
     case CmdNotesPane:
       s.enabled = Ready();
       s.checked = notesShown_;
+      break;
+    case CmdUsePresenterView:
+      s.enabled = Ready();
+      s.checked = usePresenter_;
       break;
     case CmdCopyNotes: s.enabled = ready && !deck_->Notes(current_).empty(); break;
     case CmdOpenSlideLink: s.enabled = ready; break;
@@ -220,6 +233,10 @@ std::vector<int> PresentationView::Commands() {
     if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
   for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
   for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
+  // p3-review: the comments' commands.
+  for (int cmd : {CmdNewComment, CmdReviewPane, CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments, CmdPrevComment,
+                  CmdNextComment, CmdShowCommentMarkup, CmdEncryptPassword})
+    out.push_back(cmd);
   for (int cmd : AnimCommands()) out.push_back(cmd);  // p3-anim
   return out;
 }
@@ -229,6 +246,11 @@ bool PresentationView::Execute(int cmd) {
   if (cmd == CmdSpelling && text_->Owns(cmd)) {  // p2-text: F7, maybe on another slide
     text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
     return true;
+  }
+  if (ProtectCommand(cmd)) return true;  // p3-review: Encrypt with Password
+  if (CommentsPanel::Owns(cmd)) {  // p3-review
+    if (cmd == CmdNewComment) text_->End();
+    return Comments().Execute(cmd);
   }
   if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
@@ -240,6 +262,8 @@ bool PresentationView::Execute(int cmd) {
     case CmdPresentation:
     case CmdSlideShowFromStart: StartShow(false); return true;
     case CmdSlideShowFromCurrent: StartShow(true); return true;
+    case CmdPresenterView: StartShow(true, true); return true;
+    case CmdUsePresenterView: usePresenter_ = !usePresenter_; return true;
     case CmdNextPage:
       if (current_ + 1 < n) GoToSlide(current_ + 1);
       return true;
@@ -614,17 +638,22 @@ void PresentationView::FollowLink(const SlideLink& link) {
 // ---------------------------------------------------------------------------
 // The slide show and the banner
 
-void PresentationView::StartShow(bool fromCurrent) {
+void PresentationView::StartShow(bool fromCurrent, bool presenterWindowed) {
   if (!Ready() || SlideCount() == 0 || fw::slide::show::Running()) return;
   Presentation* model = deck_->Model();
   if (!model) return;
-  // p1-show's renderer for the show: slides drawn by p1-render's SlideRender.
-  if (!showRenderer_) showRenderer_ = fw::slide::show::MakeRenderer(*model);
+  // p1-show's renderer for the show: slides drawn by p1-render's SlideRender. A new one for every show
+  // (P3): it keeps prepared slides, which point into slides an edit since may have replaced.
+  showRenderer_ = fw::slide::show::MakeRenderer(*model);
   fw::slide::show::ShowOptions o;
   o.first = fromCurrent ? current_ : 0;
   o.owner = host_.ViewHwnd();
   o.monitor = showMonitor_ < static_cast<int>(fw::slide::show::Monitors().size()) ? showMonitor_ : -1;
   o.deckPath = path_;
+  // Alt+F5 (P3): the show and the presenter view, each in a window, as PowerPoint does on one monitor.
+  // F5 with Use Presenter View on: the presenter view on another monitor, when there is one.
+  o.windowed = presenterWindowed;
+  o.presenter = presenterWindowed || usePresenter_;
   // The show ends on a slide: the tab shows it, as PowerPoint's normal view does.
   o.ended = [this](size_t slide) {
     showing_ = false;

@@ -12,9 +12,11 @@
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Geometry.h"
+#include "slide/edit/Edit.h"
 #include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
@@ -153,8 +155,9 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     v.insert(v.end(), {CmdFontBox, CmdSizeBox});
     return v;
   }();
-  constexpr int kObjects[] = {CmdInsertPicture, CmdInsertShape, CmdInsertTextBox, CmdInsertTable, CmdInsertChart,
-                              CmdObjectFill,    CmdObjectOutline, CmdObjectOutlineWeight, CmdPictureCrop};
+  constexpr int kObjects[] = {CmdInsertPicture, CmdInsertShape,   CmdInsertTextBox,       CmdInsertTable,
+                              CmdInsertChart,   CmdObjectFill,    CmdObjectOutline,       CmdObjectOutlineWeight,
+                              CmdPictureCrop,   CmdInsertVideo,   CmdInsertAudio};
   ToolItem t;
   if (std::find(textOnly.begin(), textOnly.end(), cmd) != textOnly.end()) {
     t = text_->Tool(cmd);
@@ -165,7 +168,8 @@ ToolItem PresentationView::RibbonTool(int cmd, wchar_t glyph) {
     t.cmd = cmd;
     t.enabled = q.enabled;
     t.checked = q.checked;
-    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide;
+    t.toggle = cmd == CmdNotesPane || cmd == CmdSlideHide || cmd == CmdUsePresenterView ||
+               (cmd >= CmdMediaLoop && cmd <= CmdMediaAcrossSlides);
     t.dropdown = !MenuOf(cmd).empty();
   }
   if (glyph) t.glyph = glyph;
@@ -314,6 +318,9 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   // Date & Time and Slide Number open Header & footer, as PowerPoint's open its dialog.
   add(CmdHeaderFooter, icon::Calendar, S::Medium, L"Date & Time", L"D").tool.checked = false;
   add(CmdHeaderFooter, icon::PageNumber, S::Medium, L"Slide Number", L"SN").tool.checked = false;
+  b.Group(L"Media");  // P3: Insert's last group, as PowerPoint's
+  add(CmdInsertVideo, 0, S::Large, L"Video", L"V");
+  add(CmdInsertAudio, 0, S::Large, L"Audio", L"O");
 
   // ---- Design
   b.Tab(L"Design", L"G");
@@ -374,9 +381,10 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdSlideShowFromCurrent, icon::FromCurrentSlide, S::Large, L"From\nCurrent Slide", L"C");
   b.Group(L"Set Up");
   add(CmdSlideHide, icon::HideSlide, S::Large, L"Hide\nSlide", L"H");
+  // Monitors: Use Presenter View always (as PowerPoint); where the show goes with two monitors or more.
+  b.Group(L"Monitors");
   const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
-  if (monitors.size() >= 2) {  // where the show goes
-    b.Group(L"Monitors");
+  if (monitors.size() >= 2) {
     RibbonItem& mon = add(CmdSlideMonitorMenu, 0, S::Small, L"Monitor", L"M");
     mon.tool.kind = ToolKind::Dropdown;
     mon.tool.width = 150;
@@ -387,11 +395,19 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
       if (v.index >= 0) showMonitor_ = v.index - 1;
     };
   }
+  add(CmdUsePresenterView, 0, S::Medium, L"Use Presenter View", L"V", S::Medium);  // P3: a check box
 
   // ---- Review
   b.Tab(L"Review", L"R");
   b.Group(L"Proofing");
   add(CmdSpelling, icon::Spelling, S::Large, L"Spelling", L"S");
+  // p3-review: PowerPoint 365's Comments group.
+  b.Group(L"Comments");
+  add(CmdNewComment, icon::Comment, S::Large, L"New\nComment", L"C");
+  split(CmdDeleteThread, icon::Delete, S::Large, L"Delete", L"D", {CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments});
+  add(CmdPrevComment, icon::ChevronUp, S::Large, L"Previous", L"V");
+  add(CmdNextComment, icon::ChevronDown, S::Large, L"Next", L"N");
+  split(CmdReviewPane, icon::Comment, S::Large, L"Show\nComments", L"H", {CmdReviewPane, CmdShowCommentMarkup});
 
   // ---- View
   b.Tab(L"View", L"W");
@@ -433,6 +449,48 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     b.Group(L"Size");
     add(CmdPictureCrop, 0, S::Large, L"Crop", L"V");
   }
+  if (kinds.videos > 0) {  // P3: a video (only the media tabs, as PowerPoint)
+    b.Tab(L"Video Format", L"JV", true);
+    b.Group(L"Video Styles");
+    add(CmdObjectOutline, 0, S::Medium, L"Video Border", L"SO");
+    add(CmdObjectOutlineWeight, 0, S::Medium, L"Weight", L"SW");
+    add(CmdSlideEffectsMenu, icon::ShapeEffects, S::Medium, L"Video Effects", L"SE");
+    arrange();
+    b.Group(L"Size");
+    add(CmdPictureCrop, 0, S::Large, L"Crop", L"V");
+  }
+  if (kinds.videos + kinds.audios == 1) {  // P3: one video or audio: its playback settings
+    const bool video = kinds.videos == 1;
+    b.Tab(L"Playback", L"JN", true);
+    b.Group(video ? L"Video Options" : L"Audio Options");
+    RibbonItem& volume = add(CmdMediaVolume, L'\xE767', S::Large, L"Volume", L"V");
+    volume.tool.dropdown = true;
+    volume.tool.choices = {L"Low", L"Medium", L"High", L"Mute"};
+    fw::slide::edit::MediaPlayback set;
+    if (Objects().SelectedPlayback(&set, nullptr))
+      volume.tool.choice = set.mute ? 3 : set.volume < 0.375 ? 0 : set.volume < 0.75 ? 1 : 2;
+    volume.tool.onChange = [this](const ToolValue& v) {
+      fw::slide::edit::MediaPlayback p;
+      if (v.index < 0 || v.index > 3 || !Objects().SelectedPlayback(&p, nullptr)) return;
+      static const double kLevels[] = {0.25, 0.5, 1.0};  // Low, Medium, High
+      p.mute = v.index == 3;
+      if (v.index < 3) p.volume = kLevels[v.index];
+      Objects().SetSelectedPlayback(p);
+    };
+    RibbonItem& start = add(CmdMediaStart, 0, S::Small, L"Start", L"S");
+    start.tool.kind = ToolKind::Dropdown;
+    start.tool.width = 140;
+    start.tool.choices = {L"In Click Sequence", L"Automatically", L"When Clicked On"};
+    int startNow = 0;
+    if (Objects().SelectedStart(&startNow)) start.tool.choice = startNow;
+    start.tool.onChange = [this](const ToolValue& v) {
+      if (v.index >= 0) Objects().SetSelectedStart(v.index);
+    };
+    add(CmdMediaLoop, 0, S::Medium, L"Loop until Stopped", L"L", S::Medium);
+    add(CmdMediaHide, 0, S::Medium, video ? L"Hide While Not Playing" : L"Hide During Show", L"H", S::Medium);
+    if (video) add(CmdMediaFullScreen, 0, S::Medium, L"Play Full Screen", L"F", S::Medium);
+    else add(CmdMediaAcrossSlides, 0, S::Medium, L"Play Across Slides", L"A", S::Medium);
+  }
   if (kinds.tables == 1) {
     b.Tab(L"Table Layout", L"JL", true);
     b.Group(L"Rows & Columns");
@@ -469,6 +527,17 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
     m.file.push_back(std::move(f));
   }
+  // p3-review: File > Info > Protect Presentation.
+  {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Info;
+    f.cmd = CmdEncryptPassword;
+    f.label = L"Protect Presentation: Encrypt with Password";
+    f.description = file_ && file_->Protected() ? L"A password is required to open this presentation."
+                                                : L"Require a password to open this presentation.";
+    f.glyph = icon::Lock;
+    m.file.push_back(std::move(f));
+  }
   // File › Export (P3, p3-files): the slides as PNG pictures.
   for (const auto& [cmd, about] : {std::pair{CmdExportSlidePng, L"The slide you're on, as a picture"},
                                    {CmdExportSlidesPng, L"Every slide as a picture, in a folder"}}) {
@@ -480,7 +549,13 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     m.file.push_back(std::move(f));
   }
   // A picture, shape or text box just inserted: its Format tab, as PowerPoint switches to it.
-  if (const uint32_t id = Objects().TakeInserted()) m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
+  if (const uint32_t id = Objects().TakeInserted()) {
+    if (Objects().IsMedia(id)) {
+      m.show = kinds.videos > 0 ? L"Video Format" : L"Playback";  // P3, as PowerPoint
+    } else {
+      m.show = Objects().IsPicture(id) ? L"Picture Format" : L"Shape Format";
+    }
+  }
 }
 
 }  // namespace fw::slide::view
