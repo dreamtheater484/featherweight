@@ -628,11 +628,16 @@ This is the presentation part of the friction review (docs/p3-plan.md, exit crit
 | 4. Protecting: open a protected deck, save it after an edit, protect one, remove the password | 11 C + 6 K, 2 D | 6 C + 6 K, 2 D | Passes, 5 C fewer. A wrong password is 1 K, against PowerPoint's 2 C + 1 K. |
 | 5a. The current slide as PNG | 6 C + 1 K, 1 D | 3 C + 1 K, 1 D | Passes. |
 | 5b. Every slide as PNG | 7 C + 1 K, 1 D | 3 C + 1 K, 1 D | Passes. |
-| 5c. A deck from a .potx, from Explorer, then saved | 1 C + 2 K, 2 D | 1 C + 2 K, 2 D | Ties. From inside the app it's 6 C against 4 C until the release flag is set (P14). |
-| 6a. A .ppt from mail: open, edit, save | 2 C + 1 K | 1 C + 2 K | Ties at 3: no Enable Editing, but saving is a key more (P15, by design). A password-protected .ppt is refused (P16). |
+| 5c. A deck from a .potx, from Explorer, then saved | 1 C + 2 K, 2 D | 1 C + 2 K, 2 D | Ties. From inside the app it was 6 C against 4 C until the release flag was set (P14). With 4.0's flag: File, New, the template, 3 C. |
+| 6a. A .ppt from mail: open, edit, save | 2 C + 1 K | 1 C + 2 K | Ties at 3: no Enable Editing, but saving is a key more (P15, by design). A password-protected .ppt was refused (P16); it now asks for the password. |
 | 6b. An .odp from mail: open, edit, save | 3 C + 1 K | 1 C + 2 K | Passes. |
 
 Presenting was the one flow over PowerPoint's count, by P1, which `claude/p3-present` 8461db45 fixes (to be checked on two monitors). The rest pass or tie.
+
+On 4.0's final head (`claude/p3-int` 6fe39e23, 2026-11-24) every flow passes or ties:
+- P1 to P4, P6, P8 and P16 are fixed there, and 4.0's flag closes P14.
+- P5 and P15 are by design.
+- Still open: P9 and P12, a click more each inside the comment flow, which still ties. Also P10, P11 and P13, things Featherweight's comments can't do yet.
 
 ### Where Featherweight needs more than PowerPoint, or can't do it
 
@@ -651,9 +656,9 @@ Presenting was the one flow over PowerPoint's count, by P1, which `claude/p3-pre
 | P11 | 3: edit or delete one reply | Its … menu, Edit or Delete comment: 2 C *(check in PowerPoint)* | **Can't.** A card is a whole thread: Edit changes its first comment and Delete removes the thread with its replies. The edit layer can do it. | p3-review | slide/view/PresentationComments.cpp:450-479 and 625; slide/edit/CommentOps.cpp:644-688 | Open |
 | P12 | 3: show or hide the pane from another tab | The status bar's Comments button: 1 C *(check in PowerPoint)* | Review, Show Comments: 2 C. **+1 C**. Ctrl+Alt+M opens it, but to a new comment. | p3-review | slide/view/PresentationCommands.cpp:361-373; PresentationRibbon.cpp:402 | Open |
 | P13 | 3: a comment of more than one line, or more than 256 characters | Enter starts a new paragraph | **Can't.** The box is one line: Enter posts and pasted line breaks become spaces. It holds 256 characters, so a longer comment is cut while it's typed, and a longer one from PowerPoint is cut at 256 when it's edited and saved. | p3-review | ui/Controls.cpp:888; ui/Widgets.cpp:191-196 and 319-341 | Open: the multi-line box. Since `claude/p3-review` 0e6ca275 a comment over 256 characters or with line breaks isn't put in the box to edit (the pane says to reply), so saving can't cut it |
-| P14 | 5c: a .potx from inside the app | File, New, Personal, the template: 4 C *(check in PowerPoint)* | File > New doesn't list .potx while the presentation editor isn't marked shipped, and More templates… opens on a filter that hides it: 6 C. **+2 C**. With the flag set for 4.0 (decision 28), File > New lists personal .potx and More templates… opens on .potx, .potm and .otp: 4 C, as PowerPoint. The filter stays behind the flag on purpose (p3-files): a .potx opens as a new deck to edit, which a viewer-only build can't do, as workbook templates did in S4. | p3-files, with the 4.0 release flag | slide/view/UserTemplates.cpp:60-61; core/FileKinds.cpp:23-24; App.cpp:1866-1878 | By design until 4.0 sets the flag. Count it again then, rather than closing it unchecked |
+| P14 | 5c: a .potx from inside the app | File, New, Personal, the template: 4 C *(check in PowerPoint)* | File > New doesn't list .potx while the presentation editor isn't marked shipped, and More templates… opens on a filter that hides it: 6 C. **+2 C**. With the flag set for 4.0 (decision 28), File > New lists personal .potx and More templates… opens on .potx, .potm and .otp: 4 C, as PowerPoint. The filter stays behind the flag on purpose (p3-files): a .potx opens as a new deck to edit, which a viewer-only build can't do, as workbook templates did in S4. | p3-files, with the 4.0 release flag | slide/view/UserTemplates.cpp:60-61; core/FileKinds.cpp:23-24; App.cpp:1866-1878 | Fixed by 4.0's flag (core/FileKinds.cpp:24: the editor ships in 4.0). Counted again on 6fe39e23: File, New, the personal template, which opens at once: 3 C, one fewer than PowerPoint (AppRibbon.cpp:250-265, App.cpp:1487-1491, UserTemplates.cpp:60). More templates… opens on .potx, .potm and .otp (App.cpp:1912) |
 | P15 | 6a: saving a .ppt | Ctrl+S keeps the .ppt (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As with `<name>.pptx` beside it: 2 K. **+1 K**. The flow still ties: there's no Enable Editing. | | slide/view/PresentationView.cpp:116-124 (p3-ppt) | By design (p3-plan: a .ppt opens with Save As .pptx, as .doc and .xls do; F17, W10) |
-| P16 | 6a, outside the flow: a password-protected .ppt | The password, Enter | Refused: "… it is protected with a password, which Featherweight can't open yet." p3-ppt's 186828df decrypts RC4 in the importer, but the tab doesn't ask for the password yet. | p3-ppt | slide/ppt/Ppt.cpp:87-88; slide/view/ModelDeck.cpp:364 | Open |
+| P16 | 6a, outside the flow: a password-protected .ppt | The password, Enter | Refused: "… it is protected with a password, which Featherweight can't open yet." p3-ppt's 186828df decrypts RC4 in the importer, but the tab doesn't ask for the password yet. | p3-ppt | slide/ppt/Ppt.cpp:87-88; slide/view/ModelDeck.cpp:364 | Fixed in `claude/p3-int` (p3-ppt's 5e395136): an encrypted .ppt asks for its password on the password card, and the .pptx it's saved as keeps the password |
 
 These don't change the counts but are worth a look:
 
@@ -685,7 +690,7 @@ These don't change the counts but are worth a look:
 - Saved .pptx from .odp: 14 of 14 corpus decks open in PowerPoint without repair (`readback\odp-saved-open-check.json`, 2026-11-24, p3-files 54aec9ac). From .ppt: not checked yet.
 - None of these flows is scripted. `tests/friction-checks.ps1` has the Word flows only; comments (`comment:` script ops) and transitions (`transition:`, `anim:`) could be scripted the same way.
 
-Owners: P1 to P4 p3-present (fixed on its branch); P5 is by design (the coordinator); P6 to P8 p3-anim; P9 to P13 p3-review; P14 is p3-files', by design until the 4.0 release flag, then counted again; P15 is by design; P16 p3-ppt. A finding is marked fixed when its fix is in `claude/p3-int`.
+Owners: P1 to P4 p3-present (fixed on its branch); P5 is by design (the coordinator); P6 to P8 p3-anim; P9 to P13 p3-review; P14 is p3-files', by design until the 4.0 release flag, then counted again; P15 is by design; P16 p3-ppt. A finding is marked fixed when its fix is in `claude/p3-int`. On 6fe39e23 (4.0's final head), the fixes for P1 to P4 (8461db45, c433f63f), P6 (1b83de6e), P8 (642afafc) and P16 (5e395136) are in `claude/p3-int`, and P14 is fixed by 4.0's flag.
 
 ### The flows step by step
 
