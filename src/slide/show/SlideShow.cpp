@@ -14,6 +14,7 @@
 #include <dwmapi.h>
 #include <dxgi1_3.h>
 #include <dwrite.h>
+#include <shlwapi.h>
 
 #include <algorithm>
 #include <climits>
@@ -301,6 +302,16 @@ class Show final : public anim::FrameSource, private PresenterHost {
     bool fullScreen = false;        // Play Full Screen: the video over the whole slide while it plays
   };
   std::vector<Media> media_;
+  // A media that couldn't play (a linked file that isn't on this PC): a line over its shape until the
+  // slide changes; its poster stays.
+  struct MediaNote {
+    uint32_t spid;
+    size_t item;
+    std::wstring text;
+  };
+  std::vector<MediaNote> mediaNotes_;
+  ComPtr<IDWriteTextFormat> noteFormat_;
+  void NoteMedia(uint32_t spid, size_t item, std::wstring text);
   std::string mediaReport_;  // --show-media-report: each video's line
   void ReleaseMedia();       // they stop (the report keeps their frames)
   void TakeMedia();  // runs the media commands the slide's timing fired
@@ -453,6 +464,9 @@ bool Show::Create() {
   gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                   DWRITE_FONT_STRETCH_NORMAL, std::max(12.f, h_ / 54.f), L"", &endFormat_);
   if (endFormat_) endFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+  gfx::DWrite()->CreateTextFormat(gfx::UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                  DWRITE_FONT_STRETCH_NORMAL, std::max(11.f, h_ / 64.f), L"", &noteFormat_);
+  if (noteFormat_) noteFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   if (!EnsureDevice()) {
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
@@ -1309,21 +1323,43 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
     }
     break;
   }
+  size_t item = SIZE_MAX;
+  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
+  for (size_t i = 0; i < items.size(); ++i)
+    if (items[i].spid == spid) item = i;
   const pkg::RelationshipSet* rels = deck_.RelationshipsOf(slide->part);
   MediaPlayer::Source src;
   src.video = video;
+  std::string missing;  // a linked file that isn't on this PC (or not local: a web address, a share)
   auto resolve = [&](const std::string& id) {
     const pkg::Relationship* r = rels && !id.empty() ? rels->Find(id) : nullptr;
     if (!r) return false;
     if (r->external) {
       src.path = LocalMediaPath(r->target, opts_.deckPath);  // a local file only: nothing is fetched
       src.extension = ExtensionOf(src.path);
+      if (src.path.empty()) missing = r->target;
       return !src.path.empty();
     }
     src.extension = ExtensionOf(Utf8ToWide(r->targetPart));
     return PlayableMediaExtension(src.extension) && deck_.ReadPart(r->targetPart, src.bytes);
   };
-  if (!resolve(embed) && !resolve(link)) return nullptr;
+  if (!resolve(embed) && !resolve(link)) {
+    if (!missing.empty()) {
+      // Its name only (file:///C:/My%20clips/a.mp4 -> a.mp4), never the whole path.
+      std::wstring name = Utf8ToWide(missing);
+      const size_t slash = name.find_last_of(L"\\/");
+      if (slash != std::wstring::npos) name.erase(0, slash + 1);
+      if (!name.empty()) {
+        std::vector<wchar_t> buf(name.begin(), name.end());
+        buf.push_back(0);
+        if (SUCCEEDED(UrlUnescapeW(buf.data(), nullptr, nullptr, URL_UNESCAPE_INPLACE))) name = buf.data();
+      }
+      NoteMedia(spid, item, L"The linked file isn't on this PC: " + name);
+    } else {
+      NoteMedia(spid, item, L"This media can't be played.");
+    }
+    return nullptr;
+  }
   MediaPlayer::Settings settings;
   bool hide = false, full = false;
   for (const MediaNode& n : cur_->timing.media)
@@ -1335,9 +1371,13 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
       full = n.fullScreen;
     }
   std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
-  if (!player) return nullptr;
+  if (!player) {
+    NoteMedia(spid, item, L"This media can't be played.");
+    return nullptr;
+  }
   Media m;
   m.spid = spid;
+  m.item = item;
   m.hideWhenStopped = hide;
   m.fullScreen = full && video;
   // The poster's crop crops the video too, as in PowerPoint (in 1/1000 %).
@@ -1350,9 +1390,6 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
         m.crop[k] = std::clamp(c.attribute(names[k]).as_float(0) / 100000.f, -1.f, 1.f);
     }
   }
-  const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
-  for (size_t i = 0; i < items.size(); ++i)
-    if (items[i].spid == spid) m.item = i;
   m.player = std::move(player);
   media_.push_back(std::move(m));
   return media_.back().player.get();
@@ -1366,8 +1403,10 @@ void Show::TakeMedia() {
     MediaPlayer* p = nullptr;
     for (Media& m : media_)
       if (m.spid == e.spid) p = m.player.get();
-    if (!p && (e.command == MediaCommand::Play || e.command == MediaCommand::TogglePause ||
-               e.command == MediaCommand::Resume))
+    bool noted = false;
+    for (const MediaNote& n : mediaNotes_) noted = noted || n.spid == e.spid;
+    if (!p && !noted &&
+        (e.command == MediaCommand::Play || e.command == MediaCommand::TogglePause || e.command == MediaCommand::Resume))
       p = OpenMedia(e.spid);
     if (!p) continue;
     switch (e.command) {
@@ -1396,6 +1435,13 @@ void Show::ReleaseMedia() {
     mediaReport_ += line;
   }
   media_.clear();
+  mediaNotes_.clear();
+}
+
+void Show::NoteMedia(uint32_t spid, size_t item, std::wstring text) {
+  for (const MediaNote& n : mediaNotes_)
+    if (n.spid == spid) return;
+  mediaNotes_.push_back({spid, item, std::move(text)});
 }
 
 bool Show::VideoPlaying() const {
@@ -1410,9 +1456,33 @@ void Show::VideoFrames() {
 }
 
 void Show::DrawVideos() {
-  if (!cur_ || cur_->index == kEnd || media_.empty()) return;
+  if (!cur_ || cur_->index == kEnd || (media_.empty() && mediaNotes_.empty())) return;
   const std::vector<ItemInfo>& items = renderer_.Items(cur_->index);
   const M toPx = SlideToPixels();
+  // Why a media didn't play: a line on a dark band at the foot of its shape (below a small one).
+  for (const MediaNote& n : mediaNotes_) {
+    if (n.item >= items.size() || !noteFormat_) continue;
+    const draw::Rect& b = items[n.item].bounds;
+    const D2D1_POINT_2F a = toPx.TransformPoint({b.left, b.top}), c = toPx.TransformPoint({b.right, b.bottom});
+    const float pad = noteFormat_->GetFontSize() * 0.4f;
+    const float w = std::min(slideW_, std::max(c.x - a.x, noteFormat_->GetFontSize() * 22));
+    ComPtr<IDWriteTextLayout> layout;
+    DWRITE_TEXT_METRICS tm{};
+    if (FAILED(gfx::DWrite()->CreateTextLayout(n.text.c_str(), static_cast<UINT32>(n.text.size()), noteFormat_.Get(),
+                                               w - 2 * pad, slideH_, &layout)) ||
+        FAILED(layout->GetMetrics(&tm)))
+      continue;
+    const float h = tm.height + 2 * pad;
+    const float left = std::clamp((a.x + c.x - w) / 2, 0.f, std::max(0.f, slideW_ - w));
+    float top = c.y - a.y >= 3 * h ? c.y - h : (c.y + h <= slideH_ ? c.y : a.y - h);
+    top = std::clamp(top, 0.f, std::max(0.f, slideH_ - h));
+    ComPtr<ID2D1SolidColorBrush> band, ink;
+    dc_->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 0.75f), &band);
+    dc_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1), &ink);
+    if (!band || !ink) continue;
+    dc_->FillRectangle(D2D1::RectF(left, top, left + w, top + h), band.Get());
+    dc_->DrawTextLayout({left + pad, top + pad}, layout.Get(), ink.Get());
+  }
   for (const Media& m : media_) {
     if (!m.frame || m.item >= items.size()) continue;
     const bool shown = m.player->Shown();
