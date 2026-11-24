@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include <set>
 
 #include "slide/edit/EditInternal.h"
@@ -247,24 +248,29 @@ struct TransTarget {
   double after = -1;
 };
 
+// Appends `parts` to `x`: one call instead of a chain of string temporaries (much smaller code).
+void Cat(std::string& x, std::initializer_list<std::string_view> parts) {
+  for (std::string_view part : parts) x += part;
+}
+
 std::string TransitionXml(const TransTarget& t, bool choice) {
   const TransDef& d = DefOf(t.effect);
-  bool timed = t.effect != TransitionEffect::None && t.effect != TransitionEffect::Cut;
+  const bool timed = t.effect != TransitionEffect::None && t.effect != TransitionEffect::Cut;
   std::string x = "<p:transition";
   if (timed) {
-    const char* spd = SpdFor(t.ms);
-    if (std::string_view(spd) != "fast") x += std::string(" spd=\"") + spd + "\"";
-    if (choice) x += " p14:dur=\"" + MsText(t.ms) + "\"";
+    const std::string_view spd = SpdFor(t.ms);
+    if (spd != "fast") Cat(x, {" spd=\"", spd, "\""});
+    if (choice) Cat(x, {" p14:dur=\"", MsText(t.ms), "\""});
   }
   if (!t.click) x += " advClick=\"0\"";
-  if (t.after >= 0) x += " advTm=\"" + MsText(t.after) + "\"";
+  if (t.after >= 0) Cat(x, {" advTm=\"", MsText(t.after), "\""});
   x += ">";
   if (*d.element) {
-    x += std::string("<p:") + d.element;
+    Cat(x, {"<p:", d.element});
     if (d.count) {
       const TransOpt& o = d.opts[t.option];
-      if (o.orient && std::string_view(o.orient) != "horz") x += std::string(" orient=\"") + o.orient + "\"";
-      if (o.dir && (!d.defaultDir || std::string_view(o.dir) != d.defaultDir)) x += std::string(" dir=\"") + o.dir + "\"";
+      if (o.orient && std::string_view(o.orient) != "horz") Cat(x, {" orient=\"", o.orient, "\""});
+      if (o.dir && (!d.defaultDir || std::string_view(o.dir) != d.defaultDir)) Cat(x, {" dir=\"", o.dir, "\""});
       if (o.thruBlk) x += " thruBlk=\"1\"";
     }
     x += "/>";
@@ -550,28 +556,32 @@ struct Ids {
   std::string operator()() { return std::to_string(next++); }
 };
 
-std::string Val(std::string_view v) {
-  return v == "0" ? "<p:fltVal val=\"0\"/>" : "<p:strVal val=\"" + std::string(v) + "\"/>";
+void Val(std::string& x, std::string_view v) {
+  if (v == "0") x += "<p:fltVal val=\"0\"/>";
+  else Cat(x, {"<p:strVal val=\"", v, "\"/>"});
 }
 
-std::string SetVis(Ids& id, const std::string& tgt, bool visible, double delay) {
-  return "<p:set><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"1\" fill=\"hold\"><p:stCondLst><p:cond delay=\"" + MsText(delay) +
-         "\"/></p:stCondLst></p:cTn>" + tgt +
-         "<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"" +
-         (visible ? "visible" : "hidden") + "\"/></p:to></p:set>";
+void SetVis(std::string& x, Ids& id, std::string_view tgt, bool visible, double delay) {
+  Cat(x, {"<p:set><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"1\" fill=\"hold\"><p:stCondLst><p:cond delay=\"", MsText(delay),
+          "\"/></p:stCondLst></p:cTn>", tgt,
+          "<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"",
+          visible ? "visible" : "hidden", "\"/></p:to></p:set>"});
 }
 
-std::string Filter(Ids& id, const std::string& tgt, bool in, const std::string& filter, double dur) {
-  return std::string("<p:animEffect transition=\"") + (in ? "in" : "out") + "\" filter=\"" + filter +
-         "\"><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\"/>" + tgt + "</p:cBhvr></p:animEffect>";
+void Filter(std::string& x, Ids& id, std::string_view tgt, bool in, std::string_view filter, double dur) {
+  Cat(x, {"<p:animEffect transition=\"", in ? "in" : "out", "\" filter=\"", filter, "\"><p:cBhvr><p:cTn id=\"", id(),
+          "\" dur=\"", MsText(dur), "\"/>", tgt, "</p:cBhvr></p:animEffect>"});
 }
 
-std::string Prop(Ids& id, const std::string& tgt, const char* attr, std::string_view from, std::string_view to, double dur,
-                 bool base, bool hold) {
-  return std::string("<p:anim calcmode=\"lin\" valueType=\"num\"><p:cBhvr") + (base ? " additive=\"base\"" : "") +
-         "><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\"" + (hold ? " fill=\"hold\"" : "") + "/>" + tgt +
-         "<p:attrNameLst><p:attrName>" + attr + "</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm=\"0\"><p:val>" +
-         Val(from) + "</p:val></p:tav><p:tav tm=\"100000\"><p:val>" + Val(to) + "</p:val></p:tav></p:tavLst></p:anim>";
+void Prop(std::string& x, Ids& id, std::string_view tgt, const char* attr, std::string_view from, std::string_view to, double dur,
+          bool base, bool hold) {
+  Cat(x, {"<p:anim calcmode=\"lin\" valueType=\"num\"><p:cBhvr", base ? " additive=\"base\"" : "", "><p:cTn id=\"", id(),
+          "\" dur=\"", MsText(dur), "\"", hold ? " fill=\"hold\"" : "", "/>", tgt, "<p:attrNameLst><p:attrName>", attr,
+          "</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm=\"0\"><p:val>"});
+  Val(x, from);
+  x += "</p:val></p:tav><p:tav tm=\"100000\"><p:val>";
+  Val(x, to);
+  x += "</p:val></p:tav></p:tavLst></p:anim>";
 }
 
 const char* WipeFilter(int sub) { return sub == 1 ? "wipe(up)" : sub == 2 ? "wipe(right)" : sub == 8 ? "wipe(left)" : "wipe(down)"; }
@@ -580,72 +590,87 @@ const char* SplitFilter(int sub) {
 }
 
 // The behaviors of an animation, as PowerPoint writes them (the corpus' and PowerPoint 2021's).
-std::string Behaviors(const AnimDef& d, int option, double dur, const std::string& tgt, Ids& id) {
-  const AnimOpt& o = OptOf(d, option);
-  int sub = o.subtype;
+std::string Behaviors(const AnimDef& d, int option, double dur, std::string_view tgt, Ids& id) {
+  const int sub = OptOf(d, option).subtype;
+  const bool down = PresetIdOf(d, option) == 47;  // Float: Down (47) or Up (42)
+  std::string x;
   switch (d.anim) {
     case Anim::Appear:
-      return SetVis(id, tgt, true, 0);
+      SetVis(x, id, tgt, true, 0);
+      break;
     case Anim::Fade:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, "fade", dur);
-    case Anim::FlyIn: {
-      const char* x = sub & 8 ? "0-#ppt_w/2" : sub & 2 ? "1+#ppt_w/2" : "#ppt_x";
-      const char* y = sub & 1 ? "0-#ppt_h/2" : sub & 4 ? "1+#ppt_h/2" : "#ppt_y";
-      return SetVis(id, tgt, true, 0) + Prop(id, tgt, "ppt_x", x, "#ppt_x", dur, true, true) +
-             Prop(id, tgt, "ppt_y", y, "#ppt_y", dur, true, true);
-    }
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, "fade", dur);
+      break;
+    case Anim::FlyIn:
+      SetVis(x, id, tgt, true, 0);
+      Prop(x, id, tgt, "ppt_x", sub & 8 ? "0-#ppt_w/2" : sub & 2 ? "1+#ppt_w/2" : "#ppt_x", "#ppt_x", dur, true, true);
+      Prop(x, id, tgt, "ppt_y", sub & 1 ? "0-#ppt_h/2" : sub & 4 ? "1+#ppt_h/2" : "#ppt_y", "#ppt_y", dur, true, true);
+      break;
     case Anim::FloatIn:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, "fade", dur) +
-             Prop(id, tgt, "ppt_x", "#ppt_x", "#ppt_x", dur, false, true) +
-             Prop(id, tgt, "ppt_y", PresetIdOf(d, option) == 47 ? "#ppt_y-.1" : "#ppt_y+.1", "#ppt_y", dur, false, true);
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, "fade", dur);
+      Prop(x, id, tgt, "ppt_x", "#ppt_x", "#ppt_x", dur, false, true);
+      Prop(x, id, tgt, "ppt_y", down ? "#ppt_y-.1" : "#ppt_y+.1", "#ppt_y", dur, false, true);
+      break;
     case Anim::Split:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, SplitFilter(sub), dur);
     case Anim::Wipe:
-      return SetVis(id, tgt, true, 0) + Filter(id, tgt, true, WipeFilter(sub), dur);
+      SetVis(x, id, tgt, true, 0);
+      Filter(x, id, tgt, true, d.anim == Anim::Split ? SplitFilter(sub) : WipeFilter(sub), dur);
+      break;
     case Anim::Zoom:
-      return SetVis(id, tgt, true, 0) + Prop(id, tgt, "ppt_w", "0", "#ppt_w", dur, false, true) +
-             Prop(id, tgt, "ppt_h", "0", "#ppt_h", dur, false, true) + Filter(id, tgt, true, "fade", dur);
-    case Anim::GrowShrink: {
-      const char* x = option == 2 ? "100000" : "150000";
-      const char* y = option == 1 ? "100000" : "150000";
-      return "<p:animScale><p:cBhvr><p:cTn id=\"" + id() + "\" dur=\"" + MsText(dur) + "\" fill=\"hold\"/>" + tgt +
-             "</p:cBhvr><p:by x=\"" + x + "\" y=\"" + y + "\"/></p:animScale>";
-    }
+      SetVis(x, id, tgt, true, 0);
+      Prop(x, id, tgt, "ppt_w", "0", "#ppt_w", dur, false, true);
+      Prop(x, id, tgt, "ppt_h", "0", "#ppt_h", dur, false, true);
+      Filter(x, id, tgt, true, "fade", dur);
+      break;
+    case Anim::GrowShrink:
+      Cat(x, {"<p:animScale><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"", MsText(dur), "\" fill=\"hold\"/>", tgt,
+              "</p:cBhvr><p:by x=\"", option == 2 ? "100000" : "150000", "\" y=\"", option == 1 ? "100000" : "150000",
+              "\"/></p:animScale>"});
+      break;
     case Anim::Spin:
-      return std::string("<p:animRot by=\"") + (option == 1 ? "-21600000" : "21600000") + "\"><p:cBhvr><p:cTn id=\"" + id() +
-             "\" dur=\"" + MsText(dur) + "\" fill=\"hold\"/>" + tgt +
-             "<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>";
+      Cat(x, {"<p:animRot by=\"", option == 1 ? "-21600000" : "21600000", "\"><p:cBhvr><p:cTn id=\"", id(), "\" dur=\"",
+              MsText(dur), "\" fill=\"hold\"/>", tgt, "<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>"});
+      break;
     case Anim::Disappear:
-      return SetVis(id, tgt, false, 0);
+      SetVis(x, id, tgt, false, 0);
+      break;
     case Anim::FadeOut:
-      return Filter(id, tgt, false, "fade", dur) + SetVis(id, tgt, false, dur - 1);
-    case Anim::FlyOut: {
-      const char* x = sub & 8 ? "0-ppt_w/2" : sub & 2 ? "1+ppt_w/2" : "ppt_x";
-      const char* y = sub & 1 ? "0-ppt_h/2" : sub & 4 ? "1+ppt_h/2" : "ppt_y";
-      return Prop(id, tgt, "ppt_x", "ppt_x", x, dur, true, false) + Prop(id, tgt, "ppt_y", "ppt_y", y, dur, true, false) +
-             SetVis(id, tgt, false, dur - 1);
-    }
-    case Anim::FloatOut:
-      return Filter(id, tgt, false, "fade", dur) + Prop(id, tgt, "ppt_x", "ppt_x", "ppt_x", dur, false, false) +
-             Prop(id, tgt, "ppt_y", "ppt_y", PresetIdOf(d, option) == 47 ? "ppt_y+.1" : "ppt_y-.1", dur, false, false) +
-             SetVis(id, tgt, false, dur - 1);
     case Anim::SplitOut:
-      return Filter(id, tgt, false, SplitFilter(sub), dur) + SetVis(id, tgt, false, dur - 1);
     case Anim::WipeOut:
-      return Filter(id, tgt, false, WipeFilter(sub), dur) + SetVis(id, tgt, false, dur - 1);
+      Filter(x, id, tgt, false, d.anim == Anim::FadeOut ? "fade" : d.anim == Anim::SplitOut ? SplitFilter(sub) : WipeFilter(sub), dur);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
+    case Anim::FlyOut:
+      Prop(x, id, tgt, "ppt_x", "ppt_x", sub & 8 ? "0-ppt_w/2" : sub & 2 ? "1+ppt_w/2" : "ppt_x", dur, true, false);
+      Prop(x, id, tgt, "ppt_y", "ppt_y", sub & 1 ? "0-ppt_h/2" : sub & 4 ? "1+ppt_h/2" : "ppt_y", dur, true, false);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
+    case Anim::FloatOut:
+      Filter(x, id, tgt, false, "fade", dur);
+      Prop(x, id, tgt, "ppt_x", "ppt_x", "ppt_x", dur, false, false);
+      Prop(x, id, tgt, "ppt_y", "ppt_y", down ? "ppt_y+.1" : "ppt_y-.1", dur, false, false);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
     case Anim::ZoomOut:
-      return Prop(id, tgt, "ppt_w", "ppt_w", "0", dur, false, false) + Prop(id, tgt, "ppt_h", "ppt_h", "0", dur, false, false) +
-             Filter(id, tgt, false, "fade", dur) + SetVis(id, tgt, false, dur - 1);
+      Prop(x, id, tgt, "ppt_w", "ppt_w", "0", dur, false, false);
+      Prop(x, id, tgt, "ppt_h", "ppt_h", "0", dur, false, false);
+      Filter(x, id, tgt, false, "fade", dur);
+      SetVis(x, id, tgt, false, dur - 1);
+      break;
     default:
-      return {};
+      break;
   }
+  return x;
 }
 
 std::string TargetXml(uint32_t spid, int first, int last) {
-  std::string x = "<p:tgtEl><p:spTgt spid=\"" + std::to_string(spid) + "\"";
-  if (first < 0) return x + "/></p:tgtEl>";
-  return x + "><p:txEl><p:pRg st=\"" + std::to_string(first) + "\" end=\"" + std::to_string(last) +
-         "\"/></p:txEl></p:spTgt></p:tgtEl>";
+  std::string x;
+  Cat(x, {"<p:tgtEl><p:spTgt spid=\"", std::to_string(spid), "\""});
+  if (first < 0) x += "/></p:tgtEl>";
+  else Cat(x, {"><p:txEl><p:pRg st=\"", std::to_string(first), "\" end=\"", std::to_string(last), "\"/></p:txEl></p:spTgt></p:tgtEl>"});
+  return x;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1394,11 +1419,11 @@ Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& sp
     AnimTrigger trigger = k == 0 ? spec.trigger : AnimTrigger::OnClick;
     std::string tgt = TargetXml(shape, ranges[k].first, ranges[k].second);
     std::string effectId = ids();
-    x += "<p:par><p:cTn id=\"" + effectId + "\" presetID=\"" + std::to_string(PresetIdOf(*def, option)) + "\" presetClass=\"" +
-         def->presetClass + "\" presetSubtype=\"" + std::to_string(OptOf(*def, option).subtype) + "\" fill=\"hold\"" +
-         (grp.empty() ? std::string() : " grpId=\"" + grp + "\"") + " nodeType=\"" + NodeTypeOf(trigger) +
-         "\"><p:stCondLst><p:cond delay=\"" + MsText(spec.delayMs) + "\"/></p:stCondLst><p:childTnLst>" +
-         Behaviors(*def, option, ms, tgt, ids) + "</p:childTnLst></p:cTn></p:par>";
+    Cat(x, {"<p:par><p:cTn id=\"", effectId, "\" presetID=\"", std::to_string(PresetIdOf(*def, option)), "\" presetClass=\"",
+            def->presetClass, "\" presetSubtype=\"", std::to_string(OptOf(*def, option).subtype), "\" fill=\"hold\"",
+            grp.empty() ? "" : " grpId=\"", grp, grp.empty() ? "" : "\"", " nodeType=\"", NodeTypeOf(trigger),
+            "\"><p:stCondLst><p:cond delay=\"", MsText(spec.delayMs), "\"/></p:stCondLst><p:childTnLst>",
+            Behaviors(*def, option, ms, tgt, ids), "</p:childTnLst></p:cTn></p:par>"});
   }
   pugi::xml_document doc;
   if (!Fragment(x, doc)) return call.End(Result::Fail(u"The animation can't be written."));
