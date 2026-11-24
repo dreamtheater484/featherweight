@@ -250,6 +250,9 @@ class Show final : public anim::FrameSource {
 
   // The bench.
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
+  // The display queue model: this present shows at the refresh after it, never before the one after
+  // the previous present's. `count`: refreshes that go without a new frame count as missed.
+  void TrackVblank(bool count);
   void WriteBench();
   // The bench ignores the mouse and the keyboard (a click or a key changes nothing: Roy, 2026-11-24,
   // "mouse movement or a click in a running program should generally not be a throw away"); only an
@@ -995,6 +998,8 @@ void Show::Frame() {
   }
   Draw(now);
   if (!warming) BenchFrame(start, Now() - start, inTransition, waited);  // the warm-up is no part of any motion
+  // Its frames still fill the display queue the first counted frames join: the model sees them too.
+  else if (bench_) TrackVblank(false);
   if (!Animating()) AfterSettle(Now());
 }
 
@@ -1625,7 +1630,12 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
     ++benchTransitions_.back().frames;
   }
   lastFrame_ = start;
-  if (inTransition) {
+  if (inTransition) TrackVblank(true);
+  else lastVblank_ = -1;
+}
+
+void Show::TrackVblank(bool count) {
+  {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
     if (lastVblank_ < 0 || !vblankPeriod_) {
@@ -1642,15 +1652,13 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
       // after the previous frame's (frames wait their turn). A refresh between two frames shown is
       // one with no new frame.
       long long shown = lastVblank_ >= 0 ? std::max(lastVblank_ + 1, index + 1) : index + 1;
-      if (lastVblank_ >= 0 && shown > lastVblank_ + 1) {
+      if (count && lastVblank_ >= 0 && shown > lastVblank_ + 1) {
         int missed = static_cast<int>(shown - lastVblank_ - 1);
         vblankMissed_ += missed;
         if (!benchTransitions_.empty()) benchTransitions_.back().vblankMissed += missed;
       }
       lastVblank_ = shown;
     }
-  } else {
-    lastVblank_ = -1;
   }
 }
 
