@@ -28,7 +28,7 @@ bool PackageXml(std::span<const uint8_t> package, std::string_view name, pugi::x
   for (const pkg::ZipEntry& e : zip.Entries()) {
     std::vector<uint8_t> bytes;
     if (e.name == name && e.uncompressedSize <= (8u << 20) && zip.Read(e, bytes).Ok())
-      return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8);
+      return doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata, pugi::encoding_utf8);  // runs of spaces count
   }
   return false;
 }
@@ -273,7 +273,7 @@ class Writer {
         const MasterShape& m = it->second;
         if (!ownType && depth == 0) s.spt = m.spt;
         for (const auto& [pid, v] : m.props) {
-          if (pid == 0x0301) continue;
+          if (pid == 0x0301 || pid == 0x03A9) continue;  // not its metroBlob: that's the master shape's own copy
           auto [own, added] = s.props.emplace(pid, v);
           // Boolean property sets (pid ...3F) merge bit by bit: a bit the shape doesn't set (its "use"
           // bit 16 higher is clear) comes from the master's.
@@ -282,7 +282,8 @@ class Writer {
             own->second = (own->second & ~take) | (v & take) | (take << 16);
           }
         }
-        for (const auto& [pid, v] : m.complex) s.complex.emplace(pid, v);
+        for (const auto& [pid, v] : m.complex)
+          if (pid != 0x03A9) s.complex.emplace(pid, v);
         ref = m.props.count(0x0301) ? m.props.at(0x0301) : 0;
       }
     }
