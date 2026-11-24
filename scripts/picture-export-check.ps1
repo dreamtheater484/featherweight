@@ -8,7 +8,13 @@
   then `fwtool pdf-compare --pngs` renders the PDF at 100 dpi and compares each slide's picture with
   its page (SSIM; a slide passes at >= -MinSsim, 0.99 by default). Hidden slides are exported as
   pictures but not in the PDF, so a deck with hidden slides is compared on the shown ones only.
-  The summary goes to <Out>\summary.md and summary.json; exit 1 when a slide fails.
+  The criterion, as the coordinator restated it (p3-plan, 2026-11-24): a picture equals the view's own
+  drawing, SSIM >= -MinViewSsim (0.999) against P1's page renderer (the same run's
+  `pagepngs:<dir>\v|100`, every slide, hidden ones too) at the same size (scripts\png-ssim.py, fwtool's
+  SSIM). Against the PDF it's >= 0.99, or >= -PdfFloor (0.95) on slides with dense small text, where
+  pdfium rasterizes glyphs differently from DirectWrite.
+  The summary goes to <Out>\summary.md and summary.json; exit 1 when a picture misses the page
+  renderer's drawing or the PDF's floor.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\picture-export-check.ps1
@@ -21,6 +27,10 @@ param(
   [string]$Fwtool = "build\tools\fwtool\Release\fwtool.exe",
   [string]$Out = "build\picture-export",
   [double]$MinSsim = 0.99,
+  [double]$MinViewSsim = 0.999,
+  [double]$PdfFloor = 0.95,
+  # Python 3 with Pillow and numpy, for scripts\png-ssim.py.
+  [string]$Python = "python",
   [int]$TimeoutSeconds = 300
 )
 $ErrorActionPreference = "Stop"
@@ -66,12 +76,13 @@ foreach ($d in $decks) {
   $dir = Join-Path $Out $name
   if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
   New-Item -ItemType Directory -Force $dir | Out-Null
-  $row = [ordered]@{ deck = $d.FullName; slides = 0; compared = 0; passing = 0; worst = $null; error = $null }
+  $row = [ordered]@{ deck = $d.FullName; slides = 0; compared = 0; passing = 0; worst = $null
+                     viewCompared = 0; viewPassing = 0; viewWorst = $null; error = $null }
   try {
     $info = Get-DeckInfo $d.FullName
     $row.slides = $info.slides
     $log = Join-Path $dir "app.log"
-    $script = "slidepngs:$dir\s.png|$($info.width);exportpdf:$dir\deck.pdf"
+    $script = "slidepngs:$dir\s.png|$($info.width);exportpdf:$dir\deck.pdf;pagepngs:$dir\v|100"
     $proc = Start-Process -FilePath $Featherweight -PassThru -WindowStyle Hidden -RedirectStandardError $log -ArgumentList @(
       "--snapshot", "`"$dir\window.png`"", "--size", "1400x900", "--script", "`"$script`"", "`"$($d.FullName)`"")
     $null = $proc.Handle
@@ -98,16 +109,33 @@ foreach ($d in $decks) {
     $row.passing = @($ssims | Where-Object { $_ -ge $MinSsim }).Count
     if ($ssims.Count) { $row.worst = [Math]::Round(($ssims | Measure-Object -Minimum).Minimum, 4) }
     if ([int]$c.oursPages -ne [int]$c.referencePages) { $row.error = "$($c.oursPages) pictures against $($c.referencePages) PDF pages" }
+    # The criterion: each slide's picture against the page renderer's drawing of it (page-N.png is slide N).
+    $pairs = @(for ($i = 1; $i -le $info.slides; $i++) { Join-Path $pngDir "Slide$i.png"; Join-Path $dir "v\page-$i.png" })
+    $vjson = Join-Path $dir "view.json"
+    & $Python -I (Join-Path $root "scripts\png-ssim.py") --json $vjson --pairs @pairs
+    if (-not (Test-Path $vjson)) { throw "png-ssim.py wrote nothing (Python with Pillow and numpy: -Python)" }
+    $v = @((Get-Content $vjson -Raw | ConvertFrom-Json).pairs)
+    $vs = @($v | Where-Object { $null -ne $_.ssim } | ForEach-Object { [double]$_.ssim })
+    $row.viewCompared = $v.Count
+    $row.viewPassing = @($vs | Where-Object { $_ -ge $MinViewSsim }).Count
+    if ($vs.Count) { $row.viewWorst = [Math]::Round(($vs | Measure-Object -Minimum).Minimum, 6) }
+    $verr = @($v | Where-Object { $_.error } | ForEach-Object { "$([IO.Path]::GetFileName($_.a)): $($_.error)" })
+    if ($verr.Count) { $row.error = (@($row.error) + $verr | Where-Object { $_ }) -join "; " }
   } catch { $row.error = "$($_.Exception.Message)" }
-  "{0,-60} {1,3}/{2,-3} worst {3} {4}" -f $d.Name, $row.passing, $row.compared, $row.worst, $row.error
+  "{0,-60} view {1,3}/{2,-3} worst {3}  PDF {4,3}/{5,-3} worst {6} {7}" -f $d.Name, $row.viewPassing, $row.viewCompared, $row.viewWorst,
+    $row.passing, $row.compared, $row.worst, $row.error
   $results += [pscustomobject]$row
 }
 $total = ($results | Measure-Object compared -Sum).Sum; $pass = ($results | Measure-Object passing -Sum).Sum
-$bad = @($results | Where-Object { $_.error -or $_.passing -lt $_.compared })
-$md = @("# Picture export against the app's PDF", "", "$pass of $total slides at SSIM >= $MinSsim, in $($results.Count) decks.", "")
-foreach ($r in $bad) { $md += "- $([IO.Path]::GetFileName($r.deck)): $($r.passing) of $($r.compared), worst $($r.worst)$(if ($r.error) { "; $($r.error)" })" }
+$vtotal = ($results | Measure-Object viewCompared -Sum).Sum; $vpass = ($results | Measure-Object viewPassing -Sum).Sum
+$floor = @($results | Where-Object { $null -ne $_.worst -and $_.worst -lt $PdfFloor })
+$bad = @($results | Where-Object { $_.error -or $_.viewPassing -lt $_.viewCompared })
+$md = @("# Picture export", "", "Against the page renderer's drawing at the same size (the criterion): $vpass of $vtotal slides at SSIM >= $MinViewSsim, in $($results.Count) decks.",
+        "Against the app's PDF: $pass of $total slides at SSIM >= $MinSsim; $(@($floor).Count) decks with a slide under $PdfFloor.", "")
+foreach ($r in $bad) { $md += "- $([IO.Path]::GetFileName($r.deck)): page renderer $($r.viewPassing) of $($r.viewCompared), worst $($r.viewWorst)$(if ($r.error) { "; $($r.error)" })" }
+foreach ($r in @($results | Where-Object { $_.passing -lt $_.compared })) { $md += "- $([IO.Path]::GetFileName($r.deck)): PDF $($r.passing) of $($r.compared), worst $($r.worst)" }
 [IO.File]::WriteAllText((Join-Path $Out "summary.md"), ($md -join "`r`n"), [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $Out "summary.json"), ($results | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-"$pass of $total slides at SSIM >= $MinSsim in $($results.Count) decks. Summary: $(Join-Path $Out 'summary.md')"
-if ($bad.Count) { exit 1 }
+"Page renderer: $vpass of $vtotal slides at SSIM >= $MinViewSsim. PDF: $pass of $total at >= $MinSsim. Summary: $(Join-Path $Out 'summary.md')"
+if ($bad.Count -or $floor.Count) { exit 1 }
 exit 0
