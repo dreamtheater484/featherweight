@@ -63,6 +63,73 @@ function Read-Timing([string[]]$lines) {
 }
 $triggers = @{ msoAnimTriggerOnPageClick = "click"; msoAnimTriggerWithPrevious = "with"; msoAnimTriggerAfterPrevious = "after" }
 
+# The comments as the file holds them, per slide index (presentation order): each thread's author and
+# text, and its replies'. Modern comments (p188, ppt/comments/modernComment_*.xml with ppt/authors.xml)
+# and legacy ones (p:cm, ppt/comments/commentN.xml with ppt/commentAuthors.xml; a p15:threadingInfo
+# parentCm makes one a reply).
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function Get-Norm([string]$s) { (($s -replace '[\s\u00A0]+', ' ').Trim()) }
+function Read-FileComments([string]$deck) {
+  $out = @{}
+  $z = [IO.Compression.ZipFile]::OpenRead($deck)
+  try {
+    $read = { param($n) $e = $z.GetEntry($n.TrimStart('/')); if (-not $e) { return $null }; $r = New-Object IO.StreamReader($e.Open()); $t = $r.ReadToEnd(); $r.Close(); [xml]$t }
+    $ns = @{ p = "http://schemas.openxmlformats.org/presentationml/2006/main"; a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+             p188 = "http://schemas.microsoft.com/office/powerpoint/2018/8/main"; p15 = "http://schemas.microsoft.com/office/powerpoint/2012/main"
+             r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"; rel = "http://schemas.openxmlformats.org/package/2006/relationships" }
+    $text = { param($node) Get-Norm ((@(Select-Xml -Xml $node -XPath ".//a:t" -Namespace $ns | ForEach-Object { $_.Node.InnerText }) -join " ")) }
+    $authors = @{}
+    $ax = & $read "ppt/authors.xml"
+    if ($ax) { foreach ($a in (Select-Xml -Xml $ax -XPath "//p188:author" -Namespace $ns)) { $authors[$a.Node.id] = $a.Node.name } }
+    $lx = & $read "ppt/commentAuthors.xml"
+    if ($lx) { foreach ($a in (Select-Xml -Xml $lx -XPath "//p:cmAuthor" -Namespace $ns)) { $authors["legacy:" + $a.Node.id] = $a.Node.name } }
+    $pres = & $read "ppt/presentation.xml"; $prels = & $read "ppt/_rels/presentation.xml.rels"
+    $targets = @{}; foreach ($x in $prels.Relationships.Relationship) { $targets[$x.Id] = $x.Target }
+    $i = 0
+    foreach ($sid in (Select-Xml -Xml $pres -XPath "//p:sldIdLst/p:sldId" -Namespace $ns)) {
+      $i++
+      $part = "ppt/" + ($targets[$sid.Node.GetAttribute("id", $ns.r)] -replace '^/?ppt/', '')
+      $relsPart = ($part -replace '/([^/]+)$', '/_rels/$1') + ".rels"
+      $srels = & $read $relsPart
+      $threads = @()
+      if ($srels) {
+        foreach ($x in $srels.Relationships.Relationship) {
+          $cpart = [IO.Path]::GetFullPath([IO.Path]::Combine("C:\x\" + ($part -replace '/[^/]+$', '').Replace('/', '\'), $x.Target.Replace('/', '\'))).Substring(5).Replace('\', '/')
+          if ($x.Target.StartsWith('/')) { $cpart = $x.Target.TrimStart('/') }
+          if ($x.Type -like "*/2018/10/relationships/comments") {
+            $cx = & $read $cpart
+            if (-not $cx) { continue }
+            foreach ($cm in (Select-Xml -Xml $cx -XPath "//p188:cm" -Namespace $ns)) {
+              $body = Select-Xml -Xml $cm.Node -XPath "./p188:txBody" -Namespace $ns | Select-Object -First 1
+              $t = @{ author = [string]$authors[$cm.Node.authorId]; text = $(if ($body) { & $text $body.Node } else { "" }); replies = @() }
+              foreach ($rp in (Select-Xml -Xml $cm.Node -XPath "./p188:replyLst/p188:reply" -Namespace $ns)) {
+                $rb2 = Select-Xml -Xml $rp.Node -XPath "./p188:txBody" -Namespace $ns | Select-Object -First 1
+                $t.replies += @{ author = [string]$authors[$rp.Node.authorId]; text = $(if ($rb2) { & $text $rb2.Node } else { "" }) }
+              }
+              $threads += $t
+            }
+          } elseif ($x.Type -like "*/relationships/comments") {
+            $cx = & $read $cpart
+            if (-not $cx) { continue }
+            $byIdx = @{}; $legacy = @()
+            foreach ($cm in (Select-Xml -Xml $cx -XPath "//p:cm" -Namespace $ns)) {
+              $parent = Select-Xml -Xml $cm.Node -XPath ".//p15:parentCm" -Namespace $ns | Select-Object -First 1
+              $c = @{ author = [string]$authors["legacy:" + $cm.Node.authorId]; text = (Get-Norm $cm.Node.text); replies = @()
+                      key = "$($cm.Node.authorId)/$($cm.Node.idx)"; parent = $(if ($parent) { "$($parent.Node.authorId)/$($parent.Node.idx)" } else { $null }) }
+              $byIdx[$c.key] = $c; $legacy += $c
+            }
+            foreach ($c in $legacy) { if ($c.parent -and $byIdx[$c.parent]) { $byIdx[$c.parent].replies += $c } else { $threads += $c } }
+          }
+        }
+      }
+      $out[$i] = $threads
+    }
+  } finally { $z.Dispose() }
+  $out
+}
+# A thread as one line, for comparing as sets per slide: the author and text, then its replies'.
+function Get-ThreadKey($t) { "$($t.author): $(Get-Norm $t.text)" + (@($t.replies | ForEach-Object { " | $($_.author): $(Get-Norm $_.text)" }) -join "") }
+
 $results = @()
 $files = Get-ChildItem -LiteralPath $Decks -Recurse -File | Where-Object { $_.Extension -in ".pptx", ".ppsx", ".potx", ".pptm" } | Sort-Object FullName
 # What the object model reports that Featherweight rightly reads otherwise: Cut has no duration
@@ -72,7 +139,7 @@ $noDuration = '^ppEffectCut'
 $mediaEffects = '^msoAnimEffectMedia'
 foreach ($f in $files) {
   $key = $f.FullName.Substring($Decks.Length + 1) -replace '\\', '__'
-  $r = [ordered]@{ deck = $f.FullName.Substring($Decks.Length + 1); status = "ok"; resave = @(); om = @() }
+  $r = [ordered]@{ deck = $f.FullName.Substring($Decks.Length + 1); status = "ok"; resave = @(); om = @(); comments = @(); commentThreads = 0 }
   if ($key -match '(^|__)protected__') { $r.status = "encrypted: not checked (fwtool timing takes no password)"; $results += $r; continue }
   $copy = Join-Path $resaved ([IO.Path]::GetFileNameWithoutExtension($f.Name) + ".pptx")
   $json = Join-Path $om "$key.readback.json"
@@ -88,7 +155,7 @@ foreach ($f in $files) {
   }
   # Step 3: the object model's numbers.
   $t = Read-Timing $ours
-  $rb = Get-Content -LiteralPath $json -Raw | ConvertFrom-Json
+  $rb = Get-Content -LiteralPath $json -Raw -Encoding UTF8 | ConvertFrom-Json  # UTF-8 without a BOM: not ANSI
   if ($rb.error) { $r.status = "PowerPoint: $($rb.error)"; $results += $r; continue }
   foreach ($s in $rb.slides) {
     $x = $t[[int]$s.index]
@@ -117,16 +184,33 @@ foreach ($f in $files) {
       if ($why) { $r.om += "slide $($s.index) effect $($i + 1): " + ($why -join ", ") }
     }
   }
-  if ($r.resave.Count -or $r.om.Count) { $r.status = "differs" }
+  # Step 4: the comments PowerPoint reads are the ones the file holds (threads, replies, authors, text).
+  try {
+    $fc = Read-FileComments $f.FullName
+    foreach ($s in $rb.slides) {
+      $mine = @($fc[[int]$s.index] | ForEach-Object { Get-ThreadKey $_ } | Sort-Object)
+      $theirs = @($s.comments | ForEach-Object { Get-ThreadKey $_ } | Sort-Object)
+      $r.commentThreads += $mine.Count
+      if (($mine -join "`n") -ne ($theirs -join "`n")) {
+        $r.comments += "slide $($s.index): the file has $($mine.Count) threads, PowerPoint reads $($theirs.Count)" +
+          $(if ($mine.Count -eq $theirs.Count) { "; first difference: " + (@(Compare-Object $mine $theirs | Select-Object -First 1 | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }) -join "") } else { "" })
+      }
+    }
+  } catch { $r.comments += "comments not read: $($_.Exception.Message)" }
+  if ($r.resave.Count -or $r.om.Count -or $r.comments.Count) { $r.status = "differs" }
   $results += $r
 }
 
 $bad = @($results | Where-Object { $_.status -ne "ok" })
-$md = @("# Timing read-back check", "", "Decks: $Decks ($($results.Count)); $($results.Count - $bad.Count) read back the same.", "")
+$withComments = @($results | Where-Object { $_.commentThreads -gt 0 })
+$commentsSame = @($withComments | Where-Object { -not @($_.comments).Count }).Count
+$md = @("# Timing read-back check", "", "Decks: $Decks ($($results.Count)); $($results.Count - $bad.Count) read back the same.",
+        "Comments: $commentsSame of $($withComments.Count) decks with comments ($((@($withComments | ForEach-Object { $_.commentThreads }) | Measure-Object -Sum).Sum) threads) read back the same.", "")
 foreach ($r in $bad) {
   $md += "## $($r.deck): $($r.status)"
   $md += @($r.resave | Select-Object -First 20 | ForEach-Object { "- resave: $_" })
   $md += @($r.om | Select-Object -First 20 | ForEach-Object { "- object model: $_" })
+  $md += @($r.comments | Select-Object -First 10 | ForEach-Object { "- comments: $_" })
   $md += ""
 }
 [IO.File]::WriteAllText((Join-Path $Out "summary.md"), ($md -join "`r`n"), [Text.UTF8Encoding]::new($false))
