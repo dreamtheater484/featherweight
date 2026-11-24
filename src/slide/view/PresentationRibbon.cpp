@@ -371,9 +371,10 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   add(CmdSlideShowFromCurrent, icon::FromCurrentSlide, S::Large, L"From\nCurrent Slide", L"C");
   b.Group(L"Set Up");
   add(CmdSlideHide, icon::HideSlide, S::Large, L"Hide\nSlide", L"H");
+  // Monitors: Use Presenter View always (as PowerPoint); where the show goes with two monitors or more.
+  b.Group(L"Monitors");
   const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
-  if (monitors.size() >= 2) {  // where the show goes
-    b.Group(L"Monitors");
+  if (monitors.size() >= 2) {
     RibbonItem& mon = add(CmdSlideMonitorMenu, 0, S::Small, L"Monitor", L"M");
     mon.tool.kind = ToolKind::Dropdown;
     mon.tool.width = 150;
@@ -383,8 +384,8 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     mon.tool.onChange = [this](const ToolValue& v) {
       if (v.index >= 0) showMonitor_ = v.index - 1;
     };
-    add(CmdUsePresenterView, 0, S::Medium, L"Use Presenter View", L"V", S::Medium);  // P3: a check box
   }
+  add(CmdUsePresenterView, 0, S::Medium, L"Use Presenter View", L"V", S::Medium);  // P3: a check box
 
   // ---- Review
   b.Tab(L"Review", L"R");
