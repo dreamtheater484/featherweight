@@ -148,6 +148,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
   if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
   if (PictureCommand(cmd, &s)) return s;    // P3, p3-files: Export's PNG pictures
   if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
+  if (AnimCommandState(cmd, s)) return s;   // p3-anim: transitions and animations
   if (TextEditing::Names(cmd) && cmd != CmdCopy) return clipboardName(s = text_->Query(cmd));  // named, unavailable
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
@@ -219,6 +220,7 @@ std::vector<int> PresentationView::Commands() {
     if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
   for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
   for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
+  for (int cmd : AnimCommands()) out.push_back(cmd);  // p3-anim
   return out;
 }
 
@@ -231,6 +233,7 @@ bool PresentationView::Execute(int cmd) {
   if (text_->Owns(cmd)) return text_->Execute(cmd);
   if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
   if (SlideCommand(cmd)) return true;  // P2: the slides' commands
+  if (AnimCommand(cmd)) return true;   // p3-anim: transitions and animations
   if (PictureCommand(cmd, nullptr)) return true;  // P3, p3-files
   const size_t n = SlideCount();
   switch (cmd) {
