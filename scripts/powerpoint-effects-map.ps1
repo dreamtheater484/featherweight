@@ -172,12 +172,12 @@ foreach ($entry in $slides) {
     $choice = $x.SelectSingleNode("/p:sld/mc:AlternateContent/mc:Choice", $ns)
     $fallback = $x.SelectSingleNode("/p:sld/mc:AlternateContent/mc:Fallback/p:transition", $ns)
     $tr = if ($choice) { $choice.SelectSingleNode("p:transition", $ns) } else { $x.SelectSingleNode("/p:sld/p:transition", $ns) }
-    $child = if ($tr) { @($tr.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.LocalName -ne 'sndAc' -and $_.LocalName -ne 'extLst' }) | Select-Object -First 1 } else { $null }
+    $inner = if ($tr) { @($tr.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.LocalName -ne 'sndAc' -and $_.LocalName -ne 'extLst' }) | Select-Object -First 1 } else { $null }
     $name = $title.Substring(3)
     $transitions += [ordered]@{
       ppEntryEffect = $name; value = Get-EnumValue PpEntryEffect $name
       requires = $(if ($choice) { $choice.GetAttribute("Requires") } else { $null })
-      element = Format-Element $child
+      element = Format-Element $inner
       transition = Format-Element $tr
       fallback = $(if ($fallback) { Format-Element (@($fallback.ChildNodes | Where-Object { $_.NodeType -eq 'Element' }) | Select-Object -First 1) } else { $null })
     }
