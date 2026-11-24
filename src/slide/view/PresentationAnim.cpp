@@ -340,6 +340,10 @@ void PresentationView::AnimationPane::Draw(Canvas& c) {
     x += 20 * ui_;
     c.Text(names_[i], RectF(x, y, row.right - 4 * ui_, y + rowH), a.editable ? p.text : p.textSecondary, 12 * ui_);
   }
+  if (dropAt_ != SIZE_MAX) {  // where a drag would put the picked effects
+    const float y = list_.top + dropAt_ * rowH - scroll_;
+    c.FillRound(RectF(list_.left, y - 1 * ui_, list_.right, y + 1 * ui_), 1 * ui_, p.accent);
+  }
   c.PopClip();
 }
 
@@ -363,7 +367,43 @@ bool PresentationView::AnimationPane::OnMouseDown(float x, float y, bool /*dbl*/
     anchor_ = i;
   }
   v_.PickAnims(pick);
+  pressed_ = why_.empty();
+  pressY_ = y;
+  dropAt_ = SIZE_MAX;
   return true;
+}
+
+bool PresentationView::AnimationPane::OnMouseMove(float /*x*/, float y) {
+  if (pressed_ && GetKeyState(VK_LBUTTON) >= 0) {  // released where the pane didn't hear it
+    pressed_ = false;
+    const bool shown = dropAt_ != SIZE_MAX;
+    dropAt_ = SIZE_MAX;
+    return shown;
+  }
+  if (!pressed_ || (dropAt_ == SIZE_MAX && std::fabs(y - pressY_) < 5 * ui_)) return false;
+  const float at = std::round((y - list_.top + scroll_) / (26 * ui_));
+  dropAt_ = static_cast<size_t>(std::clamp(at, 0.f, static_cast<float>(seq_.size())));
+  return true;
+}
+
+void PresentationView::AnimationPane::OnMouseUp(float /*x*/, float /*y*/) {
+  const size_t drop = dropAt_;
+  pressed_ = false;
+  dropAt_ = SIZE_MAX;
+  edit::Editor* e = v_.SlideEditor();
+  const std::vector<size_t> t = v_.AnimTargets();
+  if (drop == SIZE_MAX || !e || t.empty()) return;
+  // `to` counts the effects that stay: the moved ones above the drop place don't.
+  size_t to = drop;
+  for (size_t k : t)
+    if (k < drop) --to;
+  if (to == t.front() && t.back() - t.front() + 1 == t.size()) return;  // dropped where they are
+  if (v_.Done(ed::MoveAnimations(*e, v_.current_, t, to))) {
+    std::vector<size_t> moved;
+    for (size_t k = 0; k < t.size(); ++k) moved.push_back(to + k);
+    v_.PickAnims(moved);
+  }
+  v_.AnimChanged();
 }
 
 bool PresentationView::AnimationPane::OnWheel(int delta, float /*x*/, float /*y*/) {

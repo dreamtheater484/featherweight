@@ -33,6 +33,8 @@ class PresentationView::AnimationPane : public PanelContent {
   bool TakesFocus() const override { return true; }
   void SetFocus(bool has, bool byKeyboard) override;
   bool OnMouseDown(float x, float y, bool dbl) override;
+  bool OnMouseMove(float x, float y) override;  // dragging the picked effects to another place
+  void OnMouseUp(float x, float y) override;
   bool OnWheel(int delta, float x, float y) override;
   bool OnKeyDown(UINT vk, bool ctrl, bool shift) override;
   std::wstring TooltipAt(float x, float y) override;
@@ -47,9 +49,10 @@ class PresentationView::AnimationPane : public PanelContent {
   uint64_t state_ = UINT64_MAX;
   size_t slide_ = SIZE_MAX;
   D2D1_RECT_F list_{};
-  float ui_ = 1, scroll_ = 0;
+  float ui_ = 1, scroll_ = 0, pressY_ = 0;
   size_t anchor_ = 0;
-  bool focus_ = false;
+  size_t dropAt_ = SIZE_MAX;  // while dragging: the row the picked effects go in front of
+  bool focus_ = false, pressed_ = false;
 };
 
 // A preview playing over the slide in the editor: the slide's transition from the slide before it,
