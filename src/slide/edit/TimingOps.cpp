@@ -1233,7 +1233,10 @@ std::vector<AnimEffect> MainSequence(const Editor& ed, size_t slide, std::u16str
     a.cls = c.cls;
     a.option = c.option;
     a.trigger = e.trigger;
-    a.durationMs = Length(e.cTn) * Repeat(e.cTn);
+    a.durationMs = Length(e.cTn);
+    double v;
+    const char* rc = e.cTn.attribute("repeatCount").value();
+    a.repeat = std::string_view(rc) == "indefinite" ? 0 : ParseMs(rc, v) ? v / 1000 : 1;
     a.delayMs = CondDelay(e.cTn);
     a.editable = c.def && c.editable;
     a.presetId = static_cast<int>(Number(e.cTn.attribute("presetID").value(), 0));

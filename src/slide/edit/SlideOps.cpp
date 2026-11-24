@@ -5,6 +5,7 @@
 #include <random>
 
 #include "slide/edit/EditInternal.h"
+#include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
 
 namespace fw::slide::edit {
@@ -225,6 +226,7 @@ void MapPlaceholders(pugi::xml_node slideRoot, pugi::xml_node layoutRoot, std::s
     if (pugi::xml_node ph = PlaceholderOf(c)) slidePhs.emplace_back(c, ph);
   }
   std::vector<int> match(slidePhs.size(), -1);
+  std::set<uint32_t> dropped;  // placeholders removed: their effects and builds go too
   auto type = [](pugi::xml_node ph) { return std::string_view(ph.attribute("type").value()); };
   auto idx = [](pugi::xml_node ph) { return std::string_view(ph.attribute("idx").value()); };
   // Pass 1: the same family and index; pass 2: the same family, in order.
@@ -256,6 +258,10 @@ void MapPlaceholders(pugi::xml_node slideRoot, pugi::xml_node layoutRoot, std::s
     }
     std::string_view t = type(ph);
     if (t == "dt" || t == "ftr" || t == "sldNum" || t == "hdr" || PlaceholderIsEmpty(shape)) {
+      shape.find_node([&](pugi::xml_node n) {
+        if (LocalNameOf(n) == "cNvPr") dropped.insert(U32(n, "id"));
+        return false;
+      });
       tree.remove_child(shape);
       continue;
     }
@@ -275,6 +281,7 @@ void MapPlaceholders(pugi::xml_node slideRoot, pugi::xml_node layoutRoot, std::s
       ext.append_attribute("cy") = static_cast<long long>(b->second.Height() * 12700);
     }
   }
+  DropShapeRefs(m, slideRoot, dropped);
   // The layout's placeholders nothing matched, added empty (not the footer's, date's and number's).
   for (LayoutPh& l : layout) {
     std::string_view t = type(l.ph);

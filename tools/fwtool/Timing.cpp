@@ -214,6 +214,8 @@ int RunTiming(const Options& options) {
         if (a.anim != ed::Anim::Other && a.option >= 0 && a.option < static_cast<int>(ao.size()))
           std::printf(" (%s)", U8(ao[a.option]).c_str());
         std::printf(", %s, %.0f ms, delay %.0f ms", TriggerName(a.trigger), a.durationMs, a.delayMs);
+        if (a.repeat == 0) std::printf(", repeat until the end of the slide");
+        else if (a.repeat != 1) std::printf(", repeat %g", a.repeat);
         if (!a.editable) std::printf(", kept #%d/%d", a.presetId, a.presetSubtype);
         std::printf("\n");
       }

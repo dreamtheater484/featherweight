@@ -92,7 +92,8 @@ struct AnimEffect {
   AnimClass cls = AnimClass::Other;  // also for Other (from presetClass)
   int option = 0;                    // index into AnimOptions(anim)
   AnimTrigger trigger = AnimTrigger::OnClick;
-  double durationMs = 0;  // how long it plays (0: at once)
+  double durationMs = 0;  // how long it plays once (0: at once), PowerPoint's Duration
+  double repeat = 1;      // how many times (repeatCount); 0: until the end of the slide
   double delayMs = 0;
   bool editable = false;  // its kind, options and duration can change (a common animation as PowerPoint writes it)
   int presetId = 0, presetSubtype = 0;  // as written (with cls, what an Other effect is: 26/0 is Bounce)

@@ -18,6 +18,9 @@ bool ReplaceGroup(pugi::xml_node parent, std::string_view xml, const std::functi
                   int group);
 // spPr's child groups in schema order (xfrm 0, geometry 1, fill 2, ln 3, effects 4, scene3d 5, sp3d 6).
 int SpPrGroupOf(std::string_view local);
+// The effects, builds and connections in slide `root` that name shapes `ids`, which are gone (as
+// deleting them does; a layout change dropping empty placeholders too).
+void DropShapeRefs(Editor::Impl& m, pugi::xml_node root, const std::set<uint32_t>& ids);
 // The action attribute for a link target ("ppaction://hlinksldjump"...); empty for a web address.
 std::string LinkAction(const LinkTarget& link);
 // Puts a shape element on slide part `part` at z position `z` (-1: on top), renewing its ids that

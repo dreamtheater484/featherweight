@@ -649,3 +649,60 @@ TEST(SlideAnimSequenceByParagraphAndBack) {
   CHECK(SlideXml(ed, 0) == before);
   CHECK(ed.UndoName() == u"Add Animation");
 }
+
+// A layout change that drops an empty placeholder takes its effects and build with it (p3-corpus's
+// torture: new slide, an effect on its empty title, then a layout without a title).
+TEST(SlideAnimLayoutChangeDropsTheEffectsOfDroppedPlaceholders) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  size_t title = SIZE_MAX, blank = SIZE_MAX;
+  for (size_t i = 0; i < deck->Layouts().size(); ++i) {
+    if (deck->Layouts()[i]->type == "title") title = i;
+    if (deck->Layouts()[i]->type == "blank") blank = i;
+  }
+  CHECK(title != SIZE_MAX && blank != SIZE_MAX);
+  if (title == SIZE_MAX || blank == SIZE_MAX) return;
+  const size_t at = deck->SlideCount();
+  CHECK(ed.NewSlide(at, title));
+  const Slide* slide = deck->GetSlide(at);
+  CHECK(slide && !slide->shapes.empty());
+  if (!slide || slide->shapes.empty()) return;
+  const uint32_t shape = slide->shapes.front().id;
+  AnimSpec floatOut;
+  floatOut.anim = Anim::FloatOut;
+  floatOut.option = 1;
+  CHECK(AddAnimation(ed, at, shape, floatOut));
+  CHECK(Has(SlideXml(ed, at), "<p:spTgt spid=\"" + std::to_string(shape) + "\""));
+  CHECK(ed.SetLayout({at}, blank));
+  const std::string x = SlideXml(ed, at);
+  CHECK(!Has(x, "spid=\"" + std::to_string(shape) + "\""));
+  CHECK(MainSequence(ed, at).empty());
+  CHECK(ed.Undo());
+  CHECK_EQ(MainSequence(ed, at).size(), 1u);
+}
+
+// PowerPoint's Duration is one play; Repeat is apart (p3-corpus's read-back: a path repeated twice).
+TEST(SlideAnimDurationIsOnePlay) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  std::string fade =
+      "<p:par><p:cTn id=\"5\" presetID=\"10\" presetClass=\"entr\" presetSubtype=\"0\" repeatCount=\"2000\" fill=\"hold\" grpId=\"0\" "
+      "nodeType=\"clickEffect\"><p:stCondLst><p:cond delay=\"0\"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id=\"6\" dur=\"1\" "
+      "fill=\"hold\"><p:stCondLst><p:cond delay=\"0\"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl><p:attrNameLst>"
+      "<p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"visible\"/></p:to></p:set>"
+      "<p:animEffect transition=\"in\" filter=\"fade\"><p:cBhvr><p:cTn id=\"7\" dur=\"500\"/><p:tgtEl><p:spTgt spid=\"3\"/></p:tgtEl>"
+      "</p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>";
+  CHECK(WriteSlide(ed, 0, std::string(kHead) + TimingWith(fade, "<p:bldLst><p:bldP spid=\"3\" grpId=\"0\"/></p:bldLst>") + "</p:sld>"));
+  std::vector<AnimEffect> seq = MainSequence(ed, 0);
+  CHECK_EQ(seq.size(), 1u);
+  if (seq.size() != 1) return;
+  CHECK(seq[0].durationMs == 500 && seq[0].repeat == 2);
+  AnimTimingPatch p;
+  p.durationMs = 1000;
+  CHECK(SetAnimationTiming(ed, 0, {0}, p));
+  seq = MainSequence(ed, 0);
+  CHECK(seq.size() == 1 && seq[0].durationMs == 1000 && seq[0].repeat == 2);
+  CHECK(Has(SlideXml(ed, 0), "<p:cTn id=\"7\" dur=\"1000\"/>"));
+}
