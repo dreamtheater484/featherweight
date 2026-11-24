@@ -274,7 +274,35 @@ bool Editor::GetMediaStart(size_t slide, uint32_t id, MediaStart* out) const {
   return true;
 }
 
-Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start) {
+bool Editor::GetMediaFile(size_t slide, uint32_t id, std::vector<uint8_t>* bytes, std::string* extension) const {
+  const Impl& m = *impl_;
+  const std::string part = m.SlidePart(slide);
+  pugi::xml_node sp = part.empty() || !bytes ? pugi::xml_node() : Impl::FindShape(m.Root(part), id);
+  const pkg::RelationshipSet* rels = sp ? m.Rels(part) : nullptr;
+  if (!rels) return false;
+  // p14:media r:embed (PowerPoint 2010 on), else a:videoFile / a:audioFile r:embed; never a link.
+  std::string embed;
+  auto find = [&](auto&& self, pugi::xml_node n) -> void {
+    for (pugi::xml_node c : n.children()) {
+      if (!embed.empty()) return;
+      const std::string_view k = LocalNameOf(c);
+      if (k == "media" || k == "videoFile" || k == "audioFile" || k == "quickTimeFile")
+        for (pugi::xml_attribute a : c.attributes())
+          if (LocalNameOf(a) == "embed" && embed.empty()) embed = a.value();
+      if (k != "txBody" && k != "spPr") self(self, c);
+    }
+  };
+  find(find, sp);
+  const pkg::Relationship* r = embed.empty() ? nullptr : rels->Find(embed);
+  if (!r || r->external || r->targetPart.empty() || !m.Read(r->targetPart, *bytes)) return false;
+  if (extension) {
+    const size_t dot = r->targetPart.find_last_of('.');
+    *extension = dot == std::string::npos ? std::string() : r->targetPart.substr(dot + 1);
+  }
+  return true;
+}
+
+Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start, double durationMs) {
   Call call(*this, u"Start");  // one step: the edits below join it
   MediaStart now;
   if (!GetMediaStart(slide, id, &now)) return call.End(Result::Fail(u"That isn't a video or audio the slide plays."));
@@ -294,7 +322,7 @@ Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start) {
   if (step < 0) {
     Impl& m = *impl_;
     const std::string part = m.SlidePart(slide);
-    if (!AddPlayStep(m.Edit(part), id, 0) || (step = playStep()) < 0)
+    if (!AddPlayStep(m.Edit(part), id, durationMs) || (step = playStep()) < 0)
       return call.End(Result::Fail(u"The slide's animations can't be read, so the video's start can't change."));
   }
   AnimTimingPatch patch;

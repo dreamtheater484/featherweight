@@ -362,7 +362,11 @@ class Editor {
   bool GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, bool* video = nullptr) const;
   Result SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p);
   bool GetMediaStart(size_t slide, uint32_t id, MediaStart* out) const;
-  Result SetMediaStart(size_t slide, uint32_t id, MediaStart start);
+  // From When Clicked On back to a play step, `durationMs` is the clip's length for the step's dur, as
+  // PowerPoint writes it (After Previous delays count it); 0 when unknown.
+  Result SetMediaStart(size_t slide, uint32_t id, MediaStart start, double durationMs = 0);
+  // An embedded video's or audio's file (its bytes and extension, "mp4"); false for linked media.
+  bool GetMediaFile(size_t slide, uint32_t id, std::vector<uint8_t>* bytes, std::string* extension) const;
   // A table of `rows` by `columns` with PowerPoint's default style, as Insert > Table makes it.
   Result InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id = nullptr);
   // Deleted, with what names them: animations of them, connections to them, relationships only
