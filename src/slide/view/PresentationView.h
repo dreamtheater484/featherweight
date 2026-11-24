@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "TabContent.h"
+#include "pkg/Snapshot.h"
 #include "slide/view/Deck.h"
 #include "slide/view/SlideLayout.h"
 #include "slide/view/SlideDesign.h"
@@ -29,7 +30,11 @@ struct Changes;
 struct Result;
 }
 class PresentationFile;
+class PasswordCard;
 struct ToolItem;
+namespace fw::pkg::crypto {
+struct Key;
+}
 
 namespace fw::slide::view {
 
@@ -66,6 +71,8 @@ class PresentationView : public TabContent {
   TabKind Kind() const override { return TabKind::Presentation; }
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
   bool Ready() const override { return deck_ != nullptr; }
+  bool NeedsPassword() const override { return needPassword_; }  // p3-review
+  TextBox* PasswordBox() override;
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
   bool Modified() const override;
@@ -275,6 +282,27 @@ class PresentationView : public TabContent {
   bool DesignCommandState(int cmd, CommandState& s);
   bool DesignCommand(int cmd);
   void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
+  // Comments (P3, p3-review: PresentationComments.h): the pane, the markers, Review > Comments.
+  class CommentsPanel;
+  std::unique_ptr<CommentsPanel> commentsPanel_;
+  CommentsPanel& Comments();
+  // Password protection (P3, p3-review: PresentationProtect.cpp): an encrypted file (or a recovered
+  // one) waits behind the password card until it is decrypted; Encrypt with Password sets or removes
+  // the password the file is saved with.
+  class PasswordPanel;
+  std::unique_ptr<PasswordPanel> passwordPanel_;
+  std::unique_ptr<PasswordCard> card_;
+  bool needPassword_ = false;
+  std::vector<uint8_t> protected_;  // the encrypted file as read, until its password opens it
+  fw::pkg::Snapshot::Stamp protectedStamp_;
+  bool TakeProtected();  // the file (or the recovered bytes) is encrypted: read into protected_
+  OpenResult Unlock(const std::wstring& password, std::vector<uint8_t>& plain, fw::pkg::crypto::Key& key,
+                    std::wstring& error);
+  void SubmitPassword(const std::wstring& password);
+  PasswordCard& Card();
+  bool ProtectCommandState(int cmd, CommandState& s);
+  bool ProtectCommand(int cmd);
+  bool SetFilePassword(const std::wstring& password);  // empty: none (script op password:<text>)
   // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
   // p3-anim (PresentationAnim.cpp): the Transitions and Animations tabs, the Animation Pane, Preview.
   class AnimationPane;

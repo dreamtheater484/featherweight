@@ -15,6 +15,7 @@
 #include "slide/objects/ObjectXml.h"
 #include "slide/show/SlideShow.h"
 #include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationFile.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/PresentationText.h"
 #include "slide/view/PresentationView.h"
@@ -392,6 +393,13 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   b.Tab(L"Review", L"R");
   b.Group(L"Proofing");
   add(CmdSpelling, icon::Spelling, S::Large, L"Spelling", L"S");
+  // p3-review: PowerPoint 365's Comments group.
+  b.Group(L"Comments");
+  add(CmdNewComment, icon::Comment, S::Large, L"New\nComment", L"C");
+  split(CmdDeleteThread, icon::Delete, S::Large, L"Delete", L"D", {CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments});
+  add(CmdPrevComment, icon::ChevronUp, S::Large, L"Previous", L"V");
+  add(CmdNextComment, icon::ChevronDown, S::Large, L"Next", L"N");
+  split(CmdReviewPane, icon::Comment, S::Large, L"Show\nComments", L"H", {CmdReviewPane, CmdShowCommentMarkup});
 
   // ---- View
   b.Tab(L"View", L"W");
@@ -467,6 +475,17 @@ void PresentationView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     f.setting = e.setting;
     f.choice = !e.setting;
     if (e.cmd == CmdPrintSlides) f.description = L"Export PDF lays out the pages the same way";
+    m.file.push_back(std::move(f));
+  }
+  // p3-review: File > Info > Protect Presentation.
+  {
+    RibbonFileItem f;
+    f.place = RibbonFilePlace::Info;
+    f.cmd = CmdEncryptPassword;
+    f.label = L"Protect Presentation: Encrypt with Password";
+    f.description = file_ && file_->Protected() ? L"A password is required to open this presentation."
+                                                : L"Require a password to open this presentation.";
+    f.glyph = icon::Lock;
     m.file.push_back(std::move(f));
   }
   // File › Export (P3, p3-files): the slides as PNG pictures.

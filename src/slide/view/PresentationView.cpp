@@ -19,6 +19,9 @@
 #include "slide/view/PresentationText.h"
 #include "slide/view/NewDeck.h"
 #include "slide/view/PresentationFile.h"
+#include "PasswordCard.h"
+#include "pkg/OfficeCrypto.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationPanels.h"
 #include "slide/view/PresentationAnim.h"  // p3-anim
 #include "text/Fonts.h"
@@ -81,12 +84,21 @@ std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& ho
   return view;
 }
 
-OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
+OpenResult PresentationView::Load(const std::wstring& password, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
   std::wstring why;
-  deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
-          : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
-                       : OpenDeck(path_, why);
+  // p3-review: a password-protected presentation (or a recovered one) is a compound file, read whole
+  // and opened decrypted; until its password is given the tab shows the password card.
+  pkg::crypto::Key key;
+  if (!protected_.empty() || TakeProtected()) {
+    std::vector<uint8_t> plain;
+    if (OpenResult r = Unlock(password, plain, key, error); r != OpenResult::Ok) return r;
+    deck_ = OpenDeckFromBytes(std::move(plain), why);
+  } else {
+    deck_ = newDeck_     ? OpenDeckFromBytes(BlankPresentation(), why)
+            : fromBytes_ ? OpenDeckFromBytes(std::move(bytes_), why)
+                         : OpenDeck(path_, why);
+  }
   if (!deck_) {
     error = Title() + L": " + why;
     return OpenResult::Failed;
@@ -96,6 +108,11 @@ OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring
     path_.clear();
   }
   FileOpened();
+  if (!key.Empty()) {
+    File().Protect(std::move(key));  // saved, backed up and autosaved encrypted with it
+    protected_.clear();
+    protected_.shrink_to_fit();
+  }
   thumbCache_.assign(deck_->SlideCount(), {});
   selection_.Reset(SlideCount(), 0);
   // A slide show file starts in the show; Esc comes back here (plan §8.1). Scripted runs
@@ -299,6 +316,10 @@ ID2D1Bitmap* PresentationView::ThumbBitmap(ID2D1DeviceContext* dc, size_t slide,
 void PresentationView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   c.Fill(RectF(vp_), p.docBg);
+  if (needPassword_) {  // p3-review: the password card until the file opens
+    Card().Draw(c, vp_, ui_, Title());
+    return;
+  }
   if (!deck_) return;
   if (!bannerShown_) {
     bannerShown_ = true;
@@ -427,6 +448,7 @@ void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
       if (cur) c.Stroke(s, p.searchCurrent, std::max(1.0f, ui_));
     }
   }
+  Comments().DrawMarkers(c, rc);  // p3-review: the comments' markers, over everything
   c.PopClip();
 }
 
@@ -526,6 +548,10 @@ void PresentationView::OnDeactivated() {
 // Mouse
 
 void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseDown(x, y, mods, doubleClick, ui_);
+    return;
+  }
   if (!deck_ || button != 0) return;
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   downX_ = x;
@@ -553,6 +579,10 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
   keysInThumbs_ = false;
   if (notesShown_ && Contains(notes_, fx, fy) && NotesMouseDown()) return;  // P2: typing notes
   if (Contains(view_, fx, fy)) {
+    if (Comments().MouseDown(fx, fy)) {  // p3-review: a comment's marker (picked, maybe dragged)
+      text_->End();
+      return;
+    }
     if (const SlideLink* link = LinkAt(x, y); link && (mods & kModCtrl)) {
       FollowLink(*link);
       return;
@@ -582,7 +612,12 @@ void PresentationView::OnMouseDown(int x, int y, int button, UINT mods, bool dou
 }
 
 void PresentationView::OnMouseMove(int x, int y, UINT mods) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseMove(x, y, ui_);
+    return;
+  }
   if (!deck_) return;
+  if (commentsPanel_ && commentsPanel_->MouseMove(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseMove(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -619,6 +654,11 @@ void PresentationView::OnMouseMove(int x, int y, UINT mods) {
 }
 
 void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
+  if (needPassword_) {  // p3-review
+    Card().OnMouseUp(x, y);
+    return;
+  }
+  if (commentsPanel_ && commentsPanel_->MouseUp(static_cast<float>(x), static_cast<float>(y))) return;  // p3-review
   if (objects_ && objects_->Dragging()) {  // p2-objects
     objects_->MouseUp(static_cast<float>(x), static_cast<float>(y), mods);
     return;
@@ -634,6 +674,7 @@ void PresentationView::OnMouseUp(int x, int y, int /*button*/, UINT mods) {
 }
 
 void PresentationView::OnMouseLeave() {
+  if (needPassword_) Card().OnMouseLeave();  // p3-review
   if (hoverThumb_ >= 0) {
     hoverThumb_ = -1;
     host_.ViewInvalidate();
@@ -722,6 +763,7 @@ draw::Point PresentationView::SlidePoint(int x, int y) const {
 }
 
 HCURSOR PresentationView::CursorAt(int x, int y) {
+  if (needPassword_) return Card().CursorAt(x, y);  // p3-review
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ns = LoadCursor(nullptr, IDC_SIZENS),
                  hand = LoadCursor(nullptr, IDC_HAND), all = LoadCursor(nullptr, IDC_SIZEALL);
   if (drag_ == Drag::Splitter || (notesShown_ && Contains(Inflate(splitter_, 0, 2 * ui_), (float)x, (float)y))) return ns;
@@ -738,6 +780,8 @@ HCURSOR PresentationView::CursorAt(int x, int y) {
 }
 
 std::wstring PresentationView::TooltipAt(int x, int y) {
+  if (commentsPanel_ && Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p3-review
+    if (std::wstring tip = commentsPanel_->Tooltip(static_cast<float>(x), static_cast<float>(y)); !tip.empty()) return tip;
   if (const SlideLink* link = LinkAt(x, y)) {
     std::wstring tip = link->tooltip.empty() ? link->url : link->tooltip;
     return tip + (tip.empty() ? L"" : L"\n") + L"Ctrl+click to follow the link";
