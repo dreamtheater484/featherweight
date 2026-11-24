@@ -52,7 +52,7 @@ if ($Child) {
     $name = [Enum]::GetName([type]"Microsoft.Office.Interop.PowerPoint.$type", [int]$value)
     if ($name) { $name } else { "unknown($([int]$value))" }
   }
-  function R($v) { [Math]::Round([double]$v, 3) }
+  function Get-Rounded($v) { [Math]::Round([double]$v, 3) }
   function Read-Effect($e) {
     $x = [ordered]@{}
     try { $x.shapeId = [int]$e.Shape.Id; $x.shape = [string]$e.Shape.Name } catch { $x.shapeId = $null; $x.shape = $null }
@@ -61,15 +61,15 @@ if ($Child) {
     $x.effectId = [int]$e.EffectType
     $x.exit = ([int]$e.Exit -eq -1)
     $x.trigger = N MsoAnimTriggerType $e.Timing.TriggerType
-    $x.duration = R $e.Timing.Duration
-    $x.delay = R $e.Timing.TriggerDelayTime
+    $x.duration = Get-Rounded $e.Timing.Duration
+    $x.delay = Get-Rounded $e.Timing.TriggerDelayTime
     $x.direction = $null
     try { $dir = [int]$e.EffectParameters.Direction; if ($dir -ne 0 -and $dir -ne -2) { $x.direction = N MsoAnimDirection $dir } } catch {}
-    try { $x.repeat = R $e.Timing.RepeatCount } catch { $x.repeat = $null }
+    try { $x.repeat = Get-Rounded $e.Timing.RepeatCount } catch { $x.repeat = $null }
     $x
   }
   function Read-Comment($c) {
-    $x = [ordered]@{ author = [string]$c.Author; initials = [string]$c.AuthorInitials; text = [string]$c.Text; left = R $c.Left; top = R $c.Top }
+    $x = [ordered]@{ author = [string]$c.Author; initials = [string]$c.AuthorInitials; text = [string]$c.Text; left = Get-Rounded $c.Left; top = Get-Rounded $c.Top }
     $x.replies = @()
     try { foreach ($r in $c.Replies) { $x.replies += [ordered]@{ author = [string]$r.Author; initials = [string]$r.AuthorInitials; text = [string]$r.Text } } } catch {}
     $x
@@ -93,10 +93,10 @@ if ($Child) {
       $st = $s.SlideShowTransition
       $slide = [ordered]@{ index = [int]$s.SlideIndex; slideId = [int]$s.SlideID; hidden = ([int]$st.Hidden -eq -1) }
       $t = [ordered]@{ effect = N PpEntryEffect $st.EntryEffect; effectId = [int]$st.EntryEffect }
-      try { $t.duration = R $st.Duration } catch { $t.duration = $null }
+      try { $t.duration = Get-Rounded $st.Duration } catch { $t.duration = $null }
       $t.advanceOnClick = ([int]$st.AdvanceOnClick -eq -1)
       $t.advanceOnTime = ([int]$st.AdvanceOnTime -eq -1)
-      $t.advanceTime = R $st.AdvanceTime
+      $t.advanceTime = Get-Rounded $st.AdvanceTime
       $t.sound = $null
       try { if ([int]$st.SoundEffect.Type -ne 0 -and [int]$st.SoundEffect.Type -ne 1) { $t.sound = [string]$st.SoundEffect.Name } } catch {}
       $slide.transition = $t
