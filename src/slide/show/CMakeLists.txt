@@ -8,7 +8,7 @@ target_link_libraries(fwslideshow PUBLIC fwpkg fwcore)
 target_compile_options(fwslideshow PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 # The window, built against the app's shell (src/ui) and linked into the exe only.
-target_sources(Featherweight PRIVATE SlideShow.cpp DeckRenderer.cpp)
+target_sources(Featherweight PRIVATE SlideShow.cpp DeckRenderer.cpp PresenterView.cpp)
 target_link_libraries(Featherweight PRIVATE fwslideshow fwslide fwslide_render)
 
 if(TARGET fw_tests)

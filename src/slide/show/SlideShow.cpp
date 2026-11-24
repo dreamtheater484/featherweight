@@ -27,6 +27,7 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "slide/Presentation.h"
+#include "slide/show/PresenterView.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/Timing.h"
 #include "ui/Anim.h"
@@ -152,7 +153,7 @@ struct MonitorList {
 
 // ---------------------------------------------------------------------------------------------
 
-class Show final : public anim::FrameSource {
+class Show final : public anim::FrameSource, private PresenterHost {
  public:
   Show(Presentation& deck, SlideRenderer& renderer, ShowOptions options)
       : deck_(deck), renderer_(renderer), opts_(std::move(options)) {}
@@ -258,6 +259,15 @@ class Show final : public anim::FrameSource {
 
   std::unique_ptr<Scene> cur_, next_;
   std::vector<size_t> history_;  // slides shown, for "last viewed"
+  // P3: the presenter view, and the current slide fully built for its "next animation".
+  std::unique_ptr<PresenterView> presenter_;
+  std::unique_ptr<Scene> built_;
+  void UpdatePresenter();
+  void PresenterKey(UINT vk) override { Key(vk); }
+  void PresenterGoTo(size_t slide) override {
+    if (slide < deck_.SlideCount()) GoTo(slide, false, false);
+  }
+  void PresenterClosed() override { PostStop(); }
   SlideOrder order_;  // hidden slides, the loop, custom shows
   int hoverItem_ = -1;  // the item the mouse is over whose mouse-over action has run
   size_t lastShown_ = 0;
@@ -401,6 +411,14 @@ bool Show::Create() {
     GetCursorPos(&benchCursor_);
   }
   ShowWindow(hwnd_, SW_SHOW);
+  if (opts_.presenter) {
+    // Beside the windowed show, or full screen on another monitor; with one monitor and full screen,
+    // none (PowerPoint shows only the slides then).
+    HMONITOR where = opts_.windowed ? mon : nullptr;
+    for (size_t i = 0; !where && i < monitors.handles.size(); ++i)
+      if (monitors.handles[i] != mon) where = monitors.handles[i];
+    if (where) presenter_ = PresenterView::Create(*this, deck_, renderer_, where, opts_.windowed, opts_.owner);
+  }
   SetForegroundWindow(hwnd_);
   SetFocus(hwnd_);
   ShowCursorNow();
@@ -1003,6 +1021,7 @@ void Show::AfterSettle(double now) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     boosted_ = false;
   }
+  UpdatePresenter();  // only once nothing moves: the presenter view never costs a transition a frame
   if (!cur_ || cur_->index == kEnd) {
     if (bench_) SetTimer(hwnd_, kTimerAdvance, static_cast<UINT>(kBenchHoldMs), nullptr);
     return;
@@ -1295,6 +1314,26 @@ void Show::Follow(const Hyperlink& link) {
 void Show::Blank(int kind) {
   blank_ = blank_ == kind ? 0 : kind;
   Redraw();
+  UpdatePresenter();
+}
+
+void Show::UpdatePresenter() {
+  if (!presenter_ || !cur_) return;
+  PresenterState s;
+  s.slide = cur_->index;
+  s.current = cur_->frame.Get();
+  s.blank = blank_;
+  if (cur_->index != kEnd && cur_->animator.HasNextStep()) {
+    // Clicks left on this slide: the next click's preview is the slide built (P3: all of it).
+    if (!built_ || built_->index != cur_->index) built_ = MakeScene(cur_->index, true, Now());
+    s.next = built_ ? built_->frame.Get() : nullptr;
+    s.stepsLeft = std::max(1, static_cast<int>(cur_->timing.main.steps.size()) - cur_->animator.StepIndex());
+  } else {
+    const size_t n = cur_->index == kEnd ? kEnd : NextIndex(cur_->index);
+    s.next = n != kEnd && next_ && next_->index == n ? next_->frame.Get() : nullptr;
+    if (n != kEnd && !s.next) return;  // the next slide is still being made: kMsgPrerender updates again
+  }
+  presenter_->Update(s);
 }
 
 void Show::Key(UINT vk) {
@@ -1482,6 +1521,7 @@ LRESULT CALLBACK Show::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     size_t last = self->cur_ && self->cur_->index != kEnd ? self->cur_->index : self->lastShown_;
     std::wstring file = std::move(self->fileToOpen_);
     if (self->boosted_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    self->presenter_.reset();
     if (self->awake_) SetThreadExecutionState(ES_CONTINUOUS);
     self->hwnd_ = nullptr;
     self->DropDevice();
@@ -1590,6 +1630,7 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
       if (cur_ && cur_->index != kEnd && !Animating()) {
         size_t n = NextIndex(cur_->index);
         if (n != kEnd && (!next_ || next_->index != n)) next_ = MakeScene(n, false, Now());
+        UpdatePresenter();  // the next slide is ready now
       }
       return 0;
     case kMsgStop: DestroyWindow(hwnd_); return 0;
