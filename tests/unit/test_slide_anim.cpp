@@ -760,3 +760,33 @@ TEST(SlideAnimTransitionFromTheLayout) {
     CHECK(!t.inherited && t.effect == TransitionEffect::Wipe);
   }
 }
+
+// Header & Footer turning slide numbers off drops the number's placeholder with its effects and build
+// (p3-corpus's torture: an effect on a slide-number placeholder, then Header & Footer without it).
+TEST(SlideAnimHeaderFooterDropsTheEffectsOfDroppedPlaceholders) {
+  auto deck = Open("simple.pptx");
+  CHECK(deck != nullptr);
+  Editor ed(*deck);
+  size_t layout = SIZE_MAX;
+  for (size_t i = 0; i < deck->Layouts().size(); ++i)
+    if (deck->Layouts()[i]->type == "obj") layout = i;
+  CHECK(layout != SIZE_MAX);
+  if (layout == SIZE_MAX) return;
+  const size_t at = deck->SlideCount();
+  CHECK(ed.NewSlide(at, layout));
+  HeaderFooter numbers;
+  numbers.slideNumber = true;
+  CHECK(ed.SetHeaderFooter({at}, numbers));
+  uint32_t number = 0;
+  for (const Shape& sh : deck->GetSlide(at)->shapes)
+    if (sh.placeholder.type == PlaceholderType::SlideNumber) number = sh.id;
+  CHECK(number != 0);
+  if (!number) return;
+  AnimSpec fade;
+  CHECK(AddAnimation(ed, at, number, fade));
+  CHECK_EQ(MainSequence(ed, at).size(), 1u);
+  CHECK(ed.SetHeaderFooter({at}, HeaderFooter{}));
+  const std::string x = SlideXml(ed, at);
+  CHECK(!Has(x, "spid=\"" + std::to_string(number) + "\""));
+  CHECK(MainSequence(ed, at).empty());
+}
