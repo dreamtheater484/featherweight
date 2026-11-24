@@ -273,7 +273,7 @@ void ReadStyle9(std::span<const uint8_t> atom, std::vector<Pf9>& out) {
     if (pf & 0x00800000) b.I16();                     // bulletBlipRef
     if (pf & 0x02000000) p.autoNumber = b.U16() != 0;  // fBulletHasAutoNumber
     if (pf & 0x01000000) p.scheme = b.U16(), p.start = b.I16();
-    b.U32();  // CF9: its masks only
+    if (b.U32() & 0x00100000) b.U32();  // CF9: its masks, and with pp10ext the pp10 run id
     const uint32_t si = b.U32();
     if (si & 0x001) b.U16();  // spellInfo
     if (si & 0x002) b.U16();  // lid
