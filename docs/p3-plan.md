@@ -79,6 +79,7 @@ The size budgets add up to 900 KB, with 100 KB in reserve. Each piece measures w
 As P1, P2 and R1 (their "Rules"), plus:
 
 - **Through the edit API only.** No code outside `src/slide/edit` changes the model.
+- **Every new command id is explicit** (`CmdX = 3866`), not the previous one plus one. Merges put the pieces' blocks in `src/Commands.h` in either order, and an implicit id then changes (p3-anim's Sequence commands, 2026-11-24).
 - **Never damage a file** is the first gate, not the last: the torture run is part of every piece's done.
 - **Importers are read-only** and never crash: every input is untrusted (§4.7); limits as `src/pkg/Limits`; a fuzzer from the first push.
 - **Lightweight:** a ledger line with a reason for every size step; no new third-party libraries without the coordinator's OK; Media Foundation and WIC are Windows components, loaded only when used.
