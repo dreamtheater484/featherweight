@@ -320,7 +320,9 @@ LRESULT PresenterView::Impl::Proc(UINT m, WPARAM w, LPARAM l) {
       PAINTSTRUCT ps;
       BeginPaint(hwnd, &ps);
       EndPaint(hwnd, &ps);
-      Paint();
+      // Not while the show's slide moves (a window uncovered, a click here): the show's frames come
+      // first; its swap chain keeps the last picture, and the show's Update draws it again on settle.
+      if (!host.PresenterBusy()) Paint();
       return 0;
     }
     case WM_ERASEBKGND: return 1;

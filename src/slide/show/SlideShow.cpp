@@ -1918,8 +1918,12 @@ void Show::TrackVblank(bool count, double start, double waited) {
         vblankPeriod_ = ti.qpcRefreshPeriod;
       }
     }
-    if (vblankPeriod_ && static_cast<UINT64>(qpc.QuadPart) >= vblank0_) {
-      long long index = static_cast<long long>((static_cast<UINT64>(qpc.QuadPart) - vblank0_) / vblankPeriod_);
+    if (vblankPeriod_) {
+      // Signed: DWM may already give the coming vblank's time (then the first frames are at refresh -1);
+      // an unsigned test skipped every frame while it did, and a whole transition went uncounted.
+      const long long period = static_cast<long long>(vblankPeriod_);
+      const long long since = static_cast<long long>(qpc.QuadPart) - static_cast<long long>(vblank0_);
+      const long long index = since >= 0 ? since / period : -((period - 1 - since) / period);
       // The display queue: a frame shows at the refresh after its present, and never before the one
       // after the previous frame's (frames wait their turn). A refresh between two frames shown is
       // one with no new frame.
@@ -1937,7 +1941,7 @@ void Show::TrackVblank(bool count, double start, double waited) {
         f.wait = waited;
         f.draw = drawMs_;
         f.present = presentMs_;
-        f.phase = static_cast<double>((static_cast<UINT64>(qpc.QuadPart) - vblank0_) % vblankPeriod_) / vblankPeriod_;
+        f.phase = static_cast<double>(since - index * period) / static_cast<double>(period);
         f.vblank = index;
         f.shown = shown;
         f.missed = missed;
@@ -2001,12 +2005,12 @@ void Show::WriteBench() {
            "  \"presentMsMax\": %.2f,\n"
            "  \"worstIntervalMs\": %.2f,\n  \"animationFrames\": %d,\n  \"animationDropped\": %d,\n"
            "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n"
-           "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n",
+           "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n  \"presenterView\": %s,\n",
            refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, vblankMissed_, dropped,
            kLateStart * periodMs_, warmupFrames_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
            pct(0.99), cpu.empty() ? 0.0 : cpu.back(), gpu::IsWarp() ? "true" : "false",
            !benchAborted_ && vblankMissed_ == 0 && frames > 0 ? "true" : "false", benchAborted_ ? "true" : "false",
-           benchAborted_ ? benchAborted_ : "");
+           benchAborted_ ? benchAborted_ : "", presenter_ ? "true" : "false");
   json += buf;
   json += "  \"lateFrames\": [\n";
   for (size_t i = 0; i < slow_.size(); ++i) {
