@@ -5,7 +5,9 @@
 // seeded random edits through the edit API, aimed at what breaks decks: new, duplicated, deleted,
 // moved and hidden slides, layout changes, typing in placeholders, text boxes and shapes, notes,
 // moving, resizing, rotating, deleting, grouping, ungrouping and reordering shapes, formatting, undo
-// and redo. After each round the deck is saved, and the saved file must open, pass fwtool check with
+// and redo; and P3's operations as each piece lands them (comments: add, reply, edit, delete, resolve,
+// move; their lines join the deck's digest, so undo, redo and the read-back cover them too). After
+// each round the deck is saved, and the saved file must open, pass fwtool check with
 // no errors the original didn't have, raise no new model problems, read back as the edited deck, and
 // keep every part the save didn't write byte for byte. Undoing every edit must give the deck as
 // opened, and redoing them the deck as edited. A failure is shrunk to the fewest edits that still
@@ -47,6 +49,13 @@
 #else
 #define FW_SLIDE_OBJECTS 0
 #endif
+// P3's operations, each piece's as it lands (docs/p3-plan.md, "Order"): p3-review's comments.
+#if FW_SLIDE_EDIT && __has_include("slide/edit/Comments.h")
+#include "slide/edit/Comments.h"
+#define FW_SLIDE_COMMENTS 1
+#else
+#define FW_SLIDE_COMMENTS 0
+#endif
 
 namespace fwtool {
 namespace decktorture {
@@ -67,8 +76,14 @@ constexpr struct {
     {Op::Format, "format"},      {Op::Undo, "undo"},            {Op::Redo, "redo"},
     {Op::Save, "save"},          {Op::Theme, "theme"},          {Op::MasterShapes, "master-shapes"},
     {Op::HeaderFooter, "header-footer"}, {Op::Insert, "insert"},  {Op::Crop, "crop"},
-    {Op::Table, "table"},
+    {Op::Table, "table"},        {Op::Comment, "comment"},
 };
+
+// Comment actions and the ones that name a comment (nums[0]: its place in SlideComments).
+bool IsCommentAction(std::string_view a) {
+  return a == "add" || a == "reply" || a == "edit" || a == "delete" || a == "delete-all" || a == "resolve" ||
+         a == "reopen" || a == "move";
+}
 
 const char* OpName(Op op) {
   for (const auto& o : kOps)
@@ -200,6 +215,17 @@ std::string FormatEdit(const Edit& e) {
       s += " " + at + " " + e.arg;
       for (int n : e.nums) s += " " + std::to_string(n);
       break;
+    case Op::Comment: {
+      s += " " + std::to_string(e.slide) + " " + e.arg;
+      const std::string which = e.nums.empty() ? "0" : std::to_string(e.nums[0]);
+      const std::string author = " A" + std::to_string(e.count);
+      if (e.arg == "add") s += " " + Num(e.dx) + " " + Num(e.dy) + author + " " + Quote(e.text);
+      else if (e.arg == "reply") s += " " + which + author + " " + Quote(e.text);
+      else if (e.arg == "edit") s += " " + which + " " + Quote(e.text);
+      else if (e.arg == "move") s += " " + which + " " + Num(e.dx) + " " + Num(e.dy);
+      else if (e.arg != "delete-all") s += " " + which;
+      break;
+    }
   }
   if (!e.target.empty()) s += " # " + e.target;
   return s;
@@ -272,6 +298,27 @@ bool ParseEdit(std::string_view line, Edit& e) {
       e.arg = std::string(NextWord(s));
       return !e.arg.empty() && ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && ToDouble(NextWord(s), e.w) &&
              ToDouble(NextWord(s), e.h) && s.empty();
+    }
+    case Op::Comment: {
+      if (!ToInt(NextWord(s), e.slide)) return false;
+      e.arg = std::string(NextWord(s));
+      if (!IsCommentAction(e.arg)) return false;
+      if (e.arg == "delete-all") return s.empty();
+      auto author = [&](std::string_view w) {
+        int n = 0;
+        if (w.size() < 2 || w.front() != 'A' || !ToInt(w.substr(1), n) || n < 0) return false;
+        e.count = static_cast<uint32_t>(n);
+        return true;
+      };
+      if (e.arg == "add")
+        return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && author(NextWord(s)) && Unquote(s, e.text) && s.empty();
+      int which = 0;
+      if (!ToInt(NextWord(s), which) || which < 0) return false;
+      e.nums = {which};
+      if (e.arg == "reply") return author(NextWord(s)) && Unquote(s, e.text) && s.empty();
+      if (e.arg == "edit") return Unquote(s, e.text) && s.empty();
+      if (e.arg == "move") return ToDouble(NextWord(s), e.dx) && ToDouble(NextWord(s), e.dy) && s.empty();
+      return s.empty();  // delete, resolve, reopen
     }
     default: break;
   }
@@ -356,6 +403,32 @@ namespace ob = fw::slide::objects;
 
 std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
 
+#if FW_SLIDE_COMMENTS
+// Who comments in the torture test (Edit::count picks one).
+constexpr const char* kAuthors[] = {"Ada Lovelace", "Charles Babbage", "Grace Hopper", "Zo\xC3\xAB \xC3\x85ngstr\xC3\xB6m"};
+
+// Each slide's comments, one per line, as the comments pane lists them (the undo, redo and read-back
+// checks): id, thread, author, time, place, resolved, format and text. Places in eighths of a point.
+std::vector<std::string> CommentLines(ed::Editor& editor, size_t slides) {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < slides; ++i) {
+    const std::vector<ed::Comment> list = ed::SlideComments(editor, i);
+    for (size_t k = 0; k < list.size(); ++k) {
+      const ed::Comment& c = list[k];
+      std::string line = "slide " + std::to_string(i) + " comment " + std::to_string(k) + " " + c.id;
+      if (!c.parent.empty()) line += " reply to " + c.parent;
+      line += " by \"" + fw::WideToUtf8(c.author) + "\" (" + fw::WideToUtf8(c.initials) + ") " + c.created + (c.utc ? " utc" : "");
+      if (c.hasPos) line += " at " + std::to_string(std::llround(c.pos.x * 8)) + "," + std::to_string(std::llround(c.pos.y * 8));
+      if (c.shape) line += " on shape " + std::to_string(c.shape);
+      if (c.resolved) line += " resolved";
+      if (c.legacy) line += " legacy";
+      out.push_back(line + " " + Quote(fw::WideToUtf8(c.text)));
+    }
+  }
+  return out;
+}
+#endif
+
 // Through p2-model's edit API (slide/edit/Edit.h) and its writer (Save.h), as the tab's commands do.
 class EditTarget : public DeckTarget {
  public:
@@ -384,6 +457,10 @@ class EditTarget : public DeckTarget {
   }
   bool RedoSteps(int steps) override { return steps <= 0 || static_cast<bool>(editor_.Redo(static_cast<size_t>(steps))); }
   bool CanUndo() const override { return editor_.CanUndo(); }
+#if FW_SLIDE_COMMENTS
+  std::vector<std::string> Extra() override { return CommentLines(editor_, deck_->SlideCount()); }
+  std::vector<size_t> CommentCounts() override { return ed::CommentCounts(editor_); }
+#endif
 
  private:
   ed::Result Run(const Edit& e, std::string& why) {
@@ -539,6 +616,11 @@ class EditTarget : public DeckTarget {
       case Op::Crop:
       case Op::Table: why = "fwtool was built without fwslideobjects"; return {};
 #endif
+#if FW_SLIDE_COMMENTS
+      case Op::Comment: return CommentEdit(e, slide, text, why);
+#else
+      case Op::Comment: why = "fwtool was built without the comment operations"; return {};
+#endif
       case Op::HeaderFooter: {
         ed::HeaderFooter hf;
         hf.slideNumber = e.arg.find('n') != std::string::npos;
@@ -641,6 +723,34 @@ class EditTarget : public DeckTarget {
   }
 #endif
 
+#if FW_SLIDE_COMMENTS
+  // As the comments pane does: a new thread, or the comment at its place in the slide's list.
+  ed::Result CommentEdit(const Edit& e, size_t slide, const std::wstring& text, std::string& why) {
+    if (e.arg == "delete-all")
+      return ed::DeleteAllComments(editor_, e.slide < 0 ? std::vector<size_t>{} : std::vector<size_t>{slide});
+    if (e.slide < 0 || slide >= deck_->SlideCount()) {
+      why = "no slide " + std::to_string(e.slide);
+      return {};
+    }
+    ed::CommentAuthor who;
+    who.name = fw::Utf8ToWide(kAuthors[e.count % std::size(kAuthors)]);
+    const draw::Point at{static_cast<float>(e.dx), static_cast<float>(e.dy)};
+    if (e.arg == "add") return ed::AddComment(editor_, slide, at, text, who);
+    const std::vector<ed::Comment> list = ed::SlideComments(editor_, slide);
+    const size_t which = e.nums.empty() ? 0 : static_cast<size_t>(std::max(e.nums[0], 0));
+    if (which >= list.size()) {
+      why = "no comment " + std::to_string(which) + " on slide " + std::to_string(slide);
+      return {};
+    }
+    const std::string& id = list[which].id;
+    if (e.arg == "reply") return ed::ReplyToComment(editor_, slide, id, text, who);
+    if (e.arg == "edit") return ed::EditComment(editor_, slide, id, text);
+    if (e.arg == "delete") return ed::DeleteComment(editor_, slide, id);
+    if (e.arg == "resolve" || e.arg == "reopen") return ed::ResolveComment(editor_, slide, id, e.arg == "resolve");
+    return ed::MoveComment(editor_, slide, id, at);
+  }
+#endif
+
   std::unique_ptr<sl::Presentation> deck_;
   ed::Editor editor_;  // after deck_: it goes first
 };
@@ -731,10 +841,11 @@ class Generator {
  public:
   explicit Generator(uint64_t seed) : rng_(seed) {}
 
-  Edit Next(sl::Presentation& deck) {
+  Edit Next(DeckTarget& target) {
+    comments_ = target.CommentCounts();
     for (int tries = 0; tries < 50; ++tries) {
       Edit e;
-      if (Make(deck, e)) return e;
+      if (Make(target.Deck(), e)) return e;
     }
     Edit e;
     e.op = Op::Undo;
@@ -753,6 +864,9 @@ class Generator {
         {Op::DeleteSlide, 5}, {Op::MoveSlide, 6}, {Op::Hide, 2}, {Op::Layout, 4}, {Op::Notes, 3},
         {Op::Undo, 4}, {Op::Redo, 2}, {Op::Save, 1}, {Op::Theme, 1}, {Op::MasterShapes, 1}, {Op::HeaderFooter, 2},
         {Op::Insert, 5}, {Op::Crop, 2}, {Op::Table, 3},
+#if FW_SLIDE_COMMENTS
+        {Op::Comment, 6},
+#endif
     };
     uint32_t total = 0;
     for (const auto& w : kWeights) total += w.weight;
@@ -848,6 +962,39 @@ class Generator {
         do e.to = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
         while (e.to == e.slide);
         if (!deck.Sections().empty()) e.target = "a deck with sections";
+        return true;
+      }
+      case Op::Comment: {
+        if (!slides) return false;
+        // New threads most, then replies and edits; resolve on a legacy comment must be refused.
+        static constexpr const char* kActions[] = {"add",    "add",    "add",     "add",    "reply", "reply", "reply", "edit",
+                                                   "edit",   "delete", "delete",  "resolve", "reopen", "move", "delete-all"};
+        e.arg = rng_.Pick(kActions);
+        const draw::Size size = deck.SlideSize();
+        if (e.arg == "delete-all") {
+          e.slide = rng_.Chance(50) ? -1 : static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          e.target = e.slide < 0 ? "every slide's comments" : "a slide's comments";
+          return true;
+        }
+        if (e.arg == "add") {
+          e.slide = static_cast<int>(rng_.Below(static_cast<uint32_t>(slides)));
+          e.dx = std::round(rng_.Between(0, size.width));
+          e.dy = std::round(rng_.Between(0, size.height));
+          e.count = rng_.Below(4);
+          e.text = CommentText();
+          e.target = "a new thread";
+          return true;
+        }
+        std::vector<int> with;
+        for (size_t i = 0; i < comments_.size() && i < static_cast<size_t>(slides); ++i)
+          if (comments_[i]) with.push_back(static_cast<int>(i));
+        if (with.empty()) return false;
+        e.slide = with[rng_.Below(static_cast<uint32_t>(with.size()))];
+        e.nums = {static_cast<int>(rng_.Below(static_cast<uint32_t>(comments_[static_cast<size_t>(e.slide)])))};
+        if (e.arg == "reply") e.count = rng_.Below(4), e.text = CommentText();
+        else if (e.arg == "edit") e.text = CommentText();
+        else if (e.arg == "move") e.dx = std::round(rng_.Between(0, size.width)), e.dy = std::round(rng_.Between(0, size.height));
+        e.target = "a comment";
         return true;
       }
       default: break;
@@ -973,7 +1120,17 @@ class Generator {
     }
   }
 
+  // A comment's text: mostly what's typed into shapes, now and then paragraphs, nothing (refused),
+  // only spaces (refused), characters XML can't hold (dropped) and characters beyond the BMP.
+  std::string CommentText() {
+    static constexpr const char* kOwn[] = {"Please check this.", "First paragraph\nSecond paragraph", "", "   ",
+                                           "bell\x01 and vertical\x0Btab", "\xF0\x9D\x84\x9E music and \xF0\x9F\x99\x82"};
+    if (rng_.Chance(30)) return rng_.Pick(kOwn);
+    return kTyped[rng_.Below(static_cast<uint32_t>(std::size(kTyped)))];
+  }
+
   Rng rng_;
+  std::vector<size_t> comments_;  // per slide, as the target counts them before each edit
 };
 
 // ---- The deck, one fact per line (undo and read-back checks)
@@ -1050,6 +1207,14 @@ std::vector<std::string> Digest(sl::Presentation& deck) {
     for (size_t i : show.slides) line += " " + std::to_string(i);
     out.push_back(line);
   }
+  return out;
+}
+
+// The deck as edited so far: the model's digest and what the target holds beyond it (comments).
+std::vector<std::string> State(DeckTarget& target) {
+  std::vector<std::string> out = Digest(target.Deck());
+  std::vector<std::string> extra = target.Extra();
+  out.insert(out.end(), extra.begin(), extra.end());
   return out;
 }
 
@@ -1237,7 +1402,15 @@ std::optional<Failure> CheckSave(Original& orig, DeckTarget& target, Round& r) {
   std::vector<std::string> readBack = Digest(*deck);
   for (const std::string& p : deck->Problems())
     if (!Listed(orig.problems, p)) return Failure{"model", p};
-  std::vector<std::string> edited = Digest(target.Deck());
+#if FW_SLIDE_COMMENTS
+  {
+    // The comments as an editor of the saved copy lists them.
+    ed::Editor reread(*deck);
+    std::vector<std::string> lines = CommentLines(reread, deck->SlideCount());
+    readBack.insert(readBack.end(), lines.begin(), lines.end());
+  }
+#endif
+  std::vector<std::string> edited = State(target);
   if (std::string diff = FirstDifference(edited, readBack); !diff.empty()) {
     r.edited = Joined(edited), r.readBack = Joined(readBack);
     return Failure{"readback", diff};
@@ -1274,11 +1447,11 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     r.failure = Failure{"open", st.message};
     return r;
   }
-  std::vector<std::string> undoBase = Digest(target->Deck());  // where undoing everything leads
+  std::vector<std::string> undoBase = State(*target);  // where undoing everything leads
   Generator gen(seed);
   const size_t count = replay ? replay->size() : edits;
   for (size_t i = 0; i < count; ++i) {
-    Edit e = replay ? (*replay)[i] : gen.Next(target->Deck());
+    Edit e = replay ? (*replay)[i] : gen.Next(*target);
     r.applied.push_back(e);
     if (!current.empty()) {
       std::ofstream cur(current, std::ios::trunc);
@@ -1287,7 +1460,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     }
     if (e.op == Op::Save) {
       if ((r.failure = CheckSave(orig, *target, r))) return r;
-      if (!target->CanUndo()) undoBase = Digest(target->Deck());
+      if (!target->CanUndo()) undoBase = State(*target);
       ++r.done;
       continue;
     }
@@ -1302,11 +1475,11 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
   }
   // Undo everything: the deck as opened; redo it all: the deck as edited. (Up to the editor's 100
   // steps: a round with more doesn't get back to the start.)
-  const std::vector<std::string> edited = Digest(target->Deck());
+  const std::vector<std::string> edited = State(*target);
   if (r.done > 0 && r.done < 90) {
     const int steps = target->UndoAll();
     if (steps >= 0) {
-      if (std::string diff = FirstDifference(undoBase, Digest(target->Deck())); !diff.empty()) {
+      if (std::string diff = FirstDifference(undoBase, State(*target)); !diff.empty()) {
         r.failure = Failure{"undo", "after undoing " + std::to_string(steps) + " steps: " + diff};
         return r;
       }
@@ -1314,7 +1487,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
         r.failure = Failure{"redo", "redoing " + std::to_string(steps) + " steps failed"};
         return r;
       }
-      if (std::string diff = FirstDifference(edited, Digest(target->Deck())); !diff.empty()) {
+      if (std::string diff = FirstDifference(edited, State(*target)); !diff.empty()) {
         r.failure = Failure{"redo", "after redoing " + std::to_string(steps) + " steps: " + diff};
         return r;
       }
