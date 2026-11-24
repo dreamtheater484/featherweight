@@ -632,22 +632,35 @@ Check next to Word, Excel and PowerPoint (365 or 2021, the classic ribbon), on c
 
 ## R1's gate (record the numbers)
 
-- [ ] **Coverage tests** (ctest, Release, with FW_TEST_SCREENS on, as by default): `ribbon_word`, `ribbon_sheet` and `ribbon_slide` all pass. Each checks one editor, at 1366, 1024 and 800 px and with its contextual tabs open:
+- [x] **Coverage tests** (ctest, Release, with FW_TEST_SCREENS on, as by default): `ribbon_word`, `ribbon_sheet` and `ribbon_slide` all pass. *On 4.0's final code (61e45281, the code of 57930657), 2026-11-25: ctest 34 of 34.* Each checks one editor, at 1366, 1024 and 800 px and with its contextual tabs open:
   - every ribbon item runs a named command;
   - every group fits the window;
   - the KeyTips are unique;
   - every command the editor's toolbar and ⋯ menu reached before R1 (`tests\ribbon\<editor>.txt`) can be reached from the ribbon, the File page, a right-click menu or Alt+Q.
-- [ ] **Snapshot tests:** `ribbon_screens` (the three editors at 1366, 1024 and 800 px, light and dark, with KeyTips, the File page, a collapsed ribbon, a gallery's grid and a contextual tab) passes. Look through the pictures in `build\screens\ribbon_screens`, `ribbon_sheet` and `ribbon_slide`: nothing is cut off or overlapping.
-- [ ] **ribbonbench**, on a document, a workbook and a deck (`Featherweight.exe <file> --snapshot out.png --size 1366x768 --script ribbonbench`, with a Release build with FW_TEST_SCREENS on):
-  - tab switch, worst: ___ / ___ / ___ ms;
-  - relayout, worst: ___ / ___ / ___ ms.
+- [x] **Snapshot tests:** `ribbon_screens` (the three editors at 1366, 1024 and 800 px, light and dark, with KeyTips, the File page, a collapsed ribbon, a gallery's grid and a contextual tab) passes. Look through the pictures in `build\screens\ribbon_screens`, `ribbon_sheet` and `ribbon_slide`: nothing is cut off or overlapping. *On 4.0's final code, 2026-11-25: the three tests pass.*
+  - *Checked (27 of the 82 pictures):* nothing is cut off or overlapping. KeyTips sit on their controls, as in Office.
+    - The 800 px ones of each editor and tab, where a cut-off is likeliest.
+    - Every contextual tab: Chart Design, Picture and Shape Format, Table Design and Layout.
+    - The Design gallery, KeyTips, the collapsed and folded ribbon, the gallery's grid, and the File page (New, Options).
+  - *Not looked at here:* the wider 1024 and 1366 px pictures.
+- [x] **ribbonbench**, on a document, a workbook and a deck (`Featherweight.exe <file> --snapshot out.png --size 1366x768 --script ribbonbench`, with a Release build with FW_TEST_SCREENS on):
+  - tab switch, worst: 1.63 / 1.61 / 1.65 ms;
+  - relayout, worst: 0.16 / 0.06 / 0.21 ms.
 
-  Target: 16 ms or less each. On the development PC, 2026-11-24, simple.docx, .xlsx and .pptx: switch 1.19 / 1.15 / 1.58 ms, relayout 0.14 / 0.10 / 0.54 ms.
+  Target: 16 ms or less each. These are 4.0's final code (61e45281) on the development PC, 2026-11-25, simple.docx, .xlsx and .pptx. On 2026-11-24 (r1-plan): switch 1.19 / 1.15 / 1.58 ms, relayout 0.14 / 0.10 / 0.54 ms.
 - [x] **The shipped exe** (`scripts\budgets.ps1` on `build-release`): 12.35 MB, 12,352,512 bytes at 98603dec, +160.5 KB over P2's 12,188,160. Target: at most 250 KB more in R1. `tests\budgets\ledger.json` has a line for each R1 piece: r1-control, r1-word, r1-sheet and r1-slide.
-- [ ] **Launch and memory:** launch to ready ___ ms, memory after launch ___ MB, both no worse than P2's. A document, a workbook and a deck open no slower than with P2's exe. The coordinator's 4.0 timing run on a quiet PC fills these in (the ledger's "R1 timings").
+- [ ] **Launch and memory:** launch to ready 78.7 ms, memory after launch 20.1 MB, both no worse than P2's. A document, a workbook and a deck open no slower than with P2's exe. The coordinator's 4.0 timing run on a quiet PC fills these in (the ledger's "R1 timings").
+  - *R1's own exe (98603dec) against P2's (cd73a549), the same PC, two interleaved rounds* (r1-word, `FeatherweightNotes\r1\r1-word-quiet`, 2026-11-24): launch to ready 78.8/78.6 against 76.9/76.3 ms, memory 20.1 against 20.0/20.1 MB. The 2 ms is within the runs' spread (one build gave 76.9 to 80.4).
+  - *Opening, at 98603dec:* report.docx 133/135 against 129/130 ms, long-300.docx 956/946 against 749/758, deck-typical.pptx 156/151 against 145/142. The ledger's "R1 timings" (over Remote Desktop) has launch 25.4 ms to the window, 82.1 to ready, 20.0 MB.
+  - *On 4.0's final head:* r1-word's 33ca96e0 opens long-300 in 680/676 ms, faster than P2. The final timing run (57930657, ledger) opens PDFs and documents 16 to 35 % faster than R1's exe, and decks 15 % faster.
+  - *Not ticked:* R1's own exe opened documents and the deck 3 to 27 % slower than P2's. 4.0's final head opens them faster than R1's by more than that, but no run measured it against P2's directly. A workbook isn't in these runs' scenarios. On 4.0's final code, simple.xlsx is ready in 89 ms (bench-app, 2026-11-25), with no P2 run beside it.
 - [ ] **No idle CPU:** with a document, a workbook and a deck open, Task Manager shows 0 % CPU for Featherweight, with the ribbon expanded, with it collapsed, and with the File page open.
-- [ ] **Friction review** (`docs\friction-review.md`, "The ribbon (R1)"): the flows from D5, S4 and P2 take no more steps than before, or the extra step is accepted there with its reason (RF1, RF2, RF4 to RF6). `tests\friction-checks.ps1` and `tests\workbook-friction-checks.ps1` pass.
-- [ ] P1's and P2's parts above still pass with the ribbon.
+  - *Measured, ribbon expanded:* `fwtool bench-app` on 4.0's final code (2026-11-25) gives 0.0 ms of CPU over 3 s idle with simple.docx, simple.xlsx and simple.pptx open, as each opens, with 0 to 2 wakeups. The 4.0 timing run gives 0.0 ms with every file (PDFs, documents, decks).
+  - *Not ticked:* the collapsed ribbon and the open File page aren't in the bench. That's your look in Task Manager.
+- [x] **Friction review** (`docs\friction-review.md`, "The ribbon (R1)"): the flows from D5, S4 and P2 take no more steps than before, or the extra step is accepted there with its reason (RF1, RF2, RF4 to RF6). `tests\friction-checks.ps1` and `tests\workbook-friction-checks.ps1` pass.
+  - *r1-review's count:* of 44 flows, 2 are shorter, 35 the same, and 7 longer. All 7 are accepted (RF1, RF2, RF4). RF3 is fixed, and RF7 is accepted for 4.0 (F1).
+  - *On 4.0's final code (2026-11-25):* both scripts pass. Letter 8 (budget 9), CV 12 (12), table 15 (16); W1, W2, W4, W6 ok.
+- [x] P1's and P2's parts above still pass with the ribbon. *On 4.0's final code: see P3's gate, "P1's and P2's parts above still pass".*
 
 ## Advanced presentations (P3)
 
