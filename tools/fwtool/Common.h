@@ -19,6 +19,7 @@ struct Options {
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
   float scale = 2;              // render: pixels per point
   bool pictures = false;        // render: time decoding each picture
+  bool png = false;             // slides: each slide as a PNG too
   std::filesystem::path dumps;      // compare: Featherweight's layout dumps, <dumps>/<source>.layout.json
   std::filesystem::path jsonOut;    // compare, bench: the JSON report
   std::filesystem::path reportOut;  // compare: the Markdown report
@@ -113,6 +114,7 @@ int RunCfb(const Options& options);
 int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
+int RunSlides(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);

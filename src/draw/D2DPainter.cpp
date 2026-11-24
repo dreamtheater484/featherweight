@@ -1,10 +1,14 @@
 #include "draw/D2DPainter.h"
+#include "draw/Images.h"
 
 #include <d2d1_3.h>
 #include <d2d1effects.h>
+#include <dwrite.h>
 #include <shlwapi.h>
 
 #include <algorithm>
+#include <cmath>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
@@ -148,6 +152,48 @@ D2DPainter::~D2DPainter() {
   while (!saved_.empty()) Restore();
   PopTo(0);
   dc_->SetTransform(initial_);
+  if (textSet_) {
+    dc_->SetTextAntialiasMode(oldAntialias_);
+    dc_->SetTextRenderingParams(oldText_.Get());
+  }
+}
+
+void D2DPainter::UsePdfLikeDrawing() {
+  picturesUp_ = true;
+  // Unhinted outlines at gamma 1 (un-ccsa's dense text slides: .935 -> .966 against their PDF).
+  static const ComPtr<IDWriteRenderingParams> params = [] {
+    ComPtr<IDWriteFactory> dw;
+    ComPtr<IDWriteRenderingParams> p;
+    if (SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                      reinterpret_cast<IUnknown**>(dw.GetAddressOf()))))
+      dw->CreateCustomRenderingParams(1.f, 0.f, 0.f, DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE_OUTLINE, &p);
+    return p;
+  }();
+  if (!textSet_) {
+    oldAntialias_ = dc_->GetTextAntialiasMode();
+    dc_->GetTextRenderingParams(&oldText_);
+    textSet_ = true;
+  }
+  dc_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+  if (params) dc_->SetTextRenderingParams(params.Get());
+}
+
+HRESULT DrawFrame(ID2D1DeviceContext* dc, const std::function<void(bool fallback)>& paint) {
+  HRESULT hr = E_FAIL;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    dc->BeginDraw();
+    paint(attempt > 0);
+    hr = dc->EndDraw();
+    if (SUCCEEDED(hr) || hr == D2DERR_RECREATE_TARGET) break;
+    static bool noted = false;
+    if (!noted) {
+      noted = true;
+      OutputDebugStringW((L"Featherweight: a frame failed to draw (HRESULT " + std::to_wstring(static_cast<unsigned long>(hr)) +
+                          L"); drawn again without shadows\n")
+                             .c_str());
+    }
+  }
+  return hr;
 }
 
 void D2DPainter::Save() { saved_.push_back({current_, pushed_.size()}); }
@@ -168,6 +214,10 @@ void D2DPainter::Restore() {
 }
 
 void D2DPainter::BeginShadow(const Shadow& shadow) {
+  if (noShadows_) {
+    Save();
+    return;
+  }
   ComPtr<ID2D1Device> device;
   ComPtr<ID2D1DeviceContext> recorder;
   ComPtr<ID2D1CommandList> recording;
@@ -204,6 +254,10 @@ void D2DPainter::DrawShadowed(const Saved& s) {
     effect->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(c.r, c.g, c.b, c.a));
     dc_->SetTransform(ToD2D(user.Inverse() * s.shadow.transform * user));
     dc_->DrawImage(effect.Get());
+    // Batched with the recording drawn over it, the shadow can fail the whole frame (EndDraw:
+    // D2DERR_BAD_NUMBER, nothing drawn: era-systems slides 8 and 44, pictures with a soft shadow
+    // right under them); flushed apart, both draw.
+    dc_->Flush();
   }
   dc_->SetTransform(D2D1::IdentityMatrix());
   if (!shadowsOnly_) dc_->DrawImage(s.recording.Get());
@@ -257,13 +311,34 @@ ID2D1Brush* D2DPainter::MakeBrush(const Brush& b) {
   if (b.kind == Brush::Kind::Bitmap) {
     ID2D1Bitmap* bitmap = b.bitmap ? cache_->Get(dc_, *b.bitmap) : nullptr;
     ComPtr<ID2D1BitmapBrush1> brush;
+    // A tile (a pattern's cell, a tiled picture) spans whole device pixels, as a PDF viewer draws
+    // a tiling pattern (pdfium at 100 dpi: a 6-pt pattern cell, 8.33 pixels, at 9); so the slide
+    // view draws what its PDF does. Unsmoothed (a pattern) stays sharp only where a cell's pixel
+    // covers a few device pixels or more: nearer one, nearest-neighbour sampling drops or doubles
+    // whole rows, so they blend there as pdfium's do.
+    bool smooth = b.smooth;
+    Matrix t = b.bitmapTransform;
+    if (bitmap) {
+      D2D1_MATRIX_3X2_F w{};
+      dc_->GetTransform(&w);
+      float dpiX = 96, dpiY = 96;
+      dc_->GetDpi(&dpiX, &dpiY);
+      // Device pixels per bitmap pixel along the bitmap's x and y.
+      const float ux = std::hypot(t.m11 * w._11 + t.m12 * w._21, t.m11 * w._12 + t.m12 * w._22) * dpiX / 96;
+      const float uy = std::hypot(t.m21 * w._11 + t.m22 * w._21, t.m21 * w._12 + t.m22 * w._22) * dpiY / 96;
+      const float tw = ux * static_cast<float>(b.bitmap->Width()), th = uy * static_cast<float>(b.bitmap->Height());
+      if (b.extendX != Brush::Extend::Clamp && b.extendY != Brush::Extend::Clamp && tw >= 1 && th >= 1 && tw < 4096 &&
+          th < 4096)
+        t = Matrix::Scale(std::ceil(tw - 0.001f) / tw, std::ceil(th - 0.001f) / th) * t;
+      if (!smooth) smooth = std::sqrt(ux * uy) < 3;
+    }
     if (bitmap &&
         SUCCEEDED(dc_->CreateBitmapBrush(
             bitmap,
             D2D1::BitmapBrushProperties1(Extend(b.extendX), Extend(b.extendY),
-                                         b.smooth ? D2D1_INTERPOLATION_MODE_LINEAR
-                                                  : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
-            D2D1::BrushProperties(1.f, ToD2D(b.bitmapTransform)), &brush))) {
+                                         smooth ? D2D1_INTERPOLATION_MODE_LINEAR
+                                                : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
+            D2D1::BrushProperties(1.f, ToD2D(t)), &brush))) {
       gradient_ = brush;
       return gradient_.Get();
     }
@@ -398,11 +473,46 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   if (!b) return;
   D2D1_RECT_F d = RectF(dest), s{};
   if (src) s = RectF(*src);
+  // A cropped picture keeps whole pixels, as PdfDocument::PicturesAsPowerPoint has it.
+  // A JPEG decoded smaller (a big picture) in its own pixels.
+  if (src && picturesUp_ && bitmap.Width() > 0 && bitmap.Height() > 0) {
+    const std::shared_ptr<const Image> jpeg = bitmap.Jpeg();
+    const float W = jpeg && jpeg->Width() > 0 ? static_cast<float>(jpeg->Width()) : static_cast<float>(bitmap.Width());
+    const float H = jpeg && jpeg->Height() > 0 ? static_cast<float>(jpeg->Height()) : static_cast<float>(bitmap.Height());
+    const float kx = W / bitmap.Width(), ky = H / bitmap.Height();
+    const float l = std::round(s.left * kx), t = std::round(s.top * ky);
+    const float r = l + std::round((s.right - s.left) * kx), btm = t + std::round((s.bottom - s.top) * ky);
+    if (l >= 0 && t >= 0 && r > l && btm > t && r <= W && btm <= H) s = {l / kx, t / ky, r / kx, btm / ky};
+  }
+  // An unturned picture covers whole device pixels, its edges pushed out to them, as a PDF viewer
+  // draws an image (pdfium: the outer rectangle); the slide view then draws what its PDF does
+  // (migratieketen's spreadsheet screenshots .92 -> .99).
+  D2D1_MATRIX_3X2_F w{};
+  dc_->GetTransform(&w);
+  if (w._12 == 0 && w._21 == 0 && w._11 != 0 && w._22 != 0) {
+    if (picturesUp_) {
+      const float up = w._22 > 0 ? -0.001f : 0.001f;
+      d.top += up;
+      d.bottom += up;
+    }
+    float dpiX = 96, dpiY = 96;
+    dc_->GetDpi(&dpiX, &dpiY);
+    const auto out = [](float a, float b, float scale, float offset, float k, float& lo, float& hi) {
+      const float da = (a * scale + offset) * k, db = (b * scale + offset) * k;
+      const float from = std::floor(std::min(da, db)), to = std::ceil(std::max(da, db));
+      const float ua = ((da <= db ? from : to) / k - offset) / scale, ub = ((da <= db ? to : from) / k - offset) / scale;
+      lo = ua, hi = ub;
+    };
+    out(d.left, d.right, w._11, w._31, dpiX / 96, d.left, d.right);
+    out(d.top, d.bottom, w._22, w._32, dpiY / 96, d.top, d.bottom);
+  }
   dc_->DrawBitmap(b, &d, std::clamp(opacity, 0.f, 1.f), D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                   src ? &s : nullptr, nullptr);
 }
 
 void D2DPainter::DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) {
+  if (picturesUp_)
+    if (std::shared_ptr<const Bitmap> gdi = RasterizeEmfWithGdi(image)) return DrawBitmap(*gdi, dest, nullptr, opacity);
   IUnknown* object = cache_->Get(dc_, image);
   if (!object || dest.Width() == 0 || dest.Height() == 0) return;
   ComPtr<ID2D1GdiMetafile> metafile;

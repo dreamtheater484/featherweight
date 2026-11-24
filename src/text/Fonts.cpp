@@ -84,6 +84,7 @@ constexpr BuiltIn kBuiltIn[] = {
     {L"Courier", {L"Courier New", nullptr, nullptr}},
     {L"Helvetica", {L"Arial", nullptr, nullptr}},
     {L"Helvetica Neue", {L"Arial", nullptr, nullptr}},
+    {L"Myriad Pro", {L"Segoe UI", nullptr, nullptr}},  // PowerPoint's choice (cs-6476's PDF)
     {L"Times", {L"Times New Roman", nullptr, nullptr}},
     {L"Times Roman", {L"Times New Roman", nullptr, nullptr}},
 };
@@ -95,9 +96,9 @@ Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family, DWRITE_FONT_WEIGHT
   DWRITE_FONT_METRICS fm{};
   face_->GetMetrics(&fm);
   upem_ = fm.designUnitsPerEm ? fm.designUnitsPerEm : 2048.0f;
-  ascent_ = fm.ascent;
-  descent_ = fm.descent;
-  lineGap_ = fm.lineGap;
+  ascent_ = dwAscent_ = fm.ascent;
+  descent_ = dwDescent_ = fm.descent;
+  lineGap_ = dwLineGap_ = fm.lineGap;
   underlinePos_ = -static_cast<float>(fm.underlinePosition);
   underlineThick_ = fm.underlineThickness;
   strikePos_ = fm.strikethroughPosition;
@@ -134,12 +135,27 @@ Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family, DWRITE_FONT_WEIGHT
   }
 }
 
-FontMetrics Face::Metrics(float size) const {
+IDWriteFontFace* Face::Plain() const {
+  if (face_->GetSimulations() == DWRITE_FONT_SIMULATIONS_NONE) return face_.Get();
+  if (!plain_) {
+    ComPtr<IDWriteFontFace3> face3;
+    ComPtr<IDWriteFontFaceReference> ref;
+    ComPtr<IDWriteFontFace3> plain;
+    if (SUCCEEDED(face_.As(&face3)) && SUCCEEDED(face3->GetFontFaceReference(&ref)) &&
+        SUCCEEDED(ref->CreateFontFaceWithSimulations(DWRITE_FONT_SIMULATIONS_NONE, &plain)))
+      plain_ = plain;
+    else
+      plain_ = face_;
+  }
+  return plain_.Get();
+}
+
+FontMetrics Face::Metrics(float size, bool directWrite) const {
   float k = size / upem_;
   FontMetrics m;
-  m.ascent = ascent_ * k;
-  m.descent = descent_ * k;
-  m.lineGap = lineGap_ * k;
+  m.ascent = (directWrite ? dwAscent_ : ascent_) * k;
+  m.descent = (directWrite ? dwDescent_ : descent_) * k;
+  m.lineGap = (directWrite ? dwLineGap_ : lineGap_) * k;
   m.underlinePosition = underlinePos_ * k;
   m.underlineThickness = underlineThick_ * k;
   m.strikethroughPosition = strikePos_ * k;
@@ -170,6 +186,25 @@ Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : subst
   if (FAILED(factory_->GetSystemFontFallback(&fallback_))) return;
   ComPtr<IDWriteTextAnalyzer> analyzer;
   if (FAILED(factory_->CreateTextAnalyzer(&analyzer)) || FAILED(analyzer.As(&analyzer_))) analyzer_.Reset();
+}
+
+void Fonts::SetPowerPointFallback(bool on) {
+  if (on == powerPointFallback_ || !factory_) return;
+  ComPtr<IDWriteFontFallback> system, custom;
+  if (FAILED(factory_->GetSystemFontFallback(&system))) return;
+  if (on) {
+    ComPtr<IDWriteFontFallbackBuilder> builder;
+    static const DWRITE_UNICODE_RANGE kArabic[] = {
+        {0x0600, 0x06FF}, {0x0750, 0x077F}, {0x08A0, 0x08FF}, {0xFB50, 0xFDFF}, {0xFE70, 0xFEFF}};
+    const wchar_t* tahoma[] = {L"Tahoma"};
+    if (!Win32Family(L"Tahoma") || FAILED(factory_->CreateFontFallbackBuilder(&builder)) ||
+        FAILED(builder->AddMapping(kArabic, static_cast<UINT32>(std::size(kArabic)), tahoma, 1)) ||
+        FAILED(builder->AddMappings(system.Get())) || FAILED(builder->CreateFontFallback(&custom))) {
+      return;
+    }
+  }
+  fallback_ = on ? custom : system;
+  powerPointFallback_ = on;
 }
 
 Fonts::~Fonts() {
@@ -248,14 +283,19 @@ bool Fonts::Installed(std::wstring_view family) {
   std::wstring name(family);
   UINT32 index = 0;
   BOOL exists = FALSE;
-  if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) return true;
+  if (gdiFamilies_) {
+    if (Win32Family(name)) return true;
+  } else if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) {
+    return true;
+  }
   // Not on the PC: one of Office's cloud fonts, which Word draws as installed ones.
   if (!AddCloudFonts(name)) return false;
   return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);
 }
 
 bool Fonts::AddCloudFonts(const std::wstring& name) {
-  if (cloudAdded_ || !draw::CloudFontsHave(name)) return false;
+  const bool all = allCloudFaces_;
+  if (cloudAdded_ || !draw::CloudFontsHave(name, all)) return false;
   cloudAdded_ = true;
   // The collection with them, and the one without the document's own fonts (UseDocumentFonts) too.
   ComPtr<IDWriteFactory5> factory;
@@ -266,7 +306,7 @@ bool Fonts::AddCloudFonts(const std::wstring& name) {
     ComPtr<IDWriteFontSetBuilder1> builder;
     ComPtr<IDWriteFontCollection1> collection;
     if (c && SUCCEEDED(c.As(&c1)) && SUCCEEDED(c1->GetFontSet(&set)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder)) &&
-        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(draw::CloudFontSet())) &&
+        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(all ? draw::CloudFontSetAll() : draw::CloudFontSet())) &&
         SUCCEEDED(builder->CreateFontSet(&merged)) && SUCCEEDED(factory->CreateFontCollectionFromFontSet(merged.Get(), &collection)))
       c = collection;
   };

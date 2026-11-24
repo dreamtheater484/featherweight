@@ -46,10 +46,10 @@ TEST(FileAssoc_PdfRegistrationUnchanged) {
       {L"Software\\RegisteredApplications", L"Featherweight", L"Software\\Featherweight\\Capabilities"},
   };
   CHECK(fileassoc::Plan(kExe, {FileKind::Pdf}) == expected);
-  // The PDF reader, the document viewer and the spreadsheet viewer have shipped, so Register writes
-  // all three, PDF first.
+  // The PDF reader and the document, spreadsheet and presentation viewers have shipped, so Register
+  // writes all four, PDF first.
   const auto shipped = fileassoc::Plan(kExe, fw::ShippedViewers());
-  CHECK(shipped == fileassoc::Plan(kExe, {FileKind::Pdf, FileKind::Document, FileKind::Workbook}));
+  CHECK(shipped == fileassoc::Plan(kExe, {FileKind::Pdf, FileKind::Document, FileKind::Workbook, FileKind::Presentation}));
   CHECK(std::vector<Value>(shipped.begin(), shipped.begin() + 5) == std::vector<Value>(expected.begin(), expected.begin() + 5));
 }
 

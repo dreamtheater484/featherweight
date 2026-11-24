@@ -365,6 +365,30 @@ TEST(Text_HangingIndentIsATabStop) {
   CHECK_NEAR(lines[1].CaretX(lines[1].start), 36, 0.01);
 }
 
+TEST(Text_HangingStopOfItsOwn) {
+  // PowerPoint's indent hanging past the edge (marL 33, indent -36): the first line starts at the
+  // edge, its text after the bullet at 36, the lines after it at 33 (rlf-webinar-i 5). With marL 0
+  // the stop is there all the same (business bodies 10: indent -11.34).
+  TextStyle s = Style();
+  ParagraphFormat f;
+  f.startIndent = 33;
+  f.firstLineIndent = -33;
+  f.hangingStop = 36;
+  std::wstring text = L"*\tFirst item that wraps around";
+  auto lines = Lay(text, s, Chars(s, 20) + 36, f);
+  CHECK(lines.size() >= 2);
+  if (lines.size() < 2) return;
+  CHECK_NEAR(lines[0].CaretX(0), 0, 0.01);
+  CHECK_NEAR(lines[0].CaretX(2), 36, 0.01);
+  CHECK_NEAR(lines[1].CaretX(lines[1].start), 33, 0.01);
+  ParagraphFormat zero;
+  zero.hangingStop = 11.34f;
+  auto flush = Lay(L"*\tText", s, 200, zero);
+  CHECK(!flush.empty());
+  if (flush.empty()) return;
+  CHECK_NEAR(flush[0].CaretX(2), 11.34, 0.01);
+}
+
 TEST(Text_TabPastTheLineWraps) {
   TextStyle s = Style();
   std::wstring text = L"aaa\tbbb";
@@ -460,6 +484,15 @@ TEST(Text_CenterAndEnd) {
   // Spaces before the paragraph mark count when right-aligning, as in Word.
   auto spaces = Lay(L"abcd  ", s, 100, f);
   CHECK_NEAR(spaces[0].contentLeft, 100 - 6 * a, 0.01);
+  // PowerPoint leaves them out (alignTrailingSpaces false), before a line break too.
+  f.alignTrailingSpaces = false;
+  auto slide = Lay(L"abcd  ", s, 100, f);
+  CHECK_NEAR(slide[0].contentLeft, 100 - 4 * a, 0.01);
+  f.alignment = Alignment::Center;
+  auto broken = Lay(L"abcd \x000B" L"ab", s, 100, f);
+  CHECK(broken.size() == 2);
+  if (broken.size() == 2) CHECK_NEAR(broken[0].contentLeft, (100 - 4 * a) / 2, 0.01);
+  f.alignTrailingSpaces = true;
   // Indents.
   f.alignment = Alignment::Start;
   f.startIndent = 10;
@@ -530,6 +563,33 @@ TEST(Text_FontSlotsAndFallback) {
   }
 }
 
+TEST(Text_PowerPointFallbackDrawsArabicInTahoma) {
+  // Arabic letters a font doesn't have: Tahoma for slides, as PowerPoint draws them (un-country
+  // morocco's PDF), not DirectWrite's own choice (Segoe UI), which documents keep. The spaces
+  // between the words too: PowerPoint draws the whole Arabic run in Tahoma (its 10-point spaces at
+  // 32 points, where Franklin Gothic's are 8).
+  Fonts slides;
+  if (!slides.Installed(L"Georgia") || !slides.Installed(L"Tahoma")) return;
+  slides.SetPowerPointFallback(true);
+  const TextStyle s = Style(L"Georgia", 20);
+  const std::wstring arabic = L"\x0645\x0631\x062D\x0628\x0627 \x0628\x0643\x0645";
+  const std::vector<Line> lines = Layout(slides, Para(arabic, s), 400);
+  CHECK(!lines.empty() && !lines[0].pieces.empty());
+  if (lines.empty() || lines[0].pieces.empty()) return;
+  for (const GlyphPiece& p : lines[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
+  // A font that isn't installed (morocco's Andalus) isn't substituted for Arabic: Tahoma too.
+  const TextStyle missing = Style(L"No Such Arabic Font", 20);
+  const std::vector<Line> unknown = Layout(slides, Para(arabic, missing), 400);
+  CHECK(!unknown.empty() && !unknown[0].pieces.empty());
+  if (unknown.empty() || unknown[0].pieces.empty()) return;
+  for (const GlyphPiece& p : unknown[0].pieces) CHECK(FamilyOf(p) == L"Tahoma");
+  Fonts documents;
+  const std::vector<Line> other = Layout(documents, Para(arabic, s), 400);
+  CHECK(!other.empty() && !other[0].pieces.empty());
+  if (other.empty() || other[0].pieces.empty()) return;
+  CHECK(FamilyOf(other[0].pieces[0]) != L"Tahoma");
+}
+
 TEST(Text_AFullFaceNameIsThatFace) {
   // "Times New Roman Bold" names a face, not a family: Word draws it bold, as GDI finds it, and
   // nothing is missing. A face name that isn't installed is still substituted.
@@ -568,6 +628,22 @@ TEST(Text_OfficeCloudFontsAreUsedAsWordUsesThem) {
   CHECK(face != nullptr && face->Family() == L"Open Sans");
   CHECK(fonts.Resolve(L"Open Sans Light") != L"Open Sans Light");
   CHECK_EQ(fonts.Substitutions().size(), 1u);
+}
+
+TEST(Text_OfficeCloudFontsAreUsedAsPowerPointUsesThem) {
+  // PowerPoint finds every face in the cloud fonts by its own family name too: "Open Sans Light",
+  // in Open Sans's folder, is drawn as it is (worldbank's PDF). Never a family the PC has.
+  CHECK(!draw::CloudFontsHave(L"", true));
+  CHECK(!draw::CloudFontsHave(L"Calibri", true));
+  if (!draw::CloudFontsHave(L"Open Sans Light", true)) return;
+  CHECK(draw::CloudFontsHave(L"Open Sans", true));
+  Fonts fonts;
+  fonts.SetAllCloudFaces(true);
+  CHECK(fonts.Resolve(L"Open Sans Light") == L"Open Sans Light");
+  CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
+  CHECK(fonts.Substitutions().empty());
+  const Face* face = fonts.FaceFor(L"Open Sans Light", false, false);
+  CHECK(face != nullptr && face->Weight() == DWRITE_FONT_WEIGHT_LIGHT);  // the light face, not Open Sans made thin
 }
 
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
@@ -639,6 +715,51 @@ TEST(Text_CapsSuperscriptSpacing) {
   const float width = Lay(L"abcd abcd", spaced, 400)[0].contentRight;
   CHECK(Lay(L"abcd abcd", spaced, width - 1).size() == 1);
   CHECK(Lay(L"abcd abcd", spaced, width - 3).size() == 2);
+}
+
+TEST(Text_ShiftThatKeepsItsLine) {
+  // PowerPoint's a:rPr baseline moves its run's text without making the line taller (usgov-anyone
+  // 13: a title's f with a subscript c); a w:position shift makes room for it.
+  TextStyle s = Style();
+  TextStyle low = s;
+  low.size = 8;
+  low.baselineShift = -6;
+  const std::wstring text = L"ab c";
+  Paragraph p = Para(text, s);
+  p.runs = {{3, &s}, {1, &low}};
+  const float plain = Lay(L"ab ", s, 400)[0].descent;
+  auto word = Layout(TestFonts(), p, 400);
+  CHECK(word.size() == 1u);
+  if (word.size() != 1u) return;
+  CHECK(word[0].descent > plain + 1);
+  low.shiftKeepsLine = true;
+  auto slide = Layout(TestFonts(), p, 400);
+  CHECK(slide.size() == 1u);
+  if (slide.size() != 1u) return;
+  CHECK_NEAR(slide[0].descent, plain, 0.01);
+  CHECK(!slide[0].pieces.empty() && slide[0].pieces.back().rise == -6);  // drawn as low as before
+}
+
+TEST(Text_GdiAdvancesInWholePixels) {
+  // PowerPoint lays text out as GDI does in its master units (576 a inch, 8 a point): each glyph's
+  // advance a whole number of them (physik's Arial, annual-deaths', letters-home's Georgia).
+  TextStyle s = Style();
+  s.size = 13.3f;
+  s.gdiPixelsPerPoint = 8;
+  auto lines = Lay(L"Typography wraps lines", s, 400);
+  CHECK(!lines.empty() && !lines[0].pieces.empty());
+  if (lines.empty() || lines[0].pieces.empty()) return;
+  bool whole = true;
+  for (const auto& piece : lines[0].pieces)
+    for (float a : piece.advances) whole = whole && std::fabs(a * 8 - std::round(a * 8)) < 0.001f;
+  CHECK(whole);
+  // DirectWrite's own advances at that size aren't, all of them.
+  s.gdiPixelsPerPoint = 0;
+  auto ideal = Lay(L"Typography wraps lines", s, 400);
+  bool any = false;
+  for (const auto& piece : ideal[0].pieces)
+    for (float a : piece.advances) any = any || std::fabs(a * 8 - std::round(a * 8)) > 0.01f;
+  CHECK(any);
 }
 
 TEST(Text_InlineObjects) {

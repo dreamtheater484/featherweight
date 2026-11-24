@@ -446,3 +446,52 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 - [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`): ___ MB (target < 11 MB, 3.0's budget).
 - [ ] On a quiet PC with no Featherweight open (the script won't start its copies beside one): `scripts\budgets.ps1 -Build build-release -Timings` (launch, ready, memory, idle) and `fwtool bench-app build-release\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv build\budgets\fifty-mb.xlsx`: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000), fifty-mb on screen in ___ ms (< 1,500) and loaded in ___ ms (< 5,000); then record them (`-Timings -Record "…"`) before release 3.0.
 - [ ] `fuzz_xls`, `fuzz_ods`, the pivot cache, and `fuzz_xlsx` with pivots, 60 s each: no findings.
+
+## Presentations (P1)
+
+Decks to open: the public set in `tests\office\presentations` (one per feature, `tests\office\README.md`), PowerPoint's PDFs of them in `tests\office\reference\presentations`, and the real-world decks in `FeatherweightCorpus\pptx\<kind>\`. Open each one next to PowerPoint (or its PDF).
+
+Roy passed these checks on 2026-11-24, with the gate build (`ea3fe681` plus the slide-show bench's own fixes) as a portable copy. The test set has no `.pptm`, so the first row's `.pptm` part wasn't tried.
+
+### Opening and viewing
+
+- [x] Double-click a `.pptx`, a `.potx` and a `.pptm` in Explorer: each opens read-only in a presentation tab, the first slide shown at once; the `.pptm` says its macros are kept and never run.
+- [x] `show.ppsx` opens straight into the slide show; Esc leaves it to the tab.
+- [x] The thumbnails pane fills in while you look at the first slide; scrolling it is smooth; clicking a thumbnail shows that slide; hidden slides (`hidden-slides.pptx`) are marked and dimmed.
+- [x] Page Up/Down, arrows, Home and End move between slides; zoom (Ctrl+wheel, fit slide) keeps the slide sharp; the notes pane shows `notes.pptx`'s notes, and the slide with none shows an empty pane.
+- [x] Find (Ctrl+F) finds text on slides and in notes, jumps to the slide and marks the paragraph (and the words in the notes); Copy (Ctrl+C) copies the slide: paste into Word gives its picture, into Notepad its text. Right-click has Copy slide text, Copy slide as picture and Copy speaker notes.
+- [x] `hyperlinks.pptx` in the tab: the pointer becomes a hand over a link, its tooltip says where it goes; Ctrl+click opens a web link in the browser and jumps to a linked slide.
+- [x] The notes pane: drag its top edge to size it; the toolbar's notes button (or a double-click on the edge) hides and shows it.
+- [x] Each public deck looks like PowerPoint's PDF: layouts and placeholders (an empty placeholder shows nothing), the theme's colors and fonts and the dark slide, autofit text at PowerPoint's size, bullets and numbering, tables and their styles, every chart kind, pictures (crop, rotation, flips, transparency, the SVG), groups, effects, backgrounds (master, layout, slide, picture, pattern), WordArt.
+- [x] `embedded-fonts.pptx` shows its text in the pixel font (blocky 5×7 letters), not in Calibri; a real-world deck that embeds a font shows it too.
+- [x] Slide sizes: 4:3, 16:9 and the portrait `hidden-slides.pptx` each fit the view.
+
+### Slide show
+
+- [x] F5 starts from the first slide, Shift+F5 from the current one, the ▶ button too; on a second monitor, the show is on the chosen one.
+- [x] Click, Space, Enter, the arrow keys, Page Down move on; Backspace and Page Up go back; a number and Enter jumps; B and W black and white the screen; Esc ends the show; the cursor hides when the mouse is still.
+- [x] `transitions.pptx`: fade, push, wipe, split, cover, uncover and zoom play smoothly at the display's refresh rate; dissolve, random bars, vortex and morph play as a fade; the push with a time moves on by itself after 2 s.
+- [x] `animations.pptx`: the entrances, emphasis, exit and motion path play on click, with and after the previous ones; the first effect on slide 3 starts by itself; bullets fly in one by one; wheel and checkerboard play as appear; the trigger shows the cloud only when you click its button; the picture, chart and table animate.
+- [x] `hyperlinks.pptx` during the show: the slide links jump (and the home buttons back), next, previous, first, last and end show do what they say, the mouse-over link jumps on hover, web and mail links open the browser and mail app (after the usual question).
+- [x] `sections-custom-shows.pptx`: the button plays the custom show (slides 1, 4, 6) and comes back.
+- [x] A 50-slide deck from the corpus presents without a stutter in its transitions (record the frame rate below). Measured: p1-show's frame bench (its 50-slide `bench50.pptx`, 50 transitions) at the console presents every transition at the display's 240 Hz; see P1's gate below and p1-plan's frame-bench decision of 2026-11-24.
+
+### Printing and PDF
+
+- [x] Print (Ctrl+P), with the toolbar's print layout box: full page slides (landscape for a wide deck), handouts (1, 2, 3, 4, 6, 9 per page; 3 with lines beside the slides) and notes pages (portrait), hidden slides left out unless ⋯ Print hidden slides is on; the dialog's page range picks slides ("2-4" prints those slides in the chosen layout), Current page prints the shown slide.
+- [x] Export PDF: the same layouts; the PDF opens in Featherweight's PDF reader and in another reader, with the slides' text selectable and the links working.
+
+### Never damage a file
+
+- [x] Open a deck, look around, play the show, close it: the file's bytes and date haven't changed (P1 doesn't save decks).
+
+### P1's gate (record the numbers)
+
+Measured on the gate code, p1-int `ea3fe681` (later P1 commits are docs and the ledger), on 2026-11-24.
+
+- [x] Slides against PowerPoint's (`scripts\slide-pages.ps1`): the real-world corpus (`-Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders pptx`) 2,369 of 2,516 slides, 94.16 % (target ≥ 90 %); the public set (`-Reference tests\office\reference -Folders presentations`) 92 of 97 slides, 94.85 %.
+- [x] `fwtool check` and the Open XML SDK validator (`build\validate\fwvalidate.exe`) on every corpus and public deck: `fwtool check` 0 failed on all 170 (152 corpus, 18 public); the validator 0 errors on the 18 public decks and on 141 of the 152 corpus decks (target 0). The other 11 have 71 schema errors in their downloaded originals (P1 never saves a deck). By the coordinator's decision of 2026-11-24 in p1-plan, they're P2's baseline, not P1 failures: P2's check is that a saved deck adds no errors to its original's (`fwvalidate --compare`).
+- [x] `fuzz_pptx` and the animation timing fuzzer (`fuzz_timing`), 60 s each: no findings (CI on p1-int `9797b268`: 1,929 and 243,759 runs, "All fuzz targets ran without findings").
+- [x] On a quiet PC with no Featherweight open: a 50-slide `.pptx` to its first slide in 273 ms, on screen at 107 ms (target < 500 ms); memory with a typical deck 30.3 MB (target < 150 MB); nothing runs when idle (0 % CPU, no timers) with a deck open: 0 ms of idle CPU and no wake-ups with each deck; the slide show at 240 fps on a 240 Hz display, 0 dropped frames during transitions 2–50 (target: the display's rate, none dropped). From `scripts\budgets.ps1 -Timings` at the console (5120×1440), 2026-11-24 09:29 (ledger `c7db3b25`), and p1-plan's frame-bench decision of 2026-11-24: 50 transitions, 12,085 frames, worst frame interval 7.28 ms (under 2 refreshes), CPU per frame p99 0.48 ms. Slide 1's 3–4 counted misses are the bench's queue model, not frames; a second run had one 23 ms present stall from outside (other sessions' builds winding down).
+- [x] The shipped exe (`scripts\budgets.ps1` on `build-release`): 10.63 MB, 11,149,824 bytes (target ≤ 11.05 MB: 10.05 MB after S4 plus ≤ 1.0 MB in P1), 597 KB over S4.
+- [x] Opening a PDF, a document and a workbook is no slower than at S4 (`scripts\budgets.ps1 -Timings` against S4's numbers): PDF 102.7 ms, document 125.9 ms, workbook 598 ms (`text.pdf`, `report.docx` and `million-cells.xlsx` ready), against 101.8, 128.9 and 594 ms for S4 final's exe (`e00f6ec`) in the same quiet window; the other PDFs, `long-300.docx`, `100mb.csv` and `fifty-mb.xlsx` are within 2 % either way, and memory is the same.

@@ -3,13 +3,33 @@
   Builds the real-world corpus (plan section 10) of Word documents, workbooks and CSV files from
   tests\office\real-world.json: downloads every file, checks its hash and screens it, so anyone
   can rebuild the corpus exactly. The files are never committed (their licences vary); only the
-  manifest is. An entry's format follows its "file" (docx/, xlsx/, csv/), or for a candidate its
-  "format" or its URL's extension: .docx; .xlsx or .xltx; .csv, .tsv or .txt.
+  manifest is. An entry's format follows its "file" (docx/, xlsx/, csv/, pptx/), or for a candidate
+  its "format" or its URL's extension: .docx; .xlsx or .xltx; .csv, .tsv or .txt; .pptx, .ppsx or .potx.
+
+  Decks (P1) get the same screen (steps 1, 2, 4 and 5) with their own content rules (step 3): a plain
+  (macro-free) presentation, show or template; no VBA, ActiveX, OLE objects or embedded packages
+  (nothing in ppt/embeddings/ but a chart's own workbook, screened inside), web extensions or ribbon
+  customizations; no external relationship but an http, https or mailto hyperlink (linked pictures,
+  sounds and videos would reach out during the show); and no click or hover action that leaves the
+  show (ppaction://program, macro, ole, hlinkfile, hlinkpres): only slide jumps, show jumps (next,
+  previous, first, last, end) and custom shows. On top of that deny-list, an allow-list (Roy,
+  2026-11-20): every part's content type must be PresentationML, DrawingML, a theme, the package's
+  relationships or docProps, a picture (PNG, JPEG, GIF, BMP, TIFF, EMF, WMF, SVG), a font
+  (fntdata, odttf, ttf), a chart or chart style, or audio or video; anything else (custom XML,
+  VML, ink, JPEG XR, sensitivity labels, unknown binaries) refuses the deck, and so does a part
+  without a content type. Every part's first bytes are sniffed: an executable (MZ, ELF, Mach-O),
+  a shortcut (.lnk), a compound (OLE) file or a nested zip (but a chart's workbook) refuses the
+  deck, and so does text (a script, HTML, an HTA) where a picture, sound, video or font should be,
+  a picture that isn't one, or an SVG that scripts, embeds or links out. The facts recorded: the producer, the slides, hidden
+  slides, the slide size, and tags (pictures, photo-heavy, charts, tables, smartart, groups, wordart,
+  3d, autofit, svg, transitions, animations, sounds, video, audio, hyperlinks, notes, comments,
+  sections, custom-shows, embedded-fonts, ink, rtl, east-asian, hidden-slides).
 
   Corpus layout (point FW_CORPUS at the folder):
     docx\<category>\<id>.docx           the documents that passed the screen
     xlsx\<category>\<id>.xlsx           the workbooks (and .xltx templates) that passed it
     csv\<category>\<id>.csv             the CSV and TSV files that passed it
+    pptx\<category>\<id>.pptx           the decks (and .ppsx shows, .potx templates) that passed it
     reference\docx\<category>\<id>.docx.pdf, reference\xlsx\...\<id>.xlsx.pdf and .cells.json,
     reference\manifest.json             Office's PDFs (scripts\reference-renders.ps1 -Corpus)
     screen.json                         this run's results: every file, passed or rejected, and why
@@ -48,9 +68,20 @@
      - ms-msdt, mhtml: or !x-usc: anywhere in the XML; a DTD in any part
      - a part or all parts together expanding past 64 MB or 256 MB while they're read
   4. Structure: `fwtool check` passes (it also refuses zip bombs and malformed packages).
-  5. Antivirus: Microsoft Defender scans the quarantine folder (no setting is changed).
-  Only files that pass everything move into the corpus. Rejected files are deleted; screen.json
-  keeps the reasons. A site that asks for a browser challenge is skipped, never worked around.
+  5. Antivirus (Microsoft Defender; no Defender or security setting, exclusion or policy is ever
+     changed). Before anything is downloaded: its service, antivirus and real-time protection must
+     be on and its signatures at most 24 h old (else MpCmdRun -SignatureUpdate, which changes no
+     setting); and the standard EICAR test file, written into a new, empty quarantine subfolder,
+     must be caught (so no exclusion skips the quarantine), then deleted. Each file is scanned on
+     its own right after its download, before the content screen opens it, and again in the
+     corpus folder after the screen. A scan passes only with exit 0 and "found no threats"
+     (MpCmdRun exits 0 when it found a threat and removed it). A detection stops downloads from
+     that file's hosts; Defender's own detection record for the run is checked as well.
+  Only files that pass everything move into the corpus. Rejected files are deleted at once;
+  screen.json keeps the reasons and the Defender status, the EICAR proof and any detection. A site
+  that asks for a browser challenge is skipped, never worked around. Certificates are always
+  checked (curl's default; never -k), downloads are capped at 20 MB and their SHA-256 recorded, and
+  nothing from a download is run, unpacked to disk or opened by Explorer.
 
   The screen also records facts for the manifest: the producer (Word version, LibreOffice, or
   Google Docs, inferred when there are no docProps), Word's compatibility mode, the page count
@@ -78,6 +109,14 @@ param(
   [switch]$Rescreen,
   [switch]$Retry,
   [string[]]$Only,
+  # A JSON list of host names: every download hop (redirects too) must be one of them, on top of
+  # the sources list, so a download stays on the hosts a request named.
+  [string]$Hosts,
+  # Only the manifest's files of these formats (docx, xlsx, csv, pptx), for example -Rescreen -Formats pptx.
+  [string[]]$Formats,
+  # Check Defender on these folders and the files in them (status, the EICAR proof in each, every
+  # file scanned on its own, then each folder); nothing is downloaded, screened or deleted.
+  [string[]]$DefenderCheck,
   # Screen these local files and print the results; nothing is downloaded, moved or deleted.
   [string[]]$Screen
 )
@@ -86,6 +125,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 # powershell -File passes "a,b" as one string.
 $Screen = @($Screen | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$DefenderCheck = @($DefenderCheck | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Out -and $Screen) { $Out = [IO.Path]::GetTempPath() }
 if (-not $Out) { throw "Give the corpus folder with -Out, or set FW_CORPUS." }
@@ -146,6 +186,12 @@ function Read-Json([string]$path) {
 $manifestData = if (Test-Path $Manifest) { Read-Json $Manifest } else { $null }
 if (-not $manifestData -or -not $manifestData.sources) { throw "$Manifest has no sources list." }
 $sources = @($manifestData.sources)
+$allowedHosts = $null
+if ($Hosts) {
+  $allowedHosts = @{}
+  foreach ($h in @((Read-Json $Hosts) | ForEach-Object { $_ })) { $allowedHosts[([string]$h).ToLowerInvariant().TrimEnd('.')] = $true }
+  if (-not $allowedHosts.Count) { throw "$Hosts lists no hosts." }
+}
 
 # The source whose domain the URL's host is, or ends with ("gov" allows every *.gov host). A
 # source with "paths" matches only URLs whose path starts with one of them (case-sensitive).
@@ -172,6 +218,7 @@ function Get-Download([string]$url, [string]$dest, [string]$format = "docx") {
       $u = [Uri]$url
       if ($u.Scheme -ne "https") { throw "not HTTPS: $url" }
       if (-not (Find-Source $u)) { throw "not on the sources list: $($u.Host)" }
+      if ($allowedHosts -and -not $allowedHosts.ContainsKey($u.Host.ToLowerInvariant().TrimEnd('.'))) { throw "not one of the request's hosts: $($u.Host)" }
       $w = & $curl -sS --proto =https --max-redirs 0 --max-filesize $MaxBytes --connect-timeout 30 --max-time 300 `
         --stderr $errors -D $headers -o $dest -w "%{http_code} %{redirect_url}" $u.AbsoluteUri
       if ($LASTEXITCODE -eq 63) { throw "larger than 20 MB" }
@@ -192,6 +239,7 @@ function Get-Download([string]$url, [string]$dest, [string]$format = "docx") {
       $bad = switch ($format) {
         "xlsx" { '(?i)\.(xlsm|xltm|xlsb|xls|xlam|ods|csv|docx|doc|zip|7z|rar|exe|pdf|htm|html)$' }
         "csv" { '(?i)\.(xlsx|xlsm|xls|xlsb|ods|docx|doc|zip|gz|7z|rar|exe|pdf|htm|html|json|xml)$' }
+        "pptx" { '(?i)\.(pptm|potm|ppsm|ppt|pps|pot|odp|key|docx|xlsx|zip|7z|rar|exe|pdf|htm|html)$' }
         default { '(?i)\.(docm|dotx|dotm|doc|rtf|odt|zip|7z|rar|exe|pdf|htm|html)$' }
       }
       if ($name -match $bad) { throw "served as $name, not a .$format" }
@@ -984,16 +1032,325 @@ function Test-Csv([string]$path) {
   @{ reasons = @($reasons); facts = $facts }
 }
 
-# The format of a manifest entry or candidate: docx, xlsx or csv.
+# ---------------------------------------------------------------- Decks (P1)
+
+$pptMainTypes = @{
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml" = ".pptx"
+  "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml" = ".ppsx"
+  "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml" = ".potx"
+}
+# Parts a plain deck never has: VBA, ActiveX, OLE objects and packages (everything in
+# ppt/embeddings/ but a chart's own workbook), web extensions, ribbon customizations, add-ins' data.
+$badPptPath = '(?i)(^|/)vbaProject\.bin$|vbaProjectSignature|vbaData\.xml$|^ppt/activeX/|^ppt/embeddings/|webextension|taskpanes|^customUI/'
+$pptChartBook = '(?i)^ppt/embeddings/[^/]+\.xlsx$'
+$pptChartRels = '(?i)^ppt/charts/_rels/chart(ex)?\d*\.xml\.rels$'
+$badPptType = '(?i)macroEnabled|vbaProject|vbaData|activeX|oleObject|webextension|taskpane|addin'
+$badPptRel = @("vbaProject", "oleObject", "package", "control", "activeXControl", "activeXControlBinary", "webextension",
+  "webextensiontaskpanes", "extensibility", "attachedTemplate")
+# Click and hover actions: these jump within the show or play a custom show; the rest start a program,
+# run a macro, open a file, another presentation or an OLE verb, and are refused.
+$plainAction = '^(?i)ppaction://(hlinksldjump|hlinkshowjump\?jump=\w+|customshow\?|noaction|media)'
+# The allow-list, on top of the deny-list (Roy, 2026-11-20): every part of a deck has one of these
+# content types: PresentationML, DrawingML (charts, SmartArt, theme overrides), the theme, the
+# package's relationships and docProps, pictures, fonts, chart styles, audio and video. Anything
+# else (custom XML, VML, ink, OLE, ...) refuses the deck, and so does a part without a content type.
+# The chart workbooks are screened as workbooks and allowed only where a chart points at them.
+$pptAllowedType = '(?i)^(' + (@(
+  'application/vnd\.openxmlformats-officedocument\.presentationml\.[a-z.]+(\+xml)?',
+  'application/vnd\.ms-powerpoint\.(comments|authors|revisioninfo|changesinfo)\+xml',
+  'application/vnd\.openxmlformats-officedocument\.drawingml\.[a-z.]+\+xml',
+  'application/vnd\.ms-office\.drawingml\.diagramDrawing\+xml',
+  'application/vnd\.openxmlformats-officedocument\.theme(Manager|Override)?\+xml',
+  'application/vnd\.ms-office\.(chartstyle|chartcolorstyle|chartex)\+xml',
+  'application/vnd\.openxmlformats-package\.(relationships|core-properties)\+xml',
+  'application/vnd\.openxmlformats-officedocument\.(extended|custom)-properties\+xml',
+  'image/(png|x-png|jpeg|jpg|pjpeg|gif|bmp|x-bmp|tiff|x-emf|emf|x-wmf|wmf|svg\+xml)',
+  'application/(x-fontdata|x-font-odttf|vnd\.openxmlformats-officedocument\.obfuscatedFont|x-font-ttf|x-font-truetype|font-sfnt)',
+  'font/(ttf|sfnt)',
+  '(audio|video)/[a-z0-9.+-]+') -join '|') + ')$'
+# Pictures, sounds, videos and fonts are binary: text there (a script, HTML, an HTA) refuses the deck.
+$pptBinaryType = '(?i)^(image/(?!svg)|audio/|video/|font/|application/(x-fontdata|x-font|vnd\.openxmlformats-officedocument\.obfuscatedFont|font-sfnt))'
+# An SVG picture may not script, embed or reach out: only links within itself or to data: pictures.
+$svgBad = '(?i)<script|<foreignObject|<iframe|<embed|<object|javascript:|\son[a-z]+\s*=|(xlink:)?href\s*=\s*["''](?!#|data:image/)'
+
+# The first bytes of a part, without reading the rest.
+function Get-PartHead($entry, [int]$n = 512) {
+  $s = $entry.Open()
+  try {
+    $buf = New-Object byte[] $n
+    $got = 0
+    while ($got -lt $n) { $k = $s.Read($buf, $got, $n - $got); if ($k -le 0) { break }; $got += $k }
+    if ($got -lt $n) { $short = New-Object byte[] $got; [Array]::Copy($buf, $short, $got); $buf = $short }
+    , $buf
+  } finally { $s.Dispose() }
+}
+function Test-Prefix([byte[]]$h, [int[]]$m) {
+  if ($h.Length -lt $m.Length) { return $false }
+  for ($i = 0; $i -lt $m.Length; $i++) { if ($h[$i] -ne $m[$i]) { return $false } }
+  $true
+}
+# What a part's first bytes say it is, when that's refused anywhere in a deck.
+function Get-ForbiddenMagic([byte[]]$h) {
+  if (Test-Prefix $h 0x4D, 0x5A) { return "an executable (MZ)" }
+  if (Test-Prefix $h 0x7F, 0x45, 0x4C, 0x46) { return "an executable (ELF)" }
+  foreach ($m in @(@(0xFE, 0xED, 0xFA, 0xCE), @(0xFE, 0xED, 0xFA, 0xCF), @(0xCE, 0xFA, 0xED, 0xFE), @(0xCF, 0xFA, 0xED, 0xFE), @(0xCA, 0xFE, 0xBA, 0xBE))) {
+    if (Test-Prefix $h $m) { return "an executable (Mach-O)" }
+  }
+  if (Test-Prefix $h 0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00) { return "a shortcut (.lnk)" }
+  if (Test-Prefix $h 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1) { return "a compound (OLE) file" }
+  if ((Test-Prefix $h 0x50, 0x4B, 0x03, 0x04) -or (Test-Prefix $h 0x50, 0x4B, 0x05, 0x06) -or (Test-Prefix $h 0x50, 0x4B, 0x07, 0x08)) { return "a zip" }
+  $null
+}
+# PNG, JPEG, GIF, BMP, TIFF, EMF or WMF (Office sometimes types one picture format as another).
+function Test-PictureMagic([byte[]]$h) {
+  (Test-Prefix $h 0x89, 0x50, 0x4E, 0x47) -or (Test-Prefix $h 0xFF, 0xD8, 0xFF) -or (Test-Prefix $h 0x47, 0x49, 0x46, 0x38) -or
+  (Test-Prefix $h 0x42, 0x4D) -or (Test-Prefix $h 0x49, 0x49, 0x2A, 0x00) -or (Test-Prefix $h 0x4D, 0x4D, 0x00, 0x2A) -or
+  (Test-Prefix $h 0x01, 0x00, 0x00, 0x00) -or (Test-Prefix $h 0xD7, 0xCD, 0xC6, 0x9A) -or (Test-Prefix $h 0x01, 0x00, 0x09, 0x00) -or
+  (Test-Prefix $h 0x02, 0x00, 0x09, 0x00)
+}
+# Text where a binary part should be: markup or a script line first, or nothing but text.
+function Test-LooksLikeText([byte[]]$h) {
+  if (-not $h.Length) { return $false }
+  if ((Test-Prefix $h 0xFF, 0xFE) -or (Test-Prefix $h 0xFE, 0xFF)) { return $true }  # UTF-16 text
+  $i = if (Test-Prefix $h 0xEF, 0xBB, 0xBF) { 3 } else { 0 }
+  while ($i -lt $h.Length -and @(9, 10, 13, 32) -contains $h[$i]) { $i++ }
+  if ($i -lt $h.Length -and $h[$i] -eq 0x3C) { return $true }  # '<': HTML, an HTA, XML
+  if ($i + 1 -lt $h.Length -and $h[$i] -eq 0x23 -and $h[$i + 1] -eq 0x21) { return $true }  # '#!'
+  foreach ($b in $h) { if ($b -lt 9 -or ($b -gt 13 -and $b -lt 32) -or $b -gt 126) { return $false } }
+  $true
+}
+
+# Screens one deck. Returns @{ reasons = @(...); facts = @{...} }; no reasons means it passed.
+function Test-Pptx([string]$path) {
+  $reasons = New-Object Collections.Generic.List[string]
+  $facts = [ordered]@{}
+  $fi = Get-Item -LiteralPath $path
+  if (@(".pptx", ".ppsx", ".potx") -notcontains $fi.Extension.ToLowerInvariant()) { $reasons.Add("not a .pptx, .ppsx or .potx file"); return @{ reasons = $reasons; facts = $facts } }
+  if ($fi.Length -ge $MaxBytes) { $reasons.Add("20 MB or larger"); return @{ reasons = $reasons; facts = $facts } }
+  $head = New-Object byte[] 4
+  $fs = [IO.File]::OpenRead($path); [void]$fs.Read($head, 0, 4); $fs.Dispose()
+  if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B -or $head[2] -ne 3 -or $head[3] -ne 4) {
+    $why = if ($head[0] -eq 0xD0 -and $head[1] -eq 0xCF) { "an OLE file (a .ppt, or an encrypted deck)" } else { "not a zip (a web page or another format)" }
+    $reasons.Add($why); return @{ reasons = $reasons; facts = $facts }
+  }
+  $zip = $null
+  $part = $null
+  try {
+    $zip = [IO.Compression.ZipFile]::OpenRead($path)
+    # A zip whose central directory isn't where its end record says reads as one empty entry here.
+    $entries = @($zip.Entries | Where-Object { $_ -and $_.FullName })
+    if (-not $entries.Count) { throw "a damaged zip (no part can be read: its central directory isn't where its end record says)" }
+    if ($entries.Count -gt 5000) { throw "more than 5000 parts" }
+    $names = @{}
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($names.ContainsKey($n.ToLowerInvariant())) { throw "duplicate part name $n" }
+      $names[$n.ToLowerInvariant()] = $e
+      if ($n -match $badPptPath -and $n -notmatch $pptChartBook) { $reasons.Add("forbidden part $n") }
+    }
+    $budget = [long]$TotalCap
+    $ct = $names["[content_types].xml"]
+    if (-not $ct) { throw "no [Content_Types].xml" }
+    $defaults = @{}; $overrides = @{}
+    $r = New-XmlReader (Read-Part $ct ([ref]$budget))
+    while ($r.Read()) {
+      if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+      $type = $r.GetAttribute("ContentType")
+      if ($r.LocalName -eq "Default") { $defaults[$r.GetAttribute("Extension").ToLowerInvariant()] = $type }
+      # Part names are URIs here (Cort%C3%A1zar.wav), plain in the zip (Cortázar.wav).
+      elseif ($r.LocalName -eq "Override") { $overrides[[Uri]::UnescapeDataString($r.GetAttribute("PartName")).TrimStart('/').ToLowerInvariant()] = $type }
+      if ($type -and $type -match $badPptType -and ($r.LocalName -eq "Override" -or $type -match '(?i)macroEnabled|vba')) { $reasons.Add("forbidden content type $type") }
+    }
+    $r.Dispose()
+    function Get-PartType([string]$n) {
+      $k = $n.ToLowerInvariant()
+      if ($overrides.ContainsKey($k)) { return $overrides[$k] }
+      $ext = [IO.Path]::GetExtension($k).TrimStart('.')
+      if ($defaults.ContainsKey($ext)) { return $defaults[$ext] }
+      $null
+    }
+    $count = @{}
+    function Add-Count([string]$k, [int]$n = 1) { $count[$k] = $n + [int]$count[$k] }
+    # The allow-list and every part's first bytes: no executable, shortcut, compound (OLE) file or
+    # nested zip (but the chart workbooks) anywhere, and no text where a binary part should be.
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($n.EndsWith('/') -or $n -ieq "[Content_Types].xml") { continue }
+      $t = Get-PartType $n
+      $isBook = $n -match $pptChartBook -and $t -eq $xlsxType
+      if (-not $t) { $reasons.Add("a part with no content type ($n)"); continue }
+      if (-not $isBook -and $t -notmatch $pptAllowedType) { $reasons.Add("content type not on the allow-list: $t ($n)") }
+      $h = Get-PartHead $e
+      $magic = Get-ForbiddenMagic $h
+      if ($magic -and -not ($isBook -and $magic -eq "a zip")) { $reasons.Add("$magic in $n ($t)") }
+      elseif ($t -match $pptBinaryType -and (Test-LooksLikeText $h)) { $reasons.Add("text (a script, HTML or an HTA) in $n, typed $t") }
+      elseif ($t -match '(?i)^image/(?!svg)' -and $h.Length -and -not (Test-PictureMagic $h)) { $reasons.Add("$n is typed $t but isn't a PNG, JPEG, GIF, BMP, TIFF, EMF or WMF picture") }
+    }
+    # Relationships: the main part, refused types and external targets, and the chart workbooks.
+    $main = $null
+    $books = @{}
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($n -notmatch '(?i)\.rels$') { continue }
+      $part = $n
+      $r = New-XmlReader (Read-Part $e ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element -or $r.LocalName -ne "Relationship") { continue }
+        $target = $r.GetAttribute("Target"); $mode = $r.GetAttribute("TargetMode")
+        $short = ($r.GetAttribute("Type") -split '/')[-1]
+        if ($short -eq "package" -and $n -match $pptChartRels -and $mode -ne "External" -and (Resolve-PartName $n $target) -match $pptChartBook) {
+          $books[(Resolve-PartName $n $target).ToLowerInvariant()] = $true
+        } elseif ($badPptRel -contains $short) { $reasons.Add("forbidden relationship $short ($n)") }
+        if ($n -ieq "_rels/.rels" -and $short -eq "officeDocument") { $main = $target.TrimStart('/') }
+        if ($mode -eq "External") {
+          # Linked pictures, sounds and videos reach out when the deck is shown: only hyperlinks may be external.
+          if ($short -ne "hyperlink") { $reasons.Add("external $short relationship to $(Format-Target $target) ($n)") }
+          elseif ($target -notmatch $plainLink) { $reasons.Add("hyperlink that isn't http, https or mailto: $(Format-Target $target) ($n)") }
+        }
+        switch ($short) { "video" { Add-Count "video" } "audio" { Add-Count "audio" } "media" { Add-Count "media" } "font" { Add-Count "embedded-fonts" }
+          "comments" { Add-Count "comments" } "diagramData" { Add-Count "smartart" } "notesSlide" { Add-Count "notes" } }
+      }
+      $r.Dispose()
+    }
+    if (-not $main) { throw "no main document relationship" }
+    $mainType = Get-PartType $main
+    if (-not $pptMainTypes.ContainsKey([string]$mainType)) { $reasons.Add("main part isn't a plain (macro-free) presentation, show or template ($mainType)") }
+    else { $facts.kind = $pptMainTypes[$mainType] }
+    foreach ($e in $entries) {
+      $t = Get-PartType $e.FullName.TrimStart('/')
+      if ($t -and $t -match $badPptType) { $reasons.Add("forbidden part type $t ($($e.FullName))") }
+    }
+    foreach ($k in @($names.Keys)) {
+      if ($k -notmatch $pptChartBook) { continue }
+      $n = $names[$k].FullName.TrimStart('/')
+      if (-not $books[$k]) { $reasons.Add("forbidden part $n (no chart refers to it)"); continue }
+      $t = Get-PartType $n
+      if ($t -ne $xlsxType) { $reasons.Add("chart workbook $n isn't a plain .xlsx ($t)"); continue }
+      foreach ($why in (Test-Workbook $names[$k] ([ref]$budget))) { $reasons.Add("chart workbook $($n): $why") }
+    }
+
+    # Every XML part: forbidden strings and elements, click actions, and the facts.
+    $slides = 0; $hidden = 0; $cjk = 0
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      $t = Get-PartType $n
+      if ($n -notmatch '(?i)\.(xml|rels|vml)$' -and -not ($t -and $t -match '(?i)[+/]xml$')) { continue }
+      $bytes = Read-Part $e ([ref]$budget)
+      $text = Get-XmlText $bytes
+      $m = [regex]::Match($text, $badString)
+      if ($m.Success) { $reasons.Add("contains '$($m.Value)' ($n)") }
+      if ($n -match '(?i)\.rels$') { continue }
+      if ($t -match '(?i)^image/svg') {
+        $m = [regex]::Match($text, $svgBad)
+        if ($m.Success) { $reasons.Add("an SVG picture that scripts, embeds or links out ('$($m.Value.Trim())', $n)") }
+      }
+      $isSlide = $n -match '(?i)^ppt/slides/slide\d+\.xml$'
+      if ($isSlide) {
+        $slides++
+        foreach ($tm in [regex]::Matches($text, '<a:t>([^<]+)</a:t>')) { $cjk += [regex]::Matches($tm.Groups[1].Value, $cjkClass).Count }
+      }
+      $part = "$n ($t)"
+      $r = New-XmlReader $bytes
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        $ln = $r.LocalName
+        switch -CaseSensitive ($ln) {
+          "sld" { if ($isSlide -and $r.GetAttribute("show") -in "0", "false") { $hidden++ } }
+          { $_ -in "oleObj", "control", "embed" } { if ($r.NamespaceURI -match 'presentationml') { $reasons.Add("$ln ($n)") } }
+          { $_ -in "hlinkClick", "hlinkHover", "hlinkMouseOver" } {
+            $action = $r.GetAttribute("action")
+            if ($action -and $action -notmatch $plainAction) {
+              $what = if ($action -match '^(?i)ppaction://([a-z]+)') { $Matches[1] } else { "an action" }
+              $reasons.Add("a click action that leaves the show ($what) ($n)")
+            }
+            if ($isSlide -or $n -match '(?i)^ppt/slide(Layout|Master)s/') { Add-Count "hyperlinks" }
+          }
+          "snd" { if ($r.NamespaceURI -match 'presentationml') { Add-Count "sounds" } }
+          "pic" { if ($isSlide) { Add-Count "pictures" } }
+          "tbl" { if ($isSlide) { Add-Count "tables" } }
+          "chart" { if ($r.NamespaceURI -match 'drawingml/2006/chart' -and $isSlide) { Add-Count "charts" } }
+          "grpSp" { if ($isSlide) { Add-Count "groups" } }
+          "transition" { if ($isSlide) { Add-Count "transitions" } }
+          "timing" { if ($isSlide) { Add-Count "animations" } }
+          "prstTxWarp" { if ($isSlide -and $r.GetAttribute("prst") -ne "textNoShape") { Add-Count "wordart" } }
+          "sp3d" { if ($isSlide) { Add-Count "3d" } }
+          "normAutofit" { if ($isSlide -and $r.GetAttribute("fontScale")) { Add-Count "autofit" } }
+          "sectionLst" { Add-Count "sections" }
+          "custShow" { Add-Count "custom-shows" }
+          "embeddedFont" { Add-Count "embedded-fonts" }
+          "oMath" { Add-Count "equations" }
+          "svgBlip" { Add-Count "svg" }
+          "contentPart" { if ($isSlide) { Add-Count "ink" } }
+          "sldSz" {
+            $cx = [double]$r.GetAttribute("cx"); $cy = [double]$r.GetAttribute("cy")
+            if ($cy -gt 0) { $facts.slideSize = if ([Math]::Abs($cx / $cy - 16 / 9) -lt 0.01) { "16:9" } elseif ([Math]::Abs($cx / $cy - 4 / 3) -lt 0.01) { "4:3" } elseif ([Math]::Abs($cx / $cy - 16 / 10) -lt 0.01) { "16:10" } elseif ($cy -gt $cx) { "portrait" } else { "other" } }
+          }
+          "pPr" { if ($isSlide -and $r.GetAttribute("rtl") -eq "1") { Add-Count "rtl" } }
+        }
+      }
+      $r.Dispose()
+    }
+    if ($cjk -ge 10) { Add-Count "east-asian" $cjk }
+    $facts.slides = $slides
+    if ($hidden) { $facts.hiddenSlides = $hidden }
+    # Photo-heavy: many pictures for the slides (a picture or more on every slide, on average).
+    if ($slides -gt 0 -and [int]$count["pictures"] -ge $slides) { Add-Count "photo-heavy" }
+
+    # Facts for the manifest.
+    $app = $names["docprops/app.xml"]
+    if ($app) {
+      $r = New-XmlReader (Read-Part $app ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        switch ($r.LocalName) {
+          "Application" { $facts.producer = $r.ReadElementContentAsString() }
+          "AppVersion" { $facts.appVersion = $r.ReadElementContentAsString() }
+        }
+      }
+      $r.Dispose()
+    }
+    $core = $names["docprops/core.xml"]
+    if ($core) {
+      $r = New-XmlReader (Read-Part $core ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -eq [Xml.XmlNodeType]::Element -and $r.LocalName -eq "modified") { $v = $r.ReadElementContentAsString(); if ($v.Length -ge 10) { $facts.modified = $v.Substring(0, 10) } }
+      }
+      $r.Dispose()
+    }
+    if (-not $facts.Contains("producer")) {
+      $facts.producer = if (-not $names["docprops/core.xml"] -and $entries[$entries.Count - 1].FullName -eq "[Content_Types].xml") { "Google Slides (inferred: no docProps, [Content_Types].xml last)" } else { "unknown (no docProps/app.xml)" }
+    }
+    $tags = New-Object Collections.Generic.List[string]
+    foreach ($k in "pictures", "photo-heavy", "charts", "tables", "smartart", "groups", "wordart", "3d", "autofit", "svg", "equations",
+                   "transitions", "animations", "sounds", "video", "audio", "hyperlinks", "notes", "comments", "sections", "custom-shows",
+                   "embedded-fonts", "ink", "rtl", "east-asian") {
+      if ($count[$k]) { $tags.Add($k) }
+    }
+    if ($hidden) { $tags.Add("hidden-slides") }
+    $facts.tags = @($tags)
+    $facts.counts = [ordered]@{}
+    foreach ($k in @($count.Keys | Sort-Object)) { $facts.counts[$k] = $count[$k] }
+  } catch {
+    $where = if ($part) { " in $part" } else { "" }
+    $reasons.Add("malformed$($where): $($_.Exception.Message)")
+  } finally {
+    if ($zip) { $zip.Dispose() }
+  }
+  @{ reasons = @($reasons | Select-Object -Unique); facts = $facts }
+}
+
+# The format of a manifest entry or candidate: docx, xlsx, csv or pptx.
 function Get-Format($e) {
   $ext = if ($e.file) { [IO.Path]::GetExtension($e.file) } elseif ($e.format) { "." + $e.format } else { [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath) }
-  switch -Regex ($ext.ToLowerInvariant()) { '^\.(xlsx|xltx)$' { "xlsx" } '^\.(csv|tsv|txt)$' { "csv" } default { "docx" } }
+  switch -Regex ($ext.ToLowerInvariant()) { '^\.(xlsx|xltx)$' { "xlsx" } '^\.(csv|tsv|txt)$' { "csv" } '^\.(pptx|ppsx|potx)$' { "pptx" } default { "docx" } }
 }
 # The file extension a format's file is kept with.
 function Get-Extension($e, [string]$format) {
   if ($e.file) { return [IO.Path]::GetExtension($e.file).ToLowerInvariant() }
   $ext = [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath).ToLowerInvariant()
-  switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } } default { ".docx" } }
+  switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } }
+    "pptx" { if ($e.format -and -not $ext) { $ext = ".$($e.format)".ToLowerInvariant() }  # a template served from a URL without an extension
+      if (@(".ppsx", ".potx") -contains $ext) { $ext } else { ".pptx" } } default { ".docx" } }
 }
 
 # fwtool check refuses malformed packages and zip bombs, and checks every reference.
@@ -1006,18 +1363,73 @@ function Test-Fwtool([string]$path) {
 }
 
 # Defender scans a folder (custom scan, Defender's own settings). Returns $true when it found nothing.
+# MpCmdRun exits 0 also when it found a threat and removed it ("... found 1 threats.", probed with
+# EICAR on 2026-11-20), so a scan is clean only with exit 0 and "found no threats".
 function Test-Defender([string]$folder) {
   $ErrorActionPreference = "Continue"
   $output = & $mpcmdrun -Scan -ScanType 3 -File $folder 2>&1 | ForEach-Object { "$_" }
   $code = $LASTEXITCODE
-  @{ clean = ($code -eq 0); code = $code; output = (($output | Where-Object { $_.Trim() }) -join " / ") }
+  $text = ($output | Where-Object { $_.Trim() }) -join " / "
+  $threats = 0
+  foreach ($m in [regex]::Matches($text, '(?i)found (\d+) threats?')) { $threats += [int]$m.Groups[1].Value }
+  if ($code -eq 2 -and -not $threats) { $threats = 1 }
+  @{ clean = ($code -eq 0 -and -not $threats -and $text -match '(?i)found no threats'); code = $code; threats = $threats; output = $text }
+}
+
+# Before anything is downloaded or screened (Roy, 2026-11-20): Defender's service, antivirus and
+# real-time protection on, and its signatures at most a day old. Only its status is read; old
+# signatures are updated (MpCmdRun -SignatureUpdate updates the definitions and changes no setting).
+# No Defender or security setting, exclusion or policy is ever changed here.
+function Assert-DefenderReady {
+  $s = Get-MpComputerStatus
+  $off = @(@("AMServiceEnabled", "AntivirusEnabled", "RealTimeProtectionEnabled") | Where-Object { -not $s.$_ })
+  if ($off.Count) { throw "Defender isn't ready ($($off -join ', ') off): nothing is downloaded or screened. Tell Roy; no setting is changed here." }
+  if (((Get-Date) - $s.AntivirusSignatureLastUpdated).TotalHours -gt 24) {
+    Write-Host "Defender: signatures from $($s.AntivirusSignatureLastUpdated), more than 24 h old: MpCmdRun -SignatureUpdate"
+    & $mpcmdrun -SignatureUpdate | Out-Null
+    $s = Get-MpComputerStatus
+    if (((Get-Date) - $s.AntivirusSignatureLastUpdated).TotalHours -gt 24) { throw "Defender's signatures are still from $($s.AntivirusSignatureLastUpdated) after an update: nothing is downloaded or screened." }
+  }
+  [ordered]@{ service = $s.AMServiceEnabled; antivirus = $s.AntivirusEnabled; realTime = $s.RealTimeProtectionEnabled
+    signatures = $s.AntivirusSignatureVersion; signaturesUpdated = $s.AntivirusSignatureLastUpdated.ToString("yyyy-MM-dd HH:mm"); engine = $s.AMEngineVersion }
+}
+
+# The standard EICAR antivirus test file, as base64 so that this script isn't one itself.
+$eicarBase64 = "WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNULUZJTEUhJEgrSCo="
+# Proves Defender scans the quarantine (an exclusion would make it skip the folder silently): the
+# EICAR file in a new, empty subfolder must be caught, by real-time protection (the write refused or
+# the file removed) or by the scan (exit 2). Whatever is left of it is deleted. Throws otherwise.
+function Assert-EicarCaught([string]$quarantine) {
+  $dir = Join-Path $quarantine "eicar-proof"
+  if (Test-Path -LiteralPath $dir) { Remove-Item -Recurse -Force -LiteralPath $dir }
+  New-Item -ItemType Directory $dir | Out-Null
+  $file = Join-Path $dir "eicar.com"
+  $how = $null
+  try {
+    try { [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String($eicarBase64)) }
+    catch { $how = "real-time protection refused to write it" }
+    if (-not $how) {
+      for ($k = 0; $k -lt 20 -and (Test-Path -LiteralPath $file); $k++) { Start-Sleep -Milliseconds 250 }
+      if (-not (Test-Path -LiteralPath $file)) { $how = "real-time protection removed it" }
+    }
+    if (-not $how) {
+      $scan = Test-Defender $file
+      if ($scan.threats) { $how = "the scan found it (exit $($scan.code): $($scan.output))" }
+      elseif (-not (Test-Path -LiteralPath $file)) { $how = "real-time protection removed it during the scan" }
+      else { throw "Defender didn't catch the EICAR test file in $dir (scan exit $($scan.code): $($scan.output)): nothing is downloaded or screened." }
+    }
+  } finally {
+    Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $dir) { throw "couldn't delete $dir after the EICAR proof" }
+  $how
 }
 
 # ---------------------------------------------------------------- Run
 
 # Screens one file by its format; fwtool check for the packages.
 function Test-File([string]$path, [string]$format) {
-  $t = switch ($format) { "xlsx" { Test-Xlsx $path } "csv" { Test-Csv $path } default { Test-Docx $path } }
+  $t = switch ($format) { "xlsx" { Test-Xlsx $path } "csv" { Test-Csv $path } "pptx" { Test-Pptx $path } default { Test-Docx $path } }
   $reasons = @($t.reasons)
   if (-not $reasons.Count -and $format -ne "csv") { $fw = Test-Fwtool $path; if ($fw) { $reasons = @($fw) } }
   @{ reasons = $reasons; facts = $t.facts }
@@ -1030,6 +1442,36 @@ if ($Screen) {
     if ($reasons.Count) { "REJECTED {0}: {1}" -f $p, ($reasons -join "; ") }
     else { "passed   {0}: {1}" -f $p, (ConvertTo-PrettyJson $t.facts).Replace("`n", " ") }
   }
+  return
+}
+
+# -DefenderCheck: Defender's status, the EICAR proof in each folder (an exclusion could cover any of
+# them), every file in them scanned on its own, then each folder as a whole. Nothing is deleted but
+# the EICAR file (and a folder this made for the proof). Exit 1 if anything isn't clean.
+if ($DefenderCheck) {
+  $status = Assert-DefenderReady
+  "Defender: service, antivirus and real-time protection on; signatures {0} from {1}; engine {2}" -f $status.signatures, $status.signaturesUpdated, $status.engine
+  $bad = 0
+  foreach ($dir in $DefenderCheck) {
+    $full = [IO.Path]::GetFullPath($dir)
+    $made = -not (Test-Path -LiteralPath $full)
+    if ($made) { New-Item -ItemType Directory -Force $full | Out-Null }
+    try { "EICAR in ${full}: caught, " + (Assert-EicarCaught $full) + " (deleted)" }
+    finally { if ($made) { Remove-Item -Recurse -Force -LiteralPath $full -ErrorAction SilentlyContinue } }
+    if ($made) { continue }
+    $n = 0; $here = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath $full -File -Recurse | Sort-Object FullName)) {
+      $n++
+      $one = Test-Defender $f.FullName
+      if (-not $one.clean -or -not (Test-Path -LiteralPath $f.FullName)) { $here++; Write-Host "NOT CLEAN $($f.FullName): exit $($one.code), $($one.output)" -ForegroundColor Red }
+    }
+    $all = Test-Defender $full
+    if (-not $all.clean) { $here++ }
+    $bad += $here
+    "{0}: {1} files scanned one by one, {2} not clean; the folder as a whole: exit {3}, {4}" -f $full, $n, $here, $all.code, $all.output
+  }
+  if ($bad) { exit 1 }
+  "Defender check: all clean."
   return
 }
 
@@ -1079,11 +1521,32 @@ if ($Candidates) {
   $work = @($files | ForEach-Object { $format = Get-Format $_; [pscustomobject]@{ id = $_.id; entry = $_; format = $format; ext = (Get-Extension $_ $format) } })
 }
 if ($Only) { $work = @($work | Where-Object { $Only -contains $_.id }) }
+$Formats = @($Formats | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+if ($Formats.Count) { $work = @($work | Where-Object { $Formats -contains $_.format }) }
 if ($work.Count -eq 0) { "Nothing to do."; return }
 
-# 1. Into quarantine: one new, empty folder per file.
+# 0. Defender on and up to date, and proven to scan the quarantine (the EICAR test file), before
+# anything is downloaded or copied there.
 if (Test-Path $quarantine) { Remove-Item -Recurse -Force $quarantine }
 New-Item -ItemType Directory -Force $quarantine | Out-Null
+$defenderStatus = Assert-DefenderReady
+"Defender: service, antivirus and real-time protection on; signatures {0} from {1}; engine {2}" -f $defenderStatus.signatures, $defenderStatus.signaturesUpdated, $defenderStatus.engine
+$runStart = Get-Date
+$eicar = Assert-EicarCaught $quarantine
+"Defender: the EICAR test file in the quarantine was caught: $eicar (deleted)"
+$detections = @()
+$blockedHosts = @{}
+# A file Defender doesn't pass: deleted at once and logged; a detection (exit 2, or the file removed)
+# also stops downloads from its hosts.
+function Add-Detection($res, $scan, [string]$where) {
+  $script:detections += [pscustomobject][ordered]@{ id = $res.id; url = $res.url; where = $where; exitCode = $scan.code; output = $scan.output }
+  if ($scan.threats -or $scan.removed) {
+    foreach ($u in @($res.url, $res.finalUrl) | Where-Object { $_ }) { $script:blockedHosts[([Uri]$u).Host.ToLowerInvariant()] = $true }
+    Write-Host ("DEFENDER DETECTION in {0} ({1}, {2}): {3}. No more downloads from {4}." -f $res.id, $where, $res.url, $scan.output, (@($script:blockedHosts.Keys) -join ", ")) -ForegroundColor Red
+  }
+}
+
+# 1. Into quarantine: one new, empty folder per file, and Defender scans it on its own at once.
 $results = @()
 $i = 0
 foreach ($w in $work) {
@@ -1100,45 +1563,60 @@ foreach ($w in $work) {
       if (-not (Test-Path -LiteralPath $existing)) { throw "missing from the corpus" }
       Copy-Item -LiteralPath $existing $q
     } else {
+      $h = ([Uri]$e.url).Host.ToLowerInvariant()
+      if ($blockedHosts[$h]) { throw "not downloaded: Defender found a threat in another file from $h" }
       $res.finalUrl = Get-Download $e.url $q $w.format
       Start-Sleep -Milliseconds 300
     }
     $res.sha256 = (Get-FileHash -LiteralPath $q -Algorithm SHA256).Hash.ToLowerInvariant()
     $res.size = (Get-Item -LiteralPath $q).Length
     if ($w.entry -and $w.entry.sha256 -and $w.entry.sha256 -ne $res.sha256) { $res.reasons = @("hash differs from the manifest (the file changed)") }
+    $one = Test-Defender $q
+    $one.removed = -not (Test-Path -LiteralPath $q)
+    if (-not $one.clean -or $one.removed) {
+      $res.reasons = @($res.reasons) + ("Defender (exit {0}{1}): {2}" -f $one.code, $(if ($one.removed) { ", removed" } else { "" }), $one.output)
+      Add-Detection ([pscustomobject]$res) $one "quarantine"
+    }
   } catch {
     $x = $_.Exception
     while ($x.InnerException) { $x = $x.InnerException }
     $res.reasons = @("download: $($x.Message)")
   }
+  # Rejected files are deleted at once.
+  if ($res.reasons.Count) { Remove-Item -Recurse -Force -LiteralPath $folder -ErrorAction SilentlyContinue }
   "{0,4}/{1} {2,-60} {3}" -f $i, $work.Count, $w.id, $(if ($res.reasons.Count) { $res.reasons[0] } else { "$($res.size) bytes" })
   $results += [pscustomobject]$res
 }
-
-# 2. Defender scans the whole quarantine; if it finds anything, each folder again to see which.
-"Defender: scanning $quarantine"
-$scan = Test-Defender $quarantine
-$defender = [ordered]@{ folder = $quarantine; exitCode = $scan.code; clean = $scan.clean; output = $scan.output }
-if (-not $scan.clean) {
-  foreach ($res in $results) {
-    if (-not (Test-Path -LiteralPath $res.quarantine)) { if (-not $res.reasons.Count) { $res.reasons = @("removed by Defender") }; continue }
-    $one = Test-Defender (Split-Path -Parent $res.quarantine)
-    if (-not $one.clean) { $res.reasons = @($res.reasons) + "Defender: $($one.output)" }
+# Defender's own record: a file real-time protection took during the download (before the scan saw
+# it) counts as a detection too. The EICAR proof's folder isn't a file of ours.
+foreach ($d in @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { $_.InitialDetectionTime -ge $runStart })) {
+  $name = (@(Get-MpThreat -ErrorAction SilentlyContinue | Where-Object { $_.ThreatID -eq $d.ThreatID }) | Select-Object -First 1).ThreatName
+  foreach ($r in @($d.Resources)) {
+    if ([string]$r -notlike "*$quarantine*" -or [string]$r -like "*eicar-proof*") { continue }
+    foreach ($res in $results) {
+      if ([string]$r -notlike "*$(Split-Path -Leaf $res.quarantine)*") { continue }
+      if (-not ($res.reasons -match '^Defender')) { $res.reasons = @($res.reasons) + "Defender detection: $name" }
+      Add-Detection $res @{ code = 2; threats = 1; removed = $true; output = "$name ($r)" } "quarantine (real-time)"
+      Remove-Item -Recurse -Force -LiteralPath (Split-Path -Parent $res.quarantine) -ErrorAction SilentlyContinue
+    }
   }
 }
-"Defender: exit code $($scan.code). $($scan.output)"
+"Defender: each file scanned on its own in the quarantine; {0} not passed" -f @($detections).Count
 
-# 3-4. The content screen, then fwtool check.
+# 2-4. The content screen, then fwtool check; a rejected file is deleted at once.
 $seen = @{}
 if ($Candidates) { foreach ($f in $files) { $seen[$f.sha256] = $f.id } }  # a new URL for a file we have
 foreach ($res in $results) {
   if ($res.reasons.Count -or -not (Test-Path -LiteralPath $res.quarantine)) { continue }
-  if ($seen[$res.sha256]) { $res.reasons = @("same file as $($seen[$res.sha256])"); continue }
-  $seen[$res.sha256] = $res.id
-  $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
-  $t = Test-File $res.quarantine $w.format
-  $res.facts = $t.facts
-  $res.reasons = @($t.reasons)
+  if ($seen[$res.sha256]) { $res.reasons = @("same file as $($seen[$res.sha256])") }
+  else {
+    $seen[$res.sha256] = $res.id
+    $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
+    $t = Test-File $res.quarantine $w.format
+    $res.facts = $t.facts
+    $res.reasons = @($t.reasons)
+  }
+  if ($res.reasons.Count) { Remove-Item -Recurse -Force -LiteralPath (Split-Path -Parent $res.quarantine) -ErrorAction SilentlyContinue }
 }
 
 # 5. Passing files move into the corpus; the rest are deleted. New candidates (and, with -Rescreen,
@@ -1152,6 +1630,14 @@ function Set-Facts($entry, $facts, [string]$format) {
         sheets = $facts.sheets; cells = $facts.cells; formulas = $facts.formulas
         tags = $facts.tags
         functions = @($facts.functions.Keys)
+      }
+    }
+    "pptx" {
+      [ordered]@{
+        modified = $facts.modified
+        producer = (@($facts.producer, $facts.appVersion) | Where-Object { $_ }) -join " "
+        slides = $facts.slides; hiddenSlides = $facts.hiddenSlides; slideSize = $facts.slideSize
+        tags = $facts.tags
       }
     }
     "csv" {
@@ -1175,6 +1661,9 @@ foreach ($f in $files) { $byId[$f.id] = $f }
 foreach ($res in $results) {
   $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
   $e = if ($w.entry) { $w.entry } else { $w.candidate }
+  # A deck's extension follows its main part (.pptx, .ppsx or .potx), not the URL or the candidate:
+  # PowerPoint refuses a presentation named .potx ("its file extension has changed").
+  if ($w.format -eq "pptx" -and -not $Rescreen -and $res.facts -and $res.facts.kind) { $w.ext = $res.facts.kind }
   $dest = Join-Path $Out "$($w.format)\$($e.category)\$($res.id)$($w.ext)"
   if ($res.reasons.Count) {
     "REJECTED {0}: {1}" -f $res.id, ($res.reasons -join "; ")
@@ -1187,6 +1676,20 @@ foreach ($res in $results) {
   }
   New-Item -ItemType Directory -Force (Split-Path -Parent $dest) | Out-Null
   if (-not $Rescreen) { Move-Item -LiteralPath $res.quarantine $dest -Force }
+  # Defender again, on the screened file where it now lies in the corpus.
+  $two = Test-Defender $dest
+  $two.removed = -not (Test-Path -LiteralPath $dest)
+  if (-not $two.clean -or $two.removed) {
+    $res.reasons = @("Defender in the corpus folder (exit {0}{1}): {2}" -f $two.code, $(if ($two.removed) { ", removed" } else { "" }), $two.output)
+    Add-Detection $res $two "corpus"
+    Remove-Item -LiteralPath $dest -ErrorAction SilentlyContinue
+    "REJECTED {0}: {1}" -f $res.id, ($res.reasons -join "; ")
+    if ($Candidates -or $Rescreen) {
+      $rejected += [pscustomobject][ordered]@{ url = $e.url; publisher = $e.publisher; category = $e.category; language = $e.language; reasons = @($res.reasons); date = $today }
+      $byId.Remove($res.id)
+    }
+    continue
+  }
   if ($Candidates) {
     $c = $e
     $e = [pscustomobject][ordered]@{
@@ -1214,8 +1717,9 @@ Remove-Item -Recurse -Force $quarantine
 Write-PrettyJson ([ordered]@{
   date = $today
   mode = $(if ($Candidates) { "candidates" } elseif ($Rescreen) { "rescreen" } else { "fetch" })
-  defender = $defender
-  passed = @($results | Where-Object { -not $_.reasons.Count } | ForEach-Object { [ordered]@{ id = $_.id; sha256 = $_.sha256; facts = $_.facts } })
+  defender = [ordered]@{ status = $defenderStatus; eicarProof = $eicar; scans = "each file on its own in the quarantine, then in the corpus folder"
+    detections = @($detections); blockedHosts = @($blockedHosts.Keys) }
+  passed =@($results | Where-Object { -not $_.reasons.Count } | ForEach-Object { [ordered]@{ id = $_.id; sha256 = $_.sha256; facts = $_.facts } })
   rejected = @($results | Where-Object { $_.reasons.Count } | ForEach-Object { [ordered]@{ id = $_.id; url = $_.url; reasons = $_.reasons } })
 }) (Join-Path $Out "screen.json")
 if ($Candidates -or $Rescreen) {

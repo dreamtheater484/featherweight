@@ -112,6 +112,12 @@ constexpr const char* kUsage =
     "  fwtool pdf-compare [--out DIR] [--json FILE] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
     "      by SSIM; a page passes at >= 0.95. --out writes failing pages side by side with the difference.\n"
+    "  fwtool pdf-compare --pngs DIR [--out DIR] [--json FILE] <reference.pdf>\n"
+    "      The same against the pages the app drew, DIR\\page-1.png on (P1's slides: the script op\n"
+    "      pagepngs:DIR|100 draws every slide, hidden ones too, as the screen does).\n"
+    "  fwtool slides --out DIR [--png] [--scale N] <deck or folder>...\n"
+    "      Decks (P1): draws every slide with the slide renderer into DIR/<deck>.pdf (for pdf-compare\n"
+    "      against PowerPoint's PDF), and with --png each slide as a PNG; times the first slide.\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -313,6 +319,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
     else if (arg == L"--pictures") options.pictures = true;
+    else if (arg == L"--png") options.png = true;
     else if (arg == L"--scale" && i + 1 < argc) options.scale = std::clamp(static_cast<float>(_wtof(argv[++i])), 0.1f, 16.f);
     else if (arg == L"--dumps" && i + 1 < argc) options.dumps = argv[++i];
     else if (arg == L"--json" && i + 1 < argc) options.jsonOut = argv[++i];
@@ -384,6 +391,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
+  if (command == L"slides") return fwtool::RunSlides(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

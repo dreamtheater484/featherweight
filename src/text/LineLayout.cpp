@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <limits>
 
 #include "text/Analysis.h"
@@ -465,10 +466,29 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   const Face* base = fonts.FaceFor(*sf.family, sf.bold, sf.italic);
   if (!base) base = fonts.Get(fonts.Resolve(L""), DWRITE_FONT_WEIGHT_NORMAL, false);
   if (!base) return;
+  std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
+  detail::TextSource source(shape, rtl, locales, nullptr);
+  if (connected && fonts.PowerPointFallback()) {
+    // A connected script's run (Arabic) whose font hasn't its letters: PowerPoint draws all of it,
+    // its spaces too, in the font that has them (morocco: Tahoma's 10-point spaces at 32, not
+    // Franklin Gothic's 8). So too when its font isn't installed: no substitute (Calibri, which has
+    // Arabic now), but the fallback's font (morocco's Andalus: Tahoma).
+    const bool missing = !sf.family->empty() && !fonts.Installed(*sf.family);
+    uint32_t first = start;
+    while (first < end && std::iswspace(shape[first])) ++first;
+    UINT32 mapped = 0;
+    ComPtr<IDWriteFont> font;
+    FLOAT scale = 1;
+    if (first < end &&
+        SUCCEEDED(fonts.Fallback()->MapCharacters(&source, first, 1, fonts.Collection(), missing ? nullptr : base->Family().c_str(),
+                                                  base->Weight(), base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) &&
+        font)
+      if (const Face* other = fonts.Get(font.Get()); other && _wcsicmp(other->Family().c_str(), base->Family().c_str()) != 0) base = other;
+  }
 
   float size = sf.size * (smallCaps[start] ? kSmallCapsScale : 1.0f);
   float rise = style.baselineShift;
-  FontMetrics bm = base->Metrics(size);
+  FontMetrics bm = base->Metrics(size, style.directWriteMetrics);
   if (style.verticalAlign == VerticalAlign::Superscript) {
     rise += bm.superscriptRaise;
     size = bm.superscriptSize;
@@ -478,8 +498,6 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   }
 
   // Font fallback, for characters the font doesn't have.
-  std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
-  detail::TextSource source(shape, rtl, locales, nullptr);
   // The base face as DirectWrite names it: "Calibri" at weight 300 for Word's "Calibri Light".
   for (uint32_t pos = start; pos < end;) {
     UINT32 mapped = 0;
@@ -505,9 +523,10 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.emSize = size * (scale > 0 ? scale : 1);
     seg.rise = rise;
     seg.level = level[pos];
-    FontMetrics m = face->Metrics(seg.emSize);
-    seg.ascent = m.ascent + rise;
-    seg.descent = m.descent - rise;
+    FontMetrics m = face->Metrics(seg.emSize, style.directWriteMetrics);
+    const float lineRise = style.shiftKeepsLine ? rise - style.baselineShift : rise;
+    seg.ascent = m.ascent + lineRise;
+    seg.descent = m.descent - lineRise;
     seg.lineGap = m.lineGap;
     if (style.verticalAlign != VerticalAlign::Baseline) {
       // Superscript and subscript text sizes its line as the run's text would on the baseline, at
@@ -535,14 +554,14 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
   // Connected scripts (Arabic and others) keep the font's defaults, which they need.
   DWRITE_FONT_FEATURE list[4];
   UINT32 count = 0;
+  const bool kern = !connected && style.kerningMinSize > 0 && seg.emSize >= style.kerningMinSize;
   if (!connected) {
     if (!style.ligatures) {
       list[count++] = {DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, 0};
       list[count++] = {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES, 0};
     }
     list[count++] = {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES, 0};
-    bool kern = style.kerningMinSize > 0 && seg.emSize >= style.kerningMinSize;
-    list[count++] = {DWRITE_FONT_FEATURE_TAG_KERNING, kern ? 1u : 0u};
+    list[count++] = {DWRITE_FONT_FEATURE_TAG_KERNING, kern && !style.kernTable ? 1u : 0u};
   }
   DWRITE_TYPOGRAPHIC_FEATURES features{list, count};
   const DWRITE_TYPOGRAPHIC_FEATURES* featureList[1] = {&features};
@@ -569,9 +588,29 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     seg.glyphs.resize(actual);
     seg.advances.resize(actual);
     seg.offsets.resize(actual);
-    hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
-                                              glyphProps.data(), actual, face, seg.emSize, FALSE, rtlRun, &script,
-                                              locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
+    // Simulated bold placed by the regular face, when the style keeps its advances: same glyphs.
+    IDWriteFontFace* placed = style.simulatedBoldKeepsAdvances && (face->GetSimulations() & DWRITE_FONT_SIMULATIONS_BOLD)
+                                  ? seg.face->Plain()
+                                  : face;
+    if (style.gdiPixelsPerPoint > 0)
+      hr = fonts.Analyzer()->GetGdiCompatibleGlyphPlacements(
+          str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(), glyphProps.data(), actual, placed, seg.emSize,
+          style.gdiPixelsPerPoint, nullptr, FALSE, FALSE, rtlRun, &script, locale, fl, flen, ranges, seg.advances.data(),
+          seg.offsets.data());
+    else
+      hr = fonts.Analyzer()->GetGlyphPlacements(str, seg.clusters.data(), textProps.data(), len, seg.glyphs.data(),
+                                                glyphProps.data(), actual, placed, seg.emSize, FALSE, rtlRun, &script,
+                                                locale, fl, flen, ranges, seg.advances.data(), seg.offsets.data());
+    // The legacy 'kern' table's pairs: each glyph's advance takes its pair with the next one's.
+    ComPtr<IDWriteFontFace1> face1;
+    if (SUCCEEDED(hr) && kern && style.kernTable && !rtlRun && actual > 1 && SUCCEEDED(placed->QueryInterface(IID_PPV_ARGS(&face1))) &&
+        face1->HasKerningPairs()) {
+      std::vector<INT32> adjust(actual);
+      DWRITE_FONT_METRICS fm{};
+      placed->GetMetrics(&fm);
+      if (SUCCEEDED(face1->GetKerningPairAdjustments(actual, seg.glyphs.data(), adjust.data())) && fm.designUnitsPerEm)
+        for (UINT32 i = 0; i < actual; ++i) seg.advances[i] += adjust[i] * seg.emSize / fm.designUnitsPerEm;
+    }
   }
   if (FAILED(hr)) {
     // One glyph per character, unshaped: better than nothing.
@@ -654,7 +693,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
   rf.size = s.size;
   rf.rise = s.baselineShift;
   if (rf.face) {
-    FontMetrics m = rf.face->Metrics(s.size);
+    FontMetrics m = rf.face->Metrics(s.size, s.directWriteMetrics);
     if (s.verticalAlign == VerticalAlign::Superscript) {
       rf.rise += m.superscriptRaise;
       rf.size = m.superscriptSize;
@@ -662,7 +701,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
       rf.rise -= m.subscriptLower;
       rf.size = m.subscriptSize;
     }
-    rf.metrics = rf.face->Metrics(rf.size);
+    rf.metrics = rf.face->Metrics(rf.size, s.directWriteMetrics);
   }
   return rf;
 }
@@ -707,8 +746,9 @@ TabInfo LineBreaker::Impl::NextTab(float x, bool first) const {
     }
   }
   // A hanging indent is a tab stop on the first line, for list numbers.
-  if (first && f.firstLineIndent < 0 && f.startIndent > x + kEpsilon && (!found || f.startIndent < best.stop)) {
-    best = {f.startIndent, TabAlign::Start, TabLeader::None, false};
+  const float hang = f.hangingStop >= 0 ? f.hangingStop : f.startIndent;
+  if (first && (f.firstLineIndent < 0 || f.hangingStop >= 0) && hang > x + kEpsilon && (!found || hang < best.stop)) {
+    best = {hang, TabAlign::Start, TabLeader::None, false};
     found = true;
   }
   if (found) return best;
@@ -900,7 +940,7 @@ void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
   const Face* face = fonts.FaceFor(mark->family, mark->bold, mark->italic);
   if (!face) return;
-  FontMetrics m = face->Metrics(mark->size);
+  FontMetrics m = face->Metrics(mark->size, mark->directWriteMetrics);
   CombineMetrics(line, m.ascent, m.descent, m.lineGap);
 }
 
@@ -923,7 +963,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
   const uint32_t withSpaces = t;
   while (t > a && Hangs(kind[t - 1])) --t;
   // Word counts the spaces before a paragraph mark or line break when centering or right-aligning.
-  const bool countTrailing = (fit.ending == LineEnd::ParagraphEnd || fit.ending == LineEnd::LineBreak) &&
+  const bool countTrailing = f.alignTrailingSpaces && (fit.ending == LineEnd::ParagraphEnd || fit.ending == LineEnd::LineBreak) &&
                              (f.alignment == Alignment::Center || f.alignment == Alignment::End);
   const uint32_t alignEnd = countTrailing ? withSpaces : t;
 

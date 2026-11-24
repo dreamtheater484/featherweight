@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,9 @@ struct PictureFill : PixelHolder, std::enable_shared_from_this<PictureFill> {
   uint8_t tileAlign = 0;               // 0-8: tl, t, tr, l, ctr, r, bl, b, br
   // Recoloring: a:blip's effects and VML's picture settings.
   float alpha = 1;
+  // On a slide: PowerPoint's PDF export bakes a picture it draws see-through into a bitmap at most
+  // Painter::BakedPictureLimit() pixels across.
+  bool baked = false;
   bool grayscale = false;
   float biLevel = -1;                  // threshold 0-1; negative: off
   bool duotone = false;
@@ -60,6 +64,7 @@ struct Fill {
   Color color;                       // Solid; Pattern: the foreground
   Color background;                  // Pattern
   uint8_t pattern = 0;               // Pattern: index into the presets (PatternBitmap)
+  bool pageAnchored = false;         // Pattern: cells on the page's grid, not from the shape (PowerPoint)
   std::vector<GradientStop> stops;   // Gradient, sorted
   GradientShape shape = GradientShape::Linear;
   float angle = 0;                   // Linear: degrees, clockwise from left-to-right
@@ -108,6 +113,11 @@ struct TextPath {
 struct TextBody {
   pugi::xml_node content, properties;
   Rect insets{7.2f, 3.6f, 7.2f, 3.6f};
+  // SmartArt's dsp:txXfrm: where the text goes, in the shape's parent's coordinates, and its
+  // rotation, when it isn't the shape's own text rectangle.
+  bool hasTextXfrm = false;
+  Rect textXfrm;
+  float textXfrmRotation = 0;
   TextBox box;  // the flags; rect and transform are filled in later
 };
 
@@ -127,6 +137,7 @@ struct Art {
 struct Shape {
   enum class Kind : uint8_t { Shape, Picture, Group, Placeholder };
   Kind kind = Kind::Shape;
+  uint32_t id = 0;  // cNvPr id; 0 when it has none (VML)
   std::string name, description;
   Rect bounds;  // in the parent's coordinates, points
   float rotation = 0;  // degrees clockwise
@@ -139,6 +150,9 @@ struct Shape {
   OuterShadow shadow;
   std::shared_ptr<PictureFill> picture;  // Picture: what fills the geometry
   Rect childBounds;                       // Group: chOff and chExt, the children's coordinates
+  // SmartArt's drawing: its coordinates are the graphic frame's size as drawn (Office saves it at
+  // the size it shows, a frame in a scaled group's scaled), so its shapes map one to one.
+  bool childrenAsDrawn = false;
   std::vector<Shape> children;
   std::shared_ptr<TextBody> text;
   std::shared_ptr<TextPath> textPath;
@@ -148,10 +162,16 @@ struct Shape {
 // The shape's own coordinates ((0, 0) to its size) → its parent's: flips, then rotation, about
 // its center.
 Matrix ShapeTransform(const Shape& s);
-// A group child's bounds in the group's own coordinates.
+// A group child's bounds in the group's own coordinates: (0, 0) to the group's size as placed,
+// which for a group in a scaled group isn't its own xfrm's size.
 Rect ChildToGroup(const Shape& group, const Rect& child);
+Rect ChildToGroup(const Shape& group, const Rect& child, Size placed);
 // Draws a shape in its parent's coordinates.
 void DrawShape(Painter& p, const Shape& s);
+// The same through hooks; `textIndex` counts the text boxes, in CollectTextBoxes' order.
+void DrawShape(Painter& p, const Shape& s, DrawHooks& hooks, size_t& textIndex);
+// Each visible shape's id, size and transform to the drawing (Drawing::Parts).
+void CollectParts(const Shape& s, const Matrix& toDrawing, std::vector<Drawing::Part>& out);
 // The flattened outlines of every visible shape (`toDrawing`: parent coordinates → the drawing's).
 void CollectOutlines(const Shape& s, const Matrix& toDrawing, std::vector<Path::Polygon>& out);
 // The text boxes, in drawing order.
@@ -165,6 +185,13 @@ std::shared_ptr<const Bitmap> PatternBitmap(uint8_t pattern, Color foreground, C
 Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
 // The width of `text`'s glyphs' advances, as TextOutline lays them out; far cheaper than its outline.
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
+// `font`'s ascent as DirectWrite gives it (usWinAscent mostly), per em; 0 when there's no such face.
+float TextAscent(const std::wstring& font, bool bold, bool italic);
+// Whether DirectWrite draws `sfnt`'s glyphs: some embedded CFF fonts load but give no outlines
+// (cpb deck: RijksoverheidSans), though a PDF viewer draws them. True when it can't tell.
+bool OutlinesInDirectWrite(std::span<const uint8_t> sfnt);
+// A run of shaped glyphs' outlines, its origin on the baseline at (0, 0): outlined text.
+Path GlyphRunOutline(const GlyphRun& run);
 
 // ---- Readers (DrawingML.cpp, Vml.cpp) ----
 

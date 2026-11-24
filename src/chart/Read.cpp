@@ -108,9 +108,8 @@ std::wstring TextOf(pugi::xml_node tx, DataSource* source = nullptr) {
   return Wide(out);
 }
 
-// The size (points), color and weight of text from a c:txPr or a:rich's first paragraph properties.
-void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size, std::optional<draw::Color>* color,
-              bool* bold = nullptr) {
+// A c:txPr's or a:rich's first paragraph's text properties: its a:defRPr, else its first run's.
+pugi::xml_node RunProps(pugi::xml_node body) {
   pugi::xml_node rPr;
   ForEachChild(body, [&](pugi::xml_node p) {
     if (LocalNameOf(p) != "p") return true;
@@ -118,12 +117,42 @@ void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size
     if (!rPr) rPr = A(A(p, "r"), "rPr");
     return false;
   });
+  return rPr;
+}
+
+// The size (points), color and weight of text from a c:txPr or a:rich's first paragraph properties.
+void TextLook(pugi::xml_node body, const draw::ColorContext& colors, float* size, std::optional<draw::Color>* color,
+              bool* bold = nullptr) {
+  const pugi::xml_node rPr = RunProps(body);
   if (!rPr) return;
   if (size && rPr.attribute("sz")) *size = static_cast<float>(std::clamp(Number(rPr, "sz", 900) / 100, 1.0, 200.0));
   if (bold && rPr.attribute("b")) *bold = Bool(rPr, "b", true);
   if (color)
     if (pugi::xml_node f = A(rPr, "solidFill"))
       if (auto c = draw::ReadColor(f, colors)) *color = c;
+}
+
+// What a label's text doesn't state yet from `body` (a c:txPr or a:rich): size, color, weight.
+void LabelLook(pugi::xml_node body, const draw::ColorContext& colors, float& size, std::optional<draw::Color>& color,
+               std::optional<bool>& bold) {
+  if (size < 0) TextLook(body, colors, &size, nullptr);
+  if (!color) TextLook(body, colors, nullptr, &color);
+  if (!bold)
+    if (const pugi::xml_node r = RunProps(body); r.attribute("b")) bold = Bool(r, "b", true);
+}
+
+// A preset dash (a:prstDash) as dashes and gaps in multiples of the line's width; empty: solid.
+std::vector<float> PresetDashes(std::string_view v) {
+  if (v == "dot" || v == "sysDot") return {1, 1};
+  if (v == "dash") return {4, 3};
+  if (v == "lgDash") return {8, 3};
+  if (v == "dashDot") return {4, 3, 1, 3};
+  if (v == "lgDashDot") return {8, 3, 1, 3};
+  if (v == "lgDashDotDot") return {8, 3, 1, 3, 1, 3};
+  if (v == "sysDash") return {3, 1};
+  if (v == "sysDashDot") return {3, 1, 1, 1};
+  if (v == "sysDashDotDot") return {3, 1, 1, 1, 1, 1};
+  return {};
 }
 
 Look LookOf(pugi::xml_node spPr, const draw::ColorContext& colors) {
@@ -137,6 +166,14 @@ Look LookOf(pugi::xml_node spPr, const draw::ColorContext& colors) {
     if (A(ln, "noFill")) l.noLine = true;
     else if (pugi::xml_node f = A(ln, "solidFill")) l.line = draw::ReadColor(f, colors);
     if (ln.attribute("w")) l.lineWidth = std::clamp(EmuToPt(Number(ln, "w", 9525)), 0.0f, 50.0f);
+    if (pugi::xml_node d = A(ln, "prstDash")) l.dashes = PresetDashes(Val(d));
+    else if (pugi::xml_node c = A(ln, "custDash"))
+      ForEachChild(c, [&](pugi::xml_node ds) {
+        if (LocalNameOf(ds) != "ds") return true;
+        l.dashes.push_back(static_cast<float>(std::clamp(Number(ds, "d", 100000) / 100000, 0.01, 1000.0)));
+        l.dashes.push_back(static_cast<float>(std::clamp(Number(ds, "sp", 100000) / 100000, 0.01, 1000.0)));
+        return l.dashes.size() < 64;
+      });
   }
   return l;
 }
@@ -146,6 +183,12 @@ struct LabelParts {
   std::optional<bool> val, pct, cat, ser, key;
   std::optional<std::wstring> separator;
 };
+
+// A data label's own number format (c:numFmt with sourceLinked off); empty when it follows the data.
+std::string LabelFormat(pugi::xml_node dLbls) {
+  pugi::xml_node f = C(dLbls, "numFmt");
+  return f && !Bool(f, "sourceLinked", false) ? f.attribute("formatCode").value() : "";
+}
 
 LabelParts LabelsOf(pugi::xml_node dLbls) {
   LabelParts l;
@@ -173,11 +216,15 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   ForEachChild(ser, [&](pugi::xml_node dPt) {
     if (LocalNameOf(dPt) == "dPt" && NamespaceOf(dPt) == kChart && s.points.size() < kMaxPoints) {
       const double idx = Number(C(dPt, "idx"), "val", -1);
-      if (idx >= 0 && idx < double(kMaxPoints)) s.points.push_back({static_cast<uint32_t>(idx), LookOf(C(dPt, "spPr"), colors)});
+      if (idx >= 0 && idx < double(kMaxPoints)) {
+        s.points.push_back({static_cast<uint32_t>(idx), LookOf(C(dPt, "spPr"), colors)});
+        if (pugi::xml_node e = C(dPt, "explosion"))
+          s.explosions.push_back({static_cast<uint32_t>(idx), std::clamp(Number(e, "val", 0), 0.0, 400.0)});
+      }
     }
     return true;
   });
-  const bool scatter = type == Type::Scatter;
+  const bool scatter = type == Type::Scatter || type == Type::Bubble;
   pugi::xml_node cat = C(ser, scatter ? "xVal" : "cat");
   pugi::xml_node catRef = C(cat, "strRef");
   if (!catRef) catRef = C(cat, "numRef");
@@ -209,17 +256,83 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   const size_t n = std::min(s.values.size(), budget);
   s.values.resize(n);
   if (s.xs.size() > n) s.xs.resize(n);
+  if (type == Type::Bubble) s.sizes = Numbers(C(ser, "bubbleSize"), source), s.sizes.resize(n, kNaN);
   budget -= n;
   if (pugi::xml_node m = C(ser, "marker")) {
     s.symbol = Val(C(m, "symbol"));
     if (s.symbol.size() > 16) s.symbol.clear();
     if (pugi::xml_node c = C(m, "symbol")) s.marker = s.symbol != "none";
-    s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 5), 2.0, 72.0));
+    s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 7), 2.0, 72.0));
+    s.markerLook = LookOf(C(m, "spPr"), colors);
   }
   s.smooth = (type == Type::Line || scatter) && On(ser, "smooth", true);
   const LabelParts l = LabelsOf(C(ser, "dLbls"));
   s.labels = l.val, s.percent = l.pct, s.categoryLabels = l.cat, s.seriesNames = l.ser, s.keys = l.key;
   s.separator = l.separator;
+  s.labelFormat = LabelFormat(C(ser, "dLbls"));
+  s.labelPos = Val(C(C(ser, "dLbls"), "dLblPos"));
+  LabelLook(C(C(ser, "dLbls"), "txPr"), colors, s.labelSize, s.labelColor, s.labelBold);
+  ForEachChild(C(ser, "dLbls"), [&](pugi::xml_node d) {
+    if (LocalNameOf(d) != "dLbl" || s.pointLabels.size() >= 256) return true;
+    Series::PointLabel pl;
+    pl.index = static_cast<uint32_t>(std::clamp(Number(C(d, "idx"), "val", 0.0), 0.0, 1e6));
+    pl.deleted = On(d, "delete", false);
+    const LabelParts own = LabelsOf(d);
+    pl.value = own.val, pl.seriesName = own.ser, pl.category = own.cat, pl.percent = own.pct;
+    pl.separator = own.separator;
+    if (pugi::xml_node m = C(C(d, "layout"), "manualLayout")) {
+      pl.dx = static_cast<float>(std::clamp(Number(C(m, "x"), "val", 0.0), -2.0, 2.0));
+      pl.dy = static_cast<float>(std::clamp(Number(C(m, "y"), "val", 0.0), -2.0, 2.0));
+    }
+    const Look box = LookOf(C(d, "spPr"), colors);
+    if (!box.noFill) pl.fill = box.fill;
+    pl.format = LabelFormat(d);
+    if (pl.format.empty()) pl.format = C(CacheOf(C(ser, "val"), "numRef", "numCache", "numLit"), "formatCode").text().get();
+    // Office 2013's own box size (c15:layout in the label's extensions).
+    for (pugi::xml_node e = C(C(d, "extLst"), "ext"); e; e = e.next_sibling())
+      for (pugi::xml_node k = e.first_child(); k; k = k.next_sibling())
+        if (LocalNameOf(k) == "layout")
+          if (pugi::xml_node m = C(k, "manualLayout")) {
+            pl.w = static_cast<float>(std::clamp(Number(C(m, "w"), "val", 0.0), 0.0, 1.0));
+            pl.h = static_cast<float>(std::clamp(Number(C(m, "h"), "val", 0.0), 0.0, 1.0));
+          }
+    // Its text's insets: its own a:bodyPr's, else its series' labels'.
+    const auto insets = [&](pugi::xml_node body) {
+      static const char* const kNames[] = {"lIns", "tIns", "rIns", "bIns"};
+      for (int k = 0; k < 4; ++k)
+        if (pl.insets[k] < 0 && body.attribute(kNames[k])) pl.insets[k] = std::clamp(EmuToPt(Number(body, kNames[k], 0)), 0.0f, 100.0f);
+    };
+    insets(A(C(C(d, "tx"), "rich"), "bodyPr"));
+    insets(A(C(d, "txPr"), "bodyPr"));
+    insets(A(C(C(ser, "dLbls"), "txPr"), "bodyPr"));
+    pl.pos = Val(C(d, "dLblPos"));
+    if (pl.pos.size() > 8) pl.pos.clear();
+    if (pugi::xml_node rich = C(C(d, "tx"), "rich")) {
+      LabelLook(rich, colors, pl.size, pl.color, pl.bold);
+      std::wstring text;
+      ForEachChild(rich, [&](pugi::xml_node p) {
+        if (LocalNameOf(p) != "p") return true;
+        std::wstring line;
+        ForEachChild(p, [&](pugi::xml_node r) {
+          const std::string_view field = LocalNameOf(r) == "fld" ? r.attribute("type").value() : "";
+          if (field == "SERIESNAME") line += s.name;
+          else if (field == "VALUE") line += kValueField;
+          else if (field == "CATEGORYNAME") line += kCategoryField;
+          else if (field == "PERCENTAGE") line += kPercentField;
+          else if (LocalNameOf(r) == "r" || LocalNameOf(r) == "fld") line += Wide(A(r, "t").text().get());
+          return line.size() < 1000;
+        });
+        text += (text.empty() ? L"" : L"\n") + line;
+        return text.size() < 1000;
+      });
+      pl.text = text;
+    }
+    // Then its own c:txPr's; what neither states, its series' labels' (where it's drawn).
+    LabelLook(C(d, "txPr"), colors, pl.size, pl.color, pl.bold);
+    s.pointLabels.push_back(std::move(pl));
+    return true;
+  });
+  if (pugi::xml_node e = C(ser, "explosion")) s.explosion = std::clamp(Number(e, "val", 0), 0.0, 400.0);
   return s;
 }
 
@@ -231,6 +344,18 @@ std::string SourceFormat(pugi::xml_node group, const char* tag, DataSource* sour
   std::string format;
   if (FromCells(C(C(C(group, "ser"), tag), "numRef"), source, texts, numbers, &format)) return format;
   return C(CacheOf(C(C(group, "ser"), tag), "numRef", "numCache", "numLit"), "formatCode").text().get();
+}
+
+// An element's c:layout/c:manualLayout in edge mode, as fractions of the chart (factor mode, an
+// offset from where the chart would put it, isn't followed); `inner`: layoutTarget inner.
+std::optional<draw::Rect> ManualLayout(pugi::xml_node owner, bool* inner = nullptr) {
+  pugi::xml_node m = C(C(owner, "layout"), "manualLayout");
+  if (!m || Val(C(m, "xMode")) != "edge" || Val(C(m, "yMode")) != "edge") return std::nullopt;
+  const double x = Number(C(m, "x"), "val", kNaN), y = Number(C(m, "y"), "val", kNaN);
+  const double w = Number(C(m, "w"), "val", kNaN), h = Number(C(m, "h"), "val", kNaN);
+  if (!(x >= -0.5 && x <= 1.5 && y >= -0.5 && y <= 1.5 && w > 0 && w <= 2 && h > 0 && h <= 2)) return std::nullopt;
+  if (inner) *inner = Val(C(m, "layoutTarget")) == "inner";
+  return draw::Rect{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + w), static_cast<float>(y + h)};
 }
 
 // An axis; `source` is the format its numbers take when they're linked to the data's.
@@ -251,7 +376,13 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
   if (a.min && !(*a.min == *a.min)) a.min.reset();
   if (a.max && !(*a.max == *a.max)) a.max.reset();
   a.reversed = Val(C(scaling, "orientation")) == "maxMin";
+  if (pugi::xml_node b = C(scaling, "logBase")) {
+    const double base = Number(b, "val", 0.0);
+    if (base >= 2 && base <= 1000) a.logBase = base;
+  }
   if (pugi::xml_node cb = C(ax, "crossBetween")) a.between = Val(cb) != "midCat";
+  a.labelsHigh = Val(C(ax, "tickLblPos")) == "high";
+  if (pugi::xml_node s = C(ax, "tickLblSkip")) a.labelSkip = static_cast<int>(std::clamp(Number(s, "val", 0.0), 0.0, 1e6));
   if (pugi::xml_node t = C(ax, "title")) {
     a.title = TextOf(C(t, "tx"));
     a.titleOverlay = On(t, "overlay", false);
@@ -274,17 +405,20 @@ bool HasC14Style(pugi::xml_node chartSpace) {
 
 }  // namespace
 
-bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data) {
+bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data, bool presentation) {
   out = Chart{};
   if (!chartSpace || LocalNameOf(chartSpace) != "chartSpace" || NamespaceOf(chartSpace) != kChart) return false;
   pugi::xml_node chart = C(chartSpace, "chart");
   pugi::xml_node plot = C(chart, "plotArea");
   if (!plot) return false;
+  out.plotLayout = ManualLayout(plot, &out.plotInner);
   out.area = LookOf(C(chartSpace, "spPr"), colors);
   // In a workbook (where `data` comes from), Excel rounds the corners when the chart doesn't say,
   // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
   out.roundedCorners = On(chartSpace, "roundedCorners", data != nullptr);
-  out.legacy = data && !HasC14Style(chartSpace);
+  out.styled = HasC14Style(chartSpace);
+  out.presentation = presentation;
+  out.legacy = (data || presentation) && !out.styled;
   out.workbook = data != nullptr;
   out.plot = LookOf(C(plot, "spPr"), colors);
   float size = -1;  // stated by the chart, or else (below) by its axes or legend
@@ -295,7 +429,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   // The chart groups, and the axes by id.
   std::map<std::string, pugi::xml_node> axes;
   std::vector<std::pair<pugi::xml_node, std::vector<std::string>>> groups;  // a group and its axis ids
-  bool unknown = false;
+  bool unknown = false, known = false;
   size_t budget = kMaxAllPoints, seriesCount = 0;
   ForEachChild(plot, [&](pugi::xml_node c) {
     if (NamespaceOf(c) != kChart) return true;
@@ -313,19 +447,25 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     else if (k == "areaChart" || k == "area3DChart") g.type = Type::Area;
     else if (k == "scatterChart") g.type = Type::Scatter;
     else if (k == "radarChart" && out.groups.empty()) g.type = Type::Radar;
+    else if (k == "bubbleChart" && out.groups.empty()) g.type = Type::Bubble;
     else {
-      unknown = true;  // stock, bubble, surface…
+      unknown = true;  // stock, surface…
       return false;
     }
+    known = true;
     if (out.groups.size() >= 16) return true;
     const std::string_view grouping = Val(C(c, "grouping"));
     g.grouping = grouping == "stacked" ? Grouping::Stacked : grouping == "percentStacked" ? Grouping::Percent : Grouping::Clustered;
-    g.varyColors = On(c, "varyColors", g.type == Type::Pie || g.type == Type::Doughnut);
+    // Unstated, Office varies a lone series' bars and slices (PowerPoint's PDFs).
+    g.varyColors = On(c, "varyColors", g.type == Type::Column || g.type == Type::Bar || g.type == Type::Pie ||
+                                           g.type == Type::Doughnut);
     g.gap = std::clamp(Number(C(c, "gapWidth"), "val", 150), 0.0, 500.0);
     g.overlap = std::clamp(Number(C(c, "overlap"), "val", g.grouping == Grouping::Clustered ? 0 : 100), -100.0, 100.0);
     g.hole = std::clamp(Number(C(c, "holeSize"), "val", 50), 1.0, 90.0);
     g.firstAngle = std::clamp(Number(C(c, "firstSliceAng"), "val", 0), 0.0, 360.0);
     g.marker = On(c, "marker", false);
+    g.bubbleScale = std::clamp(Number(C(c, "bubbleScale"), "val", 100), 0.0, 300.0);
+    g.bubbleWidth = Val(C(c, "sizeRepresents")) == "w";
     if (g.type == Type::Radar) {
       const std::string_view radar = Val(C(c, "radarStyle"));
       g.marker = radar == "marker";
@@ -334,6 +474,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const std::string_view style = Val(C(c, "scatterStyle"));
     g.lines = style != "marker" && style != "none";
     const LabelParts l = LabelsOf(C(c, "dLbls"));
+    g.labelFormat = LabelFormat(C(c, "dLbls"));
+    g.labelPos = Val(C(C(c, "dLbls"), "dLblPos"));
     g.labels = l.val.value_or(false);
     g.percent = l.pct.value_or(false);
     g.categoryLabels = l.cat.value_or(false);
@@ -346,6 +488,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       if (LocalNameOf(s) == "axId") ids.emplace_back(Val(s));
       else if (LocalNameOf(s) == "ser" && seriesCount < 255) {
         g.series.push_back(SeriesOf(s, g.type, colors, budget, data));
+        Series& added = g.series.back();
+        LabelLook(C(C(c, "dLbls"), "txPr"), colors, added.labelSize, added.labelColor, added.labelBold);
         ++seriesCount;
       }
       return true;
@@ -356,7 +500,10 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     }
     return true;
   });
-  if (unknown || out.groups.empty()) return false;
+  if (unknown) return false;
+  // A chart of a kind Featherweight draws but without a series: nothing to draw, as PowerPoint draws
+  // it (goettingen 2's empty doughnut), rather than a placeholder; elsewhere, the placeholder.
+  if (out.groups.empty()) return presentation && known;
 
   // Axes: the first group's category and value axes; a group on another value axis is secondary.
   const auto axis = [&](const std::string& id) { auto it = axes.find(id); return it == axes.end() ? pugi::xml_node() : it->second; };
@@ -364,7 +511,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   if (first.size() >= 2) {
     pugi::xml_node a = axis(first[0]), b = axis(first[1]);
     // Scatter has two value axes: x is the one across the bottom (or top).
-    const bool scatter = out.groups.front().type == Type::Scatter;
+    const bool scatter = out.groups.front().type == Type::Scatter || out.groups.front().type == Type::Bubble;
     if (scatter) {
       const std::string_view pos = Val(C(a, "axPos"));
       if (pos == "l" || pos == "r") std::swap(a, b);
@@ -408,15 +555,17 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     // Bold and in the chart's text color unless its own text (or else its c:txPr) says otherwise.
     // Unstated, Office 2007's look (Excel's PDFs) makes it the chart's text size, or 1.2 times
     // what the chart's c:txPr states; Office 2010's, 18 points; Office 2013 and later state theirs.
-    if (out.legacy) out.titleSize = spaceSize > 0 ? spaceSize * 1.2f : 10;
+    // On a slide, 1.2 times the chart's stated text size whatever its look (poi line chart: 21.6 at 18).
+    if (out.legacy || (presentation && spaceSize > 0)) out.titleSize = spaceSize > 0 ? spaceSize * 1.2f : 10;
     else out.titleSize = size > 0 ? size * 14 / 9 : 18;
     out.titleColor = spaceColor;
     out.titleOverlay = On(t, "overlay", false);
     if (pugi::xml_node rich = C(tx, "rich")) {
       // Text with no properties at all (no a:pPr, a:rPr) is DrawingML's own default in Office
-      // 2007's look: 18-point Arial, not bold (Excel).
+      // 2007's look: 18-point Arial, not bold (Excel's PDFs; PowerPoint's, in Office 2010's look
+      // too).
       pugi::xml_node p = A(rich, "p");
-      if (out.legacy && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
+      if ((out.legacy || presentation) && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
         out.titleSize = 18;
         out.titleBold = false;
         out.titleFont = L"Arial";
@@ -425,11 +574,23 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     } else {
       TextLook(C(t, "txPr"), colors, &out.titleSize, &out.titleColor, &out.titleBold);
     }
+  } else if (C(chart, "autoTitleDeleted") && !On(chart, "autoTitleDeleted", true) && out.groups.size() == 1 &&
+             out.groups.front().series.size() == 1) {
+    // No title, but the automatic one not deleted: a single series' name, bold, at the size of a
+    // title without text (PowerPoint's PDFs).
+    out.title = out.groups.front().series.front().name;
+    out.titleSize = out.legacy || (presentation && spaceSize > 0) ? (spaceSize > 0 ? spaceSize * 1.2f : 10) : size > 0 ? size * 14 / 9 : 18;
+    out.titleColor = spaceColor;
   }
   if (pugi::xml_node legend = C(chart, "legend")) {
     const std::string_view pos = Val(C(legend, "legendPos"));
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
     out.legendOverlay = On(legend, "overlay", false);
+    out.legendLayout = ManualLayout(legend);
+    out.legendLook = LookOf(C(legend, "spPr"), colors);
+    for (pugi::xml_node e = legend.first_child(); e; e = e.next_sibling())
+      if (LocalNameOf(e) == "legendEntry" && On(e, "delete", false))
+        out.hiddenEntries.push_back(static_cast<uint32_t>(std::max(0.0, Number(C(e, "idx"), "val", 0.0))));
   }
   return true;
 }

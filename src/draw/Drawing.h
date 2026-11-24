@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -48,11 +49,20 @@ class DrawingResources {
   // the target is missing or not a picture Featherweight reads. Linked pictures (r:link,
   // TargetMode="External") are never fetched (plan §4.7): don't resolve them.
   virtual std::shared_ptr<const Image> GetImage(std::string_view relId) = 0;
+  // The picture a relationship of the part's theme points to: a format scheme's blip fill (a
+  // background style's texture, through a:bgRef or a:fillRef). Null when there's none.
+  virtual std::shared_ptr<const Image> GetThemeImage(std::string_view relId) {
+    (void)relId;
+    return nullptr;
+  }
   // The root element of the XML part a relationship points to (SmartArt's drawing), or null.
   virtual pugi::xml_node GetPartXml(std::string_view relId) {
     (void)relId;
     return {};
   }
+  // Whether the drawing is in a presentation: PowerPoint draws charts with Excel's engine, but
+  // without the chart area's border when the chart doesn't state one.
+  virtual bool InPresentation() { return false; }
 };
 
 // Where a shape's text goes. The text itself is laid out and drawn by the caller (fwtext); fwdraw
@@ -77,6 +87,35 @@ struct TextBox {
   float fontScale = 1, lineSpacingReduction = 0;  // ShrinkText: what Office last applied
   int columns = 1;
   float columnSpacing = 0;    // points
+  uint32_t shape = 0;         // the shape's id (cNvPr id), 0 when it has none
+  // The shape style's font reference (a:fontRef): the text's default color and theme font
+  // ("+mj-lt", "+mn-lt"; empty: none).
+  std::optional<Color> fontColor;
+  std::string fontFace;
+};
+
+// Lets the caller draw a drawing piece by piece (slides): skip shapes or just their own fill and
+// outline, as a slide show does to animate them as sprites, and draw each text box in its place in
+// the z-order rather than over the whole drawing. Shapes are named by their id (cNvPr id).
+class DrawHooks {
+ public:
+  virtual ~DrawHooks() = default;
+  // Whether to draw the shape at all; for a group, its children too.
+  virtual bool DrawShape(uint32_t id) {
+    (void)id;
+    return true;
+  }
+  // Whether to draw the shape's own fill, outline, picture and shadow (its text is DrawText's).
+  virtual bool DrawBody(uint32_t id) {
+    (void)id;
+    return true;
+  }
+  // Text box `index` (in TextBoxes() order) is due: the painter is in its shape's own coordinates,
+  // box.rect's.
+  virtual void DrawText(Painter& painter, size_t index) {
+    (void)painter;
+    (void)index;
+  }
 };
 
 class Drawing {
@@ -106,6 +145,18 @@ class Drawing {
   // Draws the drawing into `frame` (normally the extent at its place on the page; a different
   // size scales it).
   void Draw(Painter& painter, const Rect& frame) const;
+  // The same, asking `hooks` what to draw and drawing the text boxes through it.
+  void Draw(Painter& painter, const Rect& frame, DrawHooks& hooks) const;
+  // Every visible shape, groups before their children, in drawing order: its id, its own size, and
+  // the transform from its own coordinates ((0, 0) to size) to the drawing's (the extent's top left
+  // at the origin). For hit testing and for animating shapes on their own.
+  struct Part {
+    uint32_t id = 0;
+    Size size;
+    Matrix transform;
+    bool group = false;
+  };
+  std::vector<Part> Parts() const;
   // The outline for tight and through wrapping, relative to the extent's top left: the file's
   // wrap polygon (wp:wrapPolygon, o:wrapcoords) when it has one, else the shapes' own outlines.
   const std::vector<Path::Polygon>& WrapOutline() const { return wrap_; }
@@ -166,7 +217,9 @@ class PackageResources : public DrawingResources {
   std::shared_ptr<const Theme> GetTheme() override;
   const ColorMap& GetColorMap() override { return colorMap_; }
   std::shared_ptr<const Image> GetImage(std::string_view relId) override;
+  std::shared_ptr<const Image> GetThemeImage(std::string_view relId) override;
   pugi::xml_node GetPartXml(std::string_view relId) override;
+  bool InPresentation() override { return part_.starts_with("/ppt/"); }
 
   // The theme for a part: the document's, the workbook's, or a slide's through its layout and
   // master. Null when there is none.

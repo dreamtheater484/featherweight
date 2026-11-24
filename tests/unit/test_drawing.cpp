@@ -8,6 +8,8 @@
 #include <wrl/client.h>
 
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,7 +20,9 @@
 #include "draw/Drawing.h"
 #include "draw/Geometry.h"
 #include "draw/Images.h"
+#include "draw/Shapes.h"
 #include "draw/Theme.h"
+#include "draw/Xml.h"
 #include "pkg/XmlDom.h"
 
 using Microsoft::WRL::ComPtr;
@@ -118,8 +122,9 @@ std::vector<uint8_t> IconOf(const std::vector<uint8_t>& png, int size) {
   return ico;
 }
 
-// A metafile 100 x 50 (0.01 mm) with its left half red and its right half blue, made by GDI.
-std::vector<uint8_t> MakeEmf() {
+// A metafile 100 x 50 (0.01 mm) with its left half red and its right half blue, made by GDI; with
+// `picture`, the blue half is a bitmap (StretchDIBits).
+std::vector<uint8_t> MakeEmf(bool picture = false) {
   RECT frame{0, 0, 2000, 1000};  // 20 x 10 mm
   HDC dc = CreateEnhMetaFileW(nullptr, nullptr, &frame, nullptr);
   SetMapMode(dc, MM_ANISOTROPIC);
@@ -131,7 +136,14 @@ std::vector<uint8_t> MakeEmf() {
   HBRUSH red = CreateSolidBrush(RGB(255, 0, 0)), blue = CreateSolidBrush(RGB(0, 0, 255));
   RECT l{0, 0, 100, 100}, r{100, 0, 200, 100};
   FillRect(dc, &l, red);
-  FillRect(dc, &r, blue);
+  if (picture) {
+    BITMAPINFO bi{};
+    bi.bmiHeader = {sizeof(BITMAPINFOHEADER), 2, 2, 1, 32, BI_RGB};
+    const uint32_t bits[4] = {0x0000FF, 0x0000FF, 0x0000FF, 0x0000FF};
+    StretchDIBits(dc, 100, 0, 100, 100, 0, 0, 2, 2, bits, &bi, DIB_RGB_COLORS, SRCCOPY);
+  } else {
+    FillRect(dc, &r, blue);
+  }
   DeleteObject(red);
   DeleteObject(blue);
   HENHMETAFILE emf = CloseEnhMetaFile(dc);
@@ -229,6 +241,45 @@ bool Near(uint32_t c, uint32_t want, int tolerance = 12) {
 }  // namespace
 
 // ---- Pictures ----
+
+TEST(Drawing_MathChoiceGivesWayToFallback) {
+  // Office math in a text box (a14:m) is laid out only in slides (the slide renderer's): elsewhere
+  // (a sheet's shape) the fallback, Office's picture of it, is drawn.
+  const std::string a14 = R"( xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main")";
+  const std::string xdr = R"( xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing")";
+  fw::pkg::XmlDom math = ParseXml("<xdr:wsDr" + kNs + a14 + xdr + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                  R"(<xdr:sp><a:p><a14:m/></a:p></xdr:sp></mc:Choice><mc:Fallback><xdr:pic/></mc:Fallback>)"
+                                  "</mc:AlternateContent></xdr:wsDr>");
+  std::vector<std::string> seen;
+  draw::xml::ForEachChild(math.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"xdr:pic"});
+  // A slide's shape keeps its math when the slide renderer lays it out (FW_SLIDE_MATH, off for now).
+  fw::pkg::XmlDom slide = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp><a:p><a14:m/></a:p></p:sp></mc:Choice><mc:Fallback><p:pic/></mc:Fallback>)"
+                                   "</mc:AlternateContent></p:spTree>");
+  const int was = draw::xml::SlideMathSetting();
+  for (int on : {0, 1}) {
+    draw::xml::SlideMathSetting() = on;
+    seen.clear();
+    draw::xml::ForEachChild(slide.Root(), [&](pugi::xml_node n) {
+      seen.emplace_back(n.name());
+      return true;
+    });
+    CHECK(seen == std::vector<std::string>{on ? "p:sp" : "p:pic"});
+  }
+  draw::xml::SlideMathSetting() = was;
+  fw::pkg::XmlDom plain = ParseXml("<p:spTree" + kNs + a14 + R"(><mc:AlternateContent><mc:Choice Requires="a14">)"
+                                   R"(<p:sp/></mc:Choice><mc:Fallback><p:pic/></mc:Fallback></mc:AlternateContent></p:spTree>)");
+  seen.clear();
+  draw::xml::ForEachChild(plain.Root(), [&](pugi::xml_node n) {
+    seen.emplace_back(n.name());
+    return true;
+  });
+  CHECK(seen == std::vector<std::string>{"p:sp"});
+}
 
 TEST(Images_SniffFormats) {
   auto sniff = [](const std::vector<uint8_t>& b) { return SniffImageFormat(b.data(), b.size()); };
@@ -395,6 +446,32 @@ TEST(Images_DamagedAndUnknown) {
   emf[50] = 0xFF;
   CHECK(Image::Open(emf) == nullptr);
   CHECK(Image::Open(Bytes("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect></svg>")) == nullptr);
+}
+
+TEST(Images_EmfRasterizedByGdiAtItsOwnSize) {
+  // As PowerPoint's PDFs have an EMF that holds a picture: GDI's pixels at the size of its bounds
+  // in its own device pixels; a picture drawing nothing at a pixel leaves it transparent. One of
+  // fills only stays vectors.
+  std::shared_ptr<Image> fills = Image::Open(MakeEmf());
+  CHECK(fills != nullptr && fills->Vector() != nullptr);
+  if (fills && fills->Vector()) CHECK(RasterizeEmfWithGdi(*fills->Vector()) == nullptr);
+  std::shared_ptr<Image> img = Image::Open(MakeEmf(true));
+  CHECK(img != nullptr && img->Vector() != nullptr);
+  if (!img || !img->Vector()) return;
+  const std::vector<uint8_t>& d = img->Vector()->Data();
+  int32_t b[4];
+  std::memcpy(b, d.data() + 8, sizeof b);
+  std::shared_ptr<const Bitmap> px = RasterizeEmfWithGdi(*img->Vector());
+  CHECK(px != nullptr);
+  if (!px) return;
+  CHECK_EQ(px->Width(), b[2] - b[0] + 1);
+  CHECK_EQ(px->Height(), b[3] - b[1] + 1);
+  const auto at = [&](int x, int y) { return px->Pixels() + (static_cast<size_t>(y) * px->Width() + x) * 4; };
+  const uint8_t* left = at(px->Width() / 4, px->Height() / 2);
+  const uint8_t* right = at(px->Width() * 3 / 4, px->Height() / 2);
+  CHECK(left[3] == 255 && left[2] > 240 && left[0] < 15);   // red, opaque (BGRA)
+  CHECK(right[3] == 255 && right[0] > 240 && right[2] < 15);
+  CHECK(RasterizeEmfWithGdi(*img->Vector()) == px);  // cached
 }
 
 TEST(Images_Metafiles) {
@@ -933,6 +1010,64 @@ TEST(DrawingML_GroupsRotationAndFlips) {
   CHECK_NEAR(b.bottom, 25, 0.5);
 }
 
+TEST(DrawingML_GroupInAScaledGroup) {
+  // A group 40 x 40 whose children are in 80 x 80 units (half size) holds a group of 40 x 40 units
+  // at (0, 0, 40, 40), in its own 40 x 40 units, with a blue square filling it: the square shows at
+  // the top left 20 x 20, as PowerPoint draws it (cs-444's convolution slides), not 40 x 40.
+  TestResources res;
+  fw::pkg::XmlDom dom;
+  std::string group =
+      R"(<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="508000" cy="508000"/>)"
+      R"(<a:chOff x="0" y="0"/><a:chExt cx="1016000" cy="1016000"/></a:xfrm></wpg:grpSpPr>)"
+      R"(<wpg:grpSp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="508000" cy="508000"/>)"
+      R"(<a:chOff x="0" y="0"/><a:chExt cx="508000" cy="508000"/></a:xfrm></wpg:grpSpPr>)" +
+      Wsp(Xfrm(0, 0, 40, 40) + R"(<a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>)") +
+      "</wpg:grpSp></wpg:wgp>";
+  auto d = WordDrawing(WordAnchor(40, 40, kWpgUri, group), res, dom);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(40, 40);
+  Render(s, *d);
+  CHECK(s.End());
+  CHECK(Near(s.At(10, 10), 0x0000FF));
+  CHECK(Near(s.At(30, 10), 0xFFFFFF));
+  CHECK(Near(s.At(10, 30), 0xFFFFFF));
+  // Parts and text boxes agree with what is drawn.
+  bool found = false;
+  for (const Drawing::Part& p : d->Parts()) {
+    if (p.group) continue;
+    CHECK_NEAR(p.size.width, 20, 0.01);
+    found = true;
+  }
+  CHECK(found);
+}
+
+TEST(DrawingML_CameraTurnedAboutItsViewTurnsTheShapeBack) {
+  // A shape at rot 7.6° under a straight-on camera (lat and lon 0) turned by rev 6° shows at 1.6°,
+  // as PowerPoint draws letters-home 52's photo; a light rig's rev and a camera that isn't
+  // straight on leave the rotation alone.
+  auto angleOf = [](const std::string& scene) {
+    TestResources res;
+    fw::pkg::XmlDom dom;
+    auto d = WordDrawing(WordAnchor(40, 20, kWpsUri,
+                                    Wsp(Xfrm(0, 0, 40, 20, R"( rot="456000")") + R"(<a:prstGeom prst="rect"/>)" + scene)),
+                         res, dom);
+    if (!d || d->Parts().empty()) return -1000.f;
+    const Matrix& m = d->Parts()[0].transform;
+    return static_cast<float>(std::atan2(m.m12, m.m11) * 180 / 3.14159265358979);
+  };
+  CHECK_NEAR(angleOf(""), 7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"><a:rot lat="0" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             1.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="orthographicFront"/>)"
+                     R"(<a:lightRig rig="threePt" dir="t"><a:rot lat="0" lon="0" rev="1200000"/></a:lightRig></a:scene3d>)"),
+             7.6, 0.01);
+  CHECK_NEAR(angleOf(R"(<a:scene3d><a:camera prst="perspectiveFront"><a:rot lat="600000" lon="0" rev="360000"/></a:camera>)"
+                     R"(<a:lightRig rig="threePt" dir="t"/></a:scene3d>)"),
+             7.6, 0.01);
+}
+
 TEST(DrawingML_LinesAndArrows) {
   TestResources res;
   fw::pkg::XmlDom dom;
@@ -1025,6 +1160,144 @@ TEST(DrawingML_ChartIsPlaceholder) {
                        res, dom);
   CHECK(d && d->IsPlaceholder());
   CHECK(d && d->Extent().width == 100);
+}
+
+TEST(Shapes_OutlinesInDirectWriteFromMemory) {
+  // An installed TrueType font, from memory: DirectWrite draws its glyphs. A font whose tables
+  // don't hold together draws nothing it can tell, so it says yes (the caller keeps it).
+  wchar_t dir[MAX_PATH] = {};
+  GetWindowsDirectoryW(dir, MAX_PATH);
+  std::vector<uint8_t> arial;
+  if (FILE* f = _wfopen((std::wstring(dir) + L"\\Fonts\\arial.ttf").c_str(), L"rb")) {
+    std::fseek(f, 0, SEEK_END);
+    arial.resize(static_cast<size_t>(std::ftell(f)));
+    std::fseek(f, 0, SEEK_SET);
+    arial.resize(std::fread(arial.data(), 1, arial.size(), f));
+    std::fclose(f);
+  }
+  if (arial.empty()) return;
+  CHECK(draw::OutlinesInDirectWrite(arial));
+  // TrueType outlines under the OpenType (CFF) tag: no outlines.
+  std::vector<uint8_t> mistagged = arial;
+  std::memcpy(mistagged.data(), "OTTO", 4);
+  CHECK(!draw::OutlinesInDirectWrite(mistagged));
+}
+
+TEST(Images_BoxResampleAverages) {
+  // 5 x 1 to 4 x 1: each target pixel the mean of the 1.25 source pixels it covers.
+  std::vector<uint8_t> px;
+  for (int v : {0, 100, 200, 100, 0}) px.insert(px.end(), {static_cast<uint8_t>(v), static_cast<uint8_t>(v), static_cast<uint8_t>(v), 255});
+  Bitmap source(5, 1, std::move(px));
+  auto out = BoxResample(source, 4, 1);
+  CHECK(out && out->Width() == 4 && out->Height() == 1);
+  if (!out) return;
+  const uint8_t* p = out->Pixels();
+  CHECK(p[0] == 20 && p[4] == 140 && p[8] == 140 && p[12] == 20);  // (0 + .25*100)/1.25, (.75*100 + .5*200)/1.25
+  CHECK(p[3] == 255 && p[15] == 255);
+}
+
+TEST(DrawingML_SmartArtInAScaledGroupKeepsItsDrawnSize) {
+  // Office saves a SmartArt's drawing at the size it shows: in a group drawn at half size, a frame
+  // of 100 x 50 child units shows 50 x 25 and its drawing is 50 x 25 (govuk Scotland census 6). A
+  // shape filling the drawing's left half fills the frame's left half, not a quarter.
+  struct Parts : TestResources {
+    fw::pkg::XmlDom data, drawing;
+    pugi::xml_node GetPartXml(std::string_view relId) override {
+      return relId == "rIdDm" ? data.Root() : relId == "rIdDrawing" ? drawing.Root() : pugi::xml_node();
+    }
+  } res;
+  res.data = ParseXml(R"(<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" )"
+                      R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:extLst>)"
+                      R"(<a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt )"
+                      R"(xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rIdDrawing"/></a:ext>)"
+                      R"(</dgm:extLst></dgm:dataModel>)");
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>)" +
+                         Xfrm(0, 0, 25, 25) +
+                         R"(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>)"
+                         R"(</dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>)");
+  fw::pkg::XmlDom dom = ParseXml(
+      "<p:grpSp" + kNs + R"(><p:nvGrpSpPr><p:cNvPr id="2" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>)"
+      R"(<a:xfrm><a:off x="0" y="0"/><a:ext cx="635000" cy="317500"/><a:chOff x="0" y="0"/><a:chExt cx="1270000" cy="635000"/>)"
+      R"(</a:xfrm></p:grpSpPr><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 3"/><p:cNvGraphicFramePr/><p:nvPr/>)"
+      R"(</p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></p:xfrm><a:graphic>)"
+      R"(<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds )"
+      R"(xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>)"
+      R"(</a:graphicData></a:graphic></p:graphicFrame></p:grpSp>)");
+  auto d = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(50, 25);
+  {
+    D2DPainter p(s.dc.Get());
+    d->Draw(p, d->Bounds());
+  }
+  CHECK(s.End());
+  CHECK(Near(s.At(20, 12), 0xFF0000));
+  CHECK(Near(s.At(40, 12), 0xFFFFFF));
+}
+
+TEST(DrawingML_SmartArtFindsItsDrawingThroughDgmExtLst) {
+  // PowerPoint keeps the data model's extension list as dgm:extLst: its dsp:dataModelExt names the
+  // drawing Office saved, which is drawn.
+  struct Parts : TestResources {
+    fw::pkg::XmlDom data, drawing;
+    pugi::xml_node GetPartXml(std::string_view relId) override {
+      return relId == "rIdDm" ? data.Root() : relId == "rIdDrawing" ? drawing.Root() : pugi::xml_node();
+    }
+  } res;
+  res.data = ParseXml(R"(<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" )"
+                      R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:extLst>)"
+                      R"(<a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt )"
+                      R"(xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rIdDrawing"/></a:ext>)"
+                      R"(</dgm:extLst></dgm:dataModel>)");
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>)" +
+                         Xfrm(0, 0, 100, 50) +
+                         R"(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>)"
+                         R"(</dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>)");
+  fw::pkg::XmlDom dom = ParseXml(
+      "<p:graphicFrame" + kNs + R"(><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 3"/><p:cNvGraphicFramePr/><p:nvPr/>)"
+      R"(</p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></p:xfrm><a:graphic>)"
+      R"(<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds )"
+      R"(xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>)"
+      R"(</a:graphicData></a:graphic></p:graphicFrame>)");
+  auto d = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(d != nullptr);
+  if (!d) return;
+  Surface s(100, 50);
+  {
+    D2DPainter p(s.dc.Get());
+    d->Draw(p, d->Bounds());
+  }
+  CHECK(s.End());
+  CHECK(Near(s.At(50, 25), 0xFF0000));
+  // A quadrant turned 270 degrees whose text turns 90 on top of it reads upright, in the text's
+  // own rectangle (tdf145528 matrix in PowerPoint's PDF).
+  res.drawing = ParseXml(R"(<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" )"
+                         R"(xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr>)"
+                         R"(<dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{1}">)"
+                         R"(<dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm rot="16200000">)"
+                         R"(<a:off x="317500" y="-317500"/><a:ext cx="635000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"/>)"
+                         R"(</dsp:spPr><dsp:txBody><a:bodyPr/><a:p><a:r><a:t>Writer</a:t></a:r></a:p></dsp:txBody>)"
+                         R"(<dsp:txXfrm rot="5400000"><a:off x="0" y="0"/><a:ext cx="1270000" cy="476250"/></dsp:txXfrm>)"
+                         R"(</dsp:sp></dsp:spTree></dsp:drawing>)");
+  auto turned = Drawing::FromShapeTree(dom.Root(), res);
+  CHECK(turned != nullptr);
+  if (!turned) return;
+  const std::vector<TextBox> boxes = turned->TextBoxes();
+  CHECK(boxes.size() == 1u);
+  if (boxes.size() != 1u) return;
+  const Matrix total = Matrix::Rotate(boxes[0].rotation) * boxes[0].transform;
+  CHECK(std::fabs(total.m12) < 1e-3f && total.m11 > 0.99f);  // upright
+  // The box turns about its own center, which the shape's transform alone places.
+  const Point center =
+      boxes[0].transform.Apply({(boxes[0].rect.left + boxes[0].rect.right) / 2, (boxes[0].rect.top + boxes[0].rect.bottom) / 2});
+  CHECK(std::fabs(center.x - 50) < 1.f && std::fabs(center.y - 18.75f) < 1.f);  // the top of the frame
 }
 
 TEST(DrawingML_ShapeTree) {

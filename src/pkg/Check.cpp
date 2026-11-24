@@ -305,6 +305,7 @@ class Checker {
   void CheckCalcChain();
   void CheckNotes();
   void CheckCharts();
+  void CheckPresentation();
   void CompareCache(const PartDom& part, std::string_view formula, pugi::xml_node cache, Workbook& book,
                     std::string_view bookName);
   Checker* EmbeddedChecker(const std::string& part);
@@ -346,6 +347,7 @@ void Checker::Run() {
   CheckRules();
   ReportMissingTargets();
   if (format_ == DocFormat::Word) CheckWordTables();
+  if (format_ == DocFormat::PowerPoint) CheckPresentation();
   if (format_ == DocFormat::Excel) {
     LoadWorkbook();
     CheckCalcChain();
@@ -821,6 +823,163 @@ void Checker::CheckNotes() {
     if (drawings.empty()) Warn(comments[0]->name, "the comments have no VML drawing to show them");
     for (const auto& note : notes)
       if (!commented.count(note)) Warn(drawings[0]->name, "a note on " + note + " has no comment");
+  }
+}
+
+// ---------- Presentations (P1) ----------
+
+namespace {
+
+bool IsPresentationElement(pugi::xml_node n, std::string_view local) {
+  if (n.type() != pugi::node_element || LocalNameOf(n) != local) return false;
+  std::string_view ns = NamespaceOf(n);
+  return ns == "http://schemas.openxmlformats.org/presentationml/2006/main" || ns == "http://purl.oclc.org/ooxml/presentationml/main";
+}
+
+std::string_view RelIdOf(pugi::xml_node n) {
+  pugi::xml_attribute a = FindAttribute(n, kOfficeRelationshipsNs, "id");
+  if (!a) a = FindAttribute(n, kStrictRelationshipsNs, "id");
+  return a ? std::string_view(a.value()) : std::string_view();
+}
+
+// A PresentationML part's kind from its content type ("slide", "slideLayout", "notesSlide", ...),
+// empty for anything else.
+std::string_view PresentationKind(std::string_view contentType) {
+  constexpr std::string_view kPrefix = "application/vnd.openxmlformats-officedocument.presentationml.";
+  if (!contentType.starts_with(kPrefix) || !contentType.ends_with("+xml")) return {};
+  return contentType.substr(kPrefix.size(), contentType.size() - kPrefix.size() - 4);
+}
+
+}  // namespace
+
+// The structure PowerPoint needs to open a deck as written: the lists in presentation.xml name
+// relationships of the right kind, once each, and each slide has one layout and each layout one
+// master (parts are told apart by their content types).
+// PowerPoint 2021 refuses a slide listed twice, a slide without a layout and a slide list entry
+// that names a master (probed 2026-11-20, p1-corpus). Warnings: what it opens anyway (a layout its
+// master doesn't list, probed), parts nothing lists, notes that don't point back at their slide,
+// and links to slides or custom shows that aren't there (PowerPoint does nothing on a click).
+void Checker::CheckPresentation() {
+  const std::string main = MainPart();
+  PartDom* pres = Dom(main);
+  if (!pres || !pres->dom.Root()) return;
+  const RelationshipSet* presRels = pkg_.RelationshipsOf(main);
+
+  // The relationship an element names, when it is to a part of the expected kind; reports it if not.
+  // A missing id or a missing part is the registry's and ReportMissingTargets' to report.
+  auto typed = [&](std::string_view part, const RelationshipSet* rels, pugi::xml_node n, std::string_view kind,
+                   std::string_view what) -> const Relationship* {
+    std::string_view id = RelIdOf(n);
+    const Relationship* r = rels && !id.empty() ? rels->Find(id) : nullptr;
+    if (!r) return nullptr;
+    if (r->external || !TypeIs(r->type, kind)) {
+      Error(part, std::string(what) + " " + std::string(id) + " is a relationship of type " +
+                      std::string(r->type.substr(r->type.rfind('/') + 1)) + ", not " + std::string(kind));
+      return nullptr;
+    }
+    return pkg_.FindPart(r->targetPart) ? r : nullptr;
+  };
+
+  std::set<std::string> slides, masters, customShows;
+  for (pugi::xml_node list : pres->dom.Root().children()) {
+    auto each = [&](std::string_view item, std::string_view kind, std::string_view what, std::set<std::string>* seen) {
+      for (pugi::xml_node n : list.children()) {
+        if (!IsPresentationElement(n, item)) continue;
+        const Relationship* r = typed(main, presRels, n, kind, what);
+        if (r && seen && !seen->insert(PartKey(r->targetPart)).second)
+          Error(main, std::string(what) + " " + std::string(RelIdOf(n)) + ": " + r->targetPart + " is listed twice");
+      }
+    };
+    if (IsPresentationElement(list, "sldMasterIdLst")) each("sldMasterId", "slideMaster", "the slide master", &masters);
+    else if (IsPresentationElement(list, "notesMasterIdLst")) each("notesMasterId", "notesMaster", "the notes master", nullptr);
+    else if (IsPresentationElement(list, "handoutMasterIdLst")) each("handoutMasterId", "handoutMaster", "the handout master", nullptr);
+    else if (IsPresentationElement(list, "sldIdLst")) each("sldId", "slide", "the slide", &slides);
+    else if (IsPresentationElement(list, "custShowLst")) {
+      for (pugi::xml_node show : list.children()) {
+        if (!IsPresentationElement(show, "custShow")) continue;
+        customShows.insert(show.attribute("id").value());
+        for (pugi::xml_node sldLst : show.children()) {
+          if (!IsPresentationElement(sldLst, "sldLst")) continue;
+          for (pugi::xml_node sl : sldLst.children()) {
+            if (!IsPresentationElement(sl, "sld")) continue;
+            if (const Relationship* r = typed(main, presRels, sl, "slide", "a custom show's slide"); r && !slides.contains(PartKey(r->targetPart)))
+              Warn(main, "custom show " + Quote(show.attribute("name").value()) + " names " + r->targetPart + ", which the deck doesn't list");
+          }
+        }
+      }
+    }
+  }
+  if (masters.empty() && !slides.empty()) Error(main, "the deck has slides but lists no slide master (sldMasterIdLst)");
+
+  // Each master's layouts, from its sldLayoutIdLst.
+  std::map<std::string, std::set<std::string>> layoutsOf;  // master -> layouts
+  for (auto& p : parts_) {
+    if (PresentationKind(pkg_.ContentTypeOf(p->name)) != "slideMaster") continue;
+    std::set<std::string>& listed = layoutsOf[PartKey(p->name)];
+    const RelationshipSet* rels = pkg_.RelationshipsOf(p->name);
+    for (pugi::xml_node list : p->dom.Root().children()) {
+      if (!IsPresentationElement(list, "sldLayoutIdLst")) continue;
+      for (pugi::xml_node n : list.children())
+        if (IsPresentationElement(n, "sldLayoutId"))
+          if (const Relationship* r = typed(p->name, rels, n, "slideLayout", "the layout"))
+            if (!listed.insert(PartKey(r->targetPart)).second) Warn(p->name, "the layout " + r->targetPart + " is listed twice");
+    }
+    if (!masters.contains(PartKey(p->name))) Warn(p->name, "a slide master the deck doesn't list (sldMasterIdLst)");
+  }
+
+  for (auto& p : parts_) {
+    const std::string_view kind = PresentationKind(pkg_.ContentTypeOf(p->name));
+    if (kind.empty()) continue;
+    const RelationshipSet* rels = pkg_.RelationshipsOf(p->name);
+    auto targets = [&](std::string_view type) {
+      std::vector<const Relationship*> out;
+      if (rels)
+        for (const auto& r : rels->items)
+          if (!r.external && TypeIs(r.type, type) && pkg_.FindPart(r.targetPart)) out.push_back(&r);
+      return out;
+    };
+    if (kind == "slide") {
+      auto layouts = targets("slideLayout");
+      if (layouts.empty()) Error(p->name, "a slide with no layout");
+      else if (layouts.size() > 1) Error(p->name, "a slide with " + std::to_string(layouts.size()) + " layouts");
+      if (!slides.contains(PartKey(p->name))) Warn(p->name, "a slide the deck doesn't list (sldIdLst): it isn't shown");
+    } else if (kind == "slideLayout") {
+      auto ms = targets("slideMaster");
+      if (ms.size() != 1) {
+        Error(p->name, ms.empty() ? "a layout with no slide master" : "a layout with " + std::to_string(ms.size()) + " slide masters");
+      } else {
+        auto it = layoutsOf.find(PartKey(ms[0]->targetPart));
+        if (it != layoutsOf.end() && !it->second.contains(PartKey(p->name)))
+          Warn(p->name, "a layout its slide master " + ms[0]->targetPart + " doesn't list (sldLayoutIdLst); PowerPoint opens such decks");
+      }
+    } else if (kind == "notesSlide") {
+      auto back = targets("slide");
+      if (back.size() != 1) Warn(p->name, "notes that belong to " + std::to_string(back.size()) + " slides");
+      else if (const RelationshipSet* sr = pkg_.RelationshipsOf(back[0]->targetPart)) {
+        bool found = false;
+        for (const auto& r : sr->items) found |= !r.external && TypeIs(r.type, "notesSlide") && PartKey(r.targetPart) == PartKey(p->name);
+        if (!found) Warn(p->name, "notes whose slide " + back[0]->targetPart + " doesn't point back at them");
+      }
+    }
+    if (kind != "slide" && kind != "slideLayout" && kind != "slideMaster") continue;
+    // Links: a jump to a slide must be a relationship to a slide; a custom show must exist.
+    ForEachElement(p->dom.Root(), [&](pugi::xml_node e) {
+      std::string_view local = LocalNameOf(e);
+      if (local != "hlinkClick" && local != "hlinkHover" && local != "hlinkMouseOver") return;
+      std::string_view action = e.attribute("action").value();
+      if (action.starts_with("ppaction://hlinksldjump")) {
+        std::string_view id = RelIdOf(e);
+        const Relationship* r = rels && !id.empty() ? rels->Find(id) : nullptr;
+        if (r && (r->external || !TypeIs(r->type, "slide")))
+          Warn(p->name, "a link to a slide (" + std::string(id) + ") whose relationship isn't to a slide");
+        else if (r && !slides.contains(PartKey(r->targetPart)))
+          Warn(p->name, "a link to " + r->targetPart + ", which the deck doesn't list");
+      } else if (action.starts_with("ppaction://customshow?id=")) {
+        std::string_view rest = action.substr(25);
+        std::string show(rest.substr(0, rest.find('&')));
+        if (!customShows.contains(show)) Warn(p->name, "a link to custom show " + show + ", which the deck doesn't have");
+      }
+    });
   }
 }
 

@@ -62,8 +62,23 @@ struct TextStyle {
   float letterSpacing = 0;   // w:spacing: added after every character; may be negative
   float scale = 1;           // w:w: the glyphs' width, 1 for as designed (1.03 for 103 %)
   float baselineShift = 0;   // w:position: raised (positive) or lowered
+  // The shift doesn't make its line taller: the run's text sizes its line as it would on the
+  // baseline (PowerPoint's a:rPr baseline: usgov-anyone 13's subscripted title line).
+  bool shiftKeepsLine = false;
+  // Advances as GDI lays the text out at this many pixels a point, whole pixels each (PowerPoint's
+  // 600 dpi: 600 / 72); 0: DirectWrite's ideal ones.
+  float gdiPixelsPerPoint = 0;
   float kerningMinSize = 0;  // w:kern: kern pairs from this size up; 0: no kerning
+  // Kerning by the font's legacy 'kern' table alone, which DirectWrite's shaping skips (PowerPoint's),
+  // not by its OpenType pairs.
+  bool kernTable = false;
   bool ligatures = false;    // w14:ligatures standard (or more): standard ligatures
+  // A bold the font lacks, simulated, keeps the regular face's advances (PowerPoint's); otherwise
+  // DirectWrite widens them, as Word's text is.
+  bool simulatedBoldKeepsAdvances = false;
+  // Lines as high as DirectWrite's metrics say (PowerPoint's: a font's typo metrics when it asks
+  // for them), not GDI's (Word's).
+  bool directWriteMetrics = false;
   Caps caps = Caps::None;    // w:caps, w:smallCaps
   VerticalAlign verticalAlign = VerticalAlign::Baseline;  // w:vertAlign
   bool hidden = false;         // w:vanish: laid out as if absent
@@ -109,10 +124,16 @@ struct ParagraphFormat {
   // From the column's start and end edges; firstLineIndent is negative for a hanging indent,
   // whose position is then also a tab stop on the first line.
   float startIndent = 0, endIndent = 0, firstLineIndent = 0;
+  // The first line's hanging-indent stop when it isn't startIndent (PowerPoint: an indent hanging
+  // past the edge starts the first line at the edge and its text at -indent); negative: none.
+  float hangingStop = -1;
   std::vector<TabStop> tabs;  // custom stops, by position; bar tabs are drawn by the caller
   float defaultTabStop = 36;  // w:defaultTabStop; default stops start after the last custom stop
   HyphenationSettings hyphenation;
   bool expandLineBreaks = true;  // justify lines ending in a line break (false: w:doNotExpandShiftReturn)
+  // Spaces before a paragraph mark or line break count when centering or right-aligning, as in
+  // Word; PowerPoint leaves them out (false).
+  bool alignTrailingSpaces = true;
   // A justified line may shrink its spaces to keep a word that overflows it, as Word 2013 and
   // later do (compatibility mode 15); earlier modes don't.
   bool squeezeSpaces = true;

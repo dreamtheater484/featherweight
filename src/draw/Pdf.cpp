@@ -6,9 +6,11 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <map>
 #include <optional>
@@ -53,6 +55,12 @@ std::string N(double v) {
   std::string s;
   Num(s, v);
   return s;
+}
+// To 5 significant digits, as PowerPoint writes its PDFs' page sizes and picture places.
+double Round5(double v) {
+  if (v == 0 || !std::isfinite(v)) return v;
+  const double scale = std::pow(10.0, 5 - static_cast<int>(std::ceil(std::log10(std::fabs(v)))));
+  return std::nearbyint(v * scale) / scale;
 }
 std::string Ref(uint32_t object) { return std::to_string(object) + " 0 R"; }
 
@@ -399,6 +407,7 @@ bool SameColor(const Color& a, const Color& b) { return a.r == b.r && a.g == b.g
 
 struct PdfDocument::Impl {
   Writer w;
+  bool picturesUp = false;  // PicturesAsPowerPoint
   uint32_t pagesObject = 0;
   struct PageRecord {
     uint32_t object = 0, contents = 0, resources = 0;
@@ -434,8 +443,8 @@ struct PdfDocument::Impl {
     }
     return slot;
   }
-  // The image for a bitmap: its name and object.
-  std::pair<std::string, uint32_t> ImageFor(const Bitmap& bitmap, bool smooth);
+  // The image for a bitmap: its name and object; `jpeg`, when given, is its pixels as a JPEG file.
+  std::pair<std::string, uint32_t> ImageFor(const Bitmap& bitmap, bool smooth, const std::vector<uint8_t>* jpeg = nullptr);
   void WriteFonts();
   std::vector<uint8_t> Finish();
 };
@@ -492,15 +501,18 @@ PdfFont* PdfDocument::Impl::FontFor(IDWriteFontFace* face) {
   return raw;
 }
 
-std::pair<std::string, uint32_t> PdfDocument::Impl::ImageFor(const Bitmap& bitmap, bool smooth) {
+std::pair<std::string, uint32_t> PdfDocument::Impl::ImageFor(const Bitmap& bitmap, bool smooth,
+                                                             const std::vector<uint8_t>* jpeg) {
   auto& slot = images[{bitmap.Id(), smooth}];
   if (slot.second) return slot;
   slot = {Name('I'), w.Reserve()};
   const std::string interpolate = smooth ? "/Interpolate true" : "";
   // A JPEG as it is: baseline or progressive, 8 bits, gray or color (CMYK files are decoded).
-  if (std::shared_ptr<const Image> source = bitmap.Jpeg()) {
+  std::shared_ptr<const Image> source = jpeg ? nullptr : bitmap.Jpeg();
+  if (jpeg || source) {
     std::vector<uint8_t> file;
-    if (source->Encoded(file) && file.size() > 4 && file[0] == 0xFF && file[1] == 0xD8) {
+    if (jpeg) file = *jpeg;
+    if ((jpeg || source->Encoded(file)) && file.size() > 4 && file[0] == 0xFF && file[1] == 0xD8) {
       int width = 0, height = 0, components = 0;
       for (size_t p = 2; p + 4 <= file.size();) {
         if (file[p] != 0xFF) break;
@@ -651,15 +663,21 @@ class PdfPainter : public Painter {
   void Transform(const Matrix& m) override {
     last_.face = nullptr;
     states_.back().ctm = m * states_.back().ctm;
+    const auto milli = [](float v) { return static_cast<float>(std::llround(std::clamp(std::isfinite(v) ? double(v) : 0.0, -1e12, 1e12) * 1000) / 1000.0); };
+    states_.back().written = Matrix{milli(m.m11), milli(m.m12), milli(m.m21), milli(m.m22), milli(m.dx), milli(m.dy)} * states_.back().written;
     Out() += MatrixOps(m) + "cm\n";
   }
   Matrix CurrentTransform() const override { return states_.back().ctm; }
   void ClipRect(const Rect& r) override {
     last_.face = nullptr;
+    states_.back().clip = std::make_shared<const std::pair<Path, Matrix>>(Path::FromRect(r), states_.back().ctm);
+    states_.back().clipDepth = states_.size();
     Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re W n\n";
   }
   void ClipPath(const Path& p) override {
     last_.face = nullptr;
+    states_.back().clip = std::make_shared<const std::pair<Path, Matrix>>(p, states_.back().ctm);
+    states_.back().clipDepth = states_.size();
     if (p.Empty()) {
       Out() += "0 0 0 0 re W n\n";
       return;
@@ -731,9 +749,12 @@ class PdfPainter : public Painter {
     Paint(b, false, [&] { Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re f\n"; }, r);
   }
   bool WantsText() const override { return true; }
+  int BakedPictureLimit() const override { return 1536; }
   void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) override;
   void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) override;
   void DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) override {
+    if (doc_.picturesUp)
+      if (std::shared_ptr<const Bitmap> gdi = RasterizeEmfWithGdi(image)) return DrawBitmap(*gdi, dest, nullptr, opacity);
     // At 300 dpi (plan §4.6, decision 9).
     const Matrix m = CurrentTransform();
     const float f = 300.f / 72;
@@ -745,11 +766,15 @@ class PdfPainter : public Painter {
  private:
   struct State {
     Matrix ctm;  // the engine's transform: points, y down
+    Matrix written;  // the same as the file has it, each cm's numbers rounded as written
     Color fill{0, 0, 0, 1}, stroke{0, 0, 0, 1};  // the current colors (alpha unused)
     int fillAlpha = 1000, strokeAlpha = 1000;
     bool group = false;  // Restore ends a group
     int groupOpacity = 1000;
     Matrix groupBase;
+    // The latest clip and the depth it was set at: a picture in a shadow casts its clip's shape.
+    std::shared_ptr<const std::pair<Path, Matrix>> clip;
+    size_t clipDepth = 0;
   };
   struct Level {
     std::string ops;
@@ -900,15 +925,30 @@ class PdfPainter : public Painter {
   }
 
   // The bitmap's pixels [0,w]x[0,h] (row 0 at the top) in the current coordinates.
-  void DrawImage(const Bitmap& bitmap, const Rect& r, bool smooth) {
-    const auto image = doc_.ImageFor(bitmap, smooth);
+  void DrawImage(const Bitmap& bitmap, const Rect& r, bool smooth, const std::vector<uint8_t>* jpeg = nullptr) {
+    const auto image = doc_.ImageFor(bitmap, smooth, jpeg);
     Res().xobjects[image.first] = image.second;
-    Out() += "q " + N(r.Width()) + " 0 0 " + N(-r.Height()) + " " + N(r.left) + " " + N(r.bottom) + " cm /" + image.first +
-             " Do Q\n";
+    // Slides' pictures to 5 decimals: where PowerPoint puts them is a matter of thousandths of a
+    // point (DrawPicture).
+    const auto n = [&](double v) {
+      if (!doc_.picturesUp) return N(v);
+      char s[48];
+      std::snprintf(s, sizeof s, "%.5f", std::isfinite(v) ? std::clamp(v, -1e9, 1e9) : 0.0);
+      std::string t = s;
+      while (t.back() == '0') t.pop_back();
+      if (t.back() == '.') t.pop_back();
+      return t == "-0" ? std::string("0") : t;
+    };
+    // (Where DrawBitmap worked it out to the 5 decimals, not as floats.)
+    const std::array<double, 4> e = exact_ ? *exact_ : std::array<double, 4>{r.left, r.top, r.right, r.bottom};
+    exact_.reset();
+    Out() += "q " + n(e[2] - e[0]) + " 0 0 " + n(e[1] - e[3]) + " " + n(e[0]) + " " + n(e[3]) + " cm /" + image.first + " Do Q\n";
   }
 
   PdfDocument::Impl& doc_;
   float width_, height_;
+  // The next picture's place as DrawBitmap rounded it (left, top, right, bottom), for DrawImage.
+  std::optional<std::array<double, 4>> exact_;
   Matrix flip_;  // page points (y down) to PDF's default space
   std::vector<Level> levels_;
   std::vector<State> states_;
@@ -1042,12 +1082,48 @@ bool PdfPainter::AppendSpaces(Point origin, const GlyphRun& run, const Brush&, P
 
 void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) {
   if (dest.Width() == 0 || dest.Height() == 0 || bitmap.Width() <= 0 || bitmap.Height() <= 0) return;
-  Cast(Path::FromRect(dest), states_.back().ctm, opacity);
+  // A picture clipped inside its shadow (an ellipse crop) casts the clip's shape, as Direct2D's
+  // shadow of what it drew does (our-dynamic-sun: round pictures, not blurred squares).
+  // Copies, not references into states_: Save() below may move it (who-health's intermittent crash).
+  const Matrix m = states_.back().ctm, f = states_.back().written;
+  {
+    const State& now = states_.back();
+    if (now.clip && !captures_.empty() && now.clipDepth >= captures_.back().depth)
+      Cast(now.clip->first, now.clip->second, opacity);
+    else
+      Cast(Path::FromRect(dest), now.ctm, opacity);
+  }
   const int a = std::clamp(static_cast<int>(std::lround(opacity * 1000)), 0, 1000);
   if (a == 0) return;
   Save();
   if (a < 1000) SetAlpha(a, states_.back().strokeAlpha);
   Rect at = dest;
+  // PowerPoint's PDFs hold a cropped picture's kept pixels, whole ones: from the nearest pixel edge,
+  // as many as the crop keeps, rounded (unisaarland's photos); a PDF viewer then fits them to the
+  // shape as it does PowerPoint's.
+  std::shared_ptr<const Bitmap> kept;
+  const std::shared_ptr<const Image> jpeg = bitmap.Jpeg();
+  if (doc_.picturesUp && src && src->Width() > 0 && src->Height() > 0) {
+    // A JPEG decoded smaller (a big picture) is cropped in its own pixels, as it is embedded.
+    const Bitmap* from = &bitmap;
+    std::shared_ptr<const Bitmap> full;
+    if (jpeg && (jpeg->Width() != bitmap.Width() || jpeg->Height() != bitmap.Height()) && (full = jpeg->Pixels()) &&
+        full->Width() == jpeg->Width() && full->Height() == jpeg->Height())
+      from = full.get();
+    const float kx = static_cast<float>(from->Width()) / bitmap.Width(), ky = static_cast<float>(from->Height()) / bitmap.Height();
+    const long l = std::lround(src->left * kx), t = std::lround(src->top * ky);
+    const long w = std::lround(src->Width() * kx), h = std::lround(src->Height() * ky);
+    if (l == 0 && t == 0 && w == from->Width() && h == from->Height()) {
+      src = nullptr;  // all of it
+    } else if (l >= 0 && t >= 0 && w > 0 && h > 0 && l + w <= from->Width() && t + h <= from->Height()) {
+      std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+      for (long y = 0; y < h; ++y)
+        std::memcpy(px.data() + static_cast<size_t>(y) * w * 4,
+                    from->Pixels() + (static_cast<size_t>(t + y) * from->Width() + l) * 4, static_cast<size_t>(w) * 4);
+      kept = std::make_shared<const Bitmap>(static_cast<int>(w), static_cast<int>(h), std::move(px));
+      src = nullptr;
+    }
+  }
   if (src && src->Width() > 0 && src->Height() > 0) {
     // The whole picture placed so `src` lands on `dest`, clipped to it.
     const float sx = dest.Width() / src->Width(), sy = dest.Height() / src->Height();
@@ -1055,7 +1131,43 @@ void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
           dest.top + (bitmap.Height() - src->top) * sy};
     ClipRect(dest);
   }
-  DrawImage(bitmap, at, true);
+  // PowerPoint writes a picture's place in the page's own coordinates (y up), each number to 5
+  // significant digits, from its bottom left, and a PDF viewer (pdfium) resamples it from wherever
+  // that puts it to a thousandth of a pixel: goettingen 3's photo, 465.3954 points high, is written
+  // 465.4 high from 0.44122, its top 0.0047 points above where it is. Its float arithmetic puts the
+  // bottom a hair higher too, about 0.00006 (letters-home 1's background at 0.000061, era-systems'
+  // hash overlay). The same here, through the transform as the file has it (its numbers rounded):
+  // acuk 27 -> 40/41, unisaarland +2.
+  if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m11 > 0 && m.m22 > 0 && f.m12 == 0 && f.m21 == 0 && f.m11 > 0 &&
+      f.m22 > 0) {
+    const double left = double(m.m11) * at.left + m.dx, right = double(m.m11) * at.right + m.dx;
+    const double top = double(m.m22) * at.top + m.dy, bottom = double(m.m22) * at.bottom + m.dy;
+    constexpr double kHair = 0.00006;
+    const double x = Round5(left), y = Round5(height_ - bottom) + kHair, w = Round5(right - left), h = Round5(bottom - top);
+    exact_ = std::array<double, 4>{(x - f.dx) / f.m11, (height_ - y - h - f.dy) / f.m22, (x + w - f.dx) / f.m11, (height_ - y - f.dy) / f.m22};
+    at = {static_cast<float>((*exact_)[0]), static_cast<float>((*exact_)[1]), static_cast<float>((*exact_)[2]),
+          static_cast<float>((*exact_)[3])};
+  } else if (doc_.picturesUp && m.m12 == 0 && m.m21 == 0 && m.m22 != 0) {
+    // Turned or flipped: a hair higher only.
+    const float up = m.m22 > 0 ? -0.001f : 0.001f;
+    at.top += up;
+    at.bottom += up;
+  }
+  if (kept && jpeg) {
+    // A JPEG's kept pixels as a JPEG again, as PowerPoint writes them (its quality).
+    const std::vector<uint8_t> file = EncodeJpeg(*kept, 0.75f);
+    DrawImage(*kept, at, true, file.empty() ? nullptr : &file);
+  } else if (jpeg && doc_.picturesUp) {
+    // PowerPoint's PDFs hold every JPEG picture encoded again at its quality 75, whatever the file's
+    // own (goettingen 3's photo: byte for byte libjpeg's quality 75); once for each picture.
+    // (Its own pixels, all of them, though it was decoded smaller to draw: the file is the image.)
+    std::vector<uint8_t> file;
+    if (!doc_.images.count({bitmap.Id(), true}))
+      if (std::shared_ptr<const Bitmap> full = jpeg->Pixels()) file = EncodeJpeg(*full, 0.75f);
+    DrawImage(bitmap, at, true, file.empty() ? nullptr : &file);
+  } else {
+    DrawImage(kept ? *kept : bitmap, at, true);
+  }
   Restore();
 }
 
@@ -1481,7 +1593,11 @@ std::vector<uint8_t> PdfDocument::Impl::Finish() {
       w.Object(o, a);
       annots += Ref(o) + " ";
     }
-    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(p.width) + " " + N(p.height) +
+    // A slide's page in whole 600-dpi pixels, as PowerPoint's (goettingen's 960.125-point slides are
+    // 960.12 wide there, which a PDF viewer draws a pixel narrower at 100 dpi, its scale with it;
+    // unimuenster's 961 are 960.96).
+    const auto box = [&](double v) { return picturesUp ? PdfDocument::PowerPointBox(v) : v; };
+    w.Object(p.object, "<</Type/Page/Parent " + Ref(pagesObject) + "/MediaBox[0 0 " + N(box(p.width)) + " " + N(box(p.height)) +
                            "]/Contents " + Ref(p.contents) + "/Resources " + Ref(p.resources) +
                            (annots.empty() ? "" : "/Annots[" + annots + "]") + ">>");
     kids += Ref(p.object) + " ";
@@ -1599,6 +1715,10 @@ void PdfDocument::AddLink(size_t page, const Rect& rect, size_t toPage, float to
 void PdfDocument::AddOutline(int level, const std::u16string& title, size_t page, float y) {
   impl_->outline.push_back({level, title, page, y});
 }
+
+void PdfDocument::PicturesAsPowerPoint() { impl_->picturesUp = true; }
+
+double PdfDocument::PowerPointBox(double points) { return std::nearbyint(points * 600 / 72) * 72 / 600; }
 
 void PdfDocument::SetInfo(const std::u16string& title, const std::u16string& author) {
   impl_->title = title;

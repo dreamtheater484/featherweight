@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,263 @@ TEST(Chart_DrawsABarForEachValueAndALegend) {
   }
 }
 
+TEST(Chart_LegendEntriesLeftOutAndALabelStep) {
+  // c:legendEntry/c:delete leaves a series out of the legend (its bars stay); c:tickLblSkip is
+  // the category labels' step, as Office shows them (govuk business bodies' charts).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"b\"/><c:legendEntry><c:idx val=\"1\"/><c:delete val=\"1\"/></c:legendEntry>");
+  xml.replace(xml.find("<c:crossAx val=\"2\"/></c:catAx>"), 29, "<c:crossAx val=\"2\"/><c:tickLblSkip val=\"2\"/></c:catAx>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK(c.hiddenEntries == std::vector<uint32_t>{1});
+  CHECK_EQ(c.category.labelSkip, 2);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
+  CHECK_EQ(Filled(art, first), 4u);   // three bars and the legend's swatch
+  CHECK_EQ(Filled(art, second), 3u);  // three bars, no swatch
+}
+
+TEST(Chart_ManualLayoutPlacesThePlotAndLegend) {
+  // c:manualLayout in edge mode: the plot area's inner box is the plot itself; the legend sits in
+  // its own box and takes no room from the plot (govuk business bodies, 15-213).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:plotArea>"), 12,
+              "<c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/>"
+              "<c:x val=\"0.25\"/><c:y val=\"0.1\"/><c:w val=\"0.5\"/><c:h val=\"0.6\"/></c:manualLayout></c:layout>");
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"b\"/><c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.8\"/>"
+              "<c:y val=\"0\"/><c:w val=\"0.2\"/><c:h val=\"0.1\"/></c:manualLayout></c:layout>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.plotLayout.has_value() && c.legendLayout.has_value());
+  CHECK(c.plotInner);
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  // The bars stand on the plot's bottom (0.7 x 200) and keep within its sides (100 to 300).
+  const draw::Color first = *draw::SchemeColor("accent1", Colors());
+  bool any = false;
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, first)) {
+      const draw::Rect b = m.path.Bounds();
+      if (b.top < 20) continue;  // the legend's swatch, at the top
+      any = true;
+      CHECK(b.left >= 99 && b.right <= 301);
+      CHECK(std::fabs(b.bottom - 140) < 1);
+    }
+  CHECK(any);
+}
+
+// A line chart of one series (Q1 to Q3: 10, 20, 30) whose plot the chart places (inner, x from
+// `x` and `w` of the chart's width, 0.1 to 0.8 of its height); `ser` goes into the series after its
+// name, `valAx` into the value axis.
+std::string PlacedLineChart(const std::string& ser, double x, double w, const std::string& valAx = {}) {
+  std::string s = Ser(0, "North", {"Q1", "Q2", "Q3"}, {"10", "20", "30"});
+  s.insert(s.find("</c:tx>") + 7, ser);
+  std::string axes = kAxes;
+  axes.replace(axes.find("</c:barChart>"), 13, "</c:lineChart>");
+  axes.insert(axes.find("<c:axPos val=\"l\"/>") + 18, valAx);
+  return std::string("<c:chartSpace") + kNs +
+         "><c:chart><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/>"
+         "<c:yMode val=\"edge\"/><c:x val=\"" + std::to_string(x) + "\"/><c:y val=\"0.1\"/><c:w val=\"" + std::to_string(w) +
+         "\"/><c:h val=\"0.7\"/></c:manualLayout></c:layout><c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>" + s +
+         "<c:marker val=\"0\"/>" + axes + "</c:plotArea></c:chart></c:chartSpace>";
+}
+
+// The series' line in `art`: its stroke in `rgb`.
+const draw::Art::Mark* LineOf(const draw::Art& art, uint32_t rgb) {
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::None && m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, draw::Rgb(rgb)))
+      return &m;
+  return nullptr;
+}
+
+TEST(Chart_PointLabelsStartBesideTheirPointsInsideTheChart) {
+  // A point's own label (c:dLbl) starts to the right of its point, 5.5 points off and centred on
+  // it, but inside the chart, and is then moved by its c:manualLayout offset; c15:layout gives its
+  // box a size of its own. A dotted line's dots are as long as its round ends (sysDot at 2 points:
+  // dots 4 apart). PowerPoint's PDFs of govuk business bodies' value boxes and panel names.
+  const std::string labels =
+      "<c:spPr><a:ln w=\"25400\"><a:solidFill><a:srgbClr val=\"0000FF\"/></a:solidFill><a:prstDash val=\"sysDot\"/></a:ln></c:spPr>"
+      "<c:dLbls><c:dLbl><c:idx val=\"0\"/><c:layout><c:manualLayout><c:x val=\"-0.1\"/><c:y val=\"0\"/></c:manualLayout></c:layout>"
+      "<c:tx><c:rich><a:bodyPr lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\"/><a:p><a:r><a:t>Panel</a:t></a:r></a:p></c:rich></c:tx>"
+      "<c:spPr><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill></c:spPr><c:showVal val=\"0\"/><c:showSerName val=\"1\"/>"
+      "<c:extLst><c:ext uri=\"{CE6537A1-D6FC-4f65-9D91-7224C49458BB}\" xmlns:c15=\"http://schemas.microsoft.com/office/drawing/2012/chart\">"
+      "<c15:layout><c:manualLayout><c:w val=\"0.8\"/><c:h val=\"0.1\"/></c:manualLayout></c15:layout></c:ext></c:extLst></c:dLbl>"
+      "<c:dLbl><c:idx val=\"2\"/><c:spPr><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></c:spPr>"
+      "<c:txPr><a:bodyPr lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\"/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>"
+      "<c:showVal val=\"1\"/></c:dLbl><c:showVal val=\"0\"/></c:dLbls>";
+  Parsed p(PlacedLineChart(labels, 0.2, 0.6));
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1u && c.groups[0].series.size() == 1u);
+  CHECK_EQ(c.groups[0].series[0].pointLabels.size(), 2u);
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  const draw::Art::Mark* line = LineOf(art, 0x0000FF);
+  REQUIRE(line != nullptr);
+  CHECK(line->line.dashes == std::vector<float>({0, 2}));
+  // The plot runs from 80 to 320: the points at 120, 200 and 280, the last (30) the line's top.
+  const draw::Rect l = line->path.Bounds();
+  CHECK(std::fabs(l.left - 120) < 0.01 && std::fabs(l.right - 280) < 0.01);
+  bool red = false, green = false;
+  for (const auto& m : art.marks) {
+    if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+    const draw::Rect b = m.path.Bounds();
+    if (Same(m.fill.color, draw::Rgb(0xFF0000))) {
+      // The value's box: its text's size (no insets), 5.5 points right of the point, centred on it.
+      red = true;
+      CHECK(std::fabs(b.left - 285.5f) < 0.01);
+      CHECK(std::fabs((b.top + b.bottom) / 2 - l.top) < 0.01);
+      CHECK(b.right - b.left > 5 && b.right - b.left < 20);
+    } else if (Same(m.fill.color, draw::Rgb(0x00FF00))) {
+      // The name's box, 320 by 20: beside its point it would pass the chart's right edge, so it
+      // starts at 80, and is moved 40 left.
+      green = true;
+      CHECK(std::fabs(b.left - 40) < 0.01 && std::fabs(b.right - 360) < 0.01);
+      CHECK(std::fabs(b.bottom - b.top - 20) < 0.01);
+      CHECK(std::fabs((b.top + b.bottom) / 2 - l.bottom) < 0.01);
+    }
+  }
+  CHECK(red && green);
+}
+
+TEST(Chart_PlacedPlotKeepsItsLabelsInsideTheChart) {
+  // A plot placed as wide as the chart: PowerPoint narrows it until the value labels beside it,
+  // and the first and last category labels centred under their points, are inside the chart. With
+  // c:tickLblPos high the value labels are up the right side.
+  for (const bool high : {false, true}) {
+    Parsed p(PlacedLineChart("<c:spPr><a:ln><a:solidFill><a:srgbClr val=\"0000FF\"/></a:solidFill></a:ln></c:spPr>", 0, 1,
+                             high ? "<c:tickLblPos val=\"high\"/>" : ""));
+    Chart c;
+    REQUIRE(Read(p.Root(), Colors(), c));
+    CHECK_EQ(c.value.labelsHigh, high);
+    const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+    const draw::Art::Mark* line = LineOf(art, 0x0000FF);
+    REQUIRE(line != nullptr);
+    const draw::Rect l = line->path.Bounds();
+    float leftmost = 400, rightmost = 0;
+    for (const auto& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+      const draw::Rect r = m.path.Bounds();
+      const draw::Point a = m.transform.Apply({r.left, r.top}), z = m.transform.Apply({r.right, r.bottom});
+      const draw::Rect b{std::min(a.x, z.x), std::min(a.y, z.y), std::max(a.x, z.x), std::max(a.y, z.y)};
+      if (b.right - b.left > 300) continue;  // the chart's background
+      CHECK(b.left >= 0 && b.right <= 400);
+      leftmost = std::min(leftmost, b.left), rightmost = std::max(rightmost, b.right);
+    }
+    // The value labels, the outermost text, on their side of the line.
+    if (high) CHECK(rightmost > l.right + 50 && rightmost > 390);
+    else CHECK(leftmost < l.left - 50 && leftmost < 10);
+  }
+}
+
+TEST(Chart_PlotKeepsTheSideMarginBesideALegend) {
+  // With 18-point text and the legend at the right, the plot ends 11.2 + 4.6 points before the
+  // legend's keys, the margin at the sides not growing past 10-point text on the legend's side
+  // either (PowerPoint's PDF of the poi line chart: 15.6 points).
+  std::string xml = PlacedLineChart("<c:spPr><a:ln><a:solidFill><a:srgbClr val=\"0000FF\"/></a:solidFill></a:ln></c:spPr>", 0, 1);
+  const size_t layout = xml.find("<c:layout>"), end = xml.find("</c:layout>") + 11;
+  xml.erase(layout, end - layout);
+  xml.replace(xml.find("</c:plotArea></c:chart>"), 23,
+              "</c:plotArea><c:legend><c:legendPos val=\"r\"/><c:overlay val=\"0\"/></c:legend></c:chart>"
+              "<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr></a:p></c:txPr>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {480, 320}, Colors(), L"Calibri");
+  float plotRight = -1, keyLeft = -1;
+  for (const auto& m : art.marks) {
+    if (m.line.fill.kind != draw::Fill::Kind::Solid) continue;
+    draw::Rect b = m.path.Bounds();
+    b = {b.left * m.transform.m11 + m.transform.dx, b.top + m.transform.dy, b.right * m.transform.m11 + m.transform.dx,
+         b.bottom + m.transform.dy};
+    if (b.bottom - b.top > 0.01f) continue;  // horizontal strokes only
+    if (Same(m.line.fill.color, draw::Rgb(0x0000FF)) && b.right - b.left < 25) keyLeft = b.left;
+    else if (b.right - b.left > 100) plotRight = std::max(plotRight, b.right);
+  }
+  REQUIRE(plotRight > 0 && keyLeft > 0);
+  CHECK_NEAR(keyLeft - plotRight, 11.2f + 4.6f, 0.05);
+}
+
+TEST(Chart_PlacedLegendSpreadsItsEntriesDownItsBox) {
+  // A legend at the side the chart places (c:manualLayout) fills its box: the keys 7.13 points in
+  // from its left, the entries spread evenly down it, its border as its c:spPr says (PowerPoint's
+  // PDFs, 15-213's memory gap: six 12-point entries in a 91-point box).
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22,
+              "<c:legendPos val=\"r\"/><c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.7\"/>"
+              "<c:y val=\"0.2\"/><c:w val=\"0.3\"/><c:h val=\"0.4\"/></c:manualLayout></c:layout><c:overlay val=\"1\"/>"
+              "<c:spPr><a:noFill/><a:ln w=\"9525\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:ln></c:spPr>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  // The box: 280 to 400 across, 40 to 120 down; two entries, centred 60 and 100 down.
+  bool border = false;
+  for (const auto& m : art.marks)
+    if (m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, draw::Rgb(0xFF0000))) {
+      const draw::Rect b = m.path.Bounds();
+      border = std::fabs(b.left - 280) < 0.01 && std::fabs(b.top - 40) < 0.01 && std::fabs(b.right - 400) < 0.01 && std::fabs(b.bottom - 120) < 0.01;
+    }
+  CHECK(border);
+  const auto swatch = [&](const char* accent) {
+    const draw::Color color = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.left >= 280) return b;
+    }
+    return draw::Rect{};
+  };
+  const draw::Rect first = swatch("accent1"), second = swatch("accent2");
+  CHECK(std::fabs(first.left - 287.13f) < 0.01 && std::fabs(second.left - 287.13f) < 0.01);
+  CHECK(std::fabs((first.top + first.bottom) / 2 - 60) < 0.01);
+  CHECK(std::fabs((second.top + second.bottom) / 2 - 100) < 0.01);
+  // One at the bottom in a box too narrow for its entries in a row lists them down it all the same
+  // (business bodies 33's doughnuts): a 60-point box.
+  std::string bottom = xml;
+  bottom.replace(bottom.find("<c:legendPos val=\"r\"/>"), 22, "<c:legendPos val=\"b\"/>");
+  bottom.replace(bottom.find("<c:w val=\"0.3\"/>"), 16, "<c:w val=\"0.15\"/>");
+  Parsed q(bottom);
+  Chart narrow;
+  REQUIRE(Read(q.Root(), Colors(), narrow));
+  const draw::Art down = Draw(narrow, {400, 200}, Colors(), L"Calibri");
+  const auto swatchIn = [&](const char* accent) {
+    const draw::Color color = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : down.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.left >= 280) return b;
+    }
+    return draw::Rect{};
+  };
+  const draw::Rect one = swatchIn("accent1"), two = swatchIn("accent2");
+  CHECK(std::fabs(one.left - 287.13f) < 0.01 && std::fabs(two.left - 287.13f) < 0.01);
+  CHECK(std::fabs((one.top + one.bottom) / 2 - 60) < 0.01);
+  CHECK(std::fabs((two.top + two.bottom) / 2 - 100) < 0.01);
+}
+
+TEST(Chart_LogarithmicValueAxis) {
+  // c:logBase 10 with a minimum of 0.01: values a thousandfold apart, gridlines at each power of
+  // ten up to the one above the largest (15-213's memory gap chart).
+  std::string xml = ColumnChart();
+  const std::string from = "<c:axId val=\"2\"/><c:axPos val=\"l\"/>";
+  xml.replace(xml.find(from), from.size(),
+              "<c:axId val=\"2\"/><c:scaling><c:logBase val=\"10\"/><c:orientation val=\"minMax\"/><c:min val=\"0.01\"/></c:scaling>"
+              "<c:axPos val=\"l\"/>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK_EQ(c.value.logBase, 10.0);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  size_t marks = 0;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    CHECK(std::isfinite(b.left) && std::isfinite(b.top) && std::isfinite(b.right) && std::isfinite(b.bottom));
+    ++marks;
+  }
+  CHECK(marks > 0);
+}
+
 TEST(Chart_PieSlicesAndPercentLabels) {
   Parsed p(PieChart());
   Chart c;
@@ -142,6 +400,85 @@ TEST(Chart_PieSlicesAndPercentLabels) {
     CHECK_EQ(Filled(art, slice), 2u);  // a slice and its legend swatch
   }
   for (const auto& m : art.marks) CHECK(m.fill.kind != draw::Fill::Kind::Solid || m.line.fill.kind == draw::Fill::Kind::None || m.path.Bounds().right - m.path.Bounds().left > 290);
+}
+
+TEST(Chart_PlacedPieIsTheLargestCircleInItsBox) {
+  // A pie whose plot area the chart places (c:manualLayout, inner) is the largest circle in that
+  // box, centred in it (PowerPoint's PDFs, govuk business bodies' doughnuts): here 160 points
+  // across, centred at (260, 100) in a 400 x 200 chart.
+  std::string xml = PieChart();
+  xml.insert(xml.find("<c:plotArea>") + 12,
+             "<c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"0.4\"/>"
+             "<c:y val=\"0.1\"/><c:w val=\"0.5\"/><c:h val=\"0.8\"/></c:manualLayout></c:layout>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  draw::Rect pie{1e9f, 1e9f, -1e9f, -1e9f};
+  for (const char* accent : {"accent1", "accent2", "accent3", "accent4"}) {
+    draw::Color slice = *draw::SchemeColor(accent, Colors());
+    draw::ApplyColorTransform(slice, "shade", 76000);
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind != draw::Fill::Kind::Solid || !Same(m.fill.color, slice) || b.right - b.left < 20) continue;  // not swatches
+      pie = {std::min(pie.left, b.left), std::min(pie.top, b.top), std::max(pie.right, b.right), std::max(pie.bottom, b.bottom)};
+    }
+  }
+  // (The arcs' points, not the curves: within half a point of the circle's extremes.)
+  CHECK_NEAR(pie.left, 180, 0.5);
+  CHECK_NEAR(pie.right, 340, 0.5);
+  CHECK_NEAR(pie.top, 20, 0.5);
+  CHECK_NEAR(pie.bottom, 180, 0.5);
+}
+
+TEST(Chart_PlacedDoughnutPullsItsSlicesOut) {
+  // A placed doughnut whose series is pulled out 10 % and its second slice 20 %: the ring's radius
+  // is the box's half over 1.1, each slice moved out by its share of it, the second past the box
+  // (PowerPoint's PDFs, business bodies 10). Two halves: the first right, the second left.
+  const std::string xml =
+      std::string("<c:chartSpace") + kNs +
+      "><c:chart><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val=\"inner\"/><c:xMode val=\"edge\"/>"
+      "<c:yMode val=\"edge\"/><c:x val=\"0.25\"/><c:y val=\"0\"/><c:w val=\"0.5\"/><c:h val=\"1\"/></c:manualLayout></c:layout>"
+      "<c:doughnutChart><c:varyColors val=\"1\"/>" +
+      [] {
+        std::string s = Ser(0, "Share", {"A", "B"}, {"1", "1"});
+        s.insert(s.find("</c:tx>") + 7, "<c:dPt><c:idx val=\"1\"/><c:bubble3D val=\"0\"/><c:explosion val=\"20\"/></c:dPt>");
+        s.insert(s.find("</c:ser>"), "<c:explosion val=\"10\"/>");
+        return s;
+      }() +
+      "<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart></c:plotArea></c:chart></c:chartSpace>";
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const draw::Art art = Draw(c, {400, 200}, Colors(), L"Calibri");
+  std::vector<draw::Rect> slices;
+  for (const auto& m : art.marks) {
+    const draw::Rect b = m.path.Bounds();
+    // (Not the chart area's own fill.)
+    if (m.fill.kind == draw::Fill::Kind::Solid && b.right - b.left > 20 && b.right - b.left < 300 && b.bottom - b.top > 100)
+      slices.push_back(b);
+  }
+  REQUIRE(slices.size() == 2u);
+  const float R = 100 / 1.1f;
+  const draw::Rect& right = slices[0].left > slices[1].left ? slices[0] : slices[1];
+  const draw::Rect& left = slices[0].left > slices[1].left ? slices[1] : slices[0];
+  CHECK_NEAR(right.right, 200 + R * 1.1f, 0.5);
+  CHECK_NEAR(left.left, 200 - R * 1.2f, 0.5);
+  CHECK_NEAR(right.top, 100 - R, 0.5);
+}
+
+TEST(Chart_EmptyChartInADeckDrawsNothing) {
+  // A doughnut without a series: in a deck, nothing (PowerPoint's PDF of goettingen 2), not the
+  // placeholder; in a workbook or document still the placeholder (Read says no).
+  const std::string xml = std::string("<c:chartSpace") + kNs +
+                          "><c:chart><c:plotArea><c:layout/><c:doughnutChart><c:varyColors val=\"1\"/><c:holeSize val=\"50\"/>"
+                          "</c:doughnutChart></c:plotArea></c:chart><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>";
+  Parsed p(xml);
+  Chart c;
+  CHECK(!Read(p.Root(), Colors(), c));
+  REQUIRE(Read(p.Root(), Colors(), c, nullptr, true));
+  CHECK(c.groups.empty());
+  CHECK(Draw(c, {200, 100}, Colors(), L"Calibri").marks.empty());
 }
 
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
@@ -204,25 +541,172 @@ TEST(Chart_StackedSeriesListedAsTheyStack) {
   const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
   // The legend's swatches: the second series' above the first's.
   const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
-  auto swatchTop = [&](const draw::Color& color) {
+  auto swatchTop = [&](const draw::Art& drawn, const draw::Color& color) {
     float top = -1;
-    for (const auto& m : art.marks) {
+    for (const auto& m : drawn.marks) {
       const draw::Rect b = m.path.Bounds();
       if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.right - b.left < 10 && b.bottom - b.top < 10)
         top = b.top;  // a swatch, not a bar
     }
     return top;
   };
-  CHECK(swatchTop(second) >= 0 && swatchTop(first) > swatchTop(second));
+  CHECK(swatchTop(art, second) >= 0 && swatchTop(art, first) > swatchTop(art, second));
+  // Stacked horizontal bars, left to right, list theirs in order (business bodies 33).
+  xml.replace(xml.find("<c:barDir val=\"col\"/>"), 21, "<c:barDir val=\"bar\"/>");
+  Parsed q(xml);
+  Chart bars;
+  REQUIRE(Read(q.Root(), Colors(), bars));
+  REQUIRE(bars.groups.size() == 1u && bars.groups[0].type == Type::Bar);
+  const draw::Art drawn = Draw(bars, {360, 216}, Colors(), L"Calibri");
+  CHECK(swatchTop(drawn, first) >= 0 && swatchTop(drawn, second) > swatchTop(drawn, first));
+}
+
+TEST(Chart_SeriesLabelsTakeTheirOwnTextAndFields) {
+  // A series' labels in its c:dLbls/c:txPr's size, weight and color, a point's own text with its
+  // value field filled in (business bodies 33's 14-point bold navy "[VALUE]%" labels).
+  std::string xml = ColumnChart();
+  const std::string dLbls =
+      "<c:dLbls><c:dLbl><c:idx val=\"0\"/><c:tx><c:rich><a:bodyPr/><a:p><a:fld id=\"{0}\" type=\"VALUE\"><a:rPr lang=\"en-US\"/>"
+      "<a:t>[VALUE]</a:t></a:fld><a:r><a:rPr lang=\"en-US\"/><a:t>%</a:t></a:r></a:p></c:rich></c:tx><c:showVal val=\"1\"/></c:dLbl>"
+      "<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1400\" b=\"1\"><a:solidFill><a:srgbClr val=\"002060\"/></a:solidFill></a:defRPr>"
+      "</a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr><c:showVal val=\"1\"/></c:dLbls>";
+  xml.insert(xml.find("</c:ser>"), dLbls);
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1u && c.groups[0].series.size() == 2u);
+  const Series& s = c.groups[0].series[0];
+  CHECK_EQ(s.labelSize, 14.0f);
+  CHECK(s.labelBold == true);
+  CHECK(s.labelColor && Same(*s.labelColor, draw::Rgb(0x002060)));
+  REQUIRE(s.pointLabels.size() == 1u);
+  CHECK(s.pointLabels[0].text == std::wstring(1, kValueField) + L"%");
+  CHECK(!s.pointLabels[0].bold && s.pointLabels[0].size < 0);  // its own text says neither: the series'
+  CHECK(c.groups[0].series[1].labelSize < 0 && !c.groups[0].series[1].labelBold);  // unstated: the chart's
+  // Drawn: the first series' three labels in navy, 14-point (digits about 9 points high).
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  int navy = 0;
+  float tallest = 0;
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, draw::Rgb(0x002060))) {
+      ++navy;
+      tallest = std::max(tallest, m.path.Bounds().bottom - m.path.Bounds().top);
+    }
+  CHECK(navy >= 1);
+  CHECK(tallest > 8 && tallest < 12);
 }
 
 TEST(Chart_OtherTypesStayPlaceholders) {
-  Parsed bubble(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:bubbleChart>" + Ser(0, "S", {"a"}, {"1"}) +
-                "</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>");
+  Parsed stock(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:stockChart>" + Ser(0, "S", {"a"}, {"1"}) +
+               "</c:stockChart></c:plotArea></c:chart></c:chartSpace>");
   Chart c;
-  CHECK(!Read(bubble.Root(), Colors(), c));
+  CHECK(!Read(stock.Root(), Colors(), c));
   Parsed empty(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea/></c:chart></c:chartSpace>");
   CHECK(!Read(empty.Root(), Colors(), c));
+}
+
+TEST(Chart_UnstatedChartAreaFillByProgram) {
+  // No chart-area c:spPr: white in a workbook or document, unfilled on a slide (PowerPoint shows
+  // the slide through it); a stated fill is drawn on a slide too.
+  // Whether something fills the whole chart area.
+  const auto filledArea = [](const std::string& xml, bool presentation) {
+    Parsed doc(xml);
+    Chart c;
+    if (!Read(doc.Root(), Colors(), c, nullptr, presentation)) return false;
+    const draw::Art art = Draw(c, {400, 300}, Colors(), L"Calibri");
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && b.right - b.left >= 399 && b.bottom - b.top >= 299) return true;
+    }
+    return false;
+  };
+  CHECK(filledArea(ColumnChart(), false));
+  CHECK(!filledArea(ColumnChart(), true));
+  std::string stated = ColumnChart();
+  stated.insert(stated.rfind("</c:chartSpace>"), "<c:spPr><a:solidFill><a:srgbClr val=\"FFFF00\"/></a:solidFill></c:spPr>");
+  CHECK(filledArea(stated, true));
+}
+
+TEST(Chart_SlideTitleIsTheTextSizeTimesOnePointTwo) {
+  // A styled chart (c14:style) on a slide with c:txPr at 18 pt and an automatic title: 21.6 pt
+  // (poi line chart in PowerPoint's PDF); in a workbook Excel's 14/9 ratio stays.
+  std::string xml = ColumnChart();
+  const std::string title = "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title>";
+  xml.replace(xml.find(title), title.size(), "<c:title><c:overlay val=\"0\"/></c:title>");
+  xml.insert(xml.find("<c:chart>"), "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+                                    "<mc:Choice Requires=\"c14\" xmlns:c14=\"http://schemas.microsoft.com/office/drawing/2007/8/2/chart\">"
+                                    "<c14:style val=\"102\"/></mc:Choice><mc:Fallback><c:style val=\"2\"/></mc:Fallback></mc:AlternateContent>");
+  xml.insert(xml.rfind("</c:chartSpace>"), "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1800\"/></a:pPr>"
+                                           "<a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>");
+  Parsed doc(xml);
+  Chart slide, book;
+  CHECK(Read(doc.Root(), Colors(), slide, nullptr, true));
+  CHECK_NEAR(slide.titleSize, 21.6f, 0.01f);
+  CHECK(Read(doc.Root(), Colors(), book, nullptr, false));
+  CHECK_NEAR(book.titleSize, 28.f, 0.01f);
+}
+
+TEST(Chart_SlideLabelRoomFollowsTheFontsAscent) {
+  // Segoe UI's ascent (1.08 em) is 13 % over Calibri's (.95): on a slide the category labels below
+  // the plot take that much more room, so the bars end higher (PowerPoint's PDFs); in a workbook
+  // the room stays Calibri's.
+  CHECK_NEAR(draw::TextAscent(L"Calibri", false, false), 0.952f, 0.01f);
+  Parsed doc(ColumnChart());
+  const auto plotBottom = [](const draw::Art& art) {
+    float bottom = -1e9f;
+    for (const auto& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+      for (const draw::Path::Polygon& f : m.path.Flatten(0.25f)) {
+        float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f;
+        for (const draw::Point& pt : f.points) l = std::min(l, pt.x), t = std::min(t, pt.y), r = std::max(r, pt.x), b = std::max(b, pt.y);
+        if (r - l > 10 && b - t > 20 && r - l < 100) bottom = std::max(bottom, b);  // a bar
+      }
+    }
+    return bottom;
+  };
+  for (const bool slide : {true, false}) {
+    Chart c;
+    REQUIRE(Read(doc.Root(), Colors(), c, nullptr, slide));
+    const float calibri = plotBottom(Draw(c, {360, 216}, Colors(), L"Calibri"));
+    const float segoe = plotBottom(Draw(c, {360, 216}, Colors(), L"Segoe UI"));
+    CHECK(calibri > 100);
+    if (slide) CHECK(segoe < calibri - 1);
+    else CHECK_NEAR(segoe, calibri, 0.01f);
+  }
+}
+
+TEST(Chart_BubblesByArea) {
+  // Bubbles at (x, y) sized by area: four times the size, twice as wide; the largest a quarter of
+  // the plot's smaller side across (PowerPoint's PDFs). A series each, so each has its own color.
+  const auto ser = [](int i, const char* x, const char* y, const char* size) {
+    return "<c:ser><c:idx val=\"" + std::to_string(i) + "\"/><c:order val=\"" + std::to_string(i) + "\"/><c:xVal>" +
+           Cache("numLit", {x}) + "</c:xVal><c:yVal>" + Cache("numLit", {y}) + "</c:yVal><c:bubbleSize>" +
+           Cache("numLit", {size}) + "</c:bubbleSize></c:ser>";
+  };
+  Parsed bubble(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:bubbleChart><c:varyColors val=\"0\"/>" +
+                ser(0, "1", "3", "1") + ser(1, "2", "5", "4") +
+                "<c:axId val=\"1\"/><c:axId val=\"2\"/></c:bubbleChart>"
+                "<c:valAx><c:axId val=\"1\"/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/></c:valAx>"
+                "<c:valAx><c:axId val=\"2\"/><c:axPos val=\"l\"/><c:crossAx val=\"1\"/></c:valAx></c:plotArea>"
+                "</c:chart></c:chartSpace>");
+  Chart c;
+  REQUIRE(Read(bubble.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1 && c.groups[0].type == Type::Bubble && c.groups[0].series.size() == 2);
+  const Series& s = c.groups[0].series[1];
+  CHECK(s.xs.size() == 1 && s.xs[0] == 2 && s.values[0] == 5 && s.sizes.size() == 1 && s.sizes[0] == 4);
+  const draw::Art art = Draw(c, {400, 300}, Colors(), L"Calibri");
+  const auto width = [&](const char* accent) {
+    const draw::Color fill = *draw::SchemeColor(accent, Colors());
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, fill)) return b.right - b.left;
+    }
+    return 0.0f;
+  };
+  const float narrow = width("accent1"), wide = width("accent2");
+  REQUIRE(narrow > 0);
+  CHECK(std::fabs(wide / narrow - 2) < 0.01f);
+  CHECK(wide > 50 && wide < 75);  // a quarter of a plot a little under 300 points high
 }
 
 TEST(Chart_RadarSpokesAndLines) {

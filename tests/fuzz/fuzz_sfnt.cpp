@@ -38,6 +38,12 @@ uint32_t Sum(const std::vector<uint8_t>& b) {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  // Embedded OpenType (P1, PowerPoint's .fntdata): the font inside, XOR and MicroType Express
+  // undone; a plain font comes back as it is. Then the decoded font goes through the subsetter.
+  const std::vector<uint8_t> decoded = DecodeEot(std::span<const uint8_t>(data, size));
+  if (decoded.empty()) return 0;
+  data = decoded.data();
+  size = decoded.size();
   const std::span<const uint8_t> file(data, size);
   const Tables tables = FileTables(file);
   const std::optional<Info> info = ReadInfo(tables);

@@ -26,6 +26,8 @@
 #include "ui/Theme.h"
 #include "pkg/Backups.h"
 #include "sheet/view/WorkbookView.h"
+#include "slide/show/SlideShow.h"
+#include "slide/view/PresentationView.h"
 #include "word/DocView.h"
 
 #pragma comment(lib, "imm32.lib")
@@ -77,6 +79,7 @@ int App::Run(const AppOptions& opts) {
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
+  if (!opts.showPath.empty()) return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture);
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
@@ -192,6 +195,11 @@ void App::MessageLoop() {
       if (msg.message == WM_QUIT) return;
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
+    }
+    // The slide show's frames come first: it waits for the display, not for messages.
+    if (anim::FrameSource* frames = anim::ActiveFrameSource(); frames && frames->Animating()) {
+      frames->Frame();
+      continue;
     }
     if (Idle()) continue;
     DWORD timeout = INFINITE;
@@ -1454,6 +1462,7 @@ void App::Execute(int cmd) {
       break;
     case CmdPresentation:
       if (ready && v->Paged()) SetPresentation(!presentation_);
+      else if (ready) v->Execute(cmd);  // a presentation's slide show (P1)
       break;
     case CmdThemeSystem: SetTheme(ThemeSetting::System); break;
     case CmdThemeLight: SetTheme(ThemeSetting::Light); break;
@@ -1671,6 +1680,8 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
+  if (fw::KindOfPath(path) == fw::FileKind::Presentation)
+    return std::make_unique<fw::slide::view::PresentationView>(*this, path);  // P1: read-only
   if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
     auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
     if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
@@ -1733,13 +1744,14 @@ void App::OpenDialog(bool templates) {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
   // Everything the viewers open first, then each kind on its own.
-  std::wstring all, docs, books;
+  std::wstring all, docs, books, decks;
   for (const fw::FileKindInfo& k : fw::FileKinds()) {
     if (!k.viewer) continue;
     for (const wchar_t* ext : k.extensions) {
       all += (all.empty() ? L"*" : L";*") + std::wstring(ext);
       if (k.kind == fw::FileKind::Document) docs += (docs.empty() ? L"*" : L";*") + std::wstring(ext);
       if (k.kind == fw::FileKind::Workbook) books += (books.empty() ? L"*" : L";*") + std::wstring(ext);
+      if (k.kind == fw::FileKind::Presentation) decks += (decks.empty() ? L"*" : L";*") + std::wstring(ext);
     }
   }
   // Templates (S4): those a shipped editor opens, as a new document or workbook.
@@ -1752,8 +1764,9 @@ void App::OpenDialog(bool templates) {
                                  {L"PDF documents", L"*.pdf"},
                                  {L"Word documents", docs.c_str()},
                                  {L"Excel workbooks", books.c_str()},
+                                 {L"PowerPoint presentations", decks.c_str()},
                                  {L"All files", L"*.*"}};
-  dlg->SetFileTypes(templates ? 6 : 5, templates ? filters : filters + 1);
+  dlg->SetFileTypes(templates ? 7 : 6, templates ? filters : filters + 1);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -2647,6 +2660,10 @@ void App::RunScript(const std::wstring& script) {
         std::wstring message;
         if (static_cast<fw::sheet::view::WorkbookView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
           fwprintf(stderr, L"print failed: %s\n", message.c_str());
+      } else if (v && v->Kind() == TabKind::Presentation && v->Ready()) {
+        std::wstring message;
+        if (static_cast<fw::slide::view::PresentationView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
+          fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
     } else if (op == L"exportpdf") {
       // exportpdf:out.pdf is File > Export PDF without the dialog.
@@ -2662,11 +2679,14 @@ void App::RunScript(const std::wstring& script) {
         dpi = std::clamp(static_cast<float>(_wtof(dir.c_str() + bar + 1)), 24.f, 600.f);
         dir.resize(bar);
       }
-      int written = 0;
+      int written = 0, failed = 0;
       if (v && v->Ready() && v->Kind() == TabKind::Document) written = static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi);
       if (v && v->Ready() && v->Kind() == TabKind::Workbook)
         written = static_cast<fw::sheet::view::WorkbookView*>(v)->RenderPagesForTesting(dir, dpi);
+      if (v && v->Ready() && v->Kind() == TabKind::Presentation)
+        written = static_cast<fw::slide::view::PresentationView*>(v)->RenderPagesForTesting(dir, dpi, &failed);
       if (written == 0) fwprintf(stderr, L"pagepngs failed\n");
+      if (written == 0 || failed > 0) scriptFailed_ = true;
     } else if (op == L"workbookpdf") {
       // workbookpdf:out.pdf exports every sheet of a workbook, as Excel's reference PDFs have them.
       TabContent* v = Active();
@@ -2888,7 +2908,7 @@ int App::RunSnapshot(const AppOptions& opts) {
   wicTarget_.Reset();
   swap_.Reset();
   DestroyWindow(hwnd_);
-  return 0;
+  return scriptFailed_ ? 6 : 0;
 }
 
 ComPtr<IWICBitmapSource> App::SnapshotImage() {

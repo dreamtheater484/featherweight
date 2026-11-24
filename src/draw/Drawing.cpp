@@ -55,6 +55,24 @@ void Drawing::Draw(Painter& painter, const Rect& frame) const {
   painter.Restore();
 }
 
+void Drawing::Draw(Painter& painter, const Rect& frame, DrawHooks& hooks) const {
+  if (hidden_) return;
+  const float w = bounds_.Width(), h = bounds_.Height();
+  painter.Save();
+  painter.Transform(Matrix::Translate(-bounds_.left, -bounds_.top) *
+                    Matrix::Scale(w > 0 ? frame.Width() / w : 1, h > 0 ? frame.Height() / h : 1) *
+                    Matrix::Translate(frame.left, frame.top));
+  size_t text = 0;
+  DrawShape(painter, *root_, hooks, text);
+  painter.Restore();
+}
+
+std::vector<Drawing::Part> Drawing::Parts() const {
+  std::vector<Part> out;
+  if (!hidden_) CollectParts(*root_, Matrix::Translate(-bounds_.left, -bounds_.top), out);
+  return out;
+}
+
 std::unique_ptr<Drawing> Drawing::FromWordDrawing(pugi::xml_node node, DrawingResources& resources) {
   if (IsElement(node, kW, "drawing")) {
     pugi::xml_node inner;
@@ -238,6 +256,17 @@ std::vector<std::string> Chain(const fw::pkg::Package& package, std::string_view
 std::shared_ptr<const Image> PackageResources::GetImage(std::string_view relId) {
   std::string target = Target(package_, part_, relId);
   return target.empty() ? nullptr : images_->Get(package_, target);
+}
+
+std::shared_ptr<const Image> PackageResources::GetThemeImage(std::string_view relId) {
+  // The theme FindTheme finds: the first in the part's chain (slide, layout, master) to have one.
+  for (const std::string& part : Chain(package_, part_)) {
+    std::string theme = TargetOfType(package_, part, "theme");
+    if (theme.empty()) continue;
+    std::string target = Target(package_, theme, relId);
+    return target.empty() ? nullptr : images_->Get(package_, target);
+  }
+  return nullptr;
 }
 
 pugi::xml_node PackageResources::GetPartXml(std::string_view relId) {

@@ -43,18 +43,24 @@ class Face {
   const std::wstring& Family() const { return family_; }
   DWRITE_FONT_WEIGHT Weight() const { return weight_; }
   DWRITE_FONT_STYLE Style() const { return style_; }
-  FontMetrics Metrics(float size) const;
+  // `directWrite`: ascent, descent and gap as DirectWrite gives them (a font's typo metrics when its
+  // USE_TYPO_METRICS bit asks; PowerPoint's) rather than GDI's.
+  FontMetrics Metrics(float size, bool directWrite = false) const;
+  // The same face without DirectWrite's bold and oblique simulations (itself when it has none).
+  IDWriteFontFace* Plain() const;
   // The glyph's advance for one character at `size` points, without shaping; 0 if it's missing.
   float Advance(wchar_t c, float size) const;
 
  private:
   Microsoft::WRL::ComPtr<IDWriteFontFace> face_;
+  mutable Microsoft::WRL::ComPtr<IDWriteFontFace> plain_;  // Plain(), made on first use
   std::wstring family_;
   DWRITE_FONT_WEIGHT weight_;
   DWRITE_FONT_STYLE style_;
   float upem_ = 2048;
   // In design units, from the font's tables (see FontMetrics).
   float ascent_ = 0, descent_ = 0, lineGap_ = 0;
+  float dwAscent_ = 0, dwDescent_ = 0, dwLineGap_ = 0;  // DirectWrite's
   float underlinePos_ = 0, underlineThick_ = 0, strikePos_ = 0, strikeThick_ = 0;
   float supSize_ = 0, supRaise_ = 0, subSize_ = 0, subLower_ = 0;
 };
@@ -75,6 +81,19 @@ class Fonts {
 
   // `collection`: the fonts to use; null for the fonts installed on the PC. Tests pass their own.
   explicit Fonts(SubstituteFn substitute = {}, IDWriteFontCollection* collection = nullptr);
+  // The caller's choice from now on (a presentation's, once its deck is known); families already
+  // resolved keep theirs.
+  void SetSubstitute(SubstituteFn substitute) { substitute_ = std::move(substitute); }
+  // Families by their GDI names only, as PowerPoint finds them: DirectWrite's own families, made
+  // by taking weight words off a name ("Gill Sans" for Gill Sans Ultra Bold), don't count.
+  void SetGdiFamilies(bool on) { gdiFamilies_ = on; }
+  // Arabic letters a font doesn't have in Tahoma, before DirectWrite's own fallback (Segoe UI), as
+  // PowerPoint draws them (un-country morocco's PDF); off: DirectWrite's alone.
+  void SetPowerPointFallback(bool on);
+  bool PowerPointFallback() const { return powerPointFallback_; }
+  // Office's cloud fonts as PowerPoint finds them: every face by its own family name too ("Open Sans
+  // Light" in Open Sans's folder, worldbank's PDF); off: as Word, only the folders' families.
+  void SetAllCloudFaces(bool on) { allCloudFaces_ = on; }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
@@ -146,6 +165,7 @@ class Fonts {
   bool FullName(const std::wstring& name, FaceName& out);
   std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
+  bool gdiFamilies_ = false, powerPointFallback_ = false, allCloudFaces_ = false;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
   std::vector<Substitution> substitutions_;

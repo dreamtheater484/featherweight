@@ -9,6 +9,10 @@
 // pixel apart). Wrong values are the fixtures' recalculation check's to find. A page one
 // PDF has and the other doesn't fails. --out DIR writes each page that fails as the reference's
 // render, ours and where they differ, side by side; --json the numbers.
+//
+// With --pngs DIR and only the reference PDF (P1's slides): ours are the pages the app drew,
+// DIR\page-1.png, page-2.png, ... (the script op pagepngs:DIR|100, which draws each slide as the
+// screen does, hidden ones too), at 100 dpi; the first missing number ends them.
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -69,6 +73,32 @@ bool Render(FPDF_DOCUMENT doc, int index, Image& out) {
     }
   FPDFBitmap_Destroy(bitmap);
   FPDF_ClosePage(page);
+  return true;
+}
+
+// A PNG the app drew (pagepngs:), as gray on white (any transparency over white).
+bool LoadPng(const std::filesystem::path& file, Image& out) {
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  ComPtr<IWICFormatConverter> converter;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateDecoderFromFilename(file.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) || FAILED(wic->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom)))
+    return false;
+  UINT w = 0, h = 0;
+  if (FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 || w > 20000 || h > 20000) return false;
+  std::vector<uint8_t> bgra(static_cast<size_t>(w) * h * 4);
+  if (FAILED(converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(bgra.size()), bgra.data()))) return false;
+  out.width = static_cast<int>(w), out.height = static_cast<int>(h);
+  out.px.resize(static_cast<size_t>(w) * h);
+  for (size_t i = 0; i < out.px.size(); ++i) {
+    const uint8_t* p = &bgra[i * 4];
+    const int gray = (p[2] * 299 + p[1] * 587 + p[0] * 114) / 1000;
+    out.px[i] = static_cast<uint8_t>((gray * p[3] + 255 * (255 - p[3])) / 255);
+  }
   return true;
 }
 
@@ -182,8 +212,10 @@ void WriteDifference(const std::filesystem::path& file, const Image& a, const Im
 }  // namespace
 
 int RunPdfCompare(const Options& options) {
-  if (options.inputs.size() != 2) {
-    std::fprintf(stderr, "pdf-compare takes two PDFs: the reference (Excel's export) and ours\n");
+  const bool pngs = !options.pngs.empty();
+  if (options.inputs.size() != (pngs ? 1u : 2u)) {
+    std::fprintf(stderr, pngs ? "pdf-compare --pngs DIR takes one PDF: the reference (PowerPoint's export)\n"
+                              : "pdf-compare takes two PDFs: the reference (Excel's export) and ours\n");
     return 2;
   }
   std::string error;
@@ -191,16 +223,24 @@ int RunPdfCompare(const Options& options) {
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   std::string bytes[2];
   FPDF_DOCUMENT docs[2] = {};
-  for (int i = 0; i < 2; ++i) {
+  for (size_t i = 0; i < options.inputs.size(); ++i) {
     if (!ReadBytes(options.inputs[i], bytes[i])) return std::fprintf(stderr, "Can't read %s\n", Display(options.inputs[i]).c_str()), 2;
     docs[i] = FPDF_LoadMemDocument64(bytes[i].data(), bytes[i].size(), nullptr);
     if (!docs[i]) return std::fprintf(stderr, "PDFium can't read %s\n", Display(options.inputs[i]).c_str()), 2;
   }
+  // Ours as the app drew them: page-1.png on, up to the first number that's missing.
+  std::vector<std::filesystem::path> drawn;
+  for (int i = 1; pngs; ++i) {
+    std::filesystem::path png = options.pngs / (L"page-" + std::to_wstring(i) + L".png");
+    if (!std::filesystem::exists(png)) break;
+    drawn.push_back(png);
+  }
+  const std::wstring stem = pngs ? options.inputs[0].stem().wstring() : options.inputs[1].stem().wstring();
   if (!options.outDir.empty()) {
     std::error_code ec;
     std::filesystem::create_directories(options.outDir, ec);
   }
-  const int counts[2] = {FPDF_GetPageCount(docs[0]), FPDF_GetPageCount(docs[1])};
+  const int counts[2] = {FPDF_GetPageCount(docs[0]), pngs ? static_cast<int>(drawn.size()) : FPDF_GetPageCount(docs[1])};
   const int pages = std::max(counts[0], counts[1]);
   int passing = 0;
   std::string json;
@@ -211,8 +251,8 @@ int RunPdfCompare(const Options& options) {
       note = p >= counts[0] ? "only in ours" : "only in the reference";
     } else {
       Image a, b;
-      if (!Render(docs[0], p, a) || !Render(docs[1], p, b)) {
-        note = "can't render";
+      if (!Render(docs[0], p, a) || !(pngs ? LoadPng(drawn[p], b) : Render(docs[1], p, b))) {
+        note = pngs ? "can't render the reference or read our PNG" : "can't render";
       } else {
         if (a.width != b.width || a.height != b.height) note = "sizes " + std::to_string(a.width) + "x" + std::to_string(a.height) + " and " +
                                                                std::to_string(b.width) + "x" + std::to_string(b.height) + " px";
@@ -223,7 +263,7 @@ int RunPdfCompare(const Options& options) {
         ssim = Ssim(pa, pb);
         content = Ssim(Crop(pa, x0, y0, x1, y1), Crop(pb, x0, y0, x1, y1));
         if (ssim < kMinSsim && !options.outDir.empty())
-          WriteDifference(options.outDir / (options.inputs[1].stem().wstring() + L"-p" + std::to_wstring(p + 1) + L".png"), pa, pb);
+          WriteDifference(options.outDir / (stem + L"-p" + std::to_wstring(p + 1) + L".png"), pa, pb);
       }
     }
     const bool ok = ssim >= kMinSsim;
@@ -233,7 +273,8 @@ int RunPdfCompare(const Options& options) {
     json += std::string(json.empty() ? "" : ",\n") + "    {\"page\": " + std::to_string(p + 1) + ", \"ssim\": " + std::to_string(ssim) +
             ", \"inkSsim\": " + std::to_string(content) + ", \"ok\": " + (ok ? "true" : "false") + "}";
   }
-  for (FPDF_DOCUMENT d : docs) FPDF_CloseDocument(d);
+  for (FPDF_DOCUMENT d : docs)
+    if (d) FPDF_CloseDocument(d);
   std::printf("%d of %d pages at SSIM >= %.2f (%d pages in the reference, %d in ours)\n", passing, pages, kMinSsim, counts[0], counts[1]);
   if (!options.jsonOut.empty())
     std::ofstream(options.jsonOut, std::ios::trunc) << "{\n  \"minSsim\": " << kMinSsim << ", \"passing\": " << passing

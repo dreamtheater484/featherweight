@@ -618,9 +618,12 @@ TEST(Check_PowerPointShapeIdsAndAnimations) {
         {"[Content_Types].xml",
          Types("/ppt/presentation.xml", "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml")},
         {"_rels/.rels", Rels(Rel("rId1", "officeDocument", "ppt/presentation.xml"))},
-        {"ppt/presentation.xml", "<p:presentation xmlns:p=\"" P_NS "\" xmlns:r=\"" R_NS "\"><p:sldIdLst>"
+        {"ppt/presentation.xml", "<p:presentation xmlns:p=\"" P_NS "\" xmlns:r=\"" R_NS "\">"
+                                 "<p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rId4\"/></p:sldMasterIdLst><p:sldIdLst>"
                                  "<p:sldId id=\"256\" r:id=\"rId2\"/><p:sldId id=\"257\" r:id=\"rId3\"/></p:sldIdLst></p:presentation>"},
-        {"ppt/_rels/presentation.xml.rels", Rels(Rel("rId2", "slide", "slides/slide1.xml") + Rel("rId3", "slide", "slides/slide2.xml"))},
+        {"ppt/_rels/presentation.xml.rels", Rels(Rel("rId2", "slide", "slides/slide1.xml") + Rel("rId3", "slide", "slides/slide2.xml") +
+                                                 Rel("rId4", "slideMaster", "slideMasters/slideMaster1.xml"))},
+        {"ppt/slideMasters/slideMaster1.xml", "<p:sldMaster xmlns:p=\"" P_NS "\"><p:cSld><p:spTree/></p:cSld></p:sldMaster>"},
         {"ppt/slides/slide1.xml", slide1},
         {"ppt/slides/slide2.xml", slide2},
     };

@@ -96,7 +96,7 @@ CommandState App::QueryCommand(int cmd) {
     case CmdNextTab:
     case CmdPrevTab: s.enabled = tabs_.size() > 1; break;
     case CmdFullScreen: s.label = fullscreen_ ? L"Exit full screen" : L"Full screen"; break;
-    case CmdPresentation: s.enabled = ready && v->Paged(); break;
+    case CmdPresentation: s.enabled = ready && (v->Paged() || (v->Kind() == TabKind::Presentation && tabEnabled)); break;
     case CmdToggleInvert: s.checked = settings_.invert; break;
     case CmdThemeSystem: s.checked = settings_.theme == ThemeSetting::System; break;
     case CmdThemeLight: s.checked = settings_.theme == ThemeSetting::Light; break;

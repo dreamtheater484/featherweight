@@ -59,6 +59,11 @@ std::vector<float> PresetDash(std::string_view v) {
   return {};
 }
 
+void ClearIds(Shape& s) {
+  s.id = 0;
+  for (Shape& c : s.children) ClearIds(c);
+}
+
 class Reader {
  public:
   explicit Reader(ReadContext& ctx) : ctx_(ctx) {}
@@ -115,6 +120,7 @@ class Reader {
       out.pattern = PatternIndex(n.attribute("prst").value());
       out.color = ReadColor(A(n, "fgClr"), colors).value_or(Color{0, 0, 0, 1});
       out.background = ReadColor(A(n, "bgClr"), colors).value_or(Color{1, 1, 1, 1});
+      out.pageAnchored = ctx_.resources.InPresentation();
     } else if (kind == "grpFill") {
       out = groupFill ? *groupFill : Fill{};
     } else {
@@ -128,13 +134,17 @@ class Reader {
     auto pic = std::make_shared<PictureFill>();
     pugi::xml_node blip = A(n, "blip");
     std::shared_ptr<const Image> raster;
-    if (std::string_view id = RelId(blip, "embed"); !id.empty()) raster = ctx_.resources.GetImage(id);
+    // A themed fill's pictures are the theme part's relationships.
+    const auto image = [&](std::string_view id) {
+      return themed_ ? ctx_.resources.GetThemeImage(id) : ctx_.resources.GetImage(id);
+    };
+    if (std::string_view id = RelId(blip, "embed"); !id.empty()) raster = image(id);
     pic->image = raster;
     // Office stores SVG pictures in an extension, with a PNG copy as the blip itself.
     ForEachChild(A(blip, "extLst"), [&](pugi::xml_node ext) {
       if (pugi::xml_node svg = Child(ext, kAsvg, "svgBlip")) {
         std::string_view id = RelId(svg, "embed");
-        std::shared_ptr<const Image> vector = id.empty() ? nullptr : ctx_.resources.GetImage(id);
+        std::shared_ptr<const Image> vector = id.empty() ? nullptr : image(id);
         if (vector && (vector->Faithful() || !raster)) pic->image = vector;
         return false;
       }
@@ -143,7 +153,10 @@ class Reader {
     ForEachChild(blip, [&](pugi::xml_node e) {
       if (NamespaceOf(e) != kA) return true;
       std::string_view k = LocalNameOf(e);
-      if (k == "alphaModFix") pic->alpha = std::clamp(Percent(e, "amt", 100000), 0.f, 1.f);
+      if (k == "alphaModFix") {
+        pic->alpha = std::clamp(Percent(e, "amt", 100000), 0.f, 1.f);
+        pic->baked = ctx_.resources.InPresentation();
+      }
       else if (k == "grayscl") pic->grayscale = true;
       else if (k == "biLevel") pic->biLevel = std::clamp(Percent(e, "thresh", 50000), 0.f, 1.f);
       else if (k == "lum") {
@@ -346,7 +359,9 @@ class Reader {
     if (pugi::xml_node fill = A(style, "fillRef")) {
       ColorContext c = refColor(fill);
       pugi::xml_node themed = ctx_.theme->Fill(static_cast<int>(Number(fill, "idx", 0)));
+      themed_ = true;
       if (!themed || !ReadFill(themed, c, nullptr, s.fill)) s.fill = Fill{};
+      themed_ = false;
     }
     if (pugi::xml_node eff = A(style, "effectRef")) {
       ColorContext c = refColor(eff);
@@ -359,6 +374,14 @@ class Reader {
   // spPr (and grpSpPr): placement, geometry, fill, line, effects.
   void ReadShapeProperties(pugi::xml_node spPr, Shape& s, const Fill* groupFill) {
     ReadXfrm(A(spPr, "xfrm"), s);
+    // A camera looking straight on (a:scene3d's camera rot, lat and lon 0) but turned about its
+    // view by rev turns the shape back by as much: PowerPoint draws a picture at rot 7.6° under a
+    // camera at rev 6° at 1.6° (letters-home 52).
+    if (pugi::xml_node rot = A(A(A(spPr, "scene3d"), "camera"), "rot");
+        rot && Number(rot, "lat", 0) == 0 && Number(rot, "lon", 0) == 0) {
+      s.rotation = std::fmod(s.rotation - Angle(rot, "rev"), 360.f);
+      if (s.rotation < 0) s.rotation += 360;
+    }
     ReadGeometry(spPr, s);
     ForEachChild(spPr, [&](pugi::xml_node c) {
       Fill f;
@@ -372,6 +395,7 @@ class Reader {
 
   void ReadNames(pugi::xml_node nv, Shape& s) {
     pugi::xml_node c = Part(nv, "cNvPr");
+    s.id = static_cast<uint32_t>(std::clamp(Number(c, "id", 0), 0.0, 4294967295.0));
     s.name = c.attribute("name").value();
     s.description = c.attribute("descr").value();
     s.hidden = Bool(c, "hidden", false);
@@ -415,6 +439,18 @@ class Reader {
     b.upright = Bool(props, "upright", false);
     b.columns = std::clamp(static_cast<int>(Number(props, "numCol", 1)), 1, 16);
     b.columnSpacing = Emu(props, "spcCol");
+    if (pugi::xml_node x = Child(el, kDsp, "txXfrm")) {
+      Shape tx;
+      ReadXfrm(x, tx);
+      t->hasTextXfrm = tx.bounds.Width() > 0 && tx.bounds.Height() > 0;
+      t->textXfrm = tx.bounds;
+      t->textXfrmRotation = tx.rotation;
+    }
+    if (pugi::xml_node font = A(Part(el, "style"), "fontRef")) {
+      b.fontColor = ReadColor(font, ctx_.colors);
+      std::string_view idx = font.attribute("idx").value();
+      b.fontFace = idx == "major" ? "+mj-lt" : idx == "minor" ? "+mn-lt" : "";
+    }
     if (pugi::xml_node fit = A(props, "normAutofit")) {
       b.autofit = TextBox::Autofit::ShrinkText;
       b.fontScale = std::clamp(Percent(fit, "fontScale", 100000), 0.01f, 1.f);
@@ -434,6 +470,8 @@ class Reader {
       if (kind == "wsp") s.name.clear();  // Word names the drawing in wp:docPr
       ReadStyle(Part(el, "style"), s);
       ReadShapeProperties(Part(el, "spPr"), s, groupFill);
+      // Filled with the slide's background (PowerPoint): the caller draws that under the shape.
+      if (Bool(el, "useBgFill", false)) s.fill = Fill{};
       ReadTextBody(el, s);
       return true;
     }
@@ -483,6 +521,7 @@ class Reader {
       const Size size{s.bounds.Width(), s.bounds.Height()};
       if (ReadGraphicData(A(A(el, "graphic"), "graphicData"), size, ctx_, inner)) {
         inner.bounds = s.bounds;
+        inner.id = s.id;
         inner.rotation = s.rotation;
         inner.flipH = s.flipH;
         inner.flipV = s.flipV;
@@ -536,29 +575,41 @@ class Reader {
     pugi::xml_node data = ctx_.resources.GetPartXml(RelId(relIds, "dm"));
     if (!data) return false;
     std::string_view drawingRel;
-    ForEachChild(A(data, "extLst"), [&](pugi::xml_node ext) {
+    // The data model's own dgm:extLst (PowerPoint writes it so; a:extLst read too).
+    pugi::xml_node extLst;
+    ForEachChild(data, [&](pugi::xml_node n) {
+      if (LocalNameOf(n) == "extLst") extLst = n;
+      return !extLst;
+    });
+    ForEachChild(extLst, [&](pugi::xml_node ext) {
       if (pugi::xml_node m = Child(ext, kDsp, "dataModelExt")) drawingRel = m.attribute("relId").value();
       return drawingRel.empty();
     });
     pugi::xml_node drawing = drawingRel.empty() ? pugi::xml_node() : ctx_.resources.GetPartXml(drawingRel);
     pugi::xml_node tree = Child(drawing, kDsp, "spTree");
     if (!tree) return false;
-    s.kind = Shape::Kind::Group;
-    s.name = "SmartArt";
-    s.childBounds = {0, 0, extent.width, extent.height};
     ForEachChild(tree, [&](pugi::xml_node c) {
       Shape child;
       std::string_view k = LocalNameOf(c);
       if ((k == "sp" || k == "grpSp" || k == "pic" || k == "cxnSp") && ReadShape(c, child, nullptr)) {
+        // Its shapes' ids are the drawing part's own: the graphic frame's is the one that counts.
+        ClearIds(child);
         s.children.push_back(std::move(child));
       }
       return ctx_.shapes <= ReadContext::kMaxShapes;
     });
+    // An empty drawing (a file whose writer left it out) shows as the placeholder a missing one does.
+    if (s.children.empty()) return false;
+    s.kind = Shape::Kind::Group;
+    s.name = "SmartArt";
+    s.childBounds = {0, 0, extent.width, extent.height};
+    s.childrenAsDrawn = true;
     return true;
   }
 
  private:
   ReadContext& ctx_;
+  bool themed_ = false;  // reading a fill from the theme's format scheme (its pictures are the theme's)
 };
 
 }  // namespace

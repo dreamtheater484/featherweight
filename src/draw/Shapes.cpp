@@ -3,7 +3,7 @@
 #include "draw/CloudFonts.h"
 
 #include <d2d1.h>
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -154,6 +154,12 @@ void DrawPicture(Painter& p, const PictureFill& pic, const Rect& area) {
   const int pw = static_cast<int>(std::ceil(std::abs(W) * m.ScaleX())), ph = static_cast<int>(std::ceil(std::abs(H) * m.ScaleY()));
   std::shared_ptr<const Bitmap> px = pic.Pixels(std::clamp(pw, 1, 16384), std::clamp(ph, 1, 16384));
   if (!px || px->Width() == 0 || px->Height() == 0) return;
+  if (const int limit = p.BakedPictureLimit(); pic.baked && pic.alpha < 1 && limit > 0 && std::max(px->Width(), px->Height()) > limit) {
+    const float f = static_cast<float>(limit) / std::max(px->Width(), px->Height());
+    if (auto baked = BoxResample(*px, std::max(1, static_cast<int>(std::lround(px->Width() * f))),
+                                 std::max(1, static_cast<int>(std::lround(px->Height() * f)))))
+      px = std::move(baked);
+  }
   // Only the visible part of the bitmap; negative crops (padding) leave the rest empty.
   const float l = std::max(0.f, pic.crop.left), t = std::max(0.f, pic.crop.top);
   const float r = 1 - std::max(0.f, pic.crop.right), b = 1 - std::max(0.f, pic.crop.bottom);
@@ -185,12 +191,30 @@ bool TileBrush(Painter& p, const PictureFill& pic, const Rect& box, Brush& out) 
   return true;
 }
 
-Brush PatternBrush(const Fill& f, Geometry::PathFill mode) {
+// `ctm`: the painter's current transform, for a page-anchored pattern.
+Brush PatternBrush(const Fill& f, Geometry::PathFill mode, const Matrix& ctm) {
   if (!f.patternBitmap) f.patternBitmap = PatternBitmap(f.pattern, f.color, f.background);
   std::shared_ptr<const Bitmap> bmp = f.patternBitmap;
   if (mode != Geometry::PathFill::Normal) bmp = PatternBitmap(f.pattern, Shade(f.color, mode), Shade(f.background, mode));
-  // 8 x 8 cells of 0.75 pt: one pixel each at 96 dpi and 100 %.
-  Brush b = Brush::FromBitmap(bmp, Matrix::Scale(0.75f, 0.75f), Brush::Extend::Repeat);
+  // 8 x 8 cells of 0.75 pt: one pixel each at 96 dpi and 100 %. PowerPoint starts them on the
+  // page's grid of cells (its PDFs: at multiples of 6 points), wherever the shape is; unturned
+  // shapes do here too.
+  Matrix m = Matrix::Scale(0.75f, 0.75f);
+  if (f.pageAnchored && ctm.m12 == 0 && ctm.m21 == 0 && ctm.m11 > 0 && ctm.m22 > 0) {
+    const float cx = 6 * ctm.m11, cy = 6 * ctm.m22;  // a cell on the page
+    const float dx = std::floor(ctm.dx / cx) * cx - ctm.dx, dy = std::floor(ctm.dy / cy) * cy - ctm.dy;
+    m = m * Matrix::Translate(dx / ctm.m11, dy / ctm.m22);
+  } else if (f.pageAnchored) {
+    // A turned or mirrored shape's pattern doesn't turn with it: square on the page, on its grid
+    // (zslbw-bnt's balloons, turned 183 degrees: PowerPoint's cells are upright).
+    const float k = std::sqrt(std::abs(ctm.m11 * ctm.m22 - ctm.m12 * ctm.m21));  // page units per point
+    if (k > 0) {
+      const float cell = 6 * k;
+      m = Matrix::Scale(0.75f * k, 0.75f * k) *
+          Matrix::Translate(std::floor(ctm.dx / cell) * cell, std::floor(ctm.dy / cell) * cell) * ctm.Inverse();
+    }
+  }
+  Brush b = Brush::FromBitmap(bmp, m, Brush::Extend::Repeat);
   b.smooth = false;
   return b;
 }
@@ -203,7 +227,7 @@ void FillArea(Painter& p, const Path& path, const Fill& f, const Rect& box, floa
       p.FillPath(path, Brush::Solid(Shade(f.color, mode)));
       return;
     case Fill::Kind::Pattern:
-      p.FillPath(path, PatternBrush(f, mode));
+      p.FillPath(path, PatternBrush(f, mode, p.CurrentTransform()));
       return;
     case Fill::Kind::Gradient: {
       if (f.stops.empty()) return;
@@ -254,7 +278,7 @@ Brush LineBrush(Painter& p, const Line& line, const Rect& box, float rotation) {
       }
       break;
     case Fill::Kind::Pattern:
-      return PatternBrush(f, Geometry::PathFill::Normal);
+      return PatternBrush(f, Geometry::PathFill::Normal, p.CurrentTransform());
     case Fill::Kind::Picture: {
       Brush b;
       if (f.picture && TileBrush(p, *f.picture, box, b)) return b;
@@ -436,7 +460,22 @@ Shadow ShadowFor(const OuterShadow& sh, const Rect& bounds) {
   return out;
 }
 
-void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds);
+// Hooks for drawing piece by piece (DrawHooks), and the next text box's index.
+struct Hooked {
+  DrawHooks* hooks = nullptr;
+  size_t* text = nullptr;
+};
+
+void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds, const Hooked& h = {});
+
+// The text boxes in a shape, as TextBoxesAt finds them.
+size_t CountText(const Shape& s) {
+  if (s.hidden) return 0;
+  if (s.kind != Shape::Kind::Group) return s.text ? 1 : 0;
+  size_t n = 0;
+  for (const Shape& c : s.children) n += CountText(c);
+  return n;
+}
 
 void DrawArt(Painter& p, const Art& art, const Rect& box) {
   if (!(art.size.width > 0 && art.size.height > 0)) return;
@@ -460,16 +499,18 @@ void DrawArt(Painter& p, const Art& art, const Rect& box) {
   p.Restore();
 }
 
-void DrawContent(Painter& p, const Shape& s, Size size) {
+// `body`: the shape's own fill, outline and picture; `text`: its text box, through the hooks.
+void DrawContent(Painter& p, const Shape& s, Size size, const Hooked& h, bool body, bool text) {
   const Rect box{0, 0, size.width, size.height};
   switch (s.kind) {
     case Shape::Kind::Group:
-      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds));
+      for (const Shape& c : s.children) DrawShapeAt(p, c, ChildToGroup(s, c.bounds, size), h);
       return;
     case Shape::Kind::Placeholder:
-      DrawPlaceholder(p, s, box);
+      if (body) DrawPlaceholder(p, s, box);
       return;
     case Shape::Kind::Picture: {
+      if (!body) return;
       Geometry::Outline o = OutlineOf(s, size);
       for (const Geometry::Figure& f : o.figures) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
       p.Save();
@@ -481,31 +522,46 @@ void DrawContent(Painter& p, const Shape& s, Size size) {
       return;
     }
     case Shape::Kind::Shape: {
-      if (s.art) {
+      if (!body) {
+      } else if (s.art) {
         DrawArt(p, *s.art, box);
-        return;
-      }
-      if (s.textPath) {
+      } else if (s.textPath) {
         DrawTextPath(p, s, box);
-        return;
+      } else {
+        Geometry::Outline o = OutlineOf(s, size);
+        for (const Geometry::Figure& f : o.figures) {
+          if (f.fill != Geometry::PathFill::None && !f.path.Empty()) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
+        }
+        StrokeFigures(p, s, o.figures, box);
       }
-      Geometry::Outline o = OutlineOf(s, size);
-      for (const Geometry::Figure& f : o.figures) {
-        if (f.fill != Geometry::PathFill::None && !f.path.Empty()) FillArea(p, f.path, s.fill, box, s.rotation, f.fill);
-      }
-      StrokeFigures(p, s, o.figures, box);
+      if (text && h.hooks && s.text) h.hooks->DrawText(p, (*h.text)++);
       return;
     }
   }
 }
 
-void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds) {
+void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds, const Hooked& h) {
   if (s.hidden) return;
-  if (s.shadow.on) p.BeginShadow(ShadowFor(s.shadow, bounds));
+  if (h.hooks && !h.hooks->DrawShape(s.id)) {
+    *h.text += CountText(s);
+    return;
+  }
+  const bool body = !h.hooks || s.kind == Shape::Kind::Group || h.hooks->DrawBody(s.id);
+  const bool shadow = s.shadow.on && body;
+  // A filled shape's shadow is the shape's: its text goes on top, unshadowed. An unfilled shape's
+  // shadow falls from its text, as in PowerPoint.
+  const bool textAfter = shadow && h.hooks && s.text && s.fill.kind != Fill::Kind::None;
+  if (shadow) p.BeginShadow(ShadowFor(s.shadow, bounds));
   else p.Save();
   p.Transform(Place(s, bounds));
-  DrawContent(p, s, {bounds.Width(), bounds.Height()});
+  DrawContent(p, s, {bounds.Width(), bounds.Height()}, h, body, !textAfter);
   p.Restore();
+  if (textAfter) {
+    p.Save();
+    p.Transform(Place(s, bounds));
+    h.hooks->DrawText(p, (*h.text)++);
+    p.Restore();
+  }
 }
 
 void Expand(Rect& r, bool& any, Point q) {
@@ -518,7 +574,7 @@ void PaintedBoundsAt(const Shape& s, const Rect& bounds, const Matrix& toParent,
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toParent;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) PaintedBoundsAt(c, ChildToGroup(s, c.bounds), m, r, any);
+    for (const Shape& c : s.children) PaintedBoundsAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, r, any);
     return;
   }
   // The box's corners, grown by the line and its arrowheads, then the shadow.
@@ -556,7 +612,7 @@ void OutlinesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, std
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toDrawing;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) OutlinesAt(c, ChildToGroup(s, c.bounds), m, out);
+    for (const Shape& c : s.children) OutlinesAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
     return;
   }
   for (const Geometry::Figure& f : OutlineOf(s, {bounds.Width(), bounds.Height()}).figures) {
@@ -571,7 +627,7 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   if (s.hidden) return;
   const Matrix m = Place(s, bounds) * toDrawing;
   if (s.kind == Shape::Kind::Group) {
-    for (const Shape& c : s.children) TextBoxesAt(c, ChildToGroup(s, c.bounds), m, out);
+    for (const Shape& c : s.children) TextBoxesAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
     return;
   }
   if (!s.text) return;
@@ -579,7 +635,20 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   box.content = s.text->content;
   box.properties = s.text->properties;
   box.insets = s.text->insets;
-  const Rect r = OutlineOf(s, {bounds.Width(), bounds.Height()}).textRect;
+  box.shape = s.id;
+  Rect r = OutlineOf(s, {bounds.Width(), bounds.Height()}).textRect;
+  if (s.text->hasTextXfrm) {
+    // SmartArt: the text's own box, unturned in the drawing's coordinates, and its turn on top of
+    // the shape's (a quadrant at 270 degrees with text at 90 reads upright: PowerPoint's PDFs). Its
+    // center's offset from the shape's is turned into the shape's own frame.
+    const Rect& t = s.text->textXfrm;
+    const float ox = (t.left + t.right - s.bounds.left - s.bounds.right) / 2, oy = (t.top + t.bottom - s.bounds.top - s.bounds.bottom) / 2;
+    const float a = -s.rotation * 3.14159265f / 180, cs = std::cos(a), sn = std::sin(a);
+    const float dx = ox * cs - oy * sn, dy = ox * sn + oy * cs;
+    const float cx = bounds.Width() / 2 + dx, cy = bounds.Height() / 2 + dy;
+    r = {cx - t.Width() / 2, cy - t.Height() / 2, cx + t.Width() / 2, cy + t.Height() / 2};
+    box.rotation += s.text->textXfrmRotation;
+  }
   box.rect = {r.left + box.insets.left, r.top + box.insets.top, r.right - box.insets.right, r.bottom - box.insets.bottom};
   if (box.rect.right < box.rect.left) box.rect.left = box.rect.right = (box.rect.left + box.rect.right) / 2;
   if (box.rect.bottom < box.rect.top) box.rect.top = box.rect.bottom = (box.rect.top + box.rect.bottom) / 2;
@@ -587,18 +656,36 @@ void TextBoxesAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, st
   out.push_back(box);
 }
 
+void PartsAt(const Shape& s, const Rect& bounds, const Matrix& toDrawing, std::vector<Drawing::Part>& out) {
+  if (s.hidden) return;
+  const Matrix m = Place(s, bounds) * toDrawing;
+  out.push_back({s.id, {bounds.Width(), bounds.Height()}, m, s.kind == Shape::Kind::Group});
+  if (s.kind == Shape::Kind::Group)
+    for (const Shape& c : s.children) PartsAt(c, ChildToGroup(s, c.bounds, {bounds.Width(), bounds.Height()}), m, out);
+}
+
 }  // namespace
 
 Matrix ShapeTransform(const Shape& s) { return Place(s, s.bounds); }
 
-Rect ChildToGroup(const Shape& g, const Rect& c) {
-  const Rect& ch = g.childBounds;
-  const float sx = std::abs(ch.Width()) > 1e-6f ? g.bounds.Width() / ch.Width() : 1;
-  const float sy = std::abs(ch.Height()) > 1e-6f ? g.bounds.Height() / ch.Height() : 1;
+Rect ChildToGroup(const Shape& g, const Rect& c) { return ChildToGroup(g, c, {g.bounds.Width(), g.bounds.Height()}); }
+
+Rect ChildToGroup(const Shape& g, const Rect& c, Size placed) {
+  const Rect ch = g.childrenAsDrawn ? Rect{0, 0, placed.width, placed.height} : g.childBounds;
+  const float sx = std::abs(ch.Width()) > 1e-6f ? placed.width / ch.Width() : 1;
+  const float sy = std::abs(ch.Height()) > 1e-6f ? placed.height / ch.Height() : 1;
   return {(c.left - ch.left) * sx, (c.top - ch.top) * sy, (c.right - ch.left) * sx, (c.bottom - ch.top) * sy};
 }
 
 void DrawShape(Painter& p, const Shape& s) { DrawShapeAt(p, s, s.bounds); }
+
+void DrawShape(Painter& p, const Shape& s, DrawHooks& hooks, size_t& textIndex) {
+  DrawShapeAt(p, s, s.bounds, {&hooks, &textIndex});
+}
+
+void CollectParts(const Shape& s, const Matrix& toDrawing, std::vector<Drawing::Part>& out) {
+  PartsAt(s, s.bounds, toDrawing, out);
+}
 
 Rect PaintedBounds(const Shape& s) {
   Rect r{};
@@ -903,6 +990,15 @@ Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, 
   return path;
 }
 
+Path GlyphRunOutline(const GlyphRun& run) {
+  Path path;
+  if (!run.face || run.count == 0) return path;
+  PathSink sink(path);
+  run.face->GetGlyphRunOutline(run.emSize, run.indices, run.advances, run.offsets, run.count, run.sideways,
+                               run.bidiLevel & 1, &sink);
+  return path;
+}
+
 float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size) {
   ComPtr<IDWriteFontFace> face;
   std::vector<UINT16> glyphs;
@@ -911,6 +1007,57 @@ float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold,
   float w = 0;
   for (float a : advances) w += a;
   return w;
+}
+
+bool OutlinesInDirectWrite(std::span<const uint8_t> sfnt) {
+  ComPtr<IDWriteFactory5> dw;
+  ComPtr<IDWriteInMemoryFontFileLoader> loader;
+  if (sfnt.empty() || sfnt.size() > UINT32_MAX ||
+      FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory5),
+                                 reinterpret_cast<IUnknown**>(dw.GetAddressOf()))) ||
+      FAILED(dw->CreateInMemoryFontFileLoader(&loader)) || FAILED(dw->RegisterFontFileLoader(loader.Get())))
+    return true;
+  bool drawn = true;
+  ComPtr<IDWriteFontFile> file;
+  ComPtr<IDWriteFontFace> face;
+  BOOL supported = FALSE;
+  DWRITE_FONT_FILE_TYPE fileType{};
+  DWRITE_FONT_FACE_TYPE faceType{};
+  UINT32 faces = 0;
+  if (SUCCEEDED(loader->CreateInMemoryFontFileReference(dw.Get(), sfnt.data(), static_cast<UINT32>(sfnt.size()), nullptr,
+                                                        &file)) &&
+      SUCCEEDED(file->Analyze(&supported, &fileType, &faceType, &faces)) && supported) {
+    IDWriteFontFile* files[] = {file.Get()};
+    if (SUCCEEDED(dw->CreateFontFace(faceType, 1, files, 0, DWRITE_FONT_SIMULATIONS_NONE, &face))) {
+      // The first of a few common letters the font has.
+      const UINT32 letters[] = {'a', 'e', 'o', 'n', 'A', 'H', '0'};
+      UINT16 glyphs[std::size(letters)] = {};
+      UINT16 glyph = 0;
+      if (SUCCEEDED(face->GetGlyphIndices(letters, static_cast<UINT32>(std::size(letters)), glyphs)))
+        for (UINT16 g : glyphs)
+          if (g && !glyph) glyph = g;
+      if (glyph) {
+        Path path;
+        PathSink sink(path);
+        face->GetGlyphRunOutline(100, &glyph, nullptr, nullptr, 1, FALSE, FALSE, &sink);
+        drawn = !path.Empty();
+      }
+    }
+  }
+  face.Reset();
+  file.Reset();
+  dw->UnregisterFontFileLoader(loader.Get());
+  return drawn;
+}
+
+float TextAscent(const std::wstring& font, bool bold, bool italic) {
+  ComPtr<IDWriteFontFace> face;
+  std::vector<UINT16> glyphs;
+  std::vector<float> advances;
+  if (!Glyphs(L" ", font, bold, italic, 1, face, glyphs, advances)) return 0;
+  DWRITE_FONT_METRICS fm{};
+  face->GetMetrics(&fm);
+  return fm.designUnitsPerEm ? static_cast<float>(fm.ascent) / fm.designUnitsPerEm : 0;
 }
 
 }  // namespace draw
