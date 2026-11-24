@@ -104,6 +104,9 @@ Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint
   bool sameDeck = clip.deck == &deck_;
   // The clip's parts here: shared ones found by bytes (or used again within this deck), the rest new.
   std::map<std::string, std::string> placed;  // clip part key -> name here
+  // A part the shapes need that can't come along (it couldn't be read when copied, or doesn't parse):
+  // the paste is refused rather than leaving an r:id that names nothing.
+  bool lost = false;
   std::function<std::string(const std::string&)> place = [&](const std::string& name) -> std::string {
     std::string key = pkg::PartKey(name);
     if (auto it = placed.find(key); it != placed.end()) return it->second;
@@ -145,7 +148,10 @@ Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint
             rel.target = r.target;
           } else {
             std::string t = place(r.target);
-            if (t.empty()) continue;
+            if (t.empty()) {
+              lost = true;
+              continue;
+            }
             rel.target = Impl::RelativeTarget(here, t);
             rel.targetPart = t;
           }
@@ -168,20 +174,34 @@ Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint
       if (sameDeck && m.Exists(r.target)) id = m.AddRel(part, r.type, r.target);
     } else if (std::string t = place(r.target); !t.empty()) {
       id = m.AddRel(part, r.type, t);
+    } else {
+      lost = true;
     }
-    renamed[r.id] = id;  // empty: a link that can't come along
+    renamed[r.id] = id;  // empty: a slide link that can't come along (its link is dropped)
   }
+  if (lost) return call.End(Result::Fail(u"The shapes can't be pasted, because a part they use can't be read."));
   if (ids) ids->clear();
   for (const std::string& xml : clip.shapes) {
     pugi::xml_document doc;
     if (!ParseFragment(xml, doc)) return call.End(Result::Fail(u"The copied shapes can't be read."));
     // Through placeholders first, so a new id that equals an old one isn't renamed twice.
     std::vector<std::pair<pugi::xml_attribute, std::string>> sites;
+    std::vector<pugi::xml_node> dropped;  // links to a slide that isn't here: never an empty r:id
     for (const pkg::FoundRef& f : m.registry.Find(doc.document_element(), pkg::RefKind::RelationshipId)) {
       auto it = renamed.find(std::string(f.Value()));
-      if (it != renamed.end() && f.attr) sites.emplace_back(f.attr, it->second);
+      if (it == renamed.end() || !f.attr) continue;
+      if (!it->second.empty()) {
+        sites.emplace_back(f.attr, it->second);
+        continue;
+      }
+      const std::string_view k = LocalNameOf(f.element);
+      if (k != "hlinkClick" && k != "hlinkHover" && k != "hlinkMouseOver") {
+        return call.End(Result::Fail(u"The shapes can't be pasted, because a part they use can't be read."));
+      }
+      dropped.push_back(f.element);
     }
     for (auto& [a, v] : sites) pugi::xml_attribute(a).set_value(v.c_str());
+    for (pugi::xml_node n : dropped) n.parent().remove_child(n);
     uint32_t id = 0;
     if (Result r = PutShape(m, part, doc.document_element(), -1, &id); !r) return call.End(r);
     if (ids) ids->push_back(id);
