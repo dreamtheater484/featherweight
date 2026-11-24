@@ -99,7 +99,8 @@ void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::st
     if (pf.bulletFlags & 4) inner += "<a:buClr>" + ColorXml(ColorOf(pf.bulletColor, cx, ColorOf(cf.color, cx, cx.scheme.rgb[1]))) + "</a:buClr>";
     // The bullet's size: a share of the text's (25 to 400 %), or below zero its own, in hundredths of a point.
     if ((pf.bulletFlags & 8) && pf.bulletSize > 0) inner += "<a:buSzPct val=\"" + Num(std::clamp<int>(pf.bulletSize, 25, 400) * 1000LL) + "\"/>";
-    else if ((pf.bulletFlags & 8) && pf.bulletSize < 0) inner += "<a:buSzPts val=\"" + Num(std::clamp<int>(-pf.bulletSize, 100, 400000)) + "\"/>";
+    else if ((pf.bulletFlags & 8) && pf.bulletSize < 0)  // points
+      inner += "<a:buSzPts val=\"" + Num(std::clamp<int>(-pf.bulletSize, 1, 4000) * 100LL) + "\"/>";
     if (pf9 && pf9->autoNumber == 1) {  // a number, in the text's font
       const int scheme = pf9->scheme >= 0 && pf9->scheme < static_cast<int>(std::size(kAutoNumber)) ? pf9->scheme : 3;
       inner += std::string("<a:buAutoNum type=\"") + kAutoNumber[scheme] + "\"";
@@ -437,6 +438,12 @@ std::string ParagraphsXml(const Text& text, const Context& cx, const std::functi
     if ((pf.bulletFlags & 1) && text.ruler && text.ruler->leftMargin[level] && !(pr && pr->pf.Has(kLeftMargin)) &&
         pf.leftMargin <= pf.indent && styled.Has(kLeftMargin) && styled.leftMargin > pf.indent)
       pf.leftMargin = styled.leftMargin;
+    // PowerPoint 2007's own margin and indent for the paragraph, when its copy of the text matches.
+    if (const size_t i = static_cast<size_t>(paragraphs) - 1; i < text.indents.size() && text.indents[i]) {
+      const auto unit = [](double emu) { return static_cast<int16_t>(std::clamp<long long>(std::llround(emu / kEmuPerUnit), -32768, 32767)); };
+      pf.leftMargin = unit(text.indents[i]->first), pf.indent = unit(text.indents[i]->first + text.indents[i]->second);
+      pf.mask |= 1u << kLeftMargin | 1u << kIndent;
+    }
     const auto cfFor = [&](size_t at) {
       Cf cf = base;
       if (const Cf* c = cfAt(at)) cf.Over(*c);

@@ -211,6 +211,8 @@ struct Text {
   std::vector<TextLink> links;
   bool placeholder = true;  // false: a text box's or shape's own text (other text: the document's style)
   std::vector<Pf9> pf9;     // by pp9rt
+  // By paragraph: margin and indent (DrawingML's marL and indent, EMUs) from PowerPoint 2007's copy of the shape.
+  std::vector<std::optional<std::pair<double, double>>> indents;
 };
 
 // Reads a text's records (TextHeaderAtom, TextCharsAtom or TextBytesAtom, StyleTextPropAtom,
