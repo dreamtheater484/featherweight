@@ -330,6 +330,9 @@ class Converter {
       if (r.type == 0x07D5) {  // FontCollection
         Records fs(r.body);
         for (Rec f; fs.Next(f) && fonts_.size() < 4096;) {
+          // FontEmbedDataBlob: the font before it, embedded (instance: regular, bold, italic, bold italic),
+          // the Embedded OpenType a .pptx keeps in ppt/fonts/*.fntdata.
+          if (f.type == 0x0FB8 && !fonts_.empty() && f.inst < 4 && !f.body.empty()) embedded_[fonts_.size() - 1][f.inst] = f.body;
           if (f.type != 0x0FB7) continue;
           std::u16string name;
           for (size_t i = 0; i + 1 < std::min<size_t>(f.body.size(), 64); i += 2) {
@@ -853,11 +856,26 @@ class Converter {
     const long long cy = std::clamp<long long>(std::llround(slideH_ * kEmuPerUnit), 914400, 51206400);
     const long long ncx = std::clamp<long long>(std::llround(notesW_ * kEmuPerUnit), 1, 51206400);
     const long long ncy = std::clamp<long long>(std::llround(notesH_ * kEmuPerUnit), 1, 51206400);
+    // Embedded fonts, as the .pptx keeps them.
+    std::string embedded;
+    std::vector<std::pair<std::string, std::span<const uint8_t>>> fontParts;
+    for (const auto& [index, styles] : embedded_) {
+      std::string faces;
+      static const char* const kStyle[] = {"regular", "bold", "italic", "boldItalic"};
+      for (int k = 0; k < 4; ++k) {
+        if (styles[k].empty()) continue;
+        const std::string name = "fonts/font" + Num(fontParts.size() + 1) + ".fntdata";
+        faces += std::string("<p:") + kStyle[k] + " r:id=\"" + presRels.Add("font", name) + "\"/>";
+        fontParts.emplace_back("ppt/" + name, styles[k]);
+      }
+      if (!faces.empty()) embedded += "<p:embeddedFont><p:font typeface=\"" + Esc(fonts_[index]) + "\"/>" + faces + "</p:embeddedFont>";
+    }
+    if (!embedded.empty()) embedded = "<p:embeddedFontLst>" + embedded + "</p:embeddedFontLst>";
     add("ppt/presentation.xml",
         std::string(kDecl) + "<p:presentation" + kNs + (firstSlide_ > 1 && firstSlide_ < 10000 ? " firstSlideNum=\"" + Num(firstSlide_) + "\"" : "") +
             " saveSubsetFonts=\"1\"><p:sldMasterIdLst>" + masterIds + "</p:sldMasterIdLst>" + notesMasterIds +
             (slideIds.empty() ? "" : "<p:sldIdLst>" + slideIds + "</p:sldIdLst>") + "<p:sldSz cx=\"" + Num(cx) + "\" cy=\"" + Num(cy) +
-            "\"/><p:notesSz cx=\"" + Num(ncx) + "\" cy=\"" + Num(ncy) + "\"/><p:defaultTextStyle>" + LevelStylesXml(defaults, kOther) +
+            "\"/><p:notesSz cx=\"" + Num(ncx) + "\" cy=\"" + Num(ncy) + "\"/>" + embedded + "<p:defaultTextStyle>" + LevelStylesXml(defaults, kOther) +
             "</p:defaultTextStyle></p:presentation>",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml");
     parts.push_back({"ppt/_rels/presentation.xml.rels", presRels.Xml()});
@@ -879,6 +897,7 @@ class Converter {
                          : ext == "bmp" ? "image/bmp" : ext == "tiff" ? "image/tiff" : ext == "emf" ? "image/x-emf" : "image/x-wmf";
       types += "<Default Extension=\"" + ext + "\" ContentType=\"" + type + "\"/>";
     }
+    if (!fontParts.empty()) types += "<Default Extension=\"fntdata\" ContentType=\"application/x-fontdata\"/>";
     parts.insert(parts.begin(), {"[Content_Types].xml", types + overrides + "</Types>"});
 
     pkg::MemorySink sink;
@@ -893,6 +912,11 @@ class Converter {
         status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
         return {};
       }
+    for (const auto& [name, bytes] : fontParts)
+      if (!zip.Add(name, bytes).Ok()) {
+        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+        return {};
+      }
     if (!zip.Finish().Ok()) {
       status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
       return {};
@@ -903,6 +927,7 @@ class Converter {
   std::vector<uint8_t> doc_, pictures_;
   std::map<uint32_t, uint32_t> persist_;
   std::map<std::pair<uint32_t, int>, std::vector<Pf9>> style9_;  // outline texts' PF9, by slide id and text type
+  std::map<size_t, std::array<std::span<const uint8_t>, 4>> embedded_;  // fonts_ index: regular, bold, italic, bold italic
   uint32_t docPersist_ = 0, encryptPersist_ = 0;
   int32_t slideW_ = 0, slideH_ = 0, notesW_ = 0, notesH_ = 0;
   uint32_t notesMaster_ = 0;

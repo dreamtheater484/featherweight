@@ -96,7 +96,9 @@ void ParaProps(const Pf& pf, const Cf& cf, const Context& cx, int level, std::st
   if (pf.Has(kSpaceAfter)) inner += Spacing("spcAft", pf.spaceAfter);
   if (pf.bulletFlags & 1) {
     if (pf.bulletFlags & 4) inner += "<a:buClr>" + ColorXml(ColorOf(pf.bulletColor, cx, ColorOf(cf.color, cx, cx.scheme.rgb[1]))) + "</a:buClr>";
+    // The bullet's size: a share of the text's (25 to 400 %), or below zero its own, in hundredths of a point.
     if ((pf.bulletFlags & 8) && pf.bulletSize > 0) inner += "<a:buSzPct val=\"" + Num(std::clamp<int>(pf.bulletSize, 25, 400) * 1000LL) + "\"/>";
+    else if ((pf.bulletFlags & 8) && pf.bulletSize < 0) inner += "<a:buSzPts val=\"" + Num(std::clamp<int>(-pf.bulletSize, 100, 400000)) + "\"/>";
     if (pf9 && pf9->autoNumber == 1) {  // a number, in the text's font
       const int scheme = pf9->scheme >= 0 && pf9->scheme < static_cast<int>(std::size(kAutoNumber)) ? pf9->scheme : 3;
       inner += std::string("<a:buAutoNum type=\"") + kAutoNumber[scheme] + "\"";
