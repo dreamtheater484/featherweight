@@ -1654,7 +1654,7 @@ static std::wstring NewLabel(const fw::FileKindInfo& k) {
 // (S4): the templates in their personal templates folder, and the Open dialog there for the rest.
 static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
   const bool docs = fw::EditorShipped(fw::FileKind::Document);
-  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook)) return;
+  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook) && !fw::EditorShipped(fw::FileKind::Presentation)) return;
   HMENU sub = CreatePopupMenu();
   if (docs)
     for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
@@ -1785,8 +1785,11 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
-  if (fw::KindOfPath(path) == fw::FileKind::Presentation)
-    return std::make_unique<fw::slide::view::PresentationView>(*this, path);  // P1: read-only
+  if (fw::KindOfPath(path) == fw::FileKind::Presentation) {
+    auto view = std::make_unique<fw::slide::view::PresentationView>(*this, path);
+    if (fw::slide::view::PresentationView::IsTemplate(path)) view->OpenAsNew(++newPresentations_);  // "Presentation2"
+    return view;
+  }
   if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
     auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
     if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
@@ -1863,6 +1866,7 @@ void App::OpenDialog(bool templates) {
   std::wstring tmpl;
   if (fw::EditorShipped(fw::FileKind::Document)) tmpl += L"*.dotx;*.dotm;*.ott";
   if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
+  if (fw::EditorShipped(fw::FileKind::Presentation)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.potx;*.potm";
   if (tmpl.empty()) templates = false;
   COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
                                  {L"Files Featherweight opens", all.c_str()},

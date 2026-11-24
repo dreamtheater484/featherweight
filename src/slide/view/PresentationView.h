@@ -53,6 +53,10 @@ class PresentationView : public TabContent {
   ~PresentationView() override;
   // A new, untitled presentation ("Presentation1"): PowerPoint's blank 16:9 deck (P2).
   static std::unique_ptr<PresentationView> NewPresentation(ViewHost& host, int number);
+  // A template (.potx, .potm) opens as a new presentation, "Presentation<number>", as PowerPoint
+  // opens one (P3).
+  static bool IsTemplate(const std::wstring& path);
+  void OpenAsNew(int number) { newNumber_ = number; }
   // A presentation from memory: a recovered one (`unsaved`), titled `title`, Save As starting at
   // `suggested` (P2, p2-model).
   static std::unique_ptr<PresentationView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
@@ -144,6 +148,10 @@ class PresentationView : public TabContent {
   // The pages as they print and export, each a PNG (page-1.png...) in `dir` at `dpi`; how many were
   // written. A page that fails is reported on stderr, counted in `failed` and skipped.
   int RenderPagesForTesting(const std::wstring& dir, float dpi, int* failed = nullptr);
+  // P3 (p3-files, PictureExport.cpp): the current slide (`all` false: to `path`) or every slide (in
+  // the folder `path` names, Slide1.png...) as PNG pictures `width` pixels across. The pictures
+  // written; `message` says what happened.
+  int ExportSlidePictures(const std::wstring& path, bool all, unsigned width, std::wstring& message);
   // The slide fitted in the view, client pixels (for tests and the snapshot scripts).
   D2D1_RECT_F SlideRectForTesting() const { return SlideRect(); }
 
@@ -201,6 +209,10 @@ class PresentationView : public TabContent {
   void ThumbsDragEnd(bool drop);
   bool ThumbsKeyDown(UINT vk, UINT mods);
   bool SlideScriptOp(const std::wstring& op, const std::wstring& arg);
+  // P3, p3-files (PictureExport.cpp): Export's PNG commands, queried (`state`) or run; their script ops.
+  bool PictureCommand(int cmd, CommandState* state);
+  bool PictureScriptOp(const std::wstring& op, const std::wstring& arg);
+  unsigned pictureWidth_ = 1920;  // the width last chosen for exported pictures
   void DrawThumbSelection(gfx::Canvas& c, const std::vector<ThumbRow>& rows, size_t i);
   void DrawDropMarker(gfx::Canvas& c);
   int SlideShortcut(UINT vk, UINT mods) const;
@@ -298,6 +310,7 @@ class PresentationView : public TabContent {
   std::wstring path_;
   std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
   bool newDeck_ = false;
+  int newNumber_ = 0;  // OpenAsNew: the file is a template, and the tab a new presentation
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).
