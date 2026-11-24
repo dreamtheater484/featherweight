@@ -110,6 +110,18 @@ const std::vector<edit::Comment>& PresentationView::CommentsPanel::List() {
   return list_;
 }
 
+bool PresentationView::CommentsPanel::AnyInDeck() {
+  edit::Editor* ed = Ed();
+  if (!ed) return false;
+  if (!List().empty()) return true;
+  if (anyState_ != ed->StateId()) {
+    const std::vector<size_t> counts = edit::CommentCounts(*ed);
+    anyInDeck_ = std::any_of(counts.begin(), counts.end(), [](size_t n) { return n > 0; });
+    anyState_ = ed->StateId();
+  }
+  return anyInDeck_;
+}
+
 edit::CommentAuthor PresentationView::CommentsPanel::Writer() const {
   edit::CommentAuthor who;
   std::wstring name = Trimmed(v_.host_.ViewReviewer());
@@ -234,12 +246,7 @@ CommandState PresentationView::CommentsPanel::Query(int cmd) {
   edit::Editor* ed = Ed();
   const bool editable = ed && ed->CanEdit();
   const std::vector<edit::Comment>& list = List();
-  auto anyInDeck = [&] {
-    if (!list.empty()) return true;
-    for (size_t n : ed ? edit::CommentCounts(*ed) : std::vector<size_t>())
-      if (n) return true;
-    return false;
-  };
+  auto anyInDeck = [&] { return AnyInDeck(); };
   switch (cmd) {
     case CmdNewComment:
       s.label = L"New comment";

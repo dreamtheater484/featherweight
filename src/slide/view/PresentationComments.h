@@ -61,6 +61,7 @@ class PresentationView::CommentsPanel : public PanelContent {
   };
   edit::Editor* Ed() const;
   const std::vector<edit::Comment>& List();  // the current slide's, read again after each edit
+  bool AnyInDeck();  // any comment on any slide, counted again after each edit
   draw::Point Anchor(const edit::Comment& c);  // where its marker is, slide points
   D2D1_RECT_F Marker(const edit::Comment& c, const D2D1_RECT_F& slide);
   std::string MarkerAt(float x, float y);
@@ -83,6 +84,10 @@ class PresentationView::CommentsPanel : public PanelContent {
   std::vector<edit::Comment> list_;
   size_t listSlide_ = SIZE_MAX;
   uint64_t listState_ = UINT64_MAX;
+  // Whether the deck has comments, as of the editor's state: counting reads every slide's comments
+  // (1.2 ms in a 50-slide deck), and the ribbon asks for Previous and Next twice each time it lays out.
+  bool anyInDeck_ = false;
+  uint64_t anyState_ = UINT64_MAX;
   std::string picked_;  // the picked thread (its first comment's id)
   bool markers_ = true;  // Show Comments > Show Markup
   // A marker being dragged.
