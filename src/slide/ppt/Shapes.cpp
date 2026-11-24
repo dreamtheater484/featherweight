@@ -719,20 +719,34 @@ class Writer {
       if (c == u'\r') lengths.push_back(0);
       else if (c < 0xDC00 || c >= 0xE000) ++lengths.back();  // code points
     std::vector<std::optional<std::pair<double, double>>> out;
+    std::vector<int> spacing;  // by code point, paragraph marks and line breaks included
+    bool spaced = false;
     for (pugi::xml_node p : doc.document_element().child("p:txBody").children("a:p")) {
       size_t length = 0;
+      if (!out.empty()) spacing.push_back(0);
       for (pugi::xml_node c : p.children()) {
-        if (std::string_view(c.name()) == "a:br") ++length;
-        else if (std::string_view(c.name()) == "a:r")
-          for (const char* q = c.child_value("a:t"); *q; ++q) length += (*q & 0xC0) != 0x80;
-        else if (std::string_view(c.name()) == "a:fld") return;  // its text isn't the field's character
+        if (std::string_view(c.name()) == "a:br") {
+          ++length, spacing.push_back(0);
+        } else if (std::string_view(c.name()) == "a:r") {
+          const int spc = std::clamp(c.child("a:rPr").attribute("spc").as_int(), -400000, 400000);
+          spaced |= spc != 0;
+          for (const char* q = c.child_value("a:t"); *q; ++q)
+            if ((*q & 0xC0) != 0x80) ++length, spacing.push_back(spc);
+        } else if (std::string_view(c.name()) == "a:fld") {
+          return;  // its text isn't the field's character
+        }
       }
       if (out.size() >= lengths.size() || lengths[out.size()] != length) return;
       const pugi::xml_node pPr = p.child("a:pPr");
       const pugi::xml_attribute marL = pPr.attribute("marL"), indent = pPr.attribute("indent");
       out.push_back(marL && indent ? std::optional(std::pair(marL.as_double(), indent.as_double())) : std::nullopt);
     }
-    if (out.size() == lengths.size()) t.indents = std::move(out);
+    if (out.size() != lengths.size()) return;
+    t.indents = std::move(out);
+    if (!spaced) return;
+    t.spacing.assign(t.chars.size(), 0);
+    for (size_t i = 0, k = 0; i < t.chars.size() && k < spacing.size(); ++i)
+      t.spacing[i] = t.chars[i] >= 0xDC00 && t.chars[i] < 0xE000 && i ? t.spacing[i - 1] : spacing[k++];
   }
 
   static bool Metro(const Shape& s, std::string& spPr, std::string& style, bool& useBg) {
