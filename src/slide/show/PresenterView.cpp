@@ -328,7 +328,9 @@ LRESULT PresenterView::Impl::Proc(UINT m, WPARAM w, LPARAM l) {
       InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     case WM_TIMER:
-      InvalidateRect(hwnd, nullptr, FALSE);
+      // The clock and the timer, once a second; never while a transition or animation runs (the show's
+      // frames come first: the view is drawn again when it settles).
+      if (!host.PresenterBusy()) InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:

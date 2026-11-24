@@ -34,6 +34,7 @@ class PresenterHost {
   virtual void PresenterKey(UINT vk) = 0;        // the show's keys work in both windows
   virtual void PresenterGoTo(size_t slide) = 0;  // a slide clicked in the strip
   virtual void PresenterClosed() = 0;            // its window closed: the show ends
+  virtual bool PresenterBusy() const = 0;        // the show moves: the clock waits (never a frame's cost)
 };
 
 class PresenterView {

@@ -314,6 +314,7 @@ class Show final : public anim::FrameSource, private PresenterHost {
     if (slide < deck_.SlideCount()) GoTo(slide, false, false);
   }
   void PresenterClosed() override { PostStop(); }
+  bool PresenterBusy() const override { return Moving(); }
   SlideOrder order_;  // hidden slides, the loop, custom shows
   int hoverItem_ = -1;  // the item the mouse is over whose mouse-over action has run
   size_t lastShown_ = 0;
