@@ -250,6 +250,11 @@ As S1–S4 (`docs/s3-plan.md`, "Rules"):
   - Slides 3 and 4 are export-matching gaps: the JPEG re-encode at q75, and a 0.1-px offset.
   - Slides 1 and 6 (0.941, 0.943) differ by a picture scaled up to 1.6 px narrower in Direct2D than in pdfium, at the 1333-px box only. It isn't one-sided against PowerPoint: on slide 1 the PDF is closer, on slide 6 the view is.
   - No code change before the next fidelity round. Every other sampled slide stays within 0.05.
+- **2026-11-24: the slide-show frame bench accepted on two full runs** (coordinator). The bench ran at the console on Roy's PC (5120×1440 at 240 Hz, four times a typical display's rate), with the gate's drawing code (`ea3fe681` plus bench-only commits `3e717cb7`, `3a9b992f`, `d8b2ed27` in `src/slide/show/SlideShow.cpp`: input no longer stops a run, the window's own closing no longer counts as a focus change, the first transition warms up behind black, and late starts count from 1.8 refreshes).
+  - 10:26: 50 transitions, 12,085 frames; transitions 2–50 with no missed refresh, worst interval 7.28 ms (under 2 refreshes), CPU per frame p99 0.48 ms.
+  - 11:05: 12,086 frames; transitions 2–27 and 29–50 with no missed refresh; one 23 ms present stall on slide 28 (CPU 0.48 ms for that frame, the present blocked), while other sessions' builds were still winding down.
+  - Slide 1's 3–4 counted misses in both runs are the bench's queue model, not frames: no frame on slide 1 started more than 6.43 ms (1.54 refreshes) after the one before, and it has no late starts. p1-show fixes the count for P3's presenter-view bench.
+  - So on the reference PC every transition presents at the display's rate except one external stall, with about 10× CPU headroom at 240 Hz; at a typical 60 Hz the same frames are far inside one refresh. Further runs would need the whole PC idle, which Roy asked not to depend on.
 
 ## After P1: notes for P3 or later
 
@@ -308,3 +313,8 @@ P1 stopped at the gate (93.36 % on `fbbbfbaa`). What is known about the slides s
   - **Smaller ones:**
     - 15-213 VM's ⬛ bullet (Noto Sans Symbols, drawn in Segoe UI Emoji) comes out at 14.04 pt in PowerPoint's PDF for buSzPts 14.4.
     - psy-101 22 (.925) is still unexplained.
+- **2026-11-24: the slide show's first transition warms up before it moves; the frame bench ignores input** (p1-show).
+  - Why: at the console (240 Hz, 5120×1440, gate head `ea3fe681`), all 3 missed refreshes of a 50-transition run were in the first transition. Its second and third frames came 16.2 and 12.9 ms apart, each waiting ~16 ms for a buffer, while the compositor took up a full-screen window shown a moment before. Every later transition starts on a window that is already presenting, and none missed a refresh.
+  - Which: a warm-up, not a second pre-render. The next slide is already prepared and finished on the GPU before every transition, the first included. What only the first lacks is a window that has presented before. So the first transition holds at its start for 100 ms and at least 4 frames before its clock starts. Its start is black (it comes from black), so nobody sees the wait. The bench leaves the held frames out (`warmupFrames` in its report) and times the transition from when it moves.
+  - The bench ignores the mouse and the keyboard (Roy, 24 Nov: a mouse move or a click shouldn't throw a run away). Only Esc, Alt+F4, closing it, or another program taking the focus stop it. Its own ending no longer counts as losing the focus: destroying the window hands the focus to another program, which had made two complete runs end as aborted.
+  - Report: DXGI's frame statistics are gone, since they give nothing for this windowed swap chain (4,073,665 "missed"). `lateFrameStarts` now counts only starts more than 1.8 refreshes apart (`lateStartThresholdMs`). The 6.3 ms starts at 240 Hz (1.5 refreshes) are on time: the frame queued ahead keeps a new frame at every refresh, and `missedRefreshes`, counted on DWM's vblank clock, is the pass criterion.

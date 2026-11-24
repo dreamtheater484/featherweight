@@ -45,6 +45,16 @@ constexpr UINT kMsgStop = WM_APP + 1, kMsgPrerender = WM_APP + 2;
 constexpr size_t kEnd = static_cast<size_t>(-1);
 constexpr double kCursorHideMs = 2000;  // as the PDF reader's presentation mode
 constexpr double kBenchHoldMs = 250;    // the bench: how long each slide and step stays
+// The first transition plays on a window and swap chain that are brand new, and the compositor takes
+// a few refreshes to settle on a new full-screen window (the first frames wait ~16 ms for their
+// buffer). So it holds still at its start, which is black, for this long and at least this many
+// frames before it moves: every later transition starts on a window that is already presenting.
+constexpr double kWarmupMs = 100;
+constexpr int kWarmupFrames = 4;
+// The bench: a frame starting more than this many refreshes after the previous one skipped a
+// refresh slot (the frame queued ahead may still have covered it: missedRefreshes says whether the
+// display went without a new frame).
+constexpr double kLateStart = 1.8;
 
 double Smooth(double p) { return p * p * (3 - 2 * p); }
 
@@ -159,7 +169,7 @@ class Show final : public anim::FrameSource {
 
   bool Create();
   void Stop() {
-    if (hwnd_) DestroyWindow(hwnd_);
+    if (hwnd_) Close();
   }
   bool Animating() const override { return transition_ || (cur_ && cur_->animator.Running(0)); }
   void Frame() override;
@@ -173,6 +183,12 @@ class Show final : public anim::FrameSource {
   static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l);
   LRESULT Proc(UINT m, WPARAM w, LPARAM l);
   void PostStop() { PostMessageW(hwnd_, kMsgStop, 0, 0); }
+  // Destroys the window (and with it the show). Destroying it moves the focus to another program's
+  // window: closing_ tells the bench that this focus change is the show's own.
+  void Close() {
+    closing_ = true;
+    DestroyWindow(hwnd_);
+  }
 
   // Device and swap chain.
   bool EnsureDevice();
@@ -234,10 +250,13 @@ class Show final : public anim::FrameSource {
 
   // The bench.
   void BenchFrame(double start, double cpuMs, bool inTransition, double waitMs);
+  // The display queue model: this present shows at the refresh after it, never before the one after
+  // the previous present's. `count`: refreshes that go without a new frame count as missed.
+  void TrackVblank(bool count);
   void WriteBench();
-  // The bench takes the screen of someone who may come back: any input since it started (anywhere,
-  // not only in the show) or another program taking the focus stops it at once.
-  bool BenchInterrupted() const;
+  // The bench ignores the mouse and the keyboard (a click or a key changes nothing: Roy, 2026-11-24,
+  // "mouse movement or a click in a running program should generally not be a throw away"); only an
+  // explicit stop (Esc, Alt+F4, closing it) or another program taking the focus ends it early.
   // Ends the show and deletes it: the caller returns at once, touching nothing of it.
   void AbortBench(const char* why);
 
@@ -264,6 +283,11 @@ class Show final : public anim::FrameSource {
 
   bool transition_ = false;
   double transitionStart_ = 0;
+  bool closing_ = false;  // the window is being destroyed
+  // The first transition's warm-up (kWarmupMs): until it's over, the transition holds at its start.
+  bool warmedUp_ = false;
+  int warmupFrames_ = 0;
+  double warmupUntil_ = 0;
   ComPtr<ID2D1Bitmap1> from_;  // what the transition starts from (null: black)
   double visibleAt_ = 0;       // when the slide's transition ended: its advance time counts from here
   bool boosted_ = false;  // the thread runs above normal while something moves
@@ -282,8 +306,6 @@ class Show final : public anim::FrameSource {
   };
   bool bench_ = false;
   const char* benchAborted_ = nullptr;  // why the bench stopped early, or null
-  DWORD benchInput_ = 0;                // GetLastInputInfo's time when the bench started
-  POINT benchCursor_{};
   bool awake_ = false;  // the display and the PC kept on while the show runs
   bool capture_ = false;
   double clock_ = 1000;  // capture_: the show's own time
@@ -302,9 +324,6 @@ class Show final : public anim::FrameSource {
   double waitMax_ = 0, drawMax_ = 0, presentMax_ = 0;
   // DXGI's frame statistics, sampled after every present during transitions: refreshes against
   // presents that reached the screen.
-  DXGI_FRAME_STATISTICS dxgiLast_{};
-  bool dxgiHave_ = false;
-  int dxgiSamples_ = 0, dxgiMissed_ = 0, dxgiFailures_ = 0;
   // Refreshes with no new frame: each present's vblank interval (on DWM's clock) against the last.
   UINT64 vblank0_ = 0, vblankPeriod_ = 0;
   long long lastVblank_ = -1;
@@ -378,13 +397,8 @@ bool Show::Create() {
   // A show keeps the display and the PC awake while it runs (the power settings stay as they are).
   SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
   awake_ = true;
-  if (bench_) {
-    LASTINPUTINFO li{sizeof(li)};
-    GetLastInputInfo(&li);
-    benchInput_ = li.dwTime;
-    GetCursorPos(&benchCursor_);
-  }
   ShowWindow(hwnd_, SW_SHOW);
+  warmupUntil_ = anim::Now() + kWarmupMs;
   SetForegroundWindow(hwnd_);
   SetFocus(hwnd_);
   ShowCursorNow();
@@ -953,10 +967,6 @@ void Show::EndTransition(double now) {
 }
 
 void Show::Frame() {
-  if (BenchInterrupted()) {
-    AbortBench("input");
-    return;
-  }
   if (!EnsureDevice()) return;
   // While something moves, the show's frames come before other programs' work (a build, a sync):
   // a frame takes well under a millisecond, so this costs them nothing.
@@ -969,7 +979,17 @@ void Show::Frame() {
   const double waited = anim::Now() - before;
   const double start = Now();
   double now = start;
-  bool inTransition = transition_;
+  bool warming = false;
+  if (!warmedUp_) {
+    if (transition_ && (warmupFrames_ < kWarmupFrames || now < warmupUntil_)) {
+      ++warmupFrames_;
+      transitionStart_ = now;  // held at its start (black): the clock starts once the window has settled
+      warming = true;
+    } else {
+      warmedUp_ = true;
+    }
+  }
+  bool inTransition = transition_ && !warming;
   if (transition_ && cur_ && now - transitionStart_ >= cur_->transition.durationMs) EndTransition(now);
   if (!transition_ && cur_) {
     cur_->animator.Update(now);
@@ -977,7 +997,9 @@ void Show::Frame() {
     else if (cur_->layered) Settle(*cur_);
   }
   Draw(now);
-  BenchFrame(start, Now() - start, inTransition, waited);
+  if (!warming) BenchFrame(start, Now() - start, inTransition, waited);  // the warm-up is no part of any motion
+  // Its frames still fill the display queue the first counted frames join: the model sees them too.
+  else if (bench_) TrackVblank(false);
   if (!Animating()) AfterSettle(Now());
 }
 
@@ -1483,34 +1505,29 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
     switch (m) {
       case WM_KEYDOWN:
       case WM_SYSKEYDOWN:
+        if (w == VK_ESCAPE) AbortBench("Esc");
+        else if (w == VK_F4 && GetKeyState(VK_MENU) < 0) AbortBench("closed");
+        return 0;  // other keys change nothing
+      case WM_CLOSE: AbortBench("closed"); return 0;
       case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
       case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
       case WM_MBUTTONDOWN:
       case WM_XBUTTONDOWN:
       case WM_MOUSEWHEEL:
-      case WM_MOUSEHWHEEL: AbortBench("input"); return 0;
-      case WM_MOUSEMOVE: {  // also sent when nothing moved (the window appearing under the cursor)
-        POINT pt;
-        GetCursorPos(&pt);
-        if (pt.x != benchCursor_.x || pt.y != benchCursor_.y) AbortBench("input");
-        return 0;
-      }
+      case WM_MOUSEHWHEEL: return 0;  // clicks and the wheel change nothing
+      case WM_MOUSEMOVE: ShowCursorNow(); return 0;  // the cursor shows; no mouse-over actions
       case WM_ACTIVATE: {
         DWORD pid = 0;
         if (l) GetWindowThreadProcessId(reinterpret_cast<HWND>(l), &pid);
-        if (LOWORD(w) == WA_INACTIVE && pid != GetCurrentProcessId()) {
+        // Not once the show is over (its end slide) or going: then the focus change is its own.
+        if (LOWORD(w) == WA_INACTIVE && pid != GetCurrentProcessId() && !closing_ && cur_ && cur_->index != kEnd) {
           AbortBench("another window took the focus");
           return 0;
         }
         break;
       }
-      case WM_TIMER:
-      case kMsgPrerender:
-        if (BenchInterrupted()) {
-          AbortBench("input");
-          return 0;
-        }
-        break;
       default: break;
     }
   }
@@ -1576,8 +1593,8 @@ LRESULT Show::Proc(UINT m, WPARAM w, LPARAM l) {
         if (n != kEnd && (!next_ || next_->index != n)) next_ = MakeScene(n, false, Now());
       }
       return 0;
-    case kMsgStop: DestroyWindow(hwnd_); return 0;
-    case WM_CLOSE: DestroyWindow(hwnd_); return 0;
+    case kMsgStop: Close(); return 0;
+    case WM_CLOSE: Close(); return 0;
     case WM_ACTIVATE:
       if (LOWORD(w) != WA_INACTIVE) SetFocus(hwnd_);
       return 0;
@@ -1595,9 +1612,10 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
   presentMax_ = std::max(presentMax_, presentMs_);
   if (lastFrame_ >= 0) {
     waitMax_ = std::max(waitMax_, waitMs);
-    // Frames start when the display takes one: a gap of two refreshes or more is a dropped frame.
+    // A frame starts when the display takes one from the queue: a start more than kLateStart
+    // refreshes after the previous one skipped a refresh slot.
     double interval = start - lastFrame_;
-    int missed = interval > 1.5 * periodMs_ ? static_cast<int>(std::lround(interval / periodMs_)) - 1 : 0;
+    int missed = interval > kLateStart * periodMs_ ? std::max(1, static_cast<int>(std::lround(interval / periodMs_)) - 1) : 0;
     if (inTransition && !benchTransitions_.empty()) {
       BenchTransition& t = benchTransitions_.back();
       ++t.frames;
@@ -1612,7 +1630,12 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
     ++benchTransitions_.back().frames;
   }
   lastFrame_ = start;
-  if (inTransition) {
+  if (inTransition) TrackVblank(true);
+  else lastVblank_ = -1;
+}
+
+void Show::TrackVblank(bool count) {
+  {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
     if (lastVblank_ < 0 || !vblankPeriod_) {
@@ -1629,43 +1652,19 @@ void Show::BenchFrame(double start, double cpuMs, bool inTransition, double wait
       // after the previous frame's (frames wait their turn). A refresh between two frames shown is
       // one with no new frame.
       long long shown = lastVblank_ >= 0 ? std::max(lastVblank_ + 1, index + 1) : index + 1;
-      if (lastVblank_ >= 0 && shown > lastVblank_ + 1) {
+      if (count && lastVblank_ >= 0 && shown > lastVblank_ + 1) {
         int missed = static_cast<int>(shown - lastVblank_ - 1);
         vblankMissed_ += missed;
         if (!benchTransitions_.empty()) benchTransitions_.back().vblankMissed += missed;
       }
       lastVblank_ = shown;
     }
-  } else {
-    lastVblank_ = -1;
   }
-  // DXGI: over consecutive samples within a transition, every refresh should have had a new frame.
-  DXGI_FRAME_STATISTICS st{};
-  if (!swap_ || FAILED(swap_->GetFrameStatistics(&st))) {
-    ++dxgiFailures_;
-    dxgiHave_ = false;
-    return;
-  }
-  if (dxgiHave_ && inTransition && st.PresentCount > dxgiLast_.PresentCount &&
-      st.SyncRefreshCount >= dxgiLast_.SyncRefreshCount) {
-    UINT presents = st.PresentCount - dxgiLast_.PresentCount;
-    UINT refreshes = st.SyncRefreshCount - dxgiLast_.SyncRefreshCount;
-    if (refreshes > presents) dxgiMissed_ += static_cast<int>(refreshes - presents);
-    ++dxgiSamples_;
-  }
-  dxgiLast_ = st;
-  dxgiHave_ = inTransition;
-}
-
-bool Show::BenchInterrupted() const {
-  if (!bench_) return false;
-  LASTINPUTINFO li{sizeof(li)};
-  return GetLastInputInfo(&li) && li.dwTime != benchInput_;
 }
 
 void Show::AbortBench(const char* why) {
   benchAborted_ = why;
-  DestroyWindow(hwnd_);  // writes the report and deletes the show
+  Close();  // writes the report and deletes the show
 }
 
 void Show::WriteBench() {
@@ -1684,14 +1683,14 @@ void Show::WriteBench() {
   snprintf(buf, sizeof(buf),
            "  \"refreshHz\": %.2f,\n  \"width\": %u,\n  \"height\": %u,\n  \"slides\": %zu,\n  \"transitions\": %zu,\n"
            "  \"transitionFrames\": %d,\n  \"missedRefreshes\": %d,\n  \"lateFrameStarts\": %d,\n"
-           "  \"dxgiMissedRefreshes\": %d,\n"
-           "  \"dxgiSamples\": %d,\n  \"dxgiFailures\": %d,\n  \"waitMsMax\": %.2f,\n  \"drawMsMax\": %.2f,\n"
+           "  \"lateStartThresholdMs\": %.2f,\n  \"warmupFrames\": %d,\n"
+           "  \"waitMsMax\": %.2f,\n  \"drawMsMax\": %.2f,\n"
            "  \"presentMsMax\": %.2f,\n"
            "  \"worstIntervalMs\": %.2f,\n  \"animationFrames\": %d,\n  \"animationDropped\": %d,\n"
            "  \"cpuMsMedian\": %.3f,\n  \"cpuMs99\": %.3f,\n  \"cpuMsMax\": %.3f,\n  \"warp\": %s,\n  \"pass\": %s,\n"
            "  \"aborted\": %s,\n  \"abortReason\": \"%s\",\n",
            refreshHz_, w_, h_, deck_.SlideCount(), benchTransitions_.size(), frames, vblankMissed_, dropped,
-           dxgiMissed_, dxgiSamples_, dxgiFailures_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
+           kLateStart * periodMs_, warmupFrames_, waitMax_, drawMax_, presentMax_, worst, animationFrames_, animationDropped_, pct(0.5),
            pct(0.99), cpu.empty() ? 0.0 : cpu.back(), gpu::IsWarp() ? "true" : "false",
            !benchAborted_ && vblankMissed_ == 0 && frames > 0 ? "true" : "false", benchAborted_ ? "true" : "false",
            benchAborted_ ? benchAborted_ : "");
@@ -1787,7 +1786,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
     if (g_show->Animating()) g_show->Frame();
     else MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
-  if (g_benchAborted) return 3;  // stopped on someone's input: no result
+  if (g_benchAborted) return 3;  // stopped early (Esc, closed, the focus taken): no result
   return benchReport.empty() || g_benchPassed ? 0 : 2;
 }
 
