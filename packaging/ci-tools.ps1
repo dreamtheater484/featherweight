@@ -5,7 +5,8 @@
 param(
   [string]$InnoVersion = "6.4.3",
   [string]$WixVersion = "5.0.2",
-  [string]$WixSha512 = ""  # of wix.$WixVersion.nupkg; empty prints it (to pin it here) instead of checking
+  # wix.$WixVersion.nupkg's SHA-512, read on a runner (release.yml run 45608841612); empty prints it instead of checking
+  [string]$WixSha512 = "cfe7eed5d79371a57e4d10a8e3ee87ac9e3c49d9e3fb27908e3312b53237196ecdc4510f6a49d809dc6b7f4a84be0757ae361d8cb9e464a0ac352a934cea3638"
 )
 $ErrorActionPreference = "Stop"
 if ($env:GITHUB_ACTIONS -ne "true") { throw "ci-tools.ps1 installs tools: it runs on CI runners only." }
