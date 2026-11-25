@@ -64,6 +64,8 @@ param(
   [string]$Corpus = $(if ($env:FW_CORPUS) { $env:FW_CORPUS } else { "D:\Documents\Codex\FeatherweightCorpus" }),
   # The shipped configuration (release.ps1's: FW_BUILD_TESTS=ON, FW_TEST_SCREENS=OFF).
   [string]$Build = "build-release",
+  # A test build (FW_TEST_SCREENS on): lang.clipping runs its script step clipcheck, which the shipped exe hasn't.
+  [string]$TestBuild = "build",
   [int]$OfficeWaitMinutes = 120,
   # Check a report instead of making one: exit 0 when it's for -Commit (default HEAD) and has no failed row.
   [string]$Verify,
@@ -87,10 +89,13 @@ $exeBudget = $exe40 + 1024 * 1024      # F1 grows the exe by at most 1,024 KB
 $downloadBudget = 10 * 1024 * 1024     # the default download without V8 (18.2 MB at 4.0)
 $catalogBudget = 40 * 1024             # each language, compressed, in the exe
 $baselines = [ordered]@{
-  # docs/TEST_CHECKLIST.md, P1's and P3's rows, on 4.0's final head (6fe39e23).
-  slidesPptx = @{ passing = 2370; slides = 2516; folder = "pptx"; through = "fwtool" }
-  slidesPpt  = @{ passing = 2344; slides = 2577; folder = "ppt"; through = "fwtool" }
-  slidesOdp  = @{ passing = 2059; slides = 2547; folder = "odp"; through = "app" }
+  # docs/TEST_CHECKLIST.md, P1's and P3's rows, on 4.0's final head (6fe39e23). Slides are compared with 4.0
+  # measured without Office's cloud fonts (the coordinator, 2026-11-25): f1-word's slide-pages run on 04e9a4bc
+  # with the cloud fonts gone and no line-breaker change (r1-word-5f2617\build\spB0, spPB0, spOA): .pptx 2,349 (2,370 with
+  # them), .ppt 2,322 (2,344), .odp 2,042 (2,059).
+  slidesPptx = @{ passing = 2349; slides = 2516; folder = "pptx"; through = "fwtool" }
+  slidesPpt  = @{ passing = 2263; slides = 2577; folder = "ppt"; through = "fwtool" }  # f1-word's spPB0 through fwtool, as the gate measures: fwtool refuses the two encrypted decks (60 slides; P3 counted them through the app, 59 of 60, for 2,322)
+  slidesOdp  = @{ passing = 2042; slides = 2547; folder = "odp"; through = "app" }  # f1-word: -Through app with the head's exe (spOA); on .pptx the head and the no-cloud build are slide for slide the same
 }
 # Measured on 4.0's binaries by f1-gate (-Checks fidelity.baseline); null until then.
 $baselineFile = Join-Path $root "tests\pdf\f1-gate-baselines.json"
@@ -365,10 +370,10 @@ Check "build.ctest" long "ctest on the shipped build (x64, locally)" "100 % of t
   $junit = Join-Path $script:outDir "ctest.xml"
   $code = Invoke-Tool "build.ctest" "ctest" @("--test-dir", (Full $Build), "-C", "Release", "--output-on-failure", "--output-junit", $junit)
   $text = Get-Content (Log "build.ctest") -Raw
-  $m = [regex]::Matches($text, '(\d+)% tests passed, (\d+) tests? failed out of (\d+)')
+  $m = [regex]::Matches($text, '(\d+)% tests passed(?:, (\d+) tests? failed)? out of (\d+)')  # no failed count when none failed
   if (-not $m.Count) { return Failed "ctest printed no total (exit $code)" }
   $last = $m[$m.Count - 1]
-  $n = [ordered]@{ total = [int]$last.Groups[3].Value; failed = [int]$last.Groups[2].Value }
+  $n = [ordered]@{ total = [int]$last.Groups[3].Value; failed = $(if ($last.Groups[2].Success) { [int]$last.Groups[2].Value } else { 0 }) }
   $names = @()
   if (Test-Path $junit) { $names = @(([xml](Get-Content $junit -Raw)).SelectNodes("//testcase") | ForEach-Object { $_.name }) }
   $n.tests = $names
@@ -494,22 +499,28 @@ Check "fidelity.word" long "Word pages and lines against Word's renders (fwtool 
   if ($ok) { Passed "$($c.pages.match) of $($c.pages.documents) page counts, $($c.lines.percent) % of lines" $n }
   else { Failed "$($c.pages.match) of $($c.pages.documents) page counts (148), $($c.lines.percent) % of lines (96.8)" $n }
 }
+# slide-pages.ps1 writes <out>\decks\<deck>\<deck>.pdf, the deck named by its corpus path (up to 77
+# characters), and fwtool and pdf-compare read paths of at most 260 characters: so a short folder, and a
+# check that it's short enough (a longer one loses decks silently: 11 decks, 150 slides on a trial run).
+$maxSlideOut = 259 - "\decks\".Length - 77 - 1 - 77 - ".pdf".Length
 function Invoke-SlidePages([string]$id, $base) {
   Need-Build
-  $o = Join-Path $script:outDir $id
+  $o = Join-Path $script:outDir "sl-$($base.folder)"
+  if ($o.Length -gt $maxSlideOut) { return [ordered]@{ error = "the output folder's path is $($o.Length) characters; the decks' names need it at most $maxSlideOut (use a shorter -Out)" } }
   $code = Invoke-Script $id "scripts\slide-pages.ps1" @("-Reference", (Join-Path $Corpus "reference"), "-Folders", $base.folder,
     "-Featherweight", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-Through", $base.through, "-MinSlides", "0")
   $s = Read-Json (Join-Path $o "summary.json")
   if (-not $s) { return $null }
   [ordered]@{ passing = [int]$s.passing; slides = [int]$s.slides; percent = $s.percent; exit = $code }
 }
-Check "fidelity.slides" long "Slides against PowerPoint's (scripts\slide-pages.ps1): .pptx, .ppt, .odp" "No lower than 4.0's: .pptx 2,370 of 2,516, .ppt 2,344 of 2,577, .odp 2,059 of 2,547 (SSIM >= 0.95)" {
+Check "fidelity.slides" long "Slides against PowerPoint's (scripts\slide-pages.ps1): .pptx, .ppt, .odp" "No lower than 4.0's without cloud fonts: .pptx 2,349 of 2,516, .ppt 2,263 of 2,577 through fwtool (2,322 with the two encrypted decks the app opens), .odp 2,042 of 2,547 (SSIM >= 0.95)" {
   $n = [ordered]@{}; $bad = @()
   foreach ($k in "slidesPptx", "slidesPpt", "slidesOdp") {
     $base = $baselines[$k]
     $m = Invoke-SlidePages "fidelity.slides-$($base.folder)" $base
     if (-not $m) { $bad += "$($base.folder): no summary"; continue }
-    $n[$base.folder] = "$($m.passing) of $($m.slides) ($($m.percent) %); 4.0: $($base.passing) of $($base.slides)"
+    if ($m.error) { $bad += "$($base.folder): $($m.error)"; continue }
+    $n[$base.folder] = "$($m.passing) of $($m.slides) ($($m.percent) %); 4.0 without cloud fonts: $($base.passing) of $($base.slides)"
     # The same slides: no fewer passing. Another count of slides (decks added or dropped): no lower share.
     $okCount = if ($m.slides -eq $base.slides) { $m.passing -ge $base.passing } else { ($m.passing / [math]::Max(1, $m.slides)) -ge ($base.passing / $base.slides) }
     if (-not $okCount) { $bad += $base.folder }
@@ -524,7 +535,7 @@ Check "fidelity.print" long "Printed workbook pages against Excel's (scripts\she
     @{ key = "printXlsOds"; ref = (Join-Path $Corpus "reference"); folders = "xls,ods" })
   $n = [ordered]@{}; $bad = @()
   foreach ($set in $sets) {
-    $o = Join-Path $script:outDir "fidelity.print-$($set.key)"
+    $o = Join-Path $script:outDir "pr-$($set.key)"  # short: sheet-pages names files after the workbooks
     $code = Invoke-Script "fidelity.print" "scripts\sheet-pages.ps1" @("-Reference", $set.ref, "-Folders", $set.folders,
       "-Featherweight", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-MinPages", "0")
     $s = Read-Json (Join-Path $o "summary.json")
@@ -642,16 +653,22 @@ Check "legal.notices" quick "THIRD_PARTY_NOTICES matches the SBOM, and About sho
 }
 Check "legal.hyphenation" quick "The Swedish (LPPL) and Finnish hyphenation patterns ship byte for byte, or are dropped" "As decided in docs\f1-plan.md (f1-word)" {
   $plan = Get-Content (Join-Path $root "docs\f1-plan.md") -Raw -Encoding UTF8
-  $decided = [regex]::Match($plan, '(?im)^- \*\*f1-word[^\n]*hyphenation[^\n]*')
-  if (-not $decided.Success) { return NotBuilt "f1-word" "the hyphenation decision in docs\f1-plan.md" }
-  $text = $decided.Value
+  # The latest decision line counts (f1-word dropped them first, then kept them byte for byte).
+  $decided = @([regex]::Matches($plan, '(?im)^- \*\*f1-word[^\n]*hyphenation[^\n]*'))
+  if (-not $decided.Count) { return NotBuilt "f1-word" "the hyphenation decision in docs\f1-plan.md" }
+  $text = $decided[$decided.Count - 1].Value
   $cmake = (Get-ChildItem (Join-Path $root "cmake") -Filter *.cmake | Get-Content -Raw) -join "`n"
   $lists = $cmake + (Get-Content (Join-Path $root "CMakeLists.txt") -Raw)
   $n = [ordered]@{ decision = $text.Substring(0, [math]::Min(160, $text.Length)) }
   $sv = $lists -match 'hyph[-_]sv'; $fi = $lists -match 'hyph[-_]fi'
   $n.swedishInBuild = $sv; $n.finnishInBuild = $fi
   if ($text -match '(?i)dropp') { if ($sv -or $fi) { Failed "decided dropped, but the build still has them" $n } else { Passed "dropped" $n } }
-  else { Passed "kept byte for byte (pinned by hash in the build)" $n }
+  else {
+    # Kept: fetched as they are, each pinned by its SHA-256 next to its name.
+    $pinned = @("hyph-sv", "hyph-fi" | Where-Object { $cmake -match ([regex]::Escape($_) + '[\s\S]{0,400}?[0-9a-f]{64}') })
+    $n.pinned = $pinned -join ", "
+    if ($pinned.Count -eq 2) { Passed "kept byte for byte, each pinned by its SHA-256" $n } else { Failed "decided kept, but not both pinned by hash in cmake\" $n }
+  }
 }
 Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the README says the MIT licence doesn't cover the name and logo" "No product or feature named after them; the README's wording present" {
   $readme = Get-Content (Join-Path $root "README.md") -Raw -Encoding UTF8
@@ -680,8 +697,8 @@ Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the 
 # ===== Languages =====
 $langs = @("nl", "de", "fr", "es")
 Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeholders and access keys consistent; each <= 40 KB" "100 % translated, 0 placeholder or access-key errors, <= 40 KB each" {
-  $tool = @("tools\strings\check.ps1", "tools\strings\check.py") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
-  if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (tools\strings\check.ps1 or .py, -Json/--json: see FeatherweightNotes\f1\gate-contract.md)" }
+  $tool = @("tools\strings\check.py", "tools\strings\check.ps1") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
+  if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (python tools\strings\check.py --build --json: see FeatherweightNotes\f1\gate-contract.md)" }
   $j = Join-Path $script:outDir "lang-catalog.json"
   if ($tool -like "*.ps1") { $code = Invoke-Script "lang.catalog" $tool @("-Build", (Full $Build), "-Json", $j) }
   else { $code = Invoke-Tool "lang.catalog" "python" @("-I", (Full $tool), "--build", (Full $Build), "--json", $j) }
@@ -691,23 +708,26 @@ Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeh
   foreach ($l in $langs) {
     $x = $c.languages.$l
     if (-not $x) { $bad += "${l}: missing"; $n[$l] = "missing"; continue }
-    $n[$l] = "$($x.translated) of $($x.strings), $($x.placeholderErrors) placeholder and $($x.accessKeyErrors) access-key errors, $($x.compressedBytes) bytes"
-    if ($x.translated -lt $x.strings -or $x.placeholderErrors -or $x.accessKeyErrors -or $x.compressedBytes -gt $catalogBudget) { $bad += $l }
+    $n[$l] = "$($x.translated) of $($x.strings), $($x.placeholderErrors) placeholder, $($x.accessKeyErrors) access-key and $([int]$x.otherErrors) other errors, $($x.compressedBytes) bytes"
+    if ($x.translated -lt $x.strings -or $x.placeholderErrors -or $x.accessKeyErrors -or $x.otherErrors -or $x.compressedBytes -gt $catalogBudget) { $bad += $l }
   }
   if ($c.unmarked) { $n.unmarked = $c.unmarked; $bad += "$($c.unmarked) strings not through T()" }
+  if ($code -and -not $bad.Count) { $bad += "check.py exited $code (its log)" }
   if ($bad.Count) { Failed ($bad -join ", ") $n } else { Passed "all four complete, each within 40 KB" $n }
 }
 Check "lang.clipping" long "The clipping check: every ribbon tab, panel and dialog at 1366 x 768 (100 %), in each language" "0 clipped labels" {
   $tool = @("tools\strings\clipping.ps1") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
   if (-not $tool) { return NotBuilt "f1-lang" "the clipping check (tools\strings\clipping.ps1 -Exe -Json: see gate-contract.md)" }
-  Need-Build
+  $testExe = Join-Path (Full $TestBuild) "Release\Featherweight.exe"
+  if (-not (Test-Path $testExe)) { return Failed "not run: no test build at $TestBuild (FW_TEST_SCREENS on: clipcheck isn't in the shipped exe)" }
   $j = Join-Path $script:outDir "lang-clipping.json"
-  $code = Invoke-Script "lang.clipping" $tool @("-Exe", (Get-Exe), "-Json", $j, "-Out", (Join-Path $script:outDir "lang-clipping"))
+  $code = Invoke-Script "lang.clipping" $tool @("-Exe", $testExe, "-Json", $j, "-Out", (Join-Path $script:outDir "lang-clipping"), "-Languages", "en,nl,de,fr,es")
   $c = Read-Json $j
   if (-not $c) { return Failed "the clipping check wrote nothing (exit $code)" }
   $n = [ordered]@{ surfaces = $c.surfaces; languages = (@($c.languages) -join ","); clipped = @($c.clipped).Count }
   if (@($c.clipped).Count) { $n.first = "$(@($c.clipped)[0])"; Failed "$(@($c.clipped).Count) clipped labels" $n }
-  elseif (@($c.languages).Count -lt 4) { Failed "only $(@($c.languages) -join ', ') checked" $n }
+  elseif (@(@("en") + $langs | Where-Object { $_ -notin @($c.languages) }).Count) { Failed "not in use: $(@(@("en") + $langs | Where-Object { $_ -notin @($c.languages) }) -join ', ') (a catalog missing or damaged falls back to English)" $n }
+  elseif ($code) { Failed "clipping.ps1 exited $code (its log)" $n }
   else { Passed "$($c.surfaces) surfaces in $(@($c.languages).Count) languages, none clipped" $n }
 }
 Check "lang.launch" timing "Launch to window in German no more than 5 ms slower than in English (fwtool bench-app)" "German - English <= 5 ms" {
