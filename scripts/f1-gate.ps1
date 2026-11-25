@@ -70,6 +70,9 @@ param(
   # Check a report instead of making one: exit 0 when it's for -Commit (default HEAD) and has no failed row.
   [string]$Verify,
   [string]$Commit,
+  # A trial's CI rows read this commit's runs instead of the head's (a head that differs from it only in the
+  # gate's own files, before CI has run on it). A report made with it is never publishable.
+  [string]$CiCommit,
   # Print the rows and checks and exit.
   [switch]$List
 )
@@ -248,7 +251,7 @@ function Gh-Json([string]$path) {
 $script:runsCache = $null
 function Get-CiRuns {
   if ($null -eq $script:runsCache) {
-    $j = Gh-Json "repos/$repoSlug/actions/runs?head_sha=$($script:head)&per_page=100"
+    $j = Gh-Json "repos/$repoSlug/actions/runs?head_sha=$($script:ciHead)&per_page=100"
     $script:runsCache = @($j.workflow_runs)
   }
   $script:runsCache
@@ -392,7 +395,7 @@ function Test-Scorecard {
 }
 Check "build.ci" ci "CI on this commit: build (with arm64's ctest), fuzz, CodeQL, Scorecard" "Every workflow and job succeeded" {
   if (-not $repoSlug) { return Failed "no GitHub remote" }
-  if (-not @(Invoke-Git branch -r --contains $script:head).Count) { return Failed "this commit isn't pushed" }
+  if (-not @(Invoke-Git branch -r --contains $script:ciHead).Count) { return Failed "this commit isn't pushed" }
   $parts = [ordered]@{
     build = Test-Workflow "build.yml" @("^build", "fuzz", "arm64") "f1-ship" "the arm64 job"
     codeql = Test-Workflow "codeql.yml" @() "f1-trust" "CodeQL code scanning"
@@ -407,14 +410,14 @@ Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 o
   if (-not (Test-Path (Join-Path $root ".github\workflows\codeql.yml"))) { return NotBuilt "f1-trust" "CodeQL code scanning (.github\workflows\codeql.yml)" }
   # The branch gated: this checkout's, else the first of f1-int and main that has the commit (codeql.yml runs on
   # pushes to those). Without ref the API answers for the default branch only.
-  $pushed = @(Invoke-Git branch -r --contains $script:head | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
+  $pushed = @(Invoke-Git branch -r --contains $script:ciHead | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
   $branch = @(@((Invoke-Git rev-parse --abbrev-ref HEAD), "claude/f1-int", "main") + $pushed | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
   if (-not $branch) { return Failed "this commit isn't on a pushed branch" }
   $ref = "refs/heads/$branch"
   # The alerts API answers "none open" for a branch CodeQL never analysed: the analysis of this commit (or of one
   # with only docs changed since) must be there first.
   try { $analyses = @(Gh-Json "repos/$repoSlug/code-scanning/analyses?ref=$ref&per_page=20") } catch { $analyses = @() }
-  $a = @($analyses | Where-Object { $_.commit_sha -eq $script:head }) | Select-Object -First 1
+  $a = @($analyses | Where-Object { $_.commit_sha -eq $script:ciHead }) | Select-Object -First 1
   if (-not $a) { $a = @($analyses | Where-Object { $_.commit_sha -and (Test-OnlyDocsSince $_.commit_sha) }) | Select-Object -First 1 }
   if (-not $a) {
     $last = @($analyses) | Select-Object -First 1
@@ -910,7 +913,7 @@ Check "review.scans" quick "VirusTotal and Hybrid Analysis (Roy's step 5): Defen
   if (-not (Test-Path $s)) { return NotBuilt "f1-trust" "scripts\scan-release.ps1" }
   $o = Join-Path $script:outDir "scan-release"
   Remove-Item (Join-Path $o "summary.json") -ErrorAction SilentlyContinue
-  $code = Invoke-Script "review.scans" "scripts\scan-release.ps1" @("-FromCi", "-Commit", $script:head, "-OutDir", $o)
+  $code = Invoke-Script "review.scans" "scripts\scan-release.ps1" @("-FromCi", "-Commit", $script:ciHead, "-OutDir", $o)
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "scan-release.ps1 -FromCi wrote no summary (exit $code; its log)" }
   $n = [ordered]@{ verdict = $r.verdict }
@@ -1135,6 +1138,8 @@ if ($List) {
 # The run
 # ---------------------------------------------------------------------------------------------------
 $script:head = Invoke-Git rev-parse HEAD
+$script:ciHead = if ($CiCommit) { Invoke-Git rev-parse $CiCommit } else { $script:head }
+if (-not $script:ciHead) { throw "unknown -CiCommit $CiCommit" }
 $dirty = [bool]@(Invoke-Git status --porcelain).Count
 $branch = Invoke-Git rev-parse --abbrev-ref HEAD
 $script:outDir = Full $Out
@@ -1205,11 +1210,11 @@ if (Test-Path (Get-Exe)) { $e = Get-Item (Get-Exe); $exeInfo = [ordered]@{ bytes
 $failedRows = @($rowsOut | Where-Object status -eq "failed")
 $gate = [ordered]@{
   version = $Version; commit = $script:head; branch = $branch; dirty = $dirty; generated = (Get-Date).ToString("s"); exe = $exeInfo
-  publishable = (-not $dirty -and -not $failedRows.Count); rows = $rowsOut
+  publishable = (-not $dirty -and -not $failedRows.Count -and -not $CiCommit); ciCommit = $script:ciHead; rows = $rowsOut
 }
 $count = { param($s) @($rowsOut | ForEach-Object { $_.checks } | Where-Object { $_.status -eq $s }).Count }
 $md = @("# Gate $Version", "",
-  "Commit ``$($script:head)`` ($branch)$(if ($dirty) { ', **with uncommitted changes: counts for nothing**' }), $((Get-Date).ToString('yyyy-MM-dd HH:mm')).",
+  "Commit ``$($script:head)`` ($branch)$(if ($dirty) { ', **with uncommitted changes: counts for nothing**' })$(if ($CiCommit) { ", CI rows read ``$($script:ciHead)`` (-CiCommit: a trial, counts for nothing)" }), $((Get-Date).ToString('yyyy-MM-dd HH:mm')).",
   $(if ($exeInfo) { "Featherweight.exe ($Build): $('{0:N0}' -f $exeInfo.bytes) bytes, sha256 $($exeInfo.sha256)." } else { "No shipped build in $Build." }), "",
   "**$(if ($gate.publishable) { 'Publishable' } else { 'Not publishable' })**: rows $(@($rowsOut | Where-Object status -eq 'passed').Count) passed, $($failedRows.Count) failed, $(@($rowsOut | Where-Object status -eq 'waiting').Count) waiting; checks $(& $count 'passed') passed, $(& $count 'failed') failed, $(& $count 'not run') not run, $(& $count 'waiting') waiting for Roy's steps.", "",
   "| Row | Status | Checks |", "|---|---|---|")
