@@ -34,7 +34,7 @@ jobs:
 
       - name: Release scan script, offline (canned answers in tests/scan)
         shell: pwsh
-        run: scripts/scan-release.ps1 -Files tests/pdfs/text.pdf -Offline tests/scan -Report build/scan.md -Json build/scan.json
+        run: scripts/scan-release.ps1 -Files tests/pdfs/text.pdf -Offline tests/scan -OutDir build/scan-offline
 
       - name: Round-trip and check the office corpus (fwtool)
         shell: pwsh

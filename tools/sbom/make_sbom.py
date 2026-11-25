@@ -183,10 +183,12 @@ def deps_components():
     return out
 
 
-def data_component(name, version, sha256, licences, url, group):
+def data_component(file, version, sha256, licences, url, group):
+    # Named by the language's id (hyph-en-us), as THIRD_PARTY_NOTICES.md names it; the file is the bom-ref.
     return {
-        "type": "data", "bom-ref": name, "group": group, "name": name, "version": version,
-        "description": "Hyphenation patterns, compressed into Featherweight.exe",
+        "type": "data", "bom-ref": file, "group": group, "name": file.split(".")[0], "version": version,
+        "description": f"Hyphenation patterns ({file}), compressed into Featherweight.exe",
+        "properties": [{"name": "fw:file", "value": file}],
         "licenses": [{"license": {"id": n} if n == "MIT" else {"name": n}}
                      for n in (licences or ["Quoted in THIRD_PARTY_NOTICES.md"])],
         "hashes": [{"alg": "SHA-256", "content": sha256}],

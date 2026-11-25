@@ -3,7 +3,8 @@ name: coverity
 # Coverity Scan (F1, docs/f1-plan.md "External review"): a weekly static analysis of the shipped exe
 # by scan.coverity.com, free for open-source projects. It waits for Roy's step 6: the project
 # registered there, with its token and the account's email as the repository secrets
-# COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL. Until then the job only says it's waiting.
+# COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL. Until then the `scan` job is skipped and the `token`
+# job says it's waiting; the 4.1 gate counts a run only when its `scan` job succeeded.
 # The project's name there is the variable COVERITY_PROJECT if set, else the repository's name.
 on:
   schedule:
@@ -14,7 +15,23 @@ permissions:
   contents: read
 
 jobs:
+  token:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Check for the token (Roy's step 6)
+        id: check
+        env:
+          COVERITY_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
+          COVERITY_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}
+        run: |
+          if [ -n "$COVERITY_TOKEN" ] && [ -n "$COVERITY_EMAIL" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::Coverity Scan is waiting for Roy's step 6 (the secrets COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL)."; fi
+
   scan:
+    needs: token
+    if: needs.token.outputs.ready == 'true'
     runs-on: windows-latest
     timeout-minutes: 120
     env:
@@ -22,31 +39,20 @@ jobs:
       COVERITY_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}
       COVERITY_PROJECT: ${{ vars.COVERITY_PROJECT || github.repository }}
     steps:
-      - name: Check for the token (Roy's step 6)
-        id: token
-        shell: pwsh
-        run: |
-          if ($env:COVERITY_TOKEN -and $env:COVERITY_EMAIL) { "ready=true" >> $env:GITHUB_OUTPUT }
-          else { "::notice::Coverity Scan is waiting for Roy's step 6 (the secrets COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL)." }
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.token.outputs.ready
         with:
           persist-credentials: false
 
       - name: Cache PDFium
-        if: steps.token.outputs.ready
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: third_party/pdfium
           key: pdfium-${{ hashFiles('cmake/FetchPdfium.cmake') }}
 
       - name: Configure the shipped configuration
-        if: steps.token.outputs.ready
         run: cmake -S . -B build-coverity -DFW_BUILD_TESTS=OFF -DFW_TEST_SCREENS=OFF
 
       - name: Get Coverity's build tool
-        if: steps.token.outputs.ready
         shell: pwsh
         run: |
           $form = @{ token = $env:COVERITY_TOKEN; project = $env:COVERITY_PROJECT }
@@ -57,11 +63,9 @@ jobs:
           Add-Content $env:GITHUB_PATH $covBuild.DirectoryName
 
       - name: Build the exe under cov-build
-        if: steps.token.outputs.ready
         run: cov-build --dir cov-int cmake --build build-coverity --config Release --target Featherweight --parallel
 
       - name: Submit to Coverity Scan
-        if: steps.token.outputs.ready
         shell: pwsh
         run: |
           Get-Content cov-int\build-log.txt -Tail 5

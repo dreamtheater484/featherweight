@@ -4,24 +4,36 @@
   report and, with -UpdateNotes, links the reports from the release notes (F1, docs/f1-plan.md).
 
 .EXAMPLE
-  scripts\scan-release.ps1 -Tag v4.1.0 -UpdateNotes          # the release's assets, from GitHub
+  scripts\scan-release.ps1 -Tag v4.1.0 -UpdateNotes          # the release's assets (a draft too), from GitHub
+  scripts\scan-release.ps1 -Run 1234567890                    # a workflow run's artifacts (release.yml's dry run)
   scripts\scan-release.ps1 -Files dist\*.exe,dist\*.zip       # local files
+  scripts\scan-release.ps1 -FromCi                            # the gate: the CI scan of this commit, fetched
   scripts\scan-release.ps1 -Files x.exe -Offline tests\scan   # canned answers, no network (a test)
 
 .NOTES
   The keys come from the environment: VT_API_KEY (VirusTotal) and HA_API_KEY (Hybrid Analysis), set
   as repository secrets by Roy (step 5). Without them the report says "waiting for step 5" and the
-  script exits 0. The scan workflow (.github/workflows/scan-release.yml) runs it for each release.
+  script exits 0. The scan workflow (.github/workflows/scan-release.yml) runs it in CI, where the keys are.
 
   Passes when Microsoft Defender (VirusTotal's "Microsoft" engine) finds nothing in any file and the
   sandbox saw no traffic except to GitHub and Windows' own services. Other engines' detections are
   listed, not failed: false positives on new, unsigned files are common.
+
+  Writes into -OutDir (build\scan-release): report.md (the release notes' Scans section),
+  scan-report.json (everything), and summary.json for the 4.1 gate (gate-contract.md, review.scans):
+  { "pass": true, "verdict": "...", "waiting": false }.
+
+  -FromCi doesn't scan: it finds the latest scan-release run for the commit (HEAD, or -Commit) and
+  downloads its report. Without one it says waiting while the repository has no keys, and fails once
+  it has them.
 #>
 param(
   [string]$Tag = "",
+  [string]$Run = "",
   [string[]]$Files = @(),
-  [string]$Report = "scan-report.md",
-  [string]$Json = "scan-report.json",
+  [switch]$FromCi,
+  [string]$Commit = "",
+  [string]$OutDir = "",
   [switch]$UpdateNotes,
   [int]$WaitMinutes = 40,
   [string]$Offline = ""  # a folder of canned API answers (tests/scan); nothing is sent
@@ -29,6 +41,47 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $OutDir) { $OutDir = Join-Path $root "build\scan-release" }
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+$Report = Join-Path $OutDir "report.md"
+$Json = Join-Path $OutDir "scan-report.json"
+$Summary = Join-Path $OutDir "summary.json"
+
+function Write-Summary([bool]$pass, [string]$verdict, [bool]$waiting, [string]$commit = "") {
+  [ordered]@{ pass = $pass; verdict = $verdict; waiting = $waiting; tag = $Tag; commit = $commit } |
+    ConvertTo-Json | Set-Content $Summary -Encoding utf8
+}
+
+# --- The gate: the CI scan of this commit (the keys exist only as repository secrets).
+if ($FromCi) {
+  $ErrorActionPreference = "Continue"  # gh's messages on stderr aren't failures here
+  if (-not $Commit) { $Commit = (git -C $root rev-parse HEAD).Trim() }
+  $runs = gh api "repos/{owner}/{repo}/actions/workflows/scan-release.yml/runs?head_sha=$Commit&status=completed&per_page=5" --jq '.workflow_runs[].id' 2>$null
+  foreach ($id in @($runs)) {
+    if (-not $id) { continue }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("fw-scan-ci-" + [guid]::NewGuid())
+    gh run download $id --name scan-report --dir $tmp 2>$null
+    $got = Get-ChildItem $tmp -Recurse -Filter summary.json -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($got) {
+      Get-ChildItem $got.DirectoryName -File | Copy-Item -Destination $OutDir -Force
+      Remove-Item $tmp -Recurse -Force
+      Write-Host "The scan of $($Commit.Substring(0, 8)) from run $id"
+      Get-Content $Summary -Raw
+      exit 0
+    }
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $secrets = @(gh secret list --json name --jq '.[].name' 2>$null)
+  if ($LASTEXITCODE -ne 0) {
+    Write-Summary $false "no scan-release run for this commit, and the repository's secrets can't be read" $true $Commit
+  } elseif ('VT_API_KEY' -in $secrets -and 'HA_API_KEY' -in $secrets) {
+    Write-Summary $false "no scan-release run for $($Commit.Substring(0, 8)) yet: run it on the release's files" $false $Commit
+  } else {
+    Write-Summary $false "waiting for Roy's step 5 (the VirusTotal and Hybrid Analysis keys)" $true $Commit
+  }
+  Get-Content $Summary -Raw
+  exit 0
+}
 $vtKey = $env:VT_API_KEY
 $haKey = $env:HA_API_KEY
 if ($Offline) { $vtKey = "offline"; $haKey = "offline" }
@@ -147,13 +200,19 @@ function Scan-HybridAnalysis([string]$path, [string]$sha) {
 
 # --- The files
 $work = $null
-if ($Tag -and -not $Files) {
+if (($Tag -or $Run) -and -not $Files) {
   $work = Join-Path ([IO.Path]::GetTempPath()) ("fw-scan-" + [guid]::NewGuid())
   New-Item -ItemType Directory $work | Out-Null
-  Step "Downloading $Tag's assets"
-  gh release download $Tag --dir $work --pattern '*.exe' --pattern '*.zip' --pattern '*.msi' --pattern '*.msix'
-  if ($LASTEXITCODE) { throw "gh release download $Tag failed" }
-  $Files = @(Get-ChildItem $work -File | ForEach-Object FullName)
+  if ($Run) {
+    Step "Downloading run $Run's artifacts"
+    gh run download $Run --dir $work
+    if ($LASTEXITCODE) { throw "gh run download $Run failed" }
+  } else {
+    Step "Downloading $Tag's assets"
+    gh release download $Tag --dir $work --pattern '*.exe' --pattern '*.zip' --pattern '*.msi' --pattern '*.msix'
+    if ($LASTEXITCODE) { throw "gh release download $Tag failed" }
+  }
+  $Files = @(Get-ChildItem $work -File -Recurse -Include *.exe, *.zip, *.msi, *.msix | ForEach-Object FullName)
 }
 $Files = @($Files | ForEach-Object { Get-ChildItem $_ -File } | ForEach-Object FullName)
 if (-not $Files) { throw "No files to scan" }
@@ -199,7 +258,30 @@ if ($status -eq 'waiting') {
 }
 $md += "", "Result: **$status**."
 Set-Content $Report ($md -join "`n") -Encoding utf8
-[ordered]@{ tag = $Tag; status = $status; files = $entries } | ConvertTo-Json -Depth 8 | Set-Content $Json -Encoding utf8
+$head = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { "$(git -C $root rev-parse HEAD 2>$null)".Trim() }
+[ordered]@{ tag = $Tag; commit = $head; status = $status; files = $entries } | ConvertTo-Json -Depth 8 | Set-Content $Json -Encoding utf8
+
+# The gate's one line: what failed, or what passed, in words.
+$names = @($entries | ForEach-Object name) -join ', '
+$verdict = switch ($status) {
+  'waiting' { "waiting for Roy's step 5 (the VirusTotal and Hybrid Analysis keys); nothing uploaded" }
+  'pass' {
+    $others = @($entries | ForEach-Object { $_.virustotal.detections } | Where-Object { $_ })
+    "$($entries.Count) file$(if ($entries.Count -ne 1) { 's' }) ($names): Defender clean, sandbox traffic only to GitHub" +
+      $(if ($others.Count) { "; other detections listed: $($others -join '; ')" } else { "; no other detections" })
+  }
+  default {
+    $why = @()
+    foreach ($e in $entries) {
+      if ($e.virustotal.status -ne 'done') { $why += "$($e.name): VirusTotal $($e.virustotal.status)" }
+      elseif (-not $e.virustotal.defenderOk) { $why += "$($e.name): Defender says $($e.virustotal.defender)" }
+      if ($e.sandbox.status -ne 'done') { $why += "$($e.name): sandbox $($e.sandbox.status)" }
+      elseif (-not $e.sandbox.networkOk) { $why += "$($e.name): sandbox traffic to $($e.sandbox.other -join ', ')" }
+    }
+    $why -join '; '
+  }
+}
+Write-Summary ($status -eq 'pass') $verdict ($status -eq 'waiting') $head
 Step "Scan $status; report in $Report"
 
 if ($UpdateNotes -and $Tag -and $status -ne 'waiting') {
