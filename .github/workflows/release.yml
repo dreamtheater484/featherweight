@@ -386,6 +386,21 @@ jobs:
         run: packaging\install-test.ps1 -Dist dist
 
   # On a v* tag: the draft release with every file. scripts/release.ps1 -Publish publishes it.
+  # The packages to VirusTotal and Hybrid Analysis (f1-trust's scan-release.yml), on a tag or a dispatch with scan:
+  # not on every push (the free limits; every Hybrid Analysis report is public). It writes "waiting" until the keys
+  # are there (Roy's step 5), and its scan-report artifact is what the gate and release.ps1 -Publish read.
+  scan:
+    needs: package
+    if: github.ref_type == 'tag' || inputs.scan
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/scan-release.yml
+    with:
+      artifact: packages
+      tag: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    secrets: inherit
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [package, reproducible-compare, msix-wack, install, smoke]
