@@ -298,7 +298,7 @@ TEST(UpdaterPicksTheChannelsRelease) {
 }
 
 TEST(UpdaterTellsThePdfiumBuilds) {
-  CHECK_EQ(updater::IsScriptEngine(FW_PDFIUM_DLL), FW_PDFIUM_IS_V8 != 0);
+  CHECK_EQ(updater::IsScriptEngine(FW_PDFIUM_DLL_W), FW_PDFIUM_IS_V8 != 0);
   CHECK(!updater::IsScriptEngine(util::ExePath()));  // a program without that export
   CHECK(!updater::IsScriptEngine(std::wstring(FW_TEST_DATA_DIR) + L"\\updater\\publisher-a.pfx"));  // not a PE file
   CHECK(!updater::IsScriptEngine(L"Z:\\no\\such\\pdfium.dll"));
@@ -519,7 +519,7 @@ TEST(UpdaterScriptEngine) {
   TempCopy standard(L"pdfium-standard");  // stands in for the standard build: a PE file without V8's export
   CopyFileW(standard.Path().c_str(), (box.Install() + L"\\pdfium.dll").c_str(), FALSE);
   // This version's release, with the PDFium this test was built with as its pdfium-v8 asset.
-  CopyFileW(FW_PDFIUM_DLL, (box.Release() + L"\\" + asset).c_str(), FALSE);
+  CopyFileW(FW_PDFIUM_DLL_W, (box.Release() + L"\\" + asset).c_str(), FALSE);
   util::WriteFileAtomic(box.Release() + L"\\SHA256SUMS.txt",
                         util::Sha256File(box.Release() + L"\\" + asset) + "  " + fw::WideToUtf8(asset) + "\n");
   std::string base = fw::WideToUtf8(box.Release());

@@ -143,7 +143,7 @@ if(FW_BUILD_TESTS)
   target_include_directories(fw_tests PRIVATE "${CMAKE_BINARY_DIR}/generated")
   target_sources(fw_tests PRIVATE src/Policy.cpp tests/unit/fw_tests.rc)
   target_compile_definitions(fw_tests PRIVATE "FW_TEST_DATA_DIR=L\"${CMAKE_SOURCE_DIR}/tests/data\""
-    "FW_SOURCE_DIR=L\"${CMAKE_SOURCE_DIR}\"" "FW_PDFIUM_DLL=L\"${FW_PDFIUM_DIR}/bin/pdfium.dll\""
+    "FW_SOURCE_DIR=L\"${CMAKE_SOURCE_DIR}\"" "FW_PDFIUM_DLL_W=L\"${FW_PDFIUM_DIR}/bin/pdfium.dll\""
     "FW_PDFIUM_IS_V8=$<BOOL:${FW_WITH_V8}>")
   target_link_libraries(fw_tests PRIVATE winhttp wintrust crypt32 version)
   # The gate reads these names (FeatherweightNotes\f1\gate-contract.md): each runs its own part of fw_tests.
