@@ -81,7 +81,7 @@ jobs:
           if [ -f tests/pdf/pyhanko-requirements.txt ]; then
             python -m pip install --require-hashes --no-deps -r tests/pdf/pyhanko-requirements.txt
           else
-            python -m pip install "pyHanko==0.25.1"
+            python -m pip install "pyHanko==0.38.2"
             python -m pip freeze | grep -iv '^pip==' > freeze.txt
             mkdir -p wheels && python -m pip download --no-deps -r freeze.txt -d wheels
             python -I tests/pdf/lock-wheels.py wheels pyhanko-requirements.txt

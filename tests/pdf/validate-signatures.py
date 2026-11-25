@@ -90,7 +90,12 @@ def main():
             rows.append({"file": path, "expect": expect, "ok": ok, "why": why, "signatures": sigs})
             print("[%s] %s (%s)%s" % ("OK" if ok else "FAIL", path, expect, "" if ok else ": " + why))
     import pyhanko
-    result = {"validator": "pyHanko %s" % getattr(pyhanko, "__version__", "?"), "pass": bad == 0,
+    try:  # pyHanko 0.26 and later have no __version__
+        from importlib.metadata import version as dist_version
+        hanko = dist_version("pyHanko")
+    except Exception:
+        hanko = getattr(pyhanko, "__version__", "?")
+    result = {"validator": "pyHanko %s" % hanko, "pass": bad == 0,
               "files": len(rows), "failed": bad, "rows": rows}
     if args.json:
         json.dump(result, open(args.json, "w", encoding="utf-8"), indent=1)
