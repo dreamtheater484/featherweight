@@ -64,6 +64,8 @@ param(
   [string]$Corpus = $(if ($env:FW_CORPUS) { $env:FW_CORPUS } else { "D:\Documents\Codex\FeatherweightCorpus" }),
   # The shipped configuration (release.ps1's: FW_BUILD_TESTS=ON, FW_TEST_SCREENS=OFF).
   [string]$Build = "build-release",
+  # A test build (FW_TEST_SCREENS on): lang.clipping runs its script step clipcheck, which the shipped exe hasn't.
+  [string]$TestBuild = "build",
   [int]$OfficeWaitMinutes = 120,
   # Check a report instead of making one: exit 0 when it's for -Commit (default HEAD) and has no failed row.
   [string]$Verify,
@@ -642,16 +644,22 @@ Check "legal.notices" quick "THIRD_PARTY_NOTICES matches the SBOM, and About sho
 }
 Check "legal.hyphenation" quick "The Swedish (LPPL) and Finnish hyphenation patterns ship byte for byte, or are dropped" "As decided in docs\f1-plan.md (f1-word)" {
   $plan = Get-Content (Join-Path $root "docs\f1-plan.md") -Raw -Encoding UTF8
-  $decided = [regex]::Match($plan, '(?im)^- \*\*f1-word[^\n]*hyphenation[^\n]*')
-  if (-not $decided.Success) { return NotBuilt "f1-word" "the hyphenation decision in docs\f1-plan.md" }
-  $text = $decided.Value
+  # The latest decision line counts (f1-word dropped them first, then kept them byte for byte).
+  $decided = @([regex]::Matches($plan, '(?im)^- \*\*f1-word[^\n]*hyphenation[^\n]*'))
+  if (-not $decided.Count) { return NotBuilt "f1-word" "the hyphenation decision in docs\f1-plan.md" }
+  $text = $decided[$decided.Count - 1].Value
   $cmake = (Get-ChildItem (Join-Path $root "cmake") -Filter *.cmake | Get-Content -Raw) -join "`n"
   $lists = $cmake + (Get-Content (Join-Path $root "CMakeLists.txt") -Raw)
   $n = [ordered]@{ decision = $text.Substring(0, [math]::Min(160, $text.Length)) }
   $sv = $lists -match 'hyph[-_]sv'; $fi = $lists -match 'hyph[-_]fi'
   $n.swedishInBuild = $sv; $n.finnishInBuild = $fi
   if ($text -match '(?i)dropp') { if ($sv -or $fi) { Failed "decided dropped, but the build still has them" $n } else { Passed "dropped" $n } }
-  else { Passed "kept byte for byte (pinned by hash in the build)" $n }
+  else {
+    # Kept: fetched as they are, each pinned by its SHA-256 next to its name.
+    $pinned = @("hyph-sv", "hyph-fi" | Where-Object { $cmake -match ([regex]::Escape($_) + '[\s\S]{0,400}?[0-9a-f]{64}') })
+    $n.pinned = $pinned -join ", "
+    if ($pinned.Count -eq 2) { Passed "kept byte for byte, each pinned by its SHA-256" $n } else { Failed "decided kept, but not both pinned by hash in cmake\" $n }
+  }
 }
 Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the README says the MIT licence doesn't cover the name and logo" "No product or feature named after them; the README's wording present" {
   $readme = Get-Content (Join-Path $root "README.md") -Raw -Encoding UTF8
@@ -680,8 +688,8 @@ Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the 
 # ===== Languages =====
 $langs = @("nl", "de", "fr", "es")
 Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeholders and access keys consistent; each <= 40 KB" "100 % translated, 0 placeholder or access-key errors, <= 40 KB each" {
-  $tool = @("tools\strings\check.ps1", "tools\strings\check.py") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
-  if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (tools\strings\check.ps1 or .py, -Json/--json: see FeatherweightNotes\f1\gate-contract.md)" }
+  $tool = @("tools\strings\check.py", "tools\strings\check.ps1") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
+  if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (python tools\strings\check.py --build --json: see FeatherweightNotes\f1\gate-contract.md)" }
   $j = Join-Path $script:outDir "lang-catalog.json"
   if ($tool -like "*.ps1") { $code = Invoke-Script "lang.catalog" $tool @("-Build", (Full $Build), "-Json", $j) }
   else { $code = Invoke-Tool "lang.catalog" "python" @("-I", (Full $tool), "--build", (Full $Build), "--json", $j) }
@@ -691,23 +699,26 @@ Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeh
   foreach ($l in $langs) {
     $x = $c.languages.$l
     if (-not $x) { $bad += "${l}: missing"; $n[$l] = "missing"; continue }
-    $n[$l] = "$($x.translated) of $($x.strings), $($x.placeholderErrors) placeholder and $($x.accessKeyErrors) access-key errors, $($x.compressedBytes) bytes"
-    if ($x.translated -lt $x.strings -or $x.placeholderErrors -or $x.accessKeyErrors -or $x.compressedBytes -gt $catalogBudget) { $bad += $l }
+    $n[$l] = "$($x.translated) of $($x.strings), $($x.placeholderErrors) placeholder, $($x.accessKeyErrors) access-key and $([int]$x.otherErrors) other errors, $($x.compressedBytes) bytes"
+    if ($x.translated -lt $x.strings -or $x.placeholderErrors -or $x.accessKeyErrors -or $x.otherErrors -or $x.compressedBytes -gt $catalogBudget) { $bad += $l }
   }
   if ($c.unmarked) { $n.unmarked = $c.unmarked; $bad += "$($c.unmarked) strings not through T()" }
+  if ($code -and -not $bad.Count) { $bad += "check.py exited $code (its log)" }
   if ($bad.Count) { Failed ($bad -join ", ") $n } else { Passed "all four complete, each within 40 KB" $n }
 }
 Check "lang.clipping" long "The clipping check: every ribbon tab, panel and dialog at 1366 x 768 (100 %), in each language" "0 clipped labels" {
   $tool = @("tools\strings\clipping.ps1") | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
   if (-not $tool) { return NotBuilt "f1-lang" "the clipping check (tools\strings\clipping.ps1 -Exe -Json: see gate-contract.md)" }
-  Need-Build
+  $testExe = Join-Path (Full $TestBuild) "Release\Featherweight.exe"
+  if (-not (Test-Path $testExe)) { return Failed "not run: no test build at $TestBuild (FW_TEST_SCREENS on: clipcheck isn't in the shipped exe)" }
   $j = Join-Path $script:outDir "lang-clipping.json"
-  $code = Invoke-Script "lang.clipping" $tool @("-Exe", (Get-Exe), "-Json", $j, "-Out", (Join-Path $script:outDir "lang-clipping"))
+  $code = Invoke-Script "lang.clipping" $tool @("-Exe", $testExe, "-Json", $j, "-Out", (Join-Path $script:outDir "lang-clipping"), "-Languages", "en,nl,de,fr,es")
   $c = Read-Json $j
   if (-not $c) { return Failed "the clipping check wrote nothing (exit $code)" }
   $n = [ordered]@{ surfaces = $c.surfaces; languages = (@($c.languages) -join ","); clipped = @($c.clipped).Count }
   if (@($c.clipped).Count) { $n.first = "$(@($c.clipped)[0])"; Failed "$(@($c.clipped).Count) clipped labels" $n }
-  elseif (@($c.languages).Count -lt 4) { Failed "only $(@($c.languages) -join ', ') checked" $n }
+  elseif (@(@("en") + $langs | Where-Object { $_ -notin @($c.languages) }).Count) { Failed "not in use: $(@(@("en") + $langs | Where-Object { $_ -notin @($c.languages) }) -join ', ') (a catalog missing or damaged falls back to English)" $n }
+  elseif ($code) { Failed "clipping.ps1 exited $code (its log)" $n }
   else { Passed "$($c.surfaces) surfaces in $(@($c.languages).Count) languages, none clipped" $n }
 }
 Check "lang.launch" timing "Launch to window in German no more than 5 ms slower than in English (fwtool bench-app)" "German - English <= 5 ms" {
