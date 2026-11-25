@@ -650,7 +650,8 @@ Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the tor
   # The torture run's files (saved and extracted), and the made corpus with its refusals.
   $inputs = @((Join-Path $script:outDir "damage.pdf\saved"), (Join-Path $script:outDir "damage.pdf\extracted"))
   if (-not (Test-Path $inputs[0])) { return Failed "needs damage.pdf's outputs on this commit (run it first)" }
-  $code = Use-Office "pdf.readers" "WINWORD" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ",")) }
+  $originals = Join-Path $script:outDir "damage.pdf\inputs.txt"
+  $code = Use-Office "pdf.readers" "WINWORD" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals) }
   if ($code -is [hashtable]) { return $code }
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "no summary (exit $code)" }

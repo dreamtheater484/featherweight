@@ -305,3 +305,8 @@ As in P3 (its "Rules"), plus:
   - The paid Store edition (analysis §4.3) is a listing and a price, a business step for Roy, with no code.
 - **Plan, 2026-11-25: the app never sends crash reports.** The minidump stays on disk, and the user may attach it to a prefilled issue in their browser. That keeps "no telemetry" exact.
 - **Plan, 2026-11-25: no beta release during F1.** Decision 29 publishes 4.1 in one go. The beta channel and rollback are tested against the updater's test URL, not by publishing.
+- **f1-gate, 2026-11-25: a long gate check's result counts for later commits when only docs changed since** (docs\, *.md, the ledger); quick and CI checks run every time, and a report made on a tree with uncommitted changes counts for nothing.
+- **f1-gate, 2026-11-25: "no worse than 4.0's" for launch, memory and opening is budgets.ps1's rule**: no more than 10 % slower or 10 % more memory than 4.0's final timing entry (57930657), and idle CPU 0.
+- **f1-gate, 2026-11-25: OCR counts a word right when the page's text layer has it, spelled exactly, in any order**; the share in reading order is reported beside it. Windows' OCR (the app's engine) reads every table column by column: in strict order, table pages score about 50 % with every word recognised. On the generated set Windows' OCR alone gets 99.48 % (96.46 % in order).
+- **f1-gate, 2026-11-25: a reader that can't open an output is excused when it can't open the original either** (Windows.Data.Pdf opens no AES-256 file at all); pdf.readers lists those apart.
+- **f1-gate, 2026-11-25: Adobe Acrobat is already installed on the reference PC** (C:\Program Files\Adobe\Acrobat DC), so pdf.readers opens the outputs in it too, in its own instance only; Roy's step 9 stays optional.
