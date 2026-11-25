@@ -412,8 +412,8 @@ constexpr double kIdleSeconds = 3;
 // microseconds.
 constexpr ULONG64 kBusyCycles = 2000000;
 
-// --languages (F1): the interface language the private copy starts in, written to its settings as
-// [General] Language=<tag> (f1-lang's setting; empty: as Windows' display language).
+// --languages (F1): the interface language the private copy starts in, as its --lang <tag> switch (f1-lang's:
+// it overrides the setting for that run and saves nothing; a --sandbox copy doesn't read its settings at all).
 std::string g_language;
 
 void WriteSettings(const std::filesystem::path& ini, const std::wstring& version) {
@@ -422,7 +422,6 @@ void WriteSettings(const std::filesystem::path& ini, const std::wstring& version
   out << "[General]\r\nTheme=light\r\nUpdateAutomatically=false\r\nLastUpdateCheck="
       << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()
       << "\r\nLastRunVersion=" << fw::WideToUtf8(version) << "\r\nOfferedDefaultApp=true\r\n";
-  if (!g_language.empty()) out << "Language=" << g_language << "\r\n";
 }
 
 Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const std::filesystem::path& file,
@@ -434,6 +433,7 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
   }
   WriteSettings(exe.parent_path() / L"Featherweight.ini", version);
   std::wstring cmd = L"\"" + exe.wstring() + L"\" --sandbox --theme light";
+  if (!g_language.empty()) cmd += L" --lang " + fw::Utf8ToWide(g_language);
   if (!file.empty()) cmd += L" \"" + file.wstring() + L"\"";
   STARTUPINFOW si{sizeof(si)};
   si.dwFlags = STARTF_USESHOWWINDOW;
