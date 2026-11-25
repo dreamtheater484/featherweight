@@ -32,12 +32,40 @@ $Flows = @($Flows | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 
 # The flows. `size` is the client area the coordinates are for. `open` is the file it starts with (a
 # copy), `out` the file it saves ({out} in a step). `verify` gets the saved file and returns problems.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function Read-ZipText([string]$zip, [string]$entry) {
+  $z = [IO.Compression.ZipFile]::OpenRead($zip)
+  try {
+    $e = $z.GetEntry($entry)
+    if (-not $e) { return "" }
+    $r = New-Object IO.StreamReader($e.Open())
+    try { $r.ReadToEnd() } finally { $r.Dispose() }
+  } finally { $z.Dispose() }
+}
+function Test-Checks([string]$f) { $v = & $Fwtool check $f 2>&1; if ($LASTEXITCODE) { "fwtool check: $(@($v)[-1])" } }
+
 $all = @(
-  @{ id = "RF2"; owner = "f1-word"; target = "Word: 7 C + 2 K"; budget = 9; decisions = 0; size = "1072x686"
-     open = "tests\office\generated\comments.docx"; out = "rf2.docx"; steps = @()
-     verify = { param($f) @(& $Fwtool check $f 2>&1 | Where-Object { $LASTEXITCODE }) } },
-  @{ id = "RF7"; owner = "f1-word"; target = "Word: 1 C"; budget = 1; decisions = 0; size = "1366x768"; out = "rf7.docx"; steps = @()
-     verify = { param($f) if (-not (@(& $Fwtool dump --model $f 2>&1 | Where-Object { "$_" -match 'Title' }).Count)) { "no paragraph in the Title style" } } },
+  # RF2, D5's flow 8 (docs/friction-review.md): the contract opens with the Review pane (f1-word, DocView.cpp).
+  # Next, Accept (it moves on), Reject, the open thread's card (the box takes the keyboard), the reply, Enter;
+  # its card and Resolve (the contract's other thread is resolved already), Ctrl+S. At 1366x768 the card list
+  # starts at the pane's foot: the first card's head shows at y 728.
+  @{ id = "RF2"; owner = "f1-word"; target = "Word: 7 C + 2 K"; budget = 9; decisions = 0; size = "1366x768"
+     open = "tests\office\torture\review-contract.docx"; out = "rf2.docx"
+     steps = @("click:1169,381|1C", "click:1242,381|1C", "click:1317,381|1C", "click:1200,728|1C", "type:Thanks, confirmed.|", "key:enter|1K",
+               "click:1200,728|1C", "click:1205,655|1C", "save:{out}|1K")
+     verify = { param($f)
+       Test-Checks $f
+       if ((Read-ZipText $f "word/comments.xml") -notmatch 'Thanks, confirmed\.') { "the reply isn't in comments.xml" }
+       if (([regex]::Matches((Read-ZipText $f "word/commentsExtended.xml"), 'w15:done="1"')).Count -lt 2) { "the open thread isn't resolved" }
+       $marks = ([regex]::Matches((Read-ZipText $f "word/document.xml"), '<w:(ins|del)\b')).Count
+       if ($marks -gt 4) { "$marks change marks left of 6: Accept and Reject didn't both take one" } } },
+  # RF7: a new document at 1366 px; the gallery's first row is Normal, No Spacing, Heading 1, Heading 2, Title
+  # (f1-word). Making the document and saving it are the check's, not the flow's.
+  @{ id = "RF7"; owner = "f1-word"; target = "Word: 1 C"; budget = 1; decisions = 0; size = "1366x768"; out = "rf7.docx"
+     steps = @("new|", "click:1086,110|1C", "type:Jane Doe|", "save:{out}|")
+     verify = { param($f)
+       Test-Checks $f
+       if (-not (@(& $Fwtool dump --model $f 2>&1 | Where-Object { "$_" -match '^\s*Title\s+\S+pt \| Jane Doe$' }).Count)) { "no paragraph in the Title style" } } },
   @{ id = "merge"; owner = "f1-pdf"; target = "Acrobat: 6 C + 1 K, 2 D"; budget = 7; decisions = 2; size = "1072x686"
      open = "build\pdf-corpus\plain-text.pdf"; out = "merged.pdf"
      # f1-pdf: Pages, the last page's thumbnail, Insert (+) and B in the Open dialog (B, Open), Ctrl+S.
@@ -60,8 +88,16 @@ $all = @(
      # f1-pdf: Recognize text on the toolbar (pdftool:ocr runs it to the end), Ctrl+S.
      steps = @("pdftool:ocr|1C", "save:{out}|1K")
      verify = { param($f) $t = Join-Path $Out "ocr-text"; & $Fwtool pdf-valid --out $t $f | Out-Null; if ((Get-Content (Join-Path $t "ocr.txt") -Raw) -notmatch '\w{4,}') { "no text layer" } } },
-  @{ id = "language"; owner = "f1-lang"; target = "Acrobat: 8 C, 1 D"; budget = 8; decisions = 1; size = "1072x686"; out = $null; steps = @()
-     verify = { param($f) @() } },
+  # f1-lang: File, Options, the language (1 D), then close and start again (2 C, counted, not run: a snapshot
+  # run doesn't save its settings). The check starts it as the saved setting would, with --lang de, and looks
+  # for German in command search.
+  @{ id = "language"; owner = "f1-lang"; target = "Acrobat: 8 C, 1 D"; budget = 8; decisions = 1; size = "1072x686"; out = $null
+     steps = @("new|", "click:27,55|1C", "click:48,655|1C", "click:309,460|1C", "|1D", "|2C")
+     verify = { param($f)
+       $err = Join-Path $Out "language-de.err"
+       $p = Start-Process -FilePath $Exe -ArgumentList @("--lang", "de", "--snapshot", "`"$(Join-Path $Out 'language-de.png')`"", "--size", (Get-WindowSize "1072x686"),
+         "--theme", "light", "--script", "`"new;dumpcommands:Drucken`"") -Wait -PassThru -NoNewWindow -RedirectStandardError $err
+       if ($p.ExitCode -or -not (Select-String -Path $err -Pattern '^commands\[Drucken\]: Drucken\|' -Quiet)) { "German doesn't load at the next start (--lang de: no Drucken in command search)" } } },
   @{ id = "share"; owner = "f1-pdf"; target = "Word: 4 C (to the share sheet)"; budget = 4; decisions = 0; size = "1072x686"
      open = "tests\office\generated\simple.docx"; out = $null
      # f1-pdf: File, Share, Share as PDF. The last click opens Windows' share sheet, which a snapshot
@@ -114,7 +150,7 @@ foreach ($f in $selected) {
   if ($row.steps -gt $f.budget) { $problems += "$($row.steps) steps, more than $($f.budget)" }
   if ($dec -gt $f.decisions) { $problems += "$dec decisions, more than $($f.decisions)" }
   if ($outFile -and -not (Test-Path $outFile)) { $problems += "nothing was saved" }
-  elseif ($outFile) { $problems += @(& $f.verify $outFile | Where-Object { $_ }) }
+  else { $problems += @(& $f.verify $outFile | Where-Object { $_ }) }  # no file: the flow's own check
   $row.ok = -not $problems.Count
   $row.why = $problems -join "; "
   $rows += [pscustomobject]$row
