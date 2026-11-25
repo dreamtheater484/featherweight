@@ -6,6 +6,7 @@
 
 #include "App.h"
 #include "Commands.h"
+#include "pdf/PdfText.h"
 #include "FileAssoc.h"
 #include "core/Lang.h"
 
@@ -27,6 +28,8 @@ constexpr AppCommand kAppCommands[] = {
     {CmdSaveAs, N_(L"Save as…"), L"Ctrl+Shift+S"},
     {CmdPrint, N_(L"Print"), L"Ctrl+P"},
     {CmdExportPdf, N_(L"Export PDF…"), L""},
+    {CmdShareFile, L"", L""},  // F1, f1-pdf: labels through T() in QueryCommand
+    {CmdSharePdf, L"", L""},
     {CmdFind, N_(L"Find"), L"Ctrl+F"},
     {CmdFindNext, N_(L"Find next"), L"F3"},
     {CmdFindPrev, N_(L"Find previous"), L"Shift+F3"},
@@ -112,6 +115,14 @@ CommandState App::QueryCommand(int cmd) {
     case CmdSaveAs: s.enabled = ready; break;
     case CmdPrint: s.enabled = ready && v->CanPrint(); break;
     case CmdExportPdf: s.enabled = ready && v->CanExportPdf(); break;
+    case CmdShareFile:  // F1, f1-pdf: Windows' share sheet
+      s.enabled = ready;
+      s.label = T(L"Send as attachment");
+      break;
+    case CmdSharePdf:
+      s.enabled = ready && (v->Kind() == TabKind::Pdf || v->CanExportPdf());
+      s.label = T(L"Share as PDF");
+      break;
     case CmdFind:
     case CmdFindNext:
     case CmdFindPrev: s.enabled = ready && !presentation_; break;
