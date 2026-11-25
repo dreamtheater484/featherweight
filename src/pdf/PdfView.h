@@ -15,6 +15,7 @@
 #include "pdf/RenderCache.h"
 #include "pdf/Search.h"
 #include "pdf/TextSelect.h"
+#include "pdf/tools/PageOps.h"
 #include "ui/Gfx.h"
 #include "ui/Widgets.h"
 
