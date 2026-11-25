@@ -542,13 +542,13 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
       LASTINPUTINFO before{sizeof(before)}, after{sizeof(after)};
       GetLastInputInfo(&before);
       double cpu = CpuMs(pi.hProcess);
-      auto switches = ContextSwitches(pi.dwProcessId);
+      auto idleStart = ContextSwitches(pi.dwProcessId);
       if (g_idleThreads) WatchIdle(pi.hProcess, pi.dwProcessId, pi.dwThreadId, kIdleSeconds * 1000);
       else Sleep(static_cast<DWORD>(kIdleSeconds * 1000));
       GetLastInputInfo(&after);
       if (after.dwTime != before.dwTime) continue;
       run.idleCpuMs = CpuMs(pi.hProcess) - cpu;
-      run.idleWakeups = static_cast<double>(Wakeups(switches, ContextSwitches(pi.dwProcessId)));
+      run.idleWakeups = static_cast<double>(Wakeups(idleStart, ContextSwitches(pi.dwProcessId)));
       break;
     }
     PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -619,7 +619,7 @@ int RunBenchApp(const Options& options) {
   g_idleThreads = options.idleThreads;
   g_listModules = options.modules;
   std::vector<std::string> launchModules;
-  if (const char* v = std::getenv("FW_BENCH_SETTLE_MS")) g_settleMs = std::atof(v);
+  if (wchar_t v[32]; GetEnvironmentVariableW(L"FW_BENCH_SETTLE_MS", v, 32) - 1u < 31u) g_settleMs = _wtof(v);
   std::printf("%s %s: the median of %d runs after a warm-up, each a fresh start, in ms from the launch.\n",
               Display(source).c_str(), fw::WideToUtf8(version).c_str(), runs);
   std::printf("\"ready\" is the app's last work before it goes quiet (its UI thread); \"loaded\" the last burst of work\n"
