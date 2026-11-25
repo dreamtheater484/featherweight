@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch supersedes this run.
+concurrency:
+  group: pdf-signatures-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pyhanko-signatures:
     runs-on: ubuntu-latest

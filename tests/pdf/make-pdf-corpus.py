@@ -188,9 +188,13 @@ def signed(path, changed_path, rng):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Featherweight test signer (f1-gate)")])
     now = datetime.datetime(2026, 11, 25, tzinfo=datetime.timezone.utc)
+    # A signing certificate's key usage: digital signature and non-repudiation (content commitment), which
+    # validators such as pyHanko require of a document signer.
+    usage = x509.KeyUsage(digital_signature=True, content_commitment=True, key_encipherment=False, data_encipherment=False,
+                          key_agreement=False, key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False)
     cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
             .serial_number(4100).not_valid_before(now).not_valid_after(now + datetime.timedelta(days=3650))
-            .sign(key, hashes.SHA256()))
+            .add_extension(usage, critical=True).sign(key, hashes.SHA256()))
     hole = 8192  # hex digits for /Contents
     p = RawPdf()
     p.add(1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /SigFlags 3 >> >>")
