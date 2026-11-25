@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdlib.h>
 
+#include <cstring>
 #include <cwchar>
 #include <exception>
 #include <vector>
@@ -209,7 +210,9 @@ std::optional<Pending> TakePending(const std::wstring& folder) {
   DeleteFileW(notePath.c_str());
   Prune(folder, kKeep);
   if (!read || bytes.size() < 2) return std::nullopt;
-  std::wstring text(reinterpret_cast<const wchar_t*>(bytes.data()), bytes.size() / sizeof(wchar_t));
+  // The note is UTF-16: copied, not cast, so a byte string is never read as a wide one.
+  std::wstring text(bytes.size() / sizeof(wchar_t), L'\0');
+  memcpy(text.data(), bytes.data(), text.size() * sizeof(wchar_t));
   if (!text.empty() && text[0] == 0xFEFF) text.erase(0, 1);
   Pending p;
   size_t start = 0;
