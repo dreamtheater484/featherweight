@@ -62,71 +62,6 @@ jobs:
         run: cmake --build build-release --config Release
       - name: Unit tests
         run: ctest --test-dir build-release -C Release --output-on-failure
-      - name: Smoke test with the standard PDFium (no V8)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          function Snap([string]$exe, [string]$file) {
-            Remove-Item smoke.png -ErrorAction SilentlyContinue
-            $p = Start-Process -FilePath $exe -ArgumentList '--snapshot', 'smoke.png', $file -PassThru -Wait
-            if ($p.ExitCode -eq 0 -and (Test-Path smoke.png)) { return "ok" } else { return "failed ($($p.ExitCode))" }
-          }
-          $failed = @()
-          foreach ($f in 'tests\pdfs\text.pdf', 'tests\pdfs\form.pdf', 'tests\office\layout\report.docx') {
-            $r = Snap build-release\Release\Featherweight.exe $f
-            Write-Host "$f : $r"
-            if ($r -ne "ok") { $failed += $f }
-          }
-          if (-not $failed) { exit 0 }
-          # A crash: its stack (cdb, at the second-chance exception), then the same file with the V8 build and with 4.0.
-          $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\${{ matrix.arch }}\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          Set-Content cdb-commands.txt "sxd -c2 `".exr -1; r; kn 60; q`" av`ng"
-          New-Item -ItemType Directory -Force v8test, nospell | Out-Null
-          Copy-Item build-release\Release\Featherweight.exe v8test\
-          Copy-Item build-release\Release\pdfium-v8.dll v8test\pdfium.dll
-          Copy-Item build-release\Release\Featherweight.exe, build-release\Release\pdfium.dll nospell\
-          Set-Content nospell\Featherweight.ini "[General]`r`nCheckSpelling=false"  # a portable copy's settings
-          # The map's symbols, to name the stack's Featherweight+0x... frames.
-          $map = "build-release\Release\Featherweight.map"
-          $syms = $null; $base = [uint64]0x140000000
-          if (Test-Path $map) {
-            $syms = [System.Collections.Generic.List[object]]::new()
-            foreach ($line in [IO.File]::ReadLines((Resolve-Path $map))) {
-              if ($line -match 'Preferred load address is ([0-9a-fA-F]+)') { $base = [Convert]::ToUInt64($Matches[1], 16) }
-              elseif ($line -match '^\s*[0-9a-fA-F]{4}:[0-9a-fA-F]{8}\s+(\S+)\s+([0-9a-fA-F]{16})\s') {
-                $syms.Add([pscustomobject]@{ va = [Convert]::ToUInt64($Matches[2], 16); name = $Matches[1] })
-              }
-            }
-            $syms = @($syms | Sort-Object va)
-          }
-          function Name([uint64]$offset) {
-            if (-not $syms) { return "" }
-            $va = $base + $offset; $lo = 0; $hi = $syms.Count - 1; $best = $null
-            while ($lo -le $hi) { $mid = [int](($lo + $hi) / 2); if ($syms[$mid].va -le $va) { $best = $syms[$mid]; $lo = $mid + 1 } else { $hi = $mid - 1 } }
-            if ($best) { return "{0}+0x{1:x}" -f $best.name, ($va - $best.va) } else { return "" }
-          }
-          gh release download v4.0.0 -R "${{ github.repository }}" -p "Featherweight-4.0.0-Portable.zip" -D v40 --clobber
-          if (Test-Path v40\Featherweight-4.0.0-Portable.zip) { Expand-Archive v40\Featherweight-4.0.0-Portable.zip v40\app -Force }
-          foreach ($f in $failed) {
-            Write-Host "== $f"
-            if ($cdb) {
-              $p = Start-Process $cdb.FullName -ArgumentList '-G', '-lines', '-y', "$PWD\build-release\Release", '-cf', "$PWD\cdb-commands.txt",
-                "$PWD\build-release\Release\Featherweight.exe", '--snapshot', "$PWD\smoke.png", "$PWD\$f" -NoNewWindow -PassThru -RedirectStandardOutput cdb.txt
-              if (-not $p.WaitForExit(180000)) { $p.Kill() }
-              $out = Get-Content cdb.txt
-              $at = ($out | Select-String -Pattern 'second chance' | Select-Object -First 1).LineNumber
-              if ($at) { $out[($at - 1)..($out.Count - 1)] | Select-Object -First 90 | Out-Host } else { $out | Select-Object -Last 60 | Out-Host }
-              Write-Host "-- the stack's frames in the program, by the linker map:"
-              foreach ($m in [regex]::Matches(($out -join "`n"), 'Featherweight\+0x([0-9a-fA-F]+)')) {
-                Write-Host ("  {0} = {1}" -f $m.Value, (Name ([Convert]::ToUInt64($m.Groups[1].Value, 16))))
-              }
-            } else { Write-Host "No cdb on this runner" }
-            Write-Host "with spelling off: $(Snap nospell\Featherweight.exe $f)"
-            Write-Host "with the V8 PDFium: $(Snap v8test\Featherweight.exe $f)"
-            if (Test-Path v40\app\Featherweight.exe) { Write-Host "with 4.0.0: $(Snap v40\app\Featherweight.exe $f)" }
-          }
-          throw "snapshot failed: $($failed -join ', ')"
       - name: Stage the program files
         shell: pwsh
         run: |
@@ -149,6 +84,96 @@ jobs:
           path: |
             stage/
             hashes-${{ matrix.arch }}.txt
+            build-release/Release/Featherweight.map
+
+  # The program opens a PDF, a form and a document off-screen on Windows Server 2022 (the Windows 10 family) and
+  # Windows 11 on ARM, with the PDFium the packages carry. A crash prints its stack (cdb; the frames named from the
+  # linker map) and tries the file with spelling off, with the V8 PDFium and with 4.0.0, to tell the causes apart.
+  # The packages don't wait for it; a tag's release does.
+  smoke:
+    name: smoke (${{ matrix.arch }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-2022 }
+          - { arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-${{ matrix.arch }}
+          path: unsigned
+      - name: Open a PDF, a form and a document
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $bin = "$PWD\unsigned\stage"  # the program files as built (the standard PDFium as pdfium.dll)
+          function Snap([string]$exe, [string]$file) {
+            Remove-Item smoke.png -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath $exe -ArgumentList '--snapshot', 'smoke.png', $file -PassThru -Wait
+            if ($p.ExitCode -eq 0 -and (Test-Path smoke.png)) { return "ok" } else { return "failed ($($p.ExitCode))" }
+          }
+          $failed = @()
+          foreach ($f in 'tests\pdfs\text.pdf', 'tests\pdfs\form.pdf', 'tests\office\layout\report.docx') {
+            $r = Snap $bin\Featherweight.exe $f
+            Write-Host "$f : $r"
+            if ($r -ne "ok") { $failed += $f }
+          }
+          if (-not $failed) { exit 0 }
+          # A crash: its stack (cdb, at the second-chance exception), then the same file with the V8 build and with 4.0.
+          $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\${{ matrix.arch }}\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          Set-Content cdb-commands.txt "sxd -c2 `".exr -1; r; kn 60; q`" av`ng"
+          New-Item -ItemType Directory -Force v8test, nospell | Out-Null
+          Copy-Item $bin\Featherweight.exe v8test\
+          Copy-Item $bin\pdfium-v8.dll v8test\pdfium.dll
+          Copy-Item $bin\Featherweight.exe, $bin\pdfium.dll nospell\
+          Set-Content nospell\Featherweight.ini "[General]`r`nCheckSpelling=false"  # a portable copy's settings
+          # The map's symbols, to name the stack's Featherweight+0x... frames.
+          $map = "unsigned\build-release\Release\Featherweight.map"
+          $syms = $null; $base = [uint64]0x140000000
+          if (Test-Path $map) {
+            $syms = [System.Collections.Generic.List[object]]::new()
+            foreach ($line in [IO.File]::ReadLines((Resolve-Path $map))) {
+              if ($line -match 'Preferred load address is ([0-9a-fA-F]+)') { $base = [Convert]::ToUInt64($Matches[1], 16) }
+              elseif ($line -match '^\s*[0-9a-fA-F]{4}:[0-9a-fA-F]{8}\s+(\S+)\s+([0-9a-fA-F]{16})\s') {
+                $syms.Add([pscustomobject]@{ va = [Convert]::ToUInt64($Matches[2], 16); name = $Matches[1] })
+              }
+            }
+            $syms = @($syms | Sort-Object va)
+          }
+          function Name([uint64]$offset) {
+            if (-not $syms) { return "" }
+            $va = $base + $offset; $lo = 0; $hi = $syms.Count - 1; $best = $null
+            while ($lo -le $hi) { $mid = [int](($lo + $hi) / 2); if ($syms[$mid].va -le $va) { $best = $syms[$mid]; $lo = $mid + 1 } else { $hi = $mid - 1 } }
+            if ($best) { return "{0}+0x{1:x}" -f $best.name, ($va - $best.va) } else { return "" }
+          }
+          gh release download v4.0.0 -R "${{ github.repository }}" -p "Featherweight-4.0.0-Portable.zip" -D v40 --clobber
+          if (Test-Path v40\Featherweight-4.0.0-Portable.zip) { Expand-Archive v40\Featherweight-4.0.0-Portable.zip v40\app -Force }
+          foreach ($f in $failed) {
+            Write-Host "== $f"
+            if ($cdb) {
+              $p = Start-Process $cdb.FullName -ArgumentList '-G', '-lines', '-y', $bin, '-cf', "$PWD\cdb-commands.txt",
+                "$bin\Featherweight.exe", '--snapshot', "$PWD\smoke.png", "$PWD\$f" -NoNewWindow -PassThru -RedirectStandardOutput cdb.txt
+              if (-not $p.WaitForExit(180000)) { $p.Kill() }
+              $out = Get-Content cdb.txt
+              $at = ($out | Select-String -Pattern 'second chance' | Select-Object -First 1).LineNumber
+              if ($at) { $out[($at - 1)..($out.Count - 1)] | Select-Object -First 90 | Out-Host } else { $out | Select-Object -Last 60 | Out-Host }
+              Write-Host "-- the stack's frames in the program, by the linker map:"
+              foreach ($m in [regex]::Matches(($out -join "`n"), 'Featherweight\+0x([0-9a-fA-F]+)')) {
+                Write-Host ("  {0} = {1}" -f $m.Value, (Name ([Convert]::ToUInt64($m.Groups[1].Value, 16))))
+              }
+            } else { Write-Host "No cdb on this runner" }
+            Write-Host "with spelling off: $(Snap nospell\Featherweight.exe $f)"
+            Write-Host "with the V8 PDFium: $(Snap v8test\Featherweight.exe $f)"
+            if (Test-Path v40\app\Featherweight.exe) { Write-Host "with 4.0.0: $(Snap v40\app\Featherweight.exe $f)" }
+          }
+          throw "snapshot failed: $($failed -join ', ')"
 
   # Byte-identical builds: the same commit built again on a fresh runner. Compared without signatures (these are
   # the files before signing); docs/reproducible-builds.md says how anyone can check a release this way.
@@ -363,7 +388,7 @@ jobs:
   # On a v* tag: the draft release with every file. scripts/release.ps1 -Publish publishes it.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package, reproducible-compare, msix-wack, install]
+    needs: [package, reproducible-compare, msix-wack, install, smoke]
     runs-on: windows-2022
     permissions:
       contents: write
