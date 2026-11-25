@@ -116,8 +116,27 @@ $lockPath = "D:\Documents\Codex\FeatherweightNotes\quiet-pc.lock"
 # ---------------------------------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------------------------------
+# A value as plain data for the report. A string Get-Content read carries PSPath, PSDrive and PSProvider notes,
+# and ConvertTo-Json -Depth 12 walks the provider's object graph: minutes of CPU and GBs for one string.
+function ConvertTo-Plain($v) {
+  if ($null -eq $v) { return $null }
+  if ($v -is [string]) { return "$v" }
+  if ($v -is [ValueType]) { return $v }
+  if ($v -is [Collections.IDictionary]) {
+    $d = [ordered]@{}
+    foreach ($k in @($v.Keys)) { $d["$k"] = ConvertTo-Plain $v[$k] }
+    return $d
+  }
+  if ($v -is [Collections.IEnumerable]) { return , @(foreach ($x in $v) { ConvertTo-Plain $x }) }
+  if ($v -is [Management.Automation.PSCustomObject]) {
+    $d = [ordered]@{}
+    foreach ($p in $v.PSObject.Properties) { $d[$p.Name] = ConvertTo-Plain $p.Value }
+    return $d
+  }
+  "$v"
+}
 function New-GateResult([string]$status, [string]$detail, $numbers, [int]$step = 0) {
-  $h = @{ status = $status; detail = $detail; numbers = $(if ($numbers) { $numbers } else { [ordered]@{} }) }
+  $h = @{ status = $status; detail = $detail; numbers = $(if ($numbers) { ConvertTo-Plain $numbers } else { [ordered]@{} }) }
   if ($step) { $h.step = $step }
   $h
 }
@@ -550,7 +569,9 @@ Check "legal.exe" quick "The shipped exe doesn't name the cloud-font folder" "No
 Check "legal.fileopen" long "No file under FontCache\4\CloudFonts opened or probed during the corpus runs (fwtool's file-open hook)" "0 paths under the cloud-font folder; the hook was on" {
   Need-Build
   $dir = Join-Path $script:outDir "filelog"
-  $code = Invoke-Tool "legal.fileopen" (Get-Fwtool) @("--help")
+  # The usage text, without a file log of its own (a log here means a corpus run happened).
+  $env:FW_FILE_LOG_DIR = ""
+  try { $code = Invoke-Tool "legal.fileopen" (Get-Fwtool) @("--help") } finally { $env:FW_FILE_LOG_DIR = $dir }
   if ((Get-Content (Log "legal.fileopen") -Raw) -notmatch "FW_FILE_LOG_DIR") { return NotBuilt "f1-gate" "fwtool's file-open hook (FW_FILE_LOG_DIR)" }
   # The corpus runs of this gate log into $dir (FW_FILE_LOG_DIR); if none ran, render the documents and decks now.
   if (-not @(Get-ChildItem $dir -Filter "fwtool-*.txt" -ErrorAction SilentlyContinue).Count) {
