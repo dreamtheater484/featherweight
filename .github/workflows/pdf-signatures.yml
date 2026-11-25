@@ -1,0 +1,55 @@
+name: pdf-signatures
+
+# F1, f1-gate (docs/f1-plan.md, gate row "PDF tools"): signed PDFs through an independent validator,
+# pyHanko, on a runner (nothing is installed on the reference PC). Every signature valid, every change
+# after signing caught. The samples are made here (tests/pdf/make-pdf-corpus.py --only signed); the
+# app's own signed outputs join them once f1-pdf's signing is in.
+# pyHanko and its dependencies are pinned by version and hash in tests/pdf/pyhanko-requirements.txt;
+# until that file exists, the job installs the pinned version and writes the lock as an artifact.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pyhanko-signatures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pyHanko (pinned)
+        run: |
+          if [ -f tests/pdf/pyhanko-requirements.txt ]; then
+            python -m pip install --require-hashes --no-deps -r tests/pdf/pyhanko-requirements.txt
+          else
+            python -m pip install "pyHanko==0.25.1"
+            python -m pip freeze | grep -iv '^pip==' > freeze.txt
+            mkdir -p wheels && python -m pip download --no-deps -r freeze.txt -d wheels
+            python -I tests/pdf/lock-wheels.py wheels pyhanko-requirements.txt
+          fi
+
+      - name: Upload the pyHanko lock (until it's committed)
+        if: hashFiles('tests/pdf/pyhanko-requirements.txt') == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyhanko-lock
+          path: pyhanko-requirements.txt
+
+      - name: Make the signed samples
+        run: python -I tests/pdf/make-pdf-corpus.py --only signed --out build/pdf-signed
+
+      - name: Validate with pyHanko
+        run: python -I tests/pdf/validate-signatures.py --dir build/pdf-signed --json build/pdf-signed/validation.json
+
+      - name: Upload the validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-signatures
+          path: build/pdf-signed/

@@ -680,7 +680,12 @@ Check "pdf.ocr" long "OCR on the generated scan set (English, 300 dpi): the text
   if ($r.percent -ge 95) { Passed "$($r.percent) % of $($r.words) words" $n } else { Failed "$($r.percent) % of $($r.words) words" $n }
 }
 Check "pdf.signatures" ci "Signatures through an independent validator (pyHanko on a CI runner): every signature valid, every change after signing caught" "All valid; all changes caught" {
-  Test-Workflow "pdf-signatures.yml" @("pyhanko|signatures") "f1-gate" "the pyHanko validation on CI (after f1-pdf's signing)"
+  $r = Test-Workflow "pdf-signatures.yml" @("pyhanko|signatures") "f1-gate" "the pyHanko validation on CI"
+  # Until the app signs, pyHanko sees only the samples made for it: the validator works, the row can't pass.
+  if ($r.status -eq "passed" -and -not (Test-Path (Join-Path $root "src\pdf\sign"))) {
+    return NotBuilt "f1-pdf" "certificate signing (src\pdf\sign): pyHanko checks the made samples only ($($r.detail))"
+  }
+  $r
 }
 
 # ===== Product basics =====

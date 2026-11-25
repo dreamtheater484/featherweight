@@ -18,14 +18,18 @@ import json
 import os
 import random
 
-import fitz  # PyMuPDF
-from PIL import Image, ImageDraw
-from pypdf import PdfReader, PdfWriter
-from pypdf.generic import DecodedStreamObject, NameObject
-from reportlab.lib.pagesizes import A3, A4, landscape, letter
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
+try:
+    import fitz  # PyMuPDF
+    from PIL import Image, ImageDraw
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import DecodedStreamObject, NameObject
+    from reportlab.lib.pagesizes import A3, A4, landscape, letter
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfgen import canvas
+except ImportError:  # --only signed needs cryptography alone (a CI runner)
+    fitz = None
+    letter = (612, 792)
 
 FONTS = "C:\\Windows\\Fonts"
 WORDS = ("page tools keep every page as it was while the order changes around it and nothing is lost "
@@ -219,6 +223,25 @@ def signed(path, changed_path, rng):
     return cert.public_bytes(serialization.Encoding.PEM)
 
 
+def tampered(src, path):
+    """The signed file with one character of its signed content changed (same length): not intact."""
+    data = open(src, "rb").read()
+    assert data.count(b"(signed, page 2)") == 1
+    open(path, "wb").write(data.replace(b"(signed, page 2)", b"(signed, page X)"))
+
+
+def signed_samples(out, rng):
+    """The signed samples and what an independent validator must say of each (tests\\pdf\\validate-signatures.py)."""
+    p = lambda n: os.path.join(out, n)
+    pem = signed(p("signed.pdf"), p("signed-then-changed.pdf"), rng)
+    tampered(p("signed.pdf"), p("signed-tampered.pdf"))
+    open(p("signer-cert.pem"), "wb").write(pem)
+    expect = {"signed.pdf": "valid", "signed-then-changed.pdf": "changed-after-signing", "signed-tampered.pdf": "broken"}
+    json.dump({"generator": "tests/pdf/make-pdf-corpus.py --only signed", "trustRoot": "signer-cert.pem", "expect": expect},
+              open(p("signatures.json"), "w", encoding="utf-8"), indent=1)
+    print("%d signed samples in %s" % (len(expect), out))
+
+
 def xfa(src, path):
     w = PdfWriter(clone_from=src)
     xdp = DecodedStreamObject()
@@ -337,10 +360,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="build\\pdf-corpus")
     ap.add_argument("--seed", type=int, default=41)
+    ap.add_argument("--only", choices=["signed"], help="only the signed samples (for pdf-signatures.yml: no fonts or PDF libraries)")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     out = args.out
     os.makedirs(out, exist_ok=True)
+    if args.only == "signed":
+        signed_samples(out, rng)
+        return
     pdfmetrics.registerFont(TTFont("Arial", os.path.join(FONTS, "arial.ttf")))
     m = []
 
@@ -389,7 +416,7 @@ def main():
     if os.path.exists(p("source-l.pdf")):
         os.remove(p("source-l.pdf"))
     reportlab_doc(p("many-pages-150.pdf"), 150, rng, "many-pages"); add("many-pages-150.pdf")
-    signed(p("signed.pdf"), p("signed-then-changed.pdf"), rng)
+    signed_samples(out, rng)
     add("signed.pdf", signed_=True, note="adbe.pkcs7.detached, a test certificate; editing warns that it breaks the signature")
     add("signed-then-changed.pdf", signed_=True, note="signed, then an incremental change: the signature covers less than the file")
     damaged_offsets(p("plain-text.pdf"), p("damaged-offsets.pdf")); add("damaged-offsets.pdf", note="every cross-reference offset off by 3")
