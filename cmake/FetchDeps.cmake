@@ -92,15 +92,21 @@ foreach(entry
     hyph-pt.pat.txt=6b50256e72d5448cec1801866e9027491f66552c8957f72b6e0ec315159e7931
     hyph-pt.hyp.txt=5c093a9e48dc8f87624693f31b8da7d090ed1e6eeb07fce7bcfd5689d7f941a8
     hyph-da.pat.txt=a093ef99375717fe34d261b05d2fdc8e64f8a9f741578c020204374f4c39a20c
-    hyph-sv.pat.txt=1fbf98f5d316712fd4e86f564643ad7341184f9ce8b30e0e18d06eceb4f52a79
     hyph-nb.pat.txt=e080c77da3d0f8de7e464f69082f5e2485e43ed349a2a7018b84e0adef785806
-    hyph-nb.hyp.txt=6484bbd793e20a206a2f0d7abfc499a5f8688c54ea7e91ee7af87fba53959d00
-    hyph-fi.pat.txt=ccabb0b3f403eca9999c0cd73b75d16b0220f2052d8f6aad2f98b5f1854dc027)
+    hyph-nb.hyp.txt=6484bbd793e20a206a2f0d7abfc499a5f8688c54ea7e91ee7af87fba53959d00)
   string(REPLACE "=" ";" pair "${entry}")
   list(GET pair 0 name)
   list(GET pair 1 sha256)
   fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_utf8_url}/${name}" ${sha256})
 endforeach()
+# Swedish and Finnish: the TeX originals at the same commit, shipped byte for byte, since their
+# licences (LPPL 1.3 for hyph-sv; hyph-fi's "may be freely distributed") ask for the files as they
+# are. A failed download or another hash stops configure: nothing falls back to the derivatives.
+set(_fw_hyph_tex_url "https://raw.githubusercontent.com/hyphenation/tex-hyphen/${_fw_hyph_utf8_commit}/hyph-utf8/tex/generic/hyph-utf8/patterns/tex")
+fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_tex_url}/hyph-sv.tex"
+  102253382bd91cdb7535de5c20744254c9ac9aaa4ca12ed420eb835e5004c0b3)
+fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_tex_url}/hyph-fi.tex"
+  cf68be5eb003d299f85f2b7185f31d8ff5799c19dfad3f0300eaf9843e9cc8d3)
 fw_fetch_file("${FW_OPENTAAL_HYPH_DIR}"
   "https://raw.githubusercontent.com/LibreOffice/dictionaries/${_fw_opentaal_commit}/nl_NL/hyph_nl_NL.dic"
   0a97b76b259ed4165d094dedf9b6fb98c57734a437df0b5b263ee13e262d5f8f)

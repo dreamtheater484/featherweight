@@ -1,7 +1,8 @@
 # Packs the pinned hyphenation patterns into HyphenationData.cpp for Hyphenation.cpp: one
 # raw-deflate stream per pattern set, from CMake's gzip without its header and trailer.
 #   cmake -DHYPH_UTF8=<dir> -DOPENTAAL=<dir> -DOUT=<file> -P PackPatterns.cmake
-# Each set is its patterns followed by its exceptions (the lines without digits).
+# Each set is its patterns followed by its exceptions (the lines without digits). A .tex set is
+# the file's bytes unchanged: Hyphenation.cpp skips its comments.
 
 set(_ids en-us en-gb nl de fr es it pt da sv nb fi)
 set(_en-us "${HYPH_UTF8}/hyph-en-us.pat.txt" "${HYPH_UTF8}/hyph-en-us.hyp.txt")
@@ -13,9 +14,9 @@ set(_es "${HYPH_UTF8}/hyph-es.pat.txt")
 set(_it "${HYPH_UTF8}/hyph-it.pat.txt")
 set(_pt "${HYPH_UTF8}/hyph-pt.pat.txt" "${HYPH_UTF8}/hyph-pt.hyp.txt")
 set(_da "${HYPH_UTF8}/hyph-da.pat.txt")
-set(_sv "${HYPH_UTF8}/hyph-sv.pat.txt")
+set(_sv "${HYPH_UTF8}/hyph-sv.tex")  # TeX source, packed as it is
 set(_nb "${HYPH_UTF8}/hyph-nb.pat.txt" "${HYPH_UTF8}/hyph-nb.hyp.txt")  # Bokmål and Nynorsk share these
-set(_fi "${HYPH_UTF8}/hyph-fi.pat.txt")
+set(_fi "${HYPH_UTF8}/hyph-fi.tex")  # TeX source, packed as it is
 
 get_filename_component(_work "${OUT}" DIRECTORY)
 string(REPEAT "0x..," 32 _row)
@@ -28,7 +29,10 @@ foreach(id ${_ids})
   set(cat "${_work}/patterns-${id}.txt")
   set(parts "")
   foreach(f ${_${id}})
-    list(APPEND parts "${f}" "${_newline}")
+    list(APPEND parts "${f}")
+    if(NOT f MATCHES "[.]tex$")
+      list(APPEND parts "${_newline}")
+    endif()
   endforeach()
   execute_process(COMMAND "${CMAKE_COMMAND}" -E cat ${parts} OUTPUT_FILE "${cat}" RESULT_VARIABLE failed)
   if(failed)

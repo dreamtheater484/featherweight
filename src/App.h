@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "CrashReport.h"
 #include "DropTarget.h"
 #include "PagedView.h"
 #include "Settings.h"
@@ -203,6 +204,7 @@ class App : public PdfHost, public DropHost {
   void NewPresentation();           // "Presentation1" (P2)
   // At startup: documents a crash left unsaved, offered in a banner.
   void OfferRecovery();
+  void OfferCrashReport();  // f1-trust
   void RecoverDocuments(bool open);  // Recover, or Discard
   // The window or a tab was activated: did the file change on disk?
   void CheckActiveFile();
@@ -366,7 +368,7 @@ class App : public PdfHost, public DropHost {
   bool scriptEngineAsked_ = false;    // the banner was shown this session
   enum BannerActions {
     kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
-    kActKeepFormat, kActMakeDefault = 20,
+    kActKeepFormat, kActCrashReport, kActCrashFolder, kActMakeDefault = 20,
     kActScriptEngine = 30, kActScriptEngineLater  // f1-ship
   };
   std::wstring keepFormatPath_;  // the save the "Keep CSV" banner waits on
@@ -374,6 +376,8 @@ class App : public PdfHost, public DropHost {
 
   // Files
   std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
+  std::wstring crashFolder_;                       // f1-trust: Crashes, beside Backups and Recovery
+  std::optional<crash::Pending> crash_;            // the last run's crash, offered for a report
   int newDocuments_ = 0;
   int newPresentations_ = 0;  // Presentation1, Presentation2 (P2)
   int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)

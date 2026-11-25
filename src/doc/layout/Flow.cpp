@@ -829,9 +829,14 @@ struct Flow {
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
       // A line with nothing but a page or column break goes on this page or column even when it's
       // full: Word never starts a page or column just for the break (the region-3 QAPP's
-      // attachment page).
+      // attachment page). Except a page break alone in the paragraph right after a table, on a page
+      // without a document grid: its line must end within the text area, or it goes to the next
+      // page, which the break then leaves blank (worldbank-sustainable's page 13; D5's held rule C).
+      // With a grid, Word keeps it (gojp-mhlw-form-b3).
       const bool breakOnly =
-          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line);
+          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line) &&
+          !(line.ending == text::LineEnd::PageBreak && space.top + h > f.bottom + kEpsilon && placed.empty() &&
+            f.paraLines == 0 && f.next > 0 && f.items[f.next - 1].kind == BlockKind::Table && f.geom.gridPitch <= 0);
       const float hang = e.Hang(pt, line, h);
       // Above footnotes, a paragraph's last line needs room for its space after too (measured on
       // the corpus: Word moves the line to the next page instead).
@@ -1188,8 +1193,15 @@ struct Flow {
           float start = f.rowCut.empty() ? 0 : f.rowCut[i];
           float limit = start + room - c.marginTop - c.marginBottom;
           float to = start;
-          for (const LineBox& l : c.content.lines)
-            if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          // A paragraph's last line fits only with the paragraph's space after (D5's held rule A:
+          // the short-form contract's "12. Charges" row moves on whole, as in Word).
+          const std::vector<LineBox>& ls = c.content.lines;
+          for (size_t k = 0; k < ls.size(); ++k) {
+            const LineBox& l = ls[k];
+            float need = l.top + l.height;
+            if ((k + 1 == ls.size() || ls[k + 1].para != l.para) && l.para != kNone) need += e.SpaceAfter(e.ParaOf(l.para));
+            if (l.top >= start - kEpsilon && need <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          }
           to = KeepTogether(c.content, start, to);
           cutTo[i] = to;
           if (to > start + kEpsilon) any = true;
@@ -1629,7 +1641,21 @@ struct Flow {
         // it) can bring it back to the page where what's before it ends, and keep-with-next the
         // page before that one too.
         bool back = false;
-        if (structure && tableRow == SIZE_MAX) {
+        // Only an edit that can change how a section starts: one at a section's first item or
+        // around a section break, or one that leaves a section break in what it changed. An Enter
+        // in a numbered item (structural for its list) is none of these, and going back to the
+        // section's start for it laid a one-section document out again from page 1 before the
+        // caret's page could show: 233 ms in long-300.docx at 4.0's gate (F1).
+        bool sectionStart = false;
+        if (structure && tableRow == SIZE_MAX && itemFrom < f.bodyItems) {
+          const uint32_t sec = f.items[itemFrom].section;
+          sectionStart = (itemFrom > 0 && f.items[itemFrom - 1].section != sec) ||
+                         (itemTo < f.bodyItems && f.items[itemTo].section != sec) ||
+                         (itemTo > itemFrom && f.items[itemTo - 1].section != sec);
+          for (uint32_t p = first; p < first + std::max<uint32_t>(added, 1) && p < doc.Paragraphs().size() && !sectionStart; ++p)
+            sectionStart = doc.Para(p).story == story && static_cast<bool>(doc.ParaNode(p).Child(Name("pPr")).Child(Name("sectPr")));
+        }
+        if (sectionStart) {
           // The first page that starts with what's before it laid out, or in the section it's in
           // (the flow enters a section before its first item).
           const uint32_t sec = itemFrom < f.items.size() ? f.items[itemFrom].section : kNone;

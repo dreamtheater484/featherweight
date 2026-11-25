@@ -10,7 +10,8 @@
 //
 // Patterns ship for English (US and UK), Dutch (OpenTaal), German (reformed spelling), French,
 // Spanish, Italian, Portuguese, Danish, Swedish, Norwegian (Bokmål and Nynorsk) and Finnish, from
-// hyph-utf8 except Dutch; THIRD_PARTY_NOTICES.md lists them with their licences. They are compressed
+// hyph-utf8 except Dutch (Swedish and Finnish as their TeX files, unchanged, as their licences ask);
+// THIRD_PARTY_NOTICES.md lists them with their licences. They are compressed
 // inside the program and a language's are unpacked the first time it's hyphenated.
 namespace fw::text {
 

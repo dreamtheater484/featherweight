@@ -651,4 +651,9 @@ enum Cmd : int {
   CmdUpdateBeta = 4120,  // File > Options > Updates: Get beta versions (the beta channel, GitHub pre-releases)
   CmdRollBackUpdate,     // Go back to version x: the files the last update replaced, from the next start
   CmdScriptEngine = 4125,  // Get the form script engine (PDFium with V8 and XFA), offered by a PDF with scripts
+  // F1, f1-trust: help and support, 4150-4169.
+  CmdHelp = 4150,             // Help: the website's help pages, in the browser (F1)
+  CmdKnownIssues,             // Help: the known issues, on the website
+  CmdReportProblem,           // Help: a new GitHub issue, prefilled with the versions
+  CmdThirdPartyNotices,       // Help: THIRD_PARTY_NOTICES.md (also linked from About)
 };

@@ -1,6 +1,10 @@
 # Third-party notices
 
-Featherweight itself is released under the MIT License (see LICENSE).
+Featherweight itself is released under the MIT License (see LICENSE). The licence covers the code. It doesn't grant rights to the name "Featherweight" or its logo, which identify the original project.
+
+Microsoft, Windows, Office, Word, Excel and PowerPoint are trademarks of the Microsoft group of companies. Adobe and Acrobat are trademarks of Adobe. Featherweight is an independent project, not affiliated with, endorsed by or sponsored by Microsoft or Adobe. It names their products only to say which files it opens.
+
+Featherweight ships no font files. It draws with the fonts installed on the PC and the fonts embedded in documents, within the embedding permissions those fonts set.
 
 Featherweight uses **PDFium** (https://pdfium.googlesource.com/pdfium/), built by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), chromium/8086. PDFium and the libraries it includes are distributed under the licenses below.
 
@@ -3081,7 +3085,8 @@ FITNESS FOR A PARTICULAR PURPOSE.
 Automatic hyphenation uses the patterns below. All but Dutch come from the hyph-utf8 package
 (https://github.com/hyphenation/tex-hyphen, tag CTAN-2024.12.31); the copyright and licence of
 each are quoted from its file. Featherweight includes the patterns and exceptions unchanged,
-without their comments, compressed into the program.
+without their comments, compressed into the program; Swedish and Finnish are the original
+files themselves (hyph-sv.tex, hyph-fi.tex), byte for byte, comments and notices included.
 
 ### American English (hyph-en-us)
 
@@ -3327,6 +3332,8 @@ Copyright (C) 1994 Frank Jensen
 
 ### Swedish (hyph-sv)
 
+Shipped as the unmodified file hyph-sv.tex (SHA-256 102253382bd91cdb7535de5c20744254c9ac9aaa4ca12ed420eb835e5004c0b3), as the LPPL allows.
+
 ```
 Copyright (C) 1994 Jan Michael Rynning
 
@@ -3357,6 +3364,8 @@ Copyright (C) 2004, 2005 Rune Kleveland, Ole Michael Selberg
 ```
 
 ### Finnish (hyph-fi)
+
+Shipped as the unmodified file hyph-fi.tex (SHA-256 cf68be5eb003d299f85f2b7185f31d8ff5799c19dfad3f0300eaf9843e9cc8d3).
 
 ```
 Copyright (C) 1986, 1988, 1989 Kauko Saarinen
