@@ -2081,7 +2081,7 @@ void App::RecentAction(int cmd, int index) {
       if (GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES)
         ShellExecuteW(hwnd_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
       else
-        banner_.Show(BannerKind::Error, L"“" + fw::FileNameOf(path) + T(L"” and its folder can’t be found."), {}, 6000);
+        banner_.Show(BannerKind::Error, Fmt(T(L"“{0}” and its folder can’t be found."), {fw::FileNameOf(path)}), {}, 6000);
     }
     return;
   }
@@ -2175,7 +2175,7 @@ void App::ActivateTab(int index) {
 
 bool App::ConfirmClose(TabContent* view) {
   if (!view->Modified()) return true;
-  std::wstring heading = T(L"Save changes to “") + view->Title() + L"”?";
+  std::wstring heading = Fmt(T(L"Save changes to “{0}”?"), {view->Title()});
   constexpr int kSaveAs = 100;
   TASKDIALOG_BUTTON buttons[] = {{IDYES, T(L"Save")}, {kSaveAs, T(L"Save as\u2026")}, {IDNO, T(L"Don’t save")}};
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
@@ -2954,7 +2954,7 @@ void App::RunScript(const std::wstring& script) {
       // new:workbook for a new workbook ("Book1").
       int kind = 0;
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
-        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i].en)) kind = i + 1;
+        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i].English())) kind = i + 1;
       if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
       else if (fw::EqualsNoCase(arg, L"presentation")) NewPresentation();  // new:presentation (P2)
       else NewDocument(kind);

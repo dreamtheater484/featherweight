@@ -119,7 +119,7 @@ TEST(Settings_Keeps25RecentFiles) {
   Settings s;
   s.LoadFrom(file.Path());
   CHECK_EQ(s.recent.size(), static_cast<size_t>(Settings::kMaxRecent));
-  CHECK_EQ(Settings::kMaxRecent, 25);
+  static_assert(Settings::kMaxRecent == 25);
   CHECK(s.recent.back().path == L"C:\\f25.pdf");
 }
 

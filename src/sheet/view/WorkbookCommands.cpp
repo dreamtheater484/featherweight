@@ -282,7 +282,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
       s.enabled = ready && edit_ && (cmd == CmdUndo ? edit_->CanUndo() : edit_->CanRedo());
       s.shortcut = cmd == CmdUndo ? L"Ctrl+Z" : L"Ctrl+Y";
       const std::u16string name = s.enabled ? (cmd == CmdUndo ? edit_->UndoName() : edit_->RedoName()) : u"";
-      const std::wstring step = fw::ToLower(std::wstring(name.begin(), name.end()));
+      const std::wstring step = fw::lang::InSentence(std::wstring(name.begin(), name.end()));
       s.label = name.empty() ? std::wstring(cmd == CmdUndo ? T(L"Undo") : T(L"Redo"))
                              : Fmt(cmd == CmdUndo ? T(L"Undo {0}") : T(L"Redo {0}"), {step});
       break;

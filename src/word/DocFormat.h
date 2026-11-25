@@ -18,6 +18,10 @@
 // Formatting in the Word tab (plan §5.2, §6.2): the toolbar's formatting groups, Word's keys,
 // command search, the format painter, Insert date and time, and the status bar's language. Each
 // command is one undo step of the tab's editor; the tab lays out again when the editor says so.
+// A style's name as the interface shows it: Word's built-in styles in the interface's language
+// ("Heading 1" is "Überschrift 1" in German), as Word shows them; a style of the author's as written.
+std::wstring ShownStyleName(std::string_view name);
+
 class DocFormat {
  public:
   // What a command applies to: character formatting to `chars` (the selection, or the word the

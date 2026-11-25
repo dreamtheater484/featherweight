@@ -372,7 +372,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       };
     }
     Toggle(gridlines_, T(L"Gridlines"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.gridLines = !p.gridLines; }); });
-    Toggle(headings_, T(L"Headings"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
+    Toggle(headings_, T(L"Headings", L"row and column"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
     Toggle(bw_, T(L"Black and white"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.blackAndWhite = !p.blackAndWhite; }); });
     Toggle(draft_, T(L"Draft quality"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.draft = !p.draft; }); });
     notes_.items = {L"(none)", T(L"At end of sheet"), T(L"As displayed on sheet")};
@@ -482,8 +482,8 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     const float rowH = 30 * ui;
     float y = body.top + 10 * ui;
     std::vector<Control*> out;
-    auto label = [&](const std::wstring& text, float l = -1, float r = -1) {
-      labels_.push_back({text, RectF(l < 0 ? left : l, y, r < 0 ? right : r, y + 16 * ui)});
+    auto label = [&](const std::wstring& text, float l = -1, float r = -1, float h = 16) {
+      labels_.push_back({text, RectF(l < 0 ? left : l, y, r < 0 ? right : r, y + h * ui)});
     };
     auto full = [&](Control& c) {
       c.rc = RectF(left, y, right, y + rowH);
@@ -500,9 +500,11 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       y += rowH + 10 * ui;
     };
     auto labelled = [&](const std::wstring& a, const std::wstring& b) {
-      label(a, left, mid - gap);
-      label(b, mid + gap, right);
-      y += 18 * ui;
+      // Two lines when either doesn't fit its half (a longer language: "Numéro de la première page").
+      const bool two = Canvas().MeasureText(a, 12 * ui) > mid - gap - left || Canvas().MeasureText(b, 12 * ui) > right - mid - gap;
+      label(a, left, mid - gap, two ? 32.f : 16.f);
+      label(b, mid + gap, right, two ? 32.f : 16.f);
+      y += (two ? 34 : 18) * ui;
     };
     for (Control* c : All()) c->visible = false;
     if (v_.preview_) {
@@ -617,7 +619,10 @@ class WorkbookView::PageSetupPanel : public PanelContent {
 
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
-    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
+    for (const auto& [text, rc] : labels_) {
+      if (c.MeasureText(text, 12 * ui_) <= gfx::Width(rc)) c.Text(text, rc, p.textSecondary, 12 * ui_);
+      else c.TextWrapped(text, rc, p.textSecondary, 12 * ui_, 2);
+    }
     if (tab_ == kTabHeader)
       c.TextWrapped(L"Codes: &[Page] &[Pages] &[Date] &[Time] &[File] &[Tab] &[Path]", hintRc_, p.textSecondary, 12 * ui_, 2);
   }
@@ -1234,7 +1239,7 @@ bool WorkbookView::PageScriptOp(const std::wstring& arg) {
   }
   if (key == L"margins") {
     for (const MarginPreset& m : kMargins)
-      if (_wcsicmp(value.c_str(), m.name.en) == 0)
+      if (_wcsicmp(value.c_str(), m.name.English()) == 0)
         return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {m.left, m.right, m.top, m.bottom, m.header, m.footer}; });
     if (!numbers(v) || v.size() != 6) return false;
     return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {v[2], v[3], v[0], v[1], v[4], v[5]}; });

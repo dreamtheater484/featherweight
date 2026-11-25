@@ -4,7 +4,7 @@
   python tools/strings/extract.py --check    fails (exit 1) if the template isn't current
 
 A key is a literal inside T(...) (wide, UTF-16 or UTF-8; T(L"Open", L"verb") gives a context),
-inside N_(...), or in a declaration of UiText, UiText8 or UiText16 (a table's strings). Entries are
+inside N_(...) or NC_(L"Bar", L"chart"), or in a declaration of UiText, UiText8 or UiText16 (a table's strings). Entries are
 sorted by their text, and name the files they come from without line numbers, so the template only
 changes when strings do.
 """
@@ -18,8 +18,9 @@ import cpplex  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 POT = os.path.join(ROOT, 'strings', 'featherweight.pot')
-SKIP = {'src/core/Lang.h', 'src/core/Lang.cpp', 'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h'}
-CALL = re.compile(r'(?:\b|::)(T|N_)\(\s*$')
+SKIP = {'src/core/Lang.h', 'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h'}  # Lang.cpp: the key names
+CALL = re.compile(r'(?:\b|::)(T|N_|NC_)\(\s*$')
+CONTEXT_ARG = re.compile(r'\b(T|NC_)\(\s*(L|u8|u)?"(?:[^"\\]|\\.)*"\s*,\s*$')  # the context itself
 TABLE = re.compile(r'\bUiText(8|16)?\b')
 TABLE_PREFIX = {None: ('L',), '8': ('', 'u8'), '16': ('u',)}  # the literals a UiText, UiText8, UiText16 takes
 CONTEXT = re.compile(r'\s*,\s*(L|u8|u)?"((?:[^"\\]|\\.)*)"\s*\)')
@@ -51,9 +52,11 @@ def keys():
                 if lit.test_only or not lit.text:
                     continue
                 ctx = None
+                if CONTEXT_ARG.search(lit.statement):
+                    continue
                 if CALL.search(lit.statement):
                     m = CONTEXT.match(lit.after)
-                    if m and re.search(r'\bT\(\s*$', lit.statement):
+                    if m and re.search(r'\b(T|NC_)\(\s*$', lit.statement):
                         ctx = cpplex.decode(m.group(2))
                 elif not (TABLE.search(lit.head) and lit.scope != 'function' or TABLE.search(lit.head) and lit.constexpr):
                     continue

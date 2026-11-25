@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # update.py, also under python -I (the gate)
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 POT = os.path.join(ROOT, 'strings', 'featherweight.pot')
 
@@ -74,21 +75,26 @@ def read_po(path):
 
 
 def access_keys(s):
-    """Positions of single & (&& is a literal ampersand)."""
+    """Positions of the & that mark an access key: before a letter or digit. && is a literal ampersand, and so
+    is one before a space or at the end ("Find & Select" on the ribbon, drawn as written)."""
     out, i = [], 0
     while i < len(s):
         if s[i] == '&':
             if i + 1 < len(s) and s[i + 1] == '&':
                 i += 2
                 continue
-            out.append(i)
+            if i + 1 < len(s) and not s[i + 1].isspace():
+                out.append(i)
         i += 1
     return out
 
 
 def problems_of(en, tr):
     out = []
-    if collections.Counter(PLACEHOLDER.findall(en)) != collections.Counter(PLACEHOLDER.findall(tr)):
+    # {0} always; printf's %d only in a string whose English has one (elsewhere "10 %" is just text).
+    printf = any(p.startswith('%') for p in PLACEHOLDER.findall(en))
+    kinds = (lambda t: [p for p in PLACEHOLDER.findall(t) if printf or p.startswith('{')])
+    if collections.Counter(kinds(en)) != collections.Counter(kinds(tr)):
         out.append('placeholders differ')
     en_tab, tr_tab = en.find('\t'), tr.find('\t')
     if (en_tab < 0) != (tr_tab < 0) or en_tab >= 0 and en[en_tab:] != tr[tr_tab:]:
@@ -108,31 +114,42 @@ def problems_of(en, tr):
 
 
 def check(path, template):
-    """(problems, counts): problem lines, and {translated, missing, placeholderErrors, accessKeyErrors}."""
+    """(problems, counts): problem lines, and {translated, missing, placeholderErrors, accessKeyErrors, otherErrors,
+    untranslated: [English], fuzzy: [English]} (fuzzy: the English changed since it was translated)."""
+    import update  # noqa: E402 (it imports this module)
     try:
         rel = os.path.relpath(path, ROOT).replace('\\', '/')
     except ValueError:  # another drive
         rel = path
-    entries = read_po(path)
     seen, out = set(), []
-    counts = {'translated': 0, 'placeholderErrors': 0, 'accessKeyErrors': 0, 'otherErrors': 0}
-    for ctx, en, tr, line in entries:
+    counts = {'translated': 0, 'placeholderErrors': 0, 'accessKeyErrors': 0, 'otherErrors': 0,
+              'untranslated': [], 'fuzzy': []}
+    for e in update.read(path):
+        if e['obsolete']:
+            continue
+        ctx, en, tr = e['ctx'], e['id'], e['str']
         key = (ctx, en)
         if key not in template:
-            out.append(f'{rel}:{line}: not in the template: {en!r}')
+            out.append(f'{rel}: not in the template (run tools/strings/update.py): {en!r}')
             counts['otherErrors'] += 1
             continue
         seen.add(key)
         if not tr:
+            counts['untranslated'].append(en)
+            continue
+        if e['fuzzy']:
+            counts['fuzzy'].append(en)
             continue
         counts['translated'] += 1
         for p in problems_of(en, tr):
-            out.append(f'{rel}:{line}: {p}: {en!r} -> {tr!r}')
+            out.append(f'{rel}: {p}: {en!r} -> {tr!r}')
             kind = 'accessKeyErrors' if 'access key' in p else 'placeholderErrors' if p in (
                 'placeholders differ', 'the shortcut after the tab differs', 'a different number of line breaks') \
                 else 'otherErrors'
             counts[kind] += 1
-    counts['missing'] = len(template) - len(seen)
+    missing = [en for (ctx, en) in sorted(template, key=lambda k: (k[1], k[0] or '')) if (ctx, en) not in seen]
+    counts['missing'] = len(missing)
+    counts['untranslated'] += missing
     return out, counts
 
 
@@ -167,11 +184,13 @@ def main():
             if size is None or size > a.max_bytes:
                 out.append(f'{code}: compiled catalog {"missing" if size is None else f"{size} bytes, over {a.max_bytes}"}')
                 print(out[-1])
-        print(f'{code}: {counts["translated"]} of {len(template)} strings translated, {counts["missing"]} missing from the '
-              f'file, {len(out)} problems' + (f', {size} bytes compressed' if size is not None else ''))
+        print(f'{code}: {counts["translated"]} of {len(template)} strings translated, {len(counts["fuzzy"])} fuzzy '
+              f'(English changed), {len(counts["untranslated"])} untranslated ({counts["missing"]} missing from the file), '
+              f'{len(out)} problems' + (f', {size} bytes compressed' if size is not None else ''))
         languages[code] = {'strings': len(template), 'translated': counts['translated'],
                            'placeholderErrors': counts['placeholderErrors'], 'accessKeyErrors': counts['accessKeyErrors'],
-                           'otherErrors': counts['otherErrors'], 'compressedBytes': size}
+                           'otherErrors': counts['otherErrors'], 'compressedBytes': size,
+                           'untranslated': counts['untranslated'], 'fuzzy': counts['fuzzy']}
         failed |= bool(out)
     if not paths:
         print('no catalogs yet (strings/<code>.po)')

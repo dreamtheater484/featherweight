@@ -39,6 +39,7 @@ TEST(Lang_EnglishReturnsItsArgument) {
   CHECK(T(w) == w);
   CHECK(std::wcscmp(UiText(L"Left"), L"Left") == 0);
   CHECK(std::wcscmp(fw::lang::Current(), L"en") == 0);
+  CHECK(fw::lang::InSentence(L"Merge Cells") == L"merge cells");  // "Undo merge cells"
 }
 
 TEST(Lang_FmtFillsPlaceholders) {
@@ -53,6 +54,14 @@ TEST(Lang_FmtFillsPlaceholders) {
 TEST(Lang_ContextSeparatesKeys) {
   CHECK(catalog::Hash(0, L"verb", L"Open") != catalog::Hash(0, nullptr, L"Open"));
   CHECK(catalog::Hash(1, nullptr, L"Open") != catalog::Hash(0, nullptr, L"Open"));
+  // A table's string with a context (NC_) is one literal whose hash is the key's with that context,
+  // shown, and English(), without it.
+  constexpr UiText bar = NC_(L"Bar", L"chart");
+  CHECK(catalog::Hash(5, nullptr, bar.key) == catalog::Hash(5, L"chart", L"Bar"));
+  CHECK(std::wcscmp(bar, L"Bar") == 0 && std::wcscmp(bar.English(), L"Bar") == 0);
+  constexpr UiText8 outline = NC_("Outline", "row groups");
+  CHECK(std::strcmp(outline, "Outline") == 0 && std::strcmp(outline.English(), "Outline") == 0);
+  CHECK(std::wcscmp(UiText(L"Left").English(), L"Left") == 0);
 }
 
 TEST(Lang_CatalogReadsBack) {
@@ -96,17 +105,32 @@ TEST(Lang_CatalogRefusesDamage) {
   bad[16] = static_cast<uint8_t>(0xC3);  // "Vet" -> a lead byte and "et"
   bad[17] = 0x28;
   CHECK(!catalog::ReadTexts(bad.data(), bad.size(), b.table, text, offsets));
-  // Keys out of order, or a place past the end.
-  std::vector<uint8_t> keys = b.keys;
-  std::swap(keys[16], keys[20]);
-  std::swap(keys[17], keys[21]);
-  std::swap(keys[18], keys[22]);
-  std::swap(keys[19], keys[23]);
+  // Format 2, byte for byte (tests/fuzz/make_catalog_seeds.py writes the same): k = 0 and w = 2, then
+  // the hashes 1, 2, 3 as the differences 1, 1, 1 (10 10 10: one 1 bit and the 0), then the places
+  // 0, 1, 2 in 2 bits each (00 10 01, low bits first): 0x15, 0x09.
+  const std::vector<uint8_t> want = {'F', 'W', 'L', 'K', 2, 0, 0, 0, 7, 0, 0, 0, 3, 0, 0, 0, 0, 2, 0x15, 0x09};
+  CHECK(otherKeys == want);
+  CHECK(other.hashes == std::vector<uint32_t>({1, 2, 3}) && other.places == std::vector<uint16_t>({0, 1, 2}));
+  // Two keys with one hash (a difference of 0), a place past the end, too few or no bits a place,
+  // k past 31, cut short.
   catalog::Keys k;
-  CHECK(!catalog::ReadKeys(keys.data(), keys.size(), k));
-  keys = b.keys;
-  keys[16 + 4 * 3] = 3;
-  keys[16 + 4 * 3 + 1] = 0;
-  CHECK(!catalog::ReadKeys(keys.data(), keys.size(), k));
-  CHECK(!catalog::ReadKeys(keys.data(), 12, k));
+  auto refused = [&](size_t at, uint8_t value) {
+    std::vector<uint8_t> keys = want;
+    keys[at] = value;
+    return !catalog::ReadKeys(keys.data(), keys.size(), k);
+  };
+  CHECK(refused(18, 0x01));
+  CHECK(refused(19, 0x0D));
+  CHECK(refused(17, 1));
+  CHECK(refused(17, 0));
+  CHECK(refused(16, 32));
+  CHECK(!catalog::ReadKeys(want.data(), want.size() - 1, k));
+  CHECK(!catalog::ReadKeys(want.data(), 12, k));
+  // A difference past 32 bits: one key, k = 31, and two 1 bits before the 0.
+  const std::vector<uint8_t> big = {'F', 'W', 'L', 'K', 2, 0, 0, 0, 7, 0, 0, 0, 1, 0, 0, 0, 31, 1, 0x03, 0, 0, 0, 0};
+  CHECK(!catalog::ReadKeys(big.data(), big.size(), k));
+  std::vector<uint8_t> one = big;
+  one[18] = 0x01;  // one 1 bit: 2^31
+  CHECK(catalog::ReadKeys(one.data(), one.size(), k) && k.hashes == std::vector<uint32_t>({0x80000000u}));
+  CHECK(catalog::ReadKeys(b.keys.data(), b.keys.size(), k) && k.hashes == b.table.hashes);
 }

@@ -353,7 +353,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
       for (const edit::StyleEntry& e : edit::GalleryStyles(doc)) {
         if (e.id.empty()) continue;  // a built-in the document doesn't have yet
         ids_.push_back(e.id);
-        style_.items.push_back(W(e.name));
+        style_.items.push_back(ShownStyleName(e.name));
       }
       const edit::Range sel = s_.Selection();
       const std::string caret(doc.ResolvedPara(sel.from.para).style);
@@ -361,7 +361,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
       if (std::find(ids_.begin(), ids_.end(), picked_) == ids_.end())
         if (const fw::doc::Style* st = doc.FindStyle(picked_)) {
           ids_.push_back(picked_);
-          style_.items.push_back(W(edit::DisplayName(st->name)));
+          style_.items.push_back(ShownStyleName(st->name));
         }
       style_.selected = static_cast<int>(std::find(ids_.begin(), ids_.end(), picked_) - ids_.begin());
       if (style_.selected >= static_cast<int>(ids_.size())) style_.selected = -1;

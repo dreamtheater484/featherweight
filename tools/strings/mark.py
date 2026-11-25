@@ -184,8 +184,11 @@ def classify(lit, r, code):
     if DATA_TARGETS.search(before):
         return '', 'data target'
     # Already marked.
-    if re.search(r'\b(T|N_)\(\s*$', before):
+    if re.search(r'\b(T|N_|NC_)\(\s*$', before):
         return '', 'marked'
+    # A context, T(L"Layout", L"ribbon tab"): for translators, not shown.
+    if re.search(r'\b(T|NC_)\(\s*(L|u8|u)?"(?:[^"\\]|\\.)*"\s*,\s*$', before):
+        return '', 'context'
     # Joined with a macro's literal ("Version " FW_VERSION_WSTRING): left for a hand edit.
     if re.search(r'\b[A-Z_][A-Z0-9_]{2,}\s*$', before) or re.match(r'\s*[A-Z_][A-Z0-9_]{2,}\s*(L|u8|u|U)?"', lit.after):
         return '', 'joined with a macro'

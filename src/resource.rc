@@ -17,7 +17,7 @@ STYLE DS_SETFONT | DS_SHELLFONT | WS_CHILD | WS_CAPTION
 CAPTION "Page sizing"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-  LTEXT "How should pages fit on the paper?", -1, 10, 10, 210, 10
+  LTEXT "How should pages fit on the paper?", IDC_PRINT_QUESTION, 10, 10, 210, 10
   AUTORADIOBUTTON "&Fit to page (recommended)", IDC_PRINT_FIT, 14, 28, 200, 12, WS_GROUP | WS_TABSTOP
   AUTORADIOBUTTON "&Actual size", IDC_PRINT_ACTUAL, 14, 44, 200, 12
 END

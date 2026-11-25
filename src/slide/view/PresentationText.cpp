@@ -1079,7 +1079,7 @@ std::vector<Control*> TextEditing::LinkPanel::Layout(const D2D1_RECT_F& body, fl
   labels_.clear();
   const std::pair<const wchar_t*, Box*> rows[] = {{T(L"Text to display"), &text_},
                                                   {T(L"Address, or a slide in this presentation"), &address_},
-                                                  {L"ScreenTip", &tip_}};
+                                                  {T(L"ScreenTip"), &tip_}};
   for (const auto& [label, box] : rows) {
     labels_.push_back({label, D2D1::RectF(left, y, right, y + 16 * ui)});
     box->rc = D2D1::RectF(left, y + 18 * ui, right, y + 48 * ui);
