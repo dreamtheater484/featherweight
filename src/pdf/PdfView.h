@@ -163,6 +163,14 @@ class PdfView : public PagedView, public DocumentHost {
   // The screen tests: a PFX loaded in memory, never into a certificate store.
   bool SignWithPfxForTesting(const std::wstring& pfx, const std::wstring& password, const std::wstring& out);
   void FillMenu(int which, HMENU menu) override;
+  // A drawn signature (the Signature panel): Place, then a click on a page puts it there as a stamp.
+  void OpenSignaturePanel();
+  bool PlacingSignature() const { return placingSignature_; }
+  void StartPlacingSignature();
+  void StopPlacingSignature();
+  // Puts the panel's signature centred on (x, y) of `page` (page coordinates).
+  bool PlaceSignatureAt(int page, float x, float y);
+  bool StampForTesting();
 
   // The thumbnail for the Pages panel, asking for it when it isn't there yet.
   ID2D1Bitmap* Thumbnail(int page, int priority);
@@ -299,6 +307,12 @@ class PdfView : public PagedView, public DocumentHost {
   std::string pageBefore_;  // between BeginPageChange and EndPageChange
   bool pageBeforeModified_ = false;
   bool signatureWarned_ = false;  // asked once whether to change a signed PDF
+
+  // ---- Drawn signatures (SignaturePanel.cpp, PdfSign.cpp) ----
+  class SignaturePanel;
+  friend class SignaturePanel;
+  std::unique_ptr<SignaturePanel> signPanel_;
+  bool placingSignature_ = false;
 
   // ---- Recognize text (PdfOcr.cpp) ----
   struct OcrJob;

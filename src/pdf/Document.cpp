@@ -752,6 +752,8 @@ AnnotHit Document::AnnotAt(int index, double x, double y) {
     FPDFAnnot_GetRect(annot, &rect);
     if (type == FPDF_ANNOT_TEXT && inside(rect)) {
       hit = {AnnotHit::Kind::Note, i, rect};
+    } else if (type == FPDF_ANNOT_STAMP && inside(rect)) {
+      hit = {AnnotHit::Kind::Stamp, i, rect};
     } else if (type == FPDF_ANNOT_HIGHLIGHT) {
       size_t quads = FPDFAnnot_CountAttachmentPoints(annot);
       for (size_t q = 0; q < quads; ++q) {

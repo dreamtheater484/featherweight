@@ -509,6 +509,7 @@ bool PdfView::RunPageScript(const std::wstring& arg) {
     CheckSignatures(true);
     return doc_->SignatureCount() > 0;
   }
+  if (op == L"stamp") return StampForTesting();
   if (op == L"undo") return UndoPages();
   if (op == L"redo") return RedoPages();
   return false;

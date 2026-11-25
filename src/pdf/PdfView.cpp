@@ -12,6 +12,7 @@
 #include "Util.h"
 #include "core/Strings.h"
 #include "pdf/PagesPanel.h"
+#include "pdf/SignaturePanel.h"
 #include "pdf/PdfText.h"
 #include "pdf/Print.h"
 #include "pdf/tools/PageOps.h"
@@ -428,6 +429,13 @@ void PdfView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     }
   }
   selBar_ = false;
+  if (placingSignature_ && button == 0) {  // f1-pdf: the click that places a drawn signature
+    const int page = PageAtPoint(x, y);
+    double px = 0, py = 0;
+    if (page >= 0 && ToPagePoint(page, x, y, px, py))
+      PlaceSignatureAt(page, static_cast<float>(px), static_cast<float>(py));
+    return;
+  }
   BeginPress(x, y);
 
   if (button == 2) {  // middle button pans
@@ -657,6 +665,7 @@ HCURSOR PdfView::CursorAt(int x, int y) {
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return ibeam;
   if (OverScrollbar(x, y)) return arrow;
+  if (placingSignature_) return PageAtPoint(x, y) >= 0 ? LoadCursor(nullptr, IDC_CROSS) : arrow;
   if (selBar_) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y)) return hand;
@@ -794,6 +803,10 @@ bool PdfView::OnKeyDown(UINT vk, UINT mods) {
     return false;
   }
   if (vk == VK_ESCAPE) {
+    if (placingSignature_) {
+      StopPlacingSignature();
+      return true;
+    }
     if (ocr_) {
       StopOcr();
       return true;
@@ -1546,6 +1559,7 @@ bool PdfView::Execute(int cmd) {
     case CmdPdfOcr: StartOcr({}); return true;
     case CmdPdfOcrPage: StartOcr({CurrentPage()}); return true;
     case CmdPdfSignCertificate: SignWithCertificate(); return true;
+    case CmdPdfDrawSignature: OpenSignaturePanel(); return true;
     case CmdPdfSignatures: CheckSignatures(true); return true;
     case CmdUndo: UndoPages(); return true;
     case CmdRedo: RedoPages(); return true;
@@ -1671,7 +1685,9 @@ void PdfView::FillContextMenu(HMENU m, int x, int y) {
     AppendItem(m, CmdHighlight, L"Highlight");
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
   }
-  if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
+  if (contextAnnot_.kind == AnnotHit::Kind::Stamp) {
+    AppendItem(m, CmdRemoveAnnot, T(L"Delete signature"));
+  } else if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
     AppendItem(m, CmdRemoveAnnot, L"Remove highlight");
   } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
     AppendItem(m, CmdOpenNote, L"Open note");

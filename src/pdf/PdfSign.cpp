@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <fpdf_signature.h>
+#include <fpdf_transformpage.h>
 
 #include <algorithm>
 
@@ -12,7 +13,9 @@
 #include "core/Strings.h"
 #include "pdf/PdfText.h"
 #include "pdf/PdfView.h"
+#include "pdf/SignaturePanel.h"
 #include "pdf/sign/Sign.h"
+#include "pdf/sign/Stamp.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
 
@@ -186,4 +189,69 @@ void PdfView::FillMenu(int which, HMENU m) {
                    n == 0 ? std::wstring(T(L"No signatures in this PDF"))
                           : pdftext::Fill(T(L"Check signatures ({0})"), {std::to_wstring(n)}),
                    n > 0);
+}
+
+// ---- Drawn signatures
+
+void PdfView::OpenSignaturePanel() {
+  if (!Ready()) return;
+  if (const std::wstring why = PageToolsBlocked(); !why.empty()) {
+    host_.ViewMessage(BannerKind::Info, why);
+    return;
+  }
+  if (!signPanel_) signPanel_ = std::make_unique<SignaturePanel>(*this);
+  host_.ViewShowPanel(signPanel_.get());
+}
+
+void PdfView::StartPlacingSignature() {
+  if (!signPanel_ || signPanel_->Empty()) return;
+  placingSignature_ = true;
+  host_.ViewFocusPage();
+  host_.ViewInvalidate();
+}
+
+void PdfView::StopPlacingSignature() {
+  if (!placingSignature_) return;
+  placingSignature_ = false;
+  host_.ViewInvalidate();
+}
+
+bool PdfView::PlaceSignatureAt(int page, float x, float y) {
+  placingSignature_ = false;
+  if (!Ready() || !signPanel_ || signPanel_->Empty()) return false;
+  if (const std::wstring why = PageToolsBlocked(); !why.empty()) {
+    host_.ViewMessage(BannerKind::Info, why);
+    return false;
+  }
+  if (doc_->SignatureCount() > 0 && !signatureWarned_) {
+    if (!host_.ViewConfirm(T(L"This PDF is signed. Changing it breaks the signature: readers will show it was changed "
+                             L"after it was signed."),
+                           T(L"Change it")))
+      return false;
+    signatureWarned_ = true;
+  }
+  FPDF_PAGE p = doc_->Page(page);
+  if (!p) return false;
+  const pdfsign::Ink ink = signPanel_->Ink();
+  const FS_RECTF rect = pdfsign::StampRect(p, x, y, 150, ink.Aspect());
+  if (pdfsign::AddSignatureStamp(doc_->Handle(), p, rect, ink) < 0) {
+    host_.ViewMessage(BannerKind::Error, T(L"The signature couldn't be placed."));
+    return false;
+  }
+  doc_->SetModified(true);
+  AnnotationsChanged(page);
+  host_.ViewMessage(BannerKind::Success, T(L"Signature placed. To take it away, right-click it, Delete signature."));
+  return true;
+}
+
+// The screen tests: a signature drawn in code, placed in the middle of the current page.
+bool PdfView::StampForTesting() {
+  if (!Ready()) return false;
+  if (!signPanel_) signPanel_ = std::make_unique<SignaturePanel>(*this);
+  signPanel_->DrawForTesting();
+  const fw::PageSizePt s = doc_->PageSizes()[CurrentPage()];
+  FPDF_PAGE p = doc_->Page(CurrentPage());
+  FS_RECTF box{};
+  if (!p || !FPDFPage_GetMediaBox(p, &box.left, &box.bottom, &box.right, &box.top)) box = {0, static_cast<float>(s.h), static_cast<float>(s.w), 0};
+  return PlaceSignatureAt(CurrentPage(), (box.left + box.right) / 2, (box.top + box.bottom) / 2);
 }

@@ -52,7 +52,7 @@ struct LinkTarget {
 
 // A highlight or note found on a page.
 struct AnnotHit {
-  enum class Kind { None, Highlight, Note };
+  enum class Kind { None, Highlight, Note, Stamp };  // Stamp: a drawn signature (f1-pdf)
   Kind kind = Kind::None;
   int index = -1;   // annotation index on the page (changes when annotations are removed)
   FS_RECTF rect{};  // page coordinates

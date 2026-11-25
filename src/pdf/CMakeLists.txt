@@ -3,7 +3,7 @@
 # (PdfView and the panels) is in the app's sources. PDFium stays delay-loaded wherever it's used.
 add_library(fwpdftools STATIC tools/PageOps.cpp
   ocr/Ocr.cpp ocr/TextLayer.cpp  # Windows.Media.Ocr through the Windows Runtime's ABI: loaded when used
-  sign/PdfObjects.cpp sign/Sign.cpp)  # certificate signatures: CMS through crypt32 (delay-loaded) and CNG
+  sign/PdfObjects.cpp sign/Sign.cpp sign/Stamp.cpp)  # certificate signatures: CMS through crypt32 (delay-loaded) and CNG
 target_include_directories(fwpdftools PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwpdftools PUBLIC pdfium fwpkg fwcore runtimeobject crypt32 bcrypt PRIVATE miniz)
 # They run once per click: compiled for size.
