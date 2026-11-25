@@ -98,7 +98,7 @@ $baselines = [ordered]@{
   # them), .ppt 2,322 (2,344), .odp 2,042 (2,059).
   slidesPptx = @{ passing = 2349; slides = 2516; folder = "pptx"; through = "fwtool" }
   slidesPpt  = @{ passing = 2263; slides = 2577; folder = "ppt"; through = "fwtool" }  # f1-word's spPB0 through fwtool, as the gate measures: fwtool refuses the two encrypted decks (60 slides; P3 counted them through the app, 59 of 60, for 2,322)
-  slidesOdp  = @{ passing = 2042; slides = 2547; folder = "odp"; through = "app" }  # f1-word: -Through app with the head's exe (spOA); on .pptx the head and the no-cloud build are slide for slide the same
+  slidesOdp  = @{ passing = 2038; slides = 2547; folder = "odp"; through = "app" }  # f1-word's spOA (2,042) with the references drawn by PDFium 8179: our PNGs byte-identical, 4 fewer at the 0.95 line (f1-plan, f1-gate's decision)
 }
 # Measured on 4.0's binaries by f1-gate (-Checks fidelity.baseline); null until then.
 $baselineFile = Join-Path $root "tests\pdf\f1-gate-baselines.json"
