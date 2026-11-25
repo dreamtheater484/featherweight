@@ -124,7 +124,8 @@ void Document::InitLibrary() {
 
 bool Document::ScriptEngineLoaded() {
   HMODULE pdfium = GetModuleHandleW(L"pdfium.dll");
-  return pdfium && GetProcAddress(pdfium, "FPDF_LoadXFA") != nullptr;
+  // Only V8's build exports it (updater::IsScriptEngine reads the same export from a file).
+  return pdfium && GetProcAddress(pdfium, "FPDF_GetRecommendedV8Flags") != nullptr;
 }
 
 bool Document::LibraryAvailable() {
@@ -256,10 +257,8 @@ void Document::AttachHost(DocumentHost* host, bool highlightFields) {
   scriptsWanted_ = type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND || FPDFDoc_GetJavaScriptActionCount(doc_) > 0;
 #ifdef PDF_ENABLE_XFA
   if (type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND) {
-    // Only the script engine's PDFium has FPDF_LoadXFA: looked up, so the program runs with either build.
-    using LoadXfa = FPDF_BOOL(FPDF_CALLCONV*)(FPDF_DOCUMENT);
-    static const auto loadXfa = reinterpret_cast<LoadXfa>(GetProcAddress(GetModuleHandleW(L"pdfium.dll"), "FPDF_LoadXFA"));
-    isXfa_ = loadXfa && loadXfa(doc_) != FALSE;
+    // Both PDFium builds have FPDF_LoadXFA; without the script engine it returns false and the AcroForm part shows.
+    isXfa_ = FPDF_LoadXFA(doc_) != FALSE;
     if (isXfa_) RefreshPageSizes();
   }
 #endif

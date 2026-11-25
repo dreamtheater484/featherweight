@@ -117,7 +117,7 @@ namespace updater {
 // The release to offer from GitHub's answer: /releases/latest (one release) for stable, /releases (a list) for
 // beta, where the newest version wins, pre-releases included. Drafts never count. nullptr when there's none.
 const fw::JsonValue* PickRelease(const fw::JsonValue& answer, bool beta);
-// Whether a pdfium.dll is the build with form scripts (V8 and XFA): it exports FPDF_LoadXFA.
+// Whether a pdfium.dll is the build with form scripts (V8 and XFA): it exports FPDF_GetRecommendedV8Flags.
 bool IsScriptEngine(const std::wstring& pdfiumPath);
 // Whether Featherweight checks for updates and updates itself: not when an administrator's policy turns updates off,
 // and not inside an MSIX package, which the Store updates.

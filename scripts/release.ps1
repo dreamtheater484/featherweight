@@ -70,12 +70,16 @@ gh auth status 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "The GitHub CLI is not logged in (run: gh auth login)." }
 $commit = (git rev-parse HEAD).Trim()
 
-# The 4.1 gate (docs/f1-plan.md): the report must be for this commit and have no failed row. f1-gate's script checks.
-$gate = Join-Path $root "scripts\f1-gate.ps1"
-if (Test-Path $gate) {
-  Step "Checking the gate's report"
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Verify
-  if ($LASTEXITCODE -ne 0) { throw "The gate's report doesn't allow releasing $commit (scripts\f1-gate.ps1 -Verify)." }
+# The gate (f1-gate's check, agreed with f1-ship): from 4.1 on, scripts\f1-gate.ps1 must have passed on this commit:
+# its report is for HEAD, made on a clean tree, with no failed row (rows waiting for Roy's steps don't block).
+if ([version]$version -ge [version]"4.1.0") {
+  $minor = ($version -split '\.')[0..1] -join '.'
+  $gateReport = if ($env:FW_GATE_REPORT) { $env:FW_GATE_REPORT } else { "D:\Documents\Codex\FeatherweightNotes\f1\gate-$minor.json" }
+  $gate = Join-Path $root "scripts\f1-gate.ps1"
+  if (-not (Test-Path $gate)) { throw "scripts\f1-gate.ps1 isn't here: from 4.1 on a release needs the gate's report." }
+  Step "Checking the gate's report ($gateReport)"
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Verify $gateReport | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "The $minor gate hasn't passed on $commit ($gateReport): run scripts\f1-gate.ps1 on it first." }
 }
 
 Step "Tagging $tag at $commit"

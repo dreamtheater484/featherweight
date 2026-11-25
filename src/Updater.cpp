@@ -336,7 +336,8 @@ bool IsScriptEngine(const std::wstring& pdfiumPath) {
         const auto* exports = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + exportsAt);
         if (offsetOf(exports->AddressOfNames, namesAt) && in(namesAt, uint64_t(exports->NumberOfNames) * 4)) {
           const DWORD* names = reinterpret_cast<const DWORD*>(base + namesAt);
-          static const char kWanted[] = "FPDF_LoadXFA";
+          // Only a build with V8 has it (FPDF_LoadXFA and the other XFA calls are in both, as stubs without XFA).
+          static const char kWanted[] = "FPDF_GetRecommendedV8Flags";
           for (DWORD i = 0; i < exports->NumberOfNames && !found; ++i) {
             uint64_t at = 0;
             if (offsetOf(names[i], at) && in(at, sizeof(kWanted)))

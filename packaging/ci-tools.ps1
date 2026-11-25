@@ -21,13 +21,16 @@ if ($iscc) {
 
 dotnet tool install --global wix --version $WixVersion | Out-Host
 if ($LASTEXITCODE) { throw "Installing WiX $WixVersion failed" }
-$nupkg = Join-Path $env:USERPROFILE ".nuget\packages\wix\$WixVersion\wix.$WixVersion.nupkg"
-if (Test-Path $nupkg) {
+# A global tool's package stays in the tools' store (older .NET SDKs: the NuGet cache).
+$nupkg = @("$env:USERPROFILE\.dotnet\tools\.store\wix\$WixVersion\wix\$WixVersion\wix.$WixVersion.nupkg",
+           "$env:USERPROFILE\.nuget\packages\wix\$WixVersion\wix.$WixVersion.nupkg") |
+  Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($nupkg) {
   $hash = (Get-FileHash $nupkg -Algorithm SHA512).Hash.ToLowerInvariant()
   if (-not $WixSha512) { Write-Host "::warning::WiX $WixVersion isn't pinned yet: its SHA-512 is $hash" }
   elseif ($hash -ne $WixSha512) { throw "WiX $WixVersion's package has SHA-512 $hash, not the pinned $WixSha512" }
 } else {
-  Write-Host "::warning::WiX's package isn't in the NuGet cache ($nupkg): not checked"
+  Write-Host "::warning::WiX's package isn't in the tools' store or the NuGet cache: not checked"
 }
 "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version

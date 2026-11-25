@@ -323,6 +323,13 @@ void DeleteTree(const std::wstring& dir) {
   RemoveDirectoryW(dir.c_str());
 }
 
+// The release's name for this architecture's program (packaging/package.ps1's updater assets).
+#if defined(_M_ARM64)
+const std::string kExeAsset = "Featherweight-arm64.exe";
+#else
+const std::string kExeAsset = "Featherweight.exe";
+#endif
+
 // %TEMP%\fw-updater-e2e-<pid>\ with install\ (Featherweight.exe, an old build) and release\.
 class Sandbox {
  public:
@@ -345,19 +352,23 @@ class Sandbox {
   }
   std::wstring Install() const { return root_ + L"\\install"; }
   std::wstring Release() const { return root_ + L"\\release"; }
-  // Publishes `exe` (a file) as the release's Featherweight.exe, with SHA256SUMS.txt and latest.json.
+  // Publishes `exe` (a file) as the release's program, with SHA256SUMS.txt and latest.json.
   void Publish(const std::wstring& exe, const char* tag) {
-    CopyFileW(exe.c_str(), (Release() + L"\\Featherweight.exe").c_str(), FALSE);
-    std::string sums = util::Sha256File(Release() + L"\\Featherweight.exe") + "  Featherweight.exe\n";
+    const std::wstring asset = Release() + L"\\" + fw::Utf8ToWide(kExeAsset);
+    CopyFileW(exe.c_str(), asset.c_str(), FALSE);
+    std::string sums = util::Sha256File(asset) + "  " + kExeAsset + "\n";
     util::WriteFileAtomic(Release() + L"\\SHA256SUMS.txt", sums);
-    std::string base = fw::WideToUtf8(Release());
-    for (char& c : base) c = c == '\\' ? '/' : c;
-    std::string json = std::string("{\"tag_name\":\"") + tag + "\",\"html_url\":\"https://example.invalid/r\",\"assets\":[" +
-                       "{\"name\":\"Featherweight.exe\",\"browser_download_url\":\"file:///" + base + "/Featherweight.exe\"}," +
-                       "{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"file:///" + base + "/SHA256SUMS.txt\"}]}";
+    std::string json = std::string("{\"tag_name\":\"") + tag + "\",\"html_url\":\"https://example.invalid/r\"," + Assets() + "}";
     util::WriteFileAtomic(Release() + L"\\latest.json", json);
     Updater::SetReleaseUrlForTesting(L"file:///" + Release());
     Updater::SetInstallDirForTesting(Install());
+  }
+  // The release's "assets" member: the program and SHA256SUMS.txt, as file: URLs.
+  std::string Assets() const {
+    std::string base = fw::WideToUtf8(Release());
+    for (char& c : base) c = c == '\\' ? '/' : c;
+    return "\"assets\":[{\"name\":\"" + kExeAsset + "\",\"browser_download_url\":\"file:///" + base + "/" + kExeAsset +
+           "\"},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"file:///" + base + "/SHA256SUMS.txt\"}]";
   }
   std::string InstalledHash() const { return util::Sha256File(Install() + L"\\Featherweight.exe"); }
   bool Leftovers() const { return util::FileExists(Install() + L"\\Featherweight.exe.new"); }
@@ -405,7 +416,7 @@ TEST(UpdaterRefusesUnsigned) {
   // An unsigned install (4.0, or 4.1 before SignPath) keeps the SHA-256 check instead.
   const Signature unsignedRunning;
   Updater::SetRunningSignatureForTesting(&unsignedRunning);
-  util::WriteFileAtomic(s.box.Release() + L"\\SHA256SUMS.txt", std::string(64, '0') + "  Featherweight.exe\n");
+  util::WriteFileAtomic(s.box.Release() + L"\\SHA256SUMS.txt", std::string(64, '0') + "  " + kExeAsset + "\n");
   CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Failed);  // the hash doesn't match
   CHECK(s.box.InstalledHash() == old && !s.box.Leftovers());
   s.box.Publish(s.plain.Path(), "v9.9.9");
@@ -446,11 +457,7 @@ TEST(UpdaterChannels) {
   CHECK(s.ok);
   // Stable reads latest.json (GitHub's /releases/latest), beta the list (/releases) with pre-releases.
   s.box.Publish(s.signedA.Path(), "v9.9.9");
-  std::string base = fw::WideToUtf8(s.box.Release());
-  for (char& c : base) c = c == '\\' ? '/' : c;
-  const std::string asset = "\"assets\":[{\"name\":\"Featherweight.exe\",\"browser_download_url\":\"file:///" + base +
-                            "/Featherweight.exe\"},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"file:///" +
-                            base + "/SHA256SUMS.txt\"}]";
+  const std::string asset = s.box.Assets();
   util::WriteFileAtomic(s.box.Release() + L"\\latest.json", "{\"tag_name\":\"v4.0.0\",\"prerelease\":false}");
   util::WriteFileAtomic(s.box.Release() + L"\\releases.json",
                         "[{\"tag_name\":\"v9.9.10\",\"draft\":true},{\"tag_name\":\"v9.9.9\",\"prerelease\":true," + asset +
@@ -509,7 +516,7 @@ TEST(UpdaterScriptEngine) {
   const Signature unsignedRunning;
   Updater::SetRunningSignatureForTesting(&unsignedRunning);
   Updater::SetInstallDirForTesting(box.Install());
-  TempCopy standard(L"pdfium-standard");  // stands in for the standard build: a PE file without FPDF_LoadXFA
+  TempCopy standard(L"pdfium-standard");  // stands in for the standard build: a PE file without V8's export
   CopyFileW(standard.Path().c_str(), (box.Install() + L"\\pdfium.dll").c_str(), FALSE);
   // This version's release, with the PDFium this test was built with as its pdfium-v8 asset.
   CopyFileW(FW_PDFIUM_DLL, (box.Release() + L"\\" + asset).c_str(), FALSE);
