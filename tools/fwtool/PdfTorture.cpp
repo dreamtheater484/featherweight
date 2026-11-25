@@ -553,7 +553,7 @@ int RunPdfTorture(const Options& options) {
   // Inserted whole, as Insert and Merge do: the small ones the tools take pages from.
   std::vector<const Doc*> donors;
   for (const auto& d : docs)
-    if (d->password.empty() && d->sigs.size() <= 12 && Insertable(*d)) donors.push_back(d.get());
+    if (d->password.empty() && d->sigs.size() <= 12 && d->bytes.size() <= (4u << 20) && Insertable(*d)) donors.push_back(d.get());
 
   const unsigned seed = options.seed ? options.seed : 1;
   const int edits = std::max(1, options.edits);
@@ -622,6 +622,9 @@ int RunPdfTorture(const Options& options) {
       for (int i = 0; i < static_cast<int>(d->sigs.size()); ++i) model.push_back({d.get(), i, d->sigs[static_cast<size_t>(i)].rot});
       std::vector<std::string> ops;
       int extracts = 0;
+      // What inserts have added so far: each adds a whole PDF (and PDFium copies its resources each time), so
+      // a round stops inserting at 32 MB more than the original, or the run's memory and time grow without end.
+      size_t inserted = 0;
       for (int e = 0; e < edits; ++e) {
         const int n = static_cast<int>(model.size());
         // --ops: only these kinds (rotate, delete, move, insert, stamp, ocr, extract, split), to find which one fails.
@@ -666,7 +669,7 @@ int RunPdfTorture(const Options& options) {
           for (int i : idx) list += (list.empty() ? "" : ",") + std::to_string(i + 1);
           ops.push_back("move " + list + " before " + std::to_string(gap + 1));
         } else if (kind == "insert") {  // another PDF's pages (merge)
-          if (donors.empty() || n > 600) continue;
+          if (donors.empty() || n > 600 || inserted > (32u << 20)) continue;
           const Doc* from = donors[rng() % donors.size()];
           const int at = static_cast<int>(rng() % static_cast<unsigned>(n + 1));
           const int got = work.Insert(*from, at);
@@ -675,6 +678,7 @@ int RunPdfTorture(const Options& options) {
             continue;
           }
           for (int j = 0; j < got; ++j) model.insert(model.begin() + at + j, PageRef{from, j, from->sigs[static_cast<size_t>(j)].rot});
+          inserted += from->bytes.size();
           ops.push_back("insert " + fw::WideToUtf8(from->path.filename().wstring()) + " at " + std::to_string(at + 1));
         } else if (kind == "stamp") {  // a drawn signature
           const int i = randomPage();
