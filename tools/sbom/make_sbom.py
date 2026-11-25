@@ -173,6 +173,13 @@ def deps_components():
             f"{lang}.{kind}.txt", hyph_version, sha256, notices.get(lang),
             f"https://raw.githubusercontent.com/hyphenation/tex-hyphen/{hyph_commit}/hyph-utf8/tex/generic/"
             f"hyph-utf8/patterns/txt/{lang}.{kind}.txt", "hyph-utf8"))
+    # The TeX originals, shipped byte for byte where their licences ask for that (f1-word: Swedish, Finnish).
+    tex_url = (f"https://raw.githubusercontent.com/hyphenation/tex-hyphen/{hyph_commit}/hyph-utf8/tex/generic/"
+               "hyph-utf8/patterns/tex")
+    for m in re.finditer(r'/(hyph-[\w-]+)\.tex"\s*\n\s*([0-9a-f]{64})', text):
+        lang, sha256 = m.groups()
+        out.append(data_component(f"{lang}.tex", hyph_version, sha256, notices.get(lang), f"{tex_url}/{lang}.tex",
+                                  "hyph-utf8"))
     nl_version = cmake_var(text, "FW_OPENTAAL_HYPH_VERSION")
     nl_commit = cmake_var(text, "_fw_opentaal_commit")
     m = re.search(r"/nl_NL/hyph_nl_NL\.dic\"\s*\n\s*([0-9a-f]{64})", text)
