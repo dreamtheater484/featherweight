@@ -89,6 +89,7 @@ class File {
   bool lastIsStream_ = false;
   int size_ = 0;
   int sections_ = 0;
+  size_t inflated_ = 0;
 };
 
 // Inflates zlib data (FlateDecode), at most `limit` bytes out.

@@ -8,6 +8,7 @@ set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_doc
   fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt fuzz_cfb fuzz_chart fuzz_doc fuzz_odt fuzz_xlsx fuzz_numfmt fuzz_csv
   fuzz_condfmt fuzz_ods fuzz_xls fuzz_pivot fuzz_pptx fuzz_timing fuzz_ppt)
 list(APPEND _fw_fuzz_targets fuzz_odp)  # P3, p3-files
+list(APPEND _fw_fuzz_targets fuzz_pdfpages)  # F1, f1-pdf: the PDF object reader under signing
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
@@ -57,6 +58,10 @@ target_link_libraries(fuzz_pivot PRIVATE fwsheet)
 target_link_libraries(fuzz_timing PRIVATE fwslideshow)
 target_link_libraries(fuzz_odp PRIVATE fwslide fwslideodp)
 target_link_libraries(fuzz_ppt PRIVATE fwslide)
+# F1, f1-pdf: compiled into the target itself (fwpdftools also holds PDFium's callers), instrumented with it.
+target_sources(fuzz_pdfpages PRIVATE "${PROJECT_SOURCE_DIR}/src/pdf/sign/PdfObjects.cpp" "${PROJECT_SOURCE_DIR}/src/pdf/sign/Sign.cpp")
+target_include_directories(fuzz_pdfpages PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(fuzz_pdfpages PRIVATE miniz crypt32 bcrypt)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -97,3 +102,5 @@ add_custom_target(fuzz_all DEPENDS ${_fw_fuzz_targets})
 add_test(NAME fuzz_odp_replay COMMAND fuzz_odp ${_fw_runs} "${_fw_seeds}/odp" "${_fw_regressions}/odp")
 add_test(NAME fuzz_xls_replay COMMAND fuzz_xls ${_fw_runs} "${_fw_seeds}/xls" "${_fw_regressions}/xls")
 add_test(NAME fuzz_ppt_replay COMMAND fuzz_ppt ${_fw_runs} "${_fw_seeds}/ppt" "${_fw_regressions}/ppt")
+add_test(NAME fuzz_pdfpages_replay COMMAND fuzz_pdfpages ${_fw_runs} "${_fw_seeds}/pdf" "${CMAKE_SOURCE_DIR}/tests/pdfs"
+  "${_fw_regressions}/pdfpages")

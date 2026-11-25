@@ -14,6 +14,8 @@ constexpr int kMaxDepth = 32;
 constexpr size_t kMaxItems = 1u << 20;
 constexpr int kMaxObjects = 10'000'000;
 constexpr size_t kMaxStream = size_t{64} << 20;
+constexpr size_t kMaxEntries = 2'000'000;            // cross-reference entries kept, all sections together
+constexpr size_t kMaxInflated = size_t{256} << 20;   // stream data inflated, all streams together
 
 bool IsWhite(char c) { return c == 0 || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' '; }
 bool IsDelim(char c) {
@@ -327,6 +329,7 @@ bool File::Open(std::string_view bytes) {
   xref_.clear();
   objStreams_.clear();
   sections_ = 0;
+  inflated_ = 0;
   if (bytes.size() < 32 || bytes.substr(0, 5) != "%PDF-") return false;
   const size_t tail = bytes.size() > 4096 ? bytes.size() - 4096 : 0;
   const size_t sx = bytes.rfind("startxref");
@@ -367,6 +370,7 @@ bool File::ReadTable(size_t& at, Obj& trailer) {
         e.b = static_cast<uint32_t>(std::clamp(gen, 0ll, 65535ll));
       }
       ++at;
+      if (local.size() >= kMaxEntries) return false;
       local.emplace(static_cast<int>(first + i), e);
     }
   }
@@ -443,7 +447,8 @@ bool File::StreamData(const Obj& stream, std::string_view source, std::string& o
   if (!filter) {
     out.assign(raw);
   } else if (filter->IsName("FlateDecode")) {
-    if (!Inflate(raw, out, kMaxStream)) return false;
+    if (inflated_ >= kMaxInflated || !Inflate(raw, out, std::min(kMaxStream, kMaxInflated - inflated_))) return false;
+    inflated_ += out.size();
   } else {
     return false;
   }
@@ -527,6 +532,7 @@ bool File::ReadXrefStream(const Obj& stream, std::string_view data) {
         e.a = a;
         e.b = static_cast<uint32_t>(std::min<uint64_t>(b, UINT32_MAX));
       }
+      if (xref_.size() >= kMaxEntries) return false;
       xref_.emplace(static_cast<int>(first + i), e);
     }
   }

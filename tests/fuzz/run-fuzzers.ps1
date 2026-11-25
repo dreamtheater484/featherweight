@@ -81,6 +81,8 @@ $all = [ordered]@{
   fuzz_timing  = @{ Seeds = @("$seeds\timing", "$regressions\timing"); MaxLen = 65536 }
   # PowerPoint 97-2003 presentations (P3): every .ppt converts to a .pptx that opens, passes the check and reads, or is refused.
   fuzz_ppt     = @{ Seeds = @("$seeds\ppt", "$regressions\ppt"); MaxLen = 131072 }
+  # PDF structure under signing (F1): objects write back as read; a signature's update reads again, its byte range exact.
+  fuzz_pdfpages = @{ Seeds = @("$seeds\pdf", "$regressions\pdfpages"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
