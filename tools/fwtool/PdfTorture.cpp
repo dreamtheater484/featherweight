@@ -839,4 +839,69 @@ int RunPdfTorture(const Options& options) {
   return totalFailures ? 1 : 0;
 }
 
+// fwtool pdf-ocr --out DIR: Recognize text on every page that needs it, as the PDF tab's Recognize text
+// does (pdftools::Editor::Recognize: Windows' OCR, an invisible text layer), each PDF saved into DIR
+// under its own name through the tab's safe save. tests\pdf\ocr-accuracy.ps1 reads the text back.
+int RunPdfOcr(const Options& options) {
+#ifdef FW_HAVE_PDFTOOLS
+  std::string error;
+  if (!InitPdfium(error)) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+  if (options.outDir.empty()) {
+    std::fprintf(stderr, "pdf-ocr needs --out DIR.\n");
+    return 2;
+  }
+  std::vector<std::string> passwords;
+  for (size_t a = 0, s = 0; a <= options.password.size(); ++a)
+    if (a == options.password.size() || options.password[a] == L',') {
+      if (a > s) passwords.push_back(fw::WideToUtf8(options.password.substr(s, a - s)));
+      s = a + 1;
+    }
+  std::vector<fs::path> files;
+  for (const auto& p : options.inputs) {
+    std::error_code ec;
+    if (fs::is_directory(p, ec)) {
+      for (const auto& e : fs::directory_iterator(p, ec))
+        if (e.is_regular_file() && fw::ToLower(e.path().extension().wstring()) == L".pdf") files.push_back(e.path());
+    } else files.push_back(p);
+  }
+  std::sort(files.begin(), files.end());
+  int failed = 0;
+  long long allWords = 0;
+  for (const auto& f : files) {
+    Work work;
+    std::string why;
+    if (!work.Open(ReadAll(f), passwords, why)) {
+      std::printf("[FAIL] %s: %s\n", Display(f).c_str(), why.c_str());
+      ++failed;
+      continue;
+    }
+    int words = 0;
+    const pdfocr::Status st = work.Editor().Recognize({}, words);
+    if (st != pdfocr::Status::Ok) {
+      std::printf("[FAIL] %s: OCR %s\n", Display(f).c_str(), st == pdfocr::Status::NoEngine ? "isn't on this PC" : st == pdfocr::Status::NoLanguage ? "has no language here" : "failed on a page");
+      ++failed;
+      continue;
+    }
+    std::string bytes;
+    bool incremental = false;
+    if (!work.SaveTo(options.outDir / f.filename(), false, bytes, incremental, why)) {
+      std::printf("[FAIL] %s: %s\n", Display(f).c_str(), why.c_str());
+      ++failed;
+      continue;
+    }
+    allWords += words;
+    std::printf("[OK] %s: %d words\n", Display(f).c_str(), words);
+  }
+  std::printf("%zu PDFs, %lld words written, %d failed\n", files.size(), allWords, failed);
+  return failed ? 1 : 0;
+#else
+  (void)options;
+  std::fprintf(stderr, "pdf-ocr goes through f1-pdf's tools (fwpdftools), which this build hasn't.\n");
+  return 2;
+#endif
+}
+
 }  // namespace fwtool

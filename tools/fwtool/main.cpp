@@ -137,6 +137,11 @@ constexpr const char* kUsage =
     "      --pfx: every third round signed with it (in memory only), saved, changed and saved again; the\n"
     "      signed revision must stay intact (DIR/signed, with signatures.json for pyHanko).\n"
     "      DIR/saved, DIR/extracted, DIR/refused, DIR/signed, DIR/repro.\n"
+#ifdef FW_HAVE_PDFTOOLS
+    "  fwtool pdf-ocr --out DIR [--password P,Q] <pdf or folder>...\n"
+    "      Recognize text on every scanned page, as the PDF tab does (f1-pdf's pdftools::Editor, Windows'\n"
+    "      OCR), each PDF saved into DIR under its own name (F1, f1-gate's OCR accuracy run).\n"
+#endif
     "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
     "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
@@ -466,6 +471,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   if (command == L"pdf-valid") return fwtool::RunPdfValid(options);
   if (command == L"pdf-torture") return fwtool::RunPdfTorture(options);
+  if (command == L"pdf-ocr") return fwtool::RunPdfOcr(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   if (command == L"slides") return fwtool::RunSlides(options);
   if (command == L"timing") return fwtool::RunTiming(options);
