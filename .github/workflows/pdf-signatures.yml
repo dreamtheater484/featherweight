@@ -2,12 +2,16 @@ name: pdf-signatures
 
 # F1, f1-gate (docs/f1-plan.md, gate row "PDF tools"): signed PDFs through an independent validator,
 # pyHanko, on a runner (nothing is installed on the reference PC). Every signature valid, every change
-# after signing caught. The samples are made here (tests/pdf/make-pdf-corpus.py --only signed); the
-# app's own signed outputs join them once f1-pdf's signing is in.
+# after signing caught. Two sets: samples made here (tests/pdf/make-pdf-corpus.py --only signed), and the
+# app's own signatures: on a Windows runner, fwtool pdf-torture --pfx signs tests/pdfs through f1-pdf's
+# signing (pdftools::Editor, the test signer loaded in memory), changes each signed file once more and
+# saves it again, and pyHanko then judges each as signatures.json says (valid; changed after signing).
+# Until fwtool is built with f1-pdf's tools, that job signs nothing and says so.
 # pyHanko and its dependencies are pinned by version and hash in tests/pdf/pyhanko-requirements.txt;
 # until that file exists, the job installs the pinned version and writes the lock as an artifact.
 on:
   push:
+    branches: [main, claude/f1-int, claude/f1-gate, claude/f1-pdf]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +23,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  app-signatures:
+    runs-on: windows-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+
+      - name: Build fwtool
+        run: |
+          cmake -S . -B build
+          cmake --build build --config Release --target fwtool
+
+      - name: Sign with the app's own signing (fwtool pdf-torture --pfx)
+        id: sign
+        shell: pwsh
+        run: |
+          $pfx = "tests/pdfs/signing/test-signer.pfx"
+          if (-not (Test-Path $pfx)) { Write-Host "No test signer yet (f1-pdf's tests/pdfs/signing): nothing signed"; "signed=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          & build/tools/fwtool/Release/fwtool.exe pdf-torture --seed 1 --edits 6 --rounds 3 --password "featherweight,secret" --pfx $pfx --pfx-password featherweight --ops rotate --out build/app-signed tests/pdfs
+          $code = $LASTEXITCODE
+          if (Test-Path build/app-signed/signed/signatures.json) {
+            Copy-Item tests/pdfs/signing/test-signer.crt build/app-signed/signed/
+            "signed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "fwtool signed nothing (built without f1-pdf's tools?)"
+            "signed=false" >> $env:GITHUB_OUTPUT
+          }
+          exit $code
+
+      - name: Upload the app's signed files
+        if: ${{ !cancelled() && steps.sign.outputs.signed == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-signed
+          path: build/app-signed/signed/
+
   pyhanko-signatures:
+    needs: app-signatures
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +81,7 @@ jobs:
           if [ -f tests/pdf/pyhanko-requirements.txt ]; then
             python -m pip install --require-hashes --no-deps -r tests/pdf/pyhanko-requirements.txt
           else
-            python -m pip install "pyHanko==0.25.1"
+            python -m pip install "pyHanko==0.38.2"
             python -m pip freeze | grep -iv '^pip==' > freeze.txt
             mkdir -p wheels && python -m pip download --no-deps -r freeze.txt -d wheels
             python -I tests/pdf/lock-wheels.py wheels pyhanko-requirements.txt
@@ -49,8 +97,18 @@ jobs:
       - name: Make the signed samples
         run: python -I tests/pdf/make-pdf-corpus.py --only signed --out build/pdf-signed
 
+      - name: The app's signed files
+        if: needs.app-signatures.outputs.signed == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: app-signed
+          path: build/app-signed
+
       - name: Validate with pyHanko
-        run: python -I tests/pdf/validate-signatures.py --dir build/pdf-signed --json build/pdf-signed/validation.json
+        run: |
+          dirs="--dir build/pdf-signed"
+          if [ -f build/app-signed/signatures.json ]; then dirs="$dirs --dir build/app-signed"; fi
+          python -I tests/pdf/validate-signatures.py $dirs --json build/pdf-signed/validation.json
 
       - name: Upload the validation
         if: always()
