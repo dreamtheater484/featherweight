@@ -113,15 +113,16 @@ TEST(Hyphenation_OtherLanguages) {
   // Every shipped set loads and hyphenates a long word of its language.
   const std::pair<const wchar_t*, const wchar_t*> words[] = {
       {L"es", L"silabación"}, {L"it", L"sillabazione"}, {L"pt-BR", L"hifenização"}, {L"da", L"orddeling"},
-      {L"sv", L"avstavning"}, {L"nb", L"orddeling"},    {L"nn-NO", L"orddeling"},   {L"fi", L"tavutus"},
-      {L"en-GB", L"hyphenation"}};
+      {L"nb", L"orddeling"},  {L"nn-NO", L"orddeling"},   {L"en-GB", L"hyphenation"}};
   for (const auto& [tag, word] : words) {
     const Hyphenator* h = Hyphenator::For(tag);
     CHECK(h != nullptr);
     if (h) CHECK(!h->Points(word).empty());
   }
   CHECK(Hyphenator::For(L"pl-PL") == nullptr);
-  CHECK(Hyphenator::Languages().size() == 12);
+  // Swedish and Finnish aren't shipped (F1): their patterns' licences ask for the files as they are.
+  CHECK(Hyphenator::For(L"sv-SE") == nullptr && Hyphenator::For(L"fi-FI") == nullptr);
+  CHECK(Hyphenator::Languages().size() == 10);
 }
 
 TEST(Hyphenation_PatternText) {
@@ -620,20 +621,19 @@ TEST(Text_OfficeFontsGetMeasuredSubstitutes) {
   // height measured on Word's renders (draw/FontSubstitutes.h), and the banner lists it. A PC with
   // Aptos installed as a font of its own draws it.
   Fonts fonts;
-  if (fonts.Installed(L"Aptos") || !fonts.Installed(L"Segoe UI")) return;
   const std::span<const draw::FontSubstitute> subs = draw::BuiltInSubstitutes(L"aptos");
   CHECK(!subs.empty());
-  if (subs.empty()) return;
-  CHECK(std::wstring(subs[0].family) == L"Segoe UI");
-  CHECK(fonts.Resolve(L"Aptos") == L"Segoe UI");
+  if (subs.empty() || fonts.Installed(L"Aptos") || !fonts.Installed(subs[0].family)) return;
+  const std::wstring windows = subs[0].family;  // Arial, at its measured width (Windows has it)
+  CHECK(fonts.Resolve(L"Aptos") == windows);
   CHECK_EQ(fonts.Substitutions().size(), 1u);
   const Face* face = fonts.FaceFor(L"Aptos", false, false);
-  const Face* own = fonts.FaceFor(L"Segoe UI", false, false);
+  const Face* own = fonts.FaceFor(windows, false, false);
   CHECK(face != nullptr && own != nullptr);
   if (!face || !own) return;
-  CHECK(face->Family() == L"Segoe UI");
+  CHECK(face->Family() == windows);
   CHECK_NEAR(face->WidthScale(), subs[0].scale, 1e-6);
-  CHECK_NEAR(own->WidthScale(), 1.0, 1e-6);  // Segoe UI asked for by name stays as designed
+  CHECK_NEAR(own->WidthScale(), 1.0, 1e-6);  // the family asked for by name stays as designed
   CHECK_NEAR(face->Advance(L'n', 10), own->Advance(L'n', 10) * subs[0].scale, 1e-4);
   const FontMetrics m = face->Metrics(10);
   if (subs[0].height > 0) CHECK_NEAR(m.ascent + m.descent + m.lineGap, subs[0].height * 10, 1e-3);

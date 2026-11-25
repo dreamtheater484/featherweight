@@ -1629,7 +1629,21 @@ struct Flow {
         // it) can bring it back to the page where what's before it ends, and keep-with-next the
         // page before that one too.
         bool back = false;
-        if (structure && tableRow == SIZE_MAX) {
+        // Only an edit that can change how a section starts: one at a section's first item or
+        // around a section break, or one that leaves a section break in what it changed. An Enter
+        // in a numbered item (structural for its list) is none of these, and going back to the
+        // section's start for it laid a one-section document out again from page 1 before the
+        // caret's page could show: 233 ms in long-300.docx at 4.0's gate (F1).
+        bool sectionStart = false;
+        if (structure && tableRow == SIZE_MAX && itemFrom < f.bodyItems) {
+          const uint32_t sec = f.items[itemFrom].section;
+          sectionStart = (itemFrom > 0 && f.items[itemFrom - 1].section != sec) ||
+                         (itemTo < f.bodyItems && f.items[itemTo].section != sec) ||
+                         (itemTo > itemFrom && f.items[itemTo - 1].section != sec);
+          for (uint32_t p = first; p < first + std::max<uint32_t>(added, 1) && p < doc.Paragraphs().size() && !sectionStart; ++p)
+            sectionStart = doc.Para(p).story == story && static_cast<bool>(doc.ParaNode(p).Child(Name("pPr")).Child(Name("sectPr")));
+        }
+        if (sectionStart) {
           // The first page that starts with what's before it laid out, or in the section it's in
           // (the flow enters a section before its first item).
           const uint32_t sec = itemFrom < f.items.size() ? f.items[itemFrom].section : kNone;
