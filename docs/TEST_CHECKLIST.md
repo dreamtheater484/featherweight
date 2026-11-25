@@ -498,6 +498,8 @@ Measured on the gate code, p1-int `ea3fe681` (later P1 commits are docs and the 
 
 ## Editing presentations (P2)
 
+*Roy, 2026-11-25, with the 4.0 check folder (`Featherweight-4.0-check`, exe `57930657`) ready for P2, R1 and P3: "Ship it". Released as the 4.0 beta.*
+
 Check next to PowerPoint, on copies (never on a deck you need). Decks to edit: the public set in `tests\office\presentations`, `tests\office\show\bench50.pptx` (50 slides), and a few of your own and of the real-world corpus (`FeatherweightCorpus\pptx\<kind>\`). After each part, save, open the copy in PowerPoint: no repair prompt, and it looks as Featherweight shows it.
 
 ### Slides

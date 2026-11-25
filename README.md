@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/dreamtheater484/featherweight/releases/latest"><b>⬇ Download for Windows</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/dreamtheater484/featherweight/releases/tag/v3.0.0"><b>Try the 3.0 beta with documents and spreadsheets</b></a>
+  <a href="https://github.com/dreamtheater484/featherweight/releases/tag/v4.0.0"><b>Try the 4.0 beta with documents, spreadsheets and presentations</b></a>
 </p>
 
 ![Featherweight with a highlight, a note preview and note markers](docs/screenshots/hero.png)
@@ -29,11 +29,11 @@ Featherweight opens PDFs instantly, fills in and saves forms, lets you highlight
 and prints. Then it stays out of your way. No account, no ads, no telemetry, no background services,
 and a 0.7 MB program.
 
-## Beta: Word documents and spreadsheets (3.0)
+## Beta: Word documents, spreadsheets and presentations (4.0)
 
-[Featherweight 3.0 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v3.0.0) opens and edits
-Word documents and Excel workbooks, with its own engine. It doesn't use Word, Excel or any Office component, and it's
-still one small program (10 MB). It's a beta: try it on copies of files that matter. The stable download above stays
+[Featherweight 4.0 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v4.0.0) opens and edits
+Word documents, Excel workbooks and PowerPoint presentations, with its own engine and a ribbon placed as in Office.
+It doesn't use Word, Excel, PowerPoint or any Office component, and it's still one small program (13 MB). It's a beta: try it on copies of files that matter. The stable download above stays
 the PDF reader.
 
 | Start screen: new documents and templates | Charts, as Word draws them |
