@@ -553,7 +553,7 @@ int RunPdfTorture(const Options& options) {
   // Inserted whole, as Insert and Merge do: the small ones the tools take pages from.
   std::vector<const Doc*> donors;
   for (const auto& d : docs)
-    if (d->password.empty() && d->sigs.size() <= 12 && Insertable(*d)) donors.push_back(d.get());
+    if (d->password.empty() && d->sigs.size() <= 12 && d->bytes.size() <= (4u << 20) && Insertable(*d)) donors.push_back(d.get());
 
   const unsigned seed = options.seed ? options.seed : 1;
   const int edits = std::max(1, options.edits);
@@ -622,6 +622,9 @@ int RunPdfTorture(const Options& options) {
       for (int i = 0; i < static_cast<int>(d->sigs.size()); ++i) model.push_back({d.get(), i, d->sigs[static_cast<size_t>(i)].rot});
       std::vector<std::string> ops;
       int extracts = 0;
+      // What inserts have added so far: each adds a whole PDF (and PDFium copies its resources each time), so
+      // a round stops inserting at 32 MB more than the original, or the run's memory and time grow without end.
+      size_t inserted = 0;
       for (int e = 0; e < edits; ++e) {
         const int n = static_cast<int>(model.size());
         // --ops: only these kinds (rotate, delete, move, insert, stamp, ocr, extract, split), to find which one fails.
@@ -666,7 +669,7 @@ int RunPdfTorture(const Options& options) {
           for (int i : idx) list += (list.empty() ? "" : ",") + std::to_string(i + 1);
           ops.push_back("move " + list + " before " + std::to_string(gap + 1));
         } else if (kind == "insert") {  // another PDF's pages (merge)
-          if (donors.empty() || n > 600) continue;
+          if (donors.empty() || n > 600 || inserted > (32u << 20)) continue;
           const Doc* from = donors[rng() % donors.size()];
           const int at = static_cast<int>(rng() % static_cast<unsigned>(n + 1));
           const int got = work.Insert(*from, at);
@@ -675,6 +678,7 @@ int RunPdfTorture(const Options& options) {
             continue;
           }
           for (int j = 0; j < got; ++j) model.insert(model.begin() + at + j, PageRef{from, j, from->sigs[static_cast<size_t>(j)].rot});
+          inserted += from->bytes.size();
           ops.push_back("insert " + fw::WideToUtf8(from->path.filename().wstring()) + " at " + std::to_string(at + 1));
         } else if (kind == "stamp") {  // a drawn signature
           const int i = randomPage();
@@ -837,6 +841,71 @@ int RunPdfTorture(const Options& options) {
               ocrWords, ocrPages, ocrNote.empty() ? "" : ", ", ocrNote.c_str(), uneditedSame, uneditedTried);
   if (!options.jsonOut.empty()) Write(options.jsonOut, json);
   return totalFailures ? 1 : 0;
+}
+
+// fwtool pdf-ocr --out DIR: Recognize text on every page that needs it, as the PDF tab's Recognize text
+// does (pdftools::Editor::Recognize: Windows' OCR, an invisible text layer), each PDF saved into DIR
+// under its own name through the tab's safe save. tests\pdf\ocr-accuracy.ps1 reads the text back.
+int RunPdfOcr(const Options& options) {
+#ifdef FW_HAVE_PDFTOOLS
+  std::string error;
+  if (!InitPdfium(error)) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+  if (options.outDir.empty()) {
+    std::fprintf(stderr, "pdf-ocr needs --out DIR.\n");
+    return 2;
+  }
+  std::vector<std::string> passwords;
+  for (size_t a = 0, s = 0; a <= options.password.size(); ++a)
+    if (a == options.password.size() || options.password[a] == L',') {
+      if (a > s) passwords.push_back(fw::WideToUtf8(options.password.substr(s, a - s)));
+      s = a + 1;
+    }
+  std::vector<fs::path> files;
+  for (const auto& p : options.inputs) {
+    std::error_code ec;
+    if (fs::is_directory(p, ec)) {
+      for (const auto& e : fs::directory_iterator(p, ec))
+        if (e.is_regular_file() && fw::ToLower(e.path().extension().wstring()) == L".pdf") files.push_back(e.path());
+    } else files.push_back(p);
+  }
+  std::sort(files.begin(), files.end());
+  int failed = 0;
+  long long allWords = 0;
+  for (const auto& f : files) {
+    Work work;
+    std::string why;
+    if (!work.Open(ReadAll(f), passwords, why)) {
+      std::printf("[FAIL] %s: %s\n", Display(f).c_str(), why.c_str());
+      ++failed;
+      continue;
+    }
+    int words = 0;
+    const pdfocr::Status st = work.Editor().Recognize({}, words);
+    if (st != pdfocr::Status::Ok) {
+      std::printf("[FAIL] %s: OCR %s\n", Display(f).c_str(), st == pdfocr::Status::NoEngine ? "isn't on this PC" : st == pdfocr::Status::NoLanguage ? "has no language here" : "failed on a page");
+      ++failed;
+      continue;
+    }
+    std::string bytes;
+    bool incremental = false;
+    if (!work.SaveTo(options.outDir / f.filename(), false, bytes, incremental, why)) {
+      std::printf("[FAIL] %s: %s\n", Display(f).c_str(), why.c_str());
+      ++failed;
+      continue;
+    }
+    allWords += words;
+    std::printf("[OK] %s: %d words\n", Display(f).c_str(), words);
+  }
+  std::printf("%zu PDFs, %lld words written, %d failed\n", files.size(), allWords, failed);
+  return failed ? 1 : 0;
+#else
+  (void)options;
+  std::fprintf(stderr, "pdf-ocr goes through f1-pdf's tools (fwpdftools), which this build hasn't.\n");
+  return 2;
+#endif
 }
 
 }  // namespace fwtool

@@ -1,0 +1,44 @@
+name: pdfium-update
+
+# PDFium's update routine (f1-ship): once a week, checks bblanchon/pdfium-binaries for a build newer than the one
+# cmake/FetchPdfium.cmake pins, and opens an issue when there is one (one issue per build). PDFium carries V8 in its
+# v8 build, so this covers V8 too. scripts/update-pdfium.ps1 then pins the new build.
+on:
+  schedule:
+    - cron: '23 5 * * 1'  # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check for a newer PDFium build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/update-pdfium.ps1 -Check -Json check.json
+          $c = Get-Content check.json | ConvertFrom-Json
+          if (-not $c.newer) { exit 0 }
+          $title = "PDFium $($c.latest) is out (pinned: $($c.pinned))"
+          $open = gh issue list --repo "${{ github.repository }}" --state open --search "in:title `"PDFium $($c.latest) is out`"" --json number | ConvertFrom-Json
+          if ($open.Count) { Write-Host "Already open: #$($open[0].number)"; exit 0 }
+          $body = @"
+          bblanchon/pdfium-binaries published PDFium $($c.latest) ($($c.published)): $($c.url)
+
+          Featherweight pins $($c.pinned) in ``cmake/FetchPdfium.cmake``. To update (the standard and V8 builds, x64 and ARM64):
+
+          ``````powershell
+          scripts\update-pdfium.ps1 -Build $($c.latest)
+          ``````
+
+          Then build, run ctest and the PDF checks, read the release's notes for security fixes, and ship it in the next release.
+          "@
+          gh issue create --repo "${{ github.repository }}" --title $title --body $body

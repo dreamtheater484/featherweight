@@ -8,7 +8,9 @@
 #include "Commands.h"
 #include "pdf/PdfText.h"
 #include "FileAssoc.h"
+#include "Policy.h"
 #include "core/Lang.h"
+#include "core/Strings.h"
 
 using namespace gfx;
 
@@ -51,6 +53,9 @@ constexpr AppCommand kAppCommands[] = {
     {CmdShowRecentFiles, N_(L"Show recent files"), L""},
     {CmdToggleAutoUpdate, N_(L"Update automatically"), L""},
     {CmdCheckUpdates, N_(L"Check for updates now"), L""},
+    {CmdUpdateBeta, N_(L"Get beta versions"), L""},  // f1-ship
+    {CmdRollBackUpdate, N_(L"Go back to the previous version"), L""},
+    {CmdScriptEngine, N_(L"Get the form script engine"), L""},
     {CmdMakeDefault, N_(L"Make Featherweight the default PDF app"), L""},
     {CmdHelp, N_(L"Help"), L"F1"},  // f1-trust
     {CmdKnownIssues, N_(L"Known issues"), L""},
@@ -101,6 +106,10 @@ CommandState App::QueryCommand(int cmd) {
       if (code == lang.code)
         l.label = cmd == CmdLanguageWindows ? Fmt(T(L"Windows' language ({0})"), {lang.name}) : lang.name;
     l.checked = cmd == CmdLanguageWindows ? settings_.language.empty() : settings_.language == code;
+    if (const std::wstring& set = policy::Get().language; !set.empty()) {  // f1-ship: an administrator chose it
+      l.enabled = false;
+      l.checked = cmd != CmdLanguageWindows && fw::EqualsNoCase(code, set);
+    }
     return l;
   }
   if (!own) return s;
@@ -146,7 +155,13 @@ CommandState App::QueryCommand(int cmd) {
                                            : settings_.autoCorrect;
       s.visible = ready && v->Kind() == TabKind::Document;
       break;
-    case CmdToggleAutoUpdate: s.checked = settings_.autoUpdate; break;
+    case CmdToggleAutoUpdate:  // f1-ship: off by policy, and left to the Store inside a package
+    case CmdCheckUpdates:
+    case CmdUpdateBeta:
+    case CmdRollBackUpdate:
+      UpdateCommandState(cmd, s);
+      break;
+    case CmdScriptEngine: s.visible = scriptEngineOffered_; break;
     case CmdClearRecent: {
       // Pinned files stay.
       const bool pinned = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return r.pinned; });

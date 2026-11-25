@@ -16,6 +16,7 @@
 #include "Share.h"
 #include "pdf/PdfText.h"
 #include "FileAssoc.h"
+#include "Policy.h"
 #include "UserTemplates.h"
 #include "Util.h"
 #include "Version.h"
@@ -85,8 +86,10 @@ int App::Run(const AppOptions& opts) {
   theme::Init(themeSetting);
   // The interface's language (f1-lang): --lang, else File > Options' choice, else Windows' display
   // language. Snapshots and the widget gallery (the screen tests) are in English unless --lang names one.
+  // f1-ship: an administrator's Language policy (packaging/admx) comes before the user's choice.
   fw::lang::Init(!opts.language.empty() ? opts.language
                  : snapshot_ || opts.widgetGallery ? std::wstring(L"en")
+                 : !policy::Get().language.empty() ? policy::Get().language
                                                    : settings_.language);
   if (!opts.showPath.empty())
     return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture, opts.showWindowed, opts.showPresenter,
@@ -1519,9 +1522,15 @@ void App::Execute(int cmd) {
       case kActUpdate:
         manualUpdateCheck_ = true;
         banner_.Show(BannerKind::Info, T(L"Downloading the update…"));
-        updater_.Start(hwnd_, true);
+        {
+          Updater::Options options = UpdateOptions(true);
+          options.skippedVersion.clear();  // asked for: installed even if it was skipped
+          updater_.Start(hwnd_, options);
+        }
         break;
       case kActDownload: util::OpenExternalLink(bannerUpdateUrl_); break;
+      case kActScriptEngine: GetScriptEngine(); break;  // f1-ship
+      case kActScriptEngineLater: break;
       case kActSkip:
         settings_.skippedVersion = bannerUpdateVersion_;
         settings_.Save();
@@ -1665,6 +1674,13 @@ void App::Execute(int cmd) {
       settings_.autoUpdate = !settings_.autoUpdate;
       settings_.Save();
       break;
+    case CmdUpdateBeta:  // f1-ship
+      settings_.updateChannel = settings_.updateChannel == L"beta" ? L"" : L"beta";
+      settings_.lastUpdateCheck = 0;  // the next check looks at the other channel
+      settings_.Save();
+      break;
+    case CmdRollBackUpdate: RollBackUpdate(); break;
+    case CmdScriptEngine: GetScriptEngine(); break;
     case CmdToggleSpelling:
       settings_.spelling = !settings_.spelling;
       settings_.Save();
@@ -1839,6 +1855,8 @@ bool App::FillWindowMenu(int which, HMENU m) {
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, T(L"Delete backups"));
     AppendItem(m, CmdToggleAutoUpdate, T(L"Update automatically"), true, settings_.autoUpdate);
     AppendItem(m, CmdCheckUpdates, T(L"Check for updates now"));
+    if (QueryCommand(CmdUpdateBeta).visible) AppendItem(m, CmdUpdateBeta, T(L"Get beta versions"), true, QueryCommand(CmdUpdateBeta).checked);
+    if (QueryCommand(CmdRollBackUpdate).visible) AppendItem(m, CmdRollBackUpdate, QueryCommand(CmdRollBackUpdate).label.c_str());
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, T(L"Make Featherweight the default PDF app"));
     AppendSeparator(m);
     HMENU helpMenu = CreatePopupMenu();  // f1-trust
@@ -2504,6 +2522,7 @@ void App::ViewInvalidate() {
 
 void App::ViewStateChanged() {
   UpdateAutosaveTimer();
+  MaybeOfferScriptEngine();
   if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -2651,18 +2670,35 @@ void App::MakeDefaultApp(fw::FileKind kind) {
 
 void App::MaybeCheckForUpdates(bool manual) {
   if (snapshot_ || updater_.Busy()) return;
+  // f1-ship: an administrator's policy turns updates off; inside an MSIX package the Store updates the app.
+  if (!updater::Allowed(policy::Get(), Updater::InPackage())) {
+    if (manual)
+      banner_.Show(BannerKind::Info, policy::Get().updatesOff ? T(L"Updates are turned off by your organization.")
+                                                              : T(L"The Microsoft Store keeps Featherweight up to date."), {}, 6000);
+    return;
+  }
   int64_t now = util::UnixNow();
   if (!manual && now - settings_.lastUpdateCheck < 24 * 3600) return;
   settings_.lastUpdateCheck = now;
   settings_.Save();
   manualUpdateCheck_ = manual;
   if (manual) banner_.Show(BannerKind::Info, T(L"Checking for updates…"));
-  updater_.Start(hwnd_, settings_.autoUpdate);
+  updater_.Start(hwnd_, UpdateOptions(settings_.autoUpdate));
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::OnUpdaterDone() {
   Updater::Result r = updater_.Get();
+  if (r.component) {  // f1-ship: the script engine's download
+    if (r.status == Updater::Status::Installed) {
+      scriptEngineOffered_ = false;
+      banner_.Show(BannerKind::Success, T(L"The script engine is installed. Restart Featherweight to run the forms’ scripts."), {}, 8000);
+    } else {
+      banner_.Show(BannerKind::Error, Fmt(T(L"The script engine wasn’t installed: {0}"), {r.error}), {}, 8000);
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
   bannerUpdateUrl_ = r.pageUrl;
   bannerUpdateVersion_ = r.version;
   switch (r.status) {
@@ -2670,6 +2706,7 @@ void App::OnUpdaterDone() {
       if (manualUpdateCheck_) banner_.Show(BannerKind::Success, T(L"Featherweight is up to date."), {}, 3000);
       break;
     case Updater::Status::Installed:
+      previousVersionRead_ = false;  // previous\ changed
       if (manualUpdateCheck_)
         banner_.Show(BannerKind::Success,
                      Fmt(T(L"Featherweight {0} is ready. It will be used the next time you start Featherweight."), {r.version}),
@@ -2693,6 +2730,92 @@ void App::OnUpdaterDone() {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+// ---- f1-ship: update options, policy and rollback ----
+
+Updater::Options App::UpdateOptions(bool install) const {
+  Updater::Options o;
+  o.install = install;
+  const std::wstring& channel = policy::Get().updateChannel.empty() ? settings_.updateChannel : policy::Get().updateChannel;
+  o.beta = channel == L"beta";
+  o.skippedVersion = settings_.skippedVersion;
+  return o;
+}
+
+const std::wstring& App::PreviousVersion() {
+  if (!previousVersionRead_) {
+    previousVersion_ = Updater::PreviousVersion();
+    previousVersionRead_ = true;
+  }
+  return previousVersion_;
+}
+
+void App::UpdateCommandState(int cmd, CommandState& s) {
+  const policy::Values& p = policy::Get();
+  if (Updater::InPackage()) {  // the Store updates the app
+    s.visible = false;
+    return;
+  }
+  switch (cmd) {
+    case CmdToggleAutoUpdate:
+      s.checked = settings_.autoUpdate && !p.updatesOff;
+      s.enabled = !p.updatesOff;
+      break;
+    case CmdCheckUpdates: s.enabled = !p.updatesOff; break;
+    case CmdUpdateBeta:
+      s.checked = (p.updateChannel.empty() ? settings_.updateChannel : p.updateChannel) == L"beta";
+      s.enabled = !p.updatesOff && p.updateChannel.empty();
+      break;
+    case CmdRollBackUpdate:
+      s.visible = !PreviousVersion().empty() && Updater::CanSelfUpdate();
+      if (s.visible) s.label = Fmt(T(L"Go back to version {0}"), {PreviousVersion()});
+      break;
+  }
+  if (s.visible && !s.enabled) s.label = Fmt(T(L"{0} (set by your organization)"), {s.label});
+}
+
+void App::MaybeOfferScriptEngine() {
+  if (scriptEngineAsked_ || snapshot_ || sandbox_) return;
+  PdfView* pdf = ActivePdf();
+  if (!pdf || !pdf->Ready() || !pdf->Doc() || !pdf->Doc()->NeedsScriptEngine()) return;
+  scriptEngineAsked_ = true;
+  // Nothing goes to the network unless the user agrees, and not at all where updates are off or managed.
+  if (!updater::Allowed(policy::Get(), Updater::InPackage()) || !Updater::CanSelfUpdate()) return;
+  scriptEngineOffered_ = true;
+  banner_.Show(BannerKind::Info,
+               T(L"This PDF’s form has scripts (calculations and checks) that need Featherweight’s optional script "
+                 L"engine, a 30 MB download from GitHub."),
+               {{kActScriptEngine, T(L"Get the script engine"), true}, {kActScriptEngineLater, T(L"Not now")}});
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::GetScriptEngine() {
+  if (updater_.Busy()) return;
+  banner_.Show(BannerKind::Info, T(L"Downloading the script engine…"));
+  updater_.StartScriptEngine(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::RollBackUpdate() {
+  const std::wstring to = PreviousVersion();
+  if (to.empty()) return;
+  const std::wstring question = Fmt(T(L"Featherweight {0} will be used from the next start. Automatic updates turn off, so it "
+                                       L"stays; you can turn them on again in Options."), {to});
+  if (MessageBoxW(hwnd_, question.c_str(), T(L"Go back to the previous version?"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+    return;
+  std::wstring error;
+  if (!Updater::RollBack(&error)) {
+    banner_.Show(BannerKind::Error, error, {}, 6000);
+    return;
+  }
+  // Kept on this version: even an earlier Featherweight (whose updater installs whatever is newer when updating
+  // automatically) only offers this version again, and not while it's skipped.
+  settings_.autoUpdate = false;
+  settings_.skippedVersion = FW_VERSION_WSTRING;
+  settings_.Save();
+  previousVersionRead_ = false;
+  banner_.Show(BannerKind::Success, Fmt(T(L"Featherweight {0} will be used the next time you start Featherweight."), {to}), {}, 8000);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
 void App::ShowAbout() {
   std::wstring content = Fmt(T(L"Version {0}"), {FW_VERSION_WSTRING}) + L"\n\n" +
                          T(L"A light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.") +
@@ -3036,7 +3159,7 @@ void App::RunScript(const std::wstring& script) {
       if (!arg.empty() && iswdigit(arg[0])) Execute(_wtoi(arg.c_str()));  // any command by its id
     } else if (op == L"updatecheck") {
       if (!arg.empty()) Updater::SetReleaseUrlForTesting(arg);
-      updater_.Start(hwnd_, false);
+      updater_.Start(hwnd_, Updater::Options{});
       for (int i = 0; i < 300 && updater_.Busy(); ++i) Sleep(50);
       Updater::Result r = updater_.Get();
       fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),

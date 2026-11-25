@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "packages" (f1-ship; Roy's step 1 pastes it into SignPath): the zip that
+     release.yml's package job uploads after building the packages from the signed program files: the installers
+     (Featherweight-x.y.z-Setup.exe, -Setup-arm64.exe), the MSIs and the MSIX packages. Check the MSIX element in
+     SignPath's editor when setting it up: its schema names the MSIX signing directive. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="Featherweight-*-Setup*.exe" min-matches="1" max-matches="2" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+    <msi-file-set>
+      <include path="Featherweight-*.msi" min-matches="1" max-matches="2" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </msi-file-set>
+    <appx-file-set>
+      <include path="Featherweight-*.msix" min-matches="1" max-matches="2" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </appx-file-set>
+  </zip-file>
+</artifact-configuration>
