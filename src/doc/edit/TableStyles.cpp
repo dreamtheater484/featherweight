@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "core/Lang.h"
 #include "doc/edit/TreeEdit.h"
 
 namespace fw::doc::edit {
@@ -81,7 +82,7 @@ Result ApplyTableStyle(Editor& editor, Pos at, std::string_view name) {
   if (!editor.CellAt(at)) {
     Result r;
     r.ok = false;
-    r.message = u"Put the cursor in a table first.";
+    r.message = T(u"Put the cursor in a table first.");
     return r;
   }
   std::string id;
@@ -92,10 +93,10 @@ Result ApplyTableStyle(Editor& editor, Pos at, std::string_view name) {
   if (id.empty() && !basic) {
     Result r;
     r.ok = false;
-    r.message = u"The document has no table style of that name.";
+    r.message = T(u"The document has no table style of that name.");
     return r;
   }
-  editor.BeginGroup(u"Table style");
+  editor.BeginGroup(T(u"Table style"));
   bool added = false;
   if (id.empty()) {
     // Word's definition, under a free id, based on the default table style when there is one.
@@ -108,7 +109,7 @@ Result ApplyTableStyle(Editor& editor, Pos at, std::string_view name) {
       std::string xml = "<w:style w:type=\"table\" w:styleId=\"" + id + "\"><w:name w:val=\"" + std::string(basic->name) + "\"/>";
       if (normal) xml += "<w:basedOn w:val=\"" + std::string(normal->id) + "\"/>";
       xml += BasicXml(basic->id) + "</w:style>";
-      te.Begin(u"Table style");
+      te.Begin(T(u"Table style"));
       if (te.AddXml(root, xml) == kNoElem) id.clear();
       else added = true;
       te.Reindex();
@@ -120,7 +121,7 @@ Result ApplyTableStyle(Editor& editor, Pos at, std::string_view name) {
   Result r;
   if (id.empty()) {
     r.ok = false;
-    r.message = u"This table style can't be added to the document.";
+    r.message = T(u"This table style can't be added to the document.");
   } else {
     r = editor.SetTableProps(at, PropEdit().Set("tblStyle", {{"val", id}}));
   }

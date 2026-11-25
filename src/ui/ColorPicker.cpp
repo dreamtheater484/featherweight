@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -63,12 +64,12 @@ bool SameColor(D2D1_COLOR_F a, D2D1_COLOR_F b) {
 // The five tints and shades of a theme color shown under it, lightest first, as Office does:
 // near-black gets lighter, near-white darker, everything else both.
 void Variants(D2D1_COLOR_F base, D2D1_COLOR_F out[5], const wchar_t* names[5], float* amounts = nullptr) {
-  static const wchar_t* const kLighterDarker[5] = {L"Lighter 80%", L"Lighter 60%", L"Lighter 40%", L"Darker 25%",
-                                                   L"Darker 50%"};
-  static const wchar_t* const kLighter[5] = {L"Lighter 50%", L"Lighter 35%", L"Lighter 25%", L"Lighter 15%",
-                                             L"Lighter 5%"};
-  static const wchar_t* const kDarker[5] = {L"Darker 5%", L"Darker 15%", L"Darker 25%", L"Darker 35%",
-                                            L"Darker 50%"};
+  static const wchar_t* const kLighterDarker[5] = {T(L"Lighter 80%"), T(L"Lighter 60%"), T(L"Lighter 40%"), T(L"Darker 25%"),
+                                                   T(L"Darker 50%")};
+  static const wchar_t* const kLighter[5] = {T(L"Lighter 50%"), T(L"Lighter 35%"), T(L"Lighter 25%"), T(L"Lighter 15%"),
+                                             T(L"Lighter 5%")};
+  static const wchar_t* const kDarker[5] = {T(L"Darker 5%"), T(L"Darker 15%"), T(L"Darker 25%"), T(L"Darker 35%"),
+                                            T(L"Darker 50%")};
   Hsl hsl = ToHsl(base);
   float amount[5];
   const wchar_t* const* labels;
@@ -95,14 +96,14 @@ void Variants(D2D1_COLOR_F base, D2D1_COLOR_F out[5], const wchar_t* names[5], f
 }
 
 const NamedColor kStandardColors[kColumns] = {
-    {Rgb(0xC00000), L"Dark Red"}, {Rgb(0xFF0000), L"Red"},         {Rgb(0xFFC000), L"Orange"},
-    {Rgb(0xFFFF00), L"Yellow"},   {Rgb(0x92D050), L"Light Green"}, {Rgb(0x00B050), L"Green"},
-    {Rgb(0x00B0F0), L"Light Blue"}, {Rgb(0x0070C0), L"Blue"},      {Rgb(0x002060), L"Dark Blue"},
-    {Rgb(0x7030A0), L"Purple"}};
+    {Rgb(0xC00000), N_(L"Dark Red")}, {Rgb(0xFF0000), N_(L"Red")},         {Rgb(0xFFC000), N_(L"Orange")},
+    {Rgb(0xFFFF00), N_(L"Yellow")},   {Rgb(0x92D050), N_(L"Light Green")}, {Rgb(0x00B050), N_(L"Green")},
+    {Rgb(0x00B0F0), N_(L"Light Blue")}, {Rgb(0x0070C0), N_(L"Blue")},      {Rgb(0x002060), N_(L"Dark Blue")},
+    {Rgb(0x7030A0), N_(L"Purple")}};
 
 std::wstring RgbName(D2D1_COLOR_F c) {
-  return L"Red " + std::to_wstring(Byte(c.r)) + L", green " + std::to_wstring(Byte(c.g)) + L", blue " +
-         std::to_wstring(Byte(c.b));
+  return Fmt(T(L"Red {0}, green {1}, blue {2}"),
+             {std::to_wstring(Byte(c.r)), std::to_wstring(Byte(c.g)), std::to_wstring(Byte(c.b))});
 }
 
 void HoverTo(Anim& a, bool on) {
@@ -117,11 +118,11 @@ void HoverTo(Anim& a, bool on) {
 ColorPalette::ColorPalette() : theme(DefaultTheme()) {}
 
 std::vector<NamedColor> ColorPalette::DefaultTheme() {
-  return {{Rgb(0xFFFFFF), L"White, Background 1"}, {Rgb(0x000000), L"Black, Text 1"},
-          {Rgb(0xE7E6E6), L"Light Gray, Background 2"}, {Rgb(0x44546A), L"Blue-Gray, Text 2"},
-          {Rgb(0x4472C4), L"Blue, Accent 1"}, {Rgb(0xED7D31), L"Orange, Accent 2"},
-          {Rgb(0xA5A5A5), L"Gray, Accent 3"}, {Rgb(0xFFC000), L"Gold, Accent 4"},
-          {Rgb(0x5B9BD5), L"Blue, Accent 5"}, {Rgb(0x70AD47), L"Green, Accent 6"}};
+  return {{Rgb(0xFFFFFF), T(L"White, Background 1")}, {Rgb(0x000000), T(L"Black, Text 1")},
+          {Rgb(0xE7E6E6), T(L"Light Gray, Background 2")}, {Rgb(0x44546A), T(L"Blue-Gray, Text 2")},
+          {Rgb(0x4472C4), T(L"Blue, Accent 1")}, {Rgb(0xED7D31), T(L"Orange, Accent 2")},
+          {Rgb(0xA5A5A5), T(L"Gray, Accent 3")}, {Rgb(0xFFC000), T(L"Gold, Accent 4")},
+          {Rgb(0x5B9BD5), T(L"Blue, Accent 5")}, {Rgb(0x70AD47), T(L"Green, Accent 6")}};
 }
 
 bool ColorPalette::ThemeCell(const std::vector<NamedColor>& theme, D2D1_COLOR_F c, int& index, int& tint, int& shade) {
@@ -208,7 +209,7 @@ void ColorPalette::Layout() {
     y += kSwatch * u;
   }
   y += 9 * u;
-  cells_.push_back({kMore, 9, -1, {}, L"More colors…", RectF(left - 4 * u, y, right + 4 * u, y + kRow * u)});
+  cells_.push_back({kMore, 9, -1, {}, T(L"More colors…"), RectF(left - 4 * u, y, right + 4 * u, y + kRow * u)});
 }
 
 bool ColorPalette::IsCurrent(const Cell& cell) const {
@@ -246,7 +247,7 @@ int ColorPalette::CellAt(float x, float y) const {
 void ColorPalette::Draw(Canvas& c) {
   const Palette& p = theme::P();
   const float u = Ui();
-  static const wchar_t* const kTitles[] = {L"", L"Theme colors", L"Standard colors", L"Recent colors", L""};
+  static const wchar_t* const kTitles[] = {L"", T(L"Theme colors"), T(L"Standard colors"), T(L"Recent colors"), L""};
   for (const auto& [section, r] : headers_)
     c.Text(kTitles[section], r, p.textSecondary, 12 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
   for (size_t i = 0; i < cells_.size(); ++i) {
@@ -383,7 +384,7 @@ int ColorPalette::DescribeAsPart(uia::Tree& t, int parent, int64_t partId, bool 
   int pane = t.Add(parent, partId, UIA_PaneControlTypeId, Name(), rc);
   t[pane].layer = 2;
   int lists[4] = {-1, -1, -1, -1};
-  static const wchar_t* const kTitles[] = {L"", L"Theme colors", L"Standard colors", L"Recent colors"};
+  static const wchar_t* const kTitles[] = {L"", T(L"Theme colors"), T(L"Standard colors"), T(L"Recent colors")};
   for (size_t i = 0; i < cells_.size(); ++i) {
     const Cell& cell = cells_[i];
     const bool focused = focusCells && static_cast<int>(i) == hot_;
@@ -396,7 +397,7 @@ int ColorPalette::DescribeAsPart(uia::Tree& t, int parent, int64_t partId, bool 
       n.focusable = true;
       n.focused = focused;
       n.focus = [this, i] { hot_ = static_cast<int>(i); };
-      if (cell.section == kAutomatic && IsCurrent(cell)) n.status = L"Selected";
+      if (cell.section == kAutomatic && IsCurrent(cell)) n.status = T(L"Selected");
       continue;
     }
     int& list = lists[cell.section];
@@ -811,7 +812,7 @@ void SplitButton::OnFocus(bool focused) {
 
 std::wstring SplitButton::TooltipAt(float x, float y) const {
   if (HitPopup(x, y)) return colors ? palette_.TooltipAt(x, y) : L"";
-  return PartAt(x, y) == kArrow ? L"More options" : tooltip;
+  return PartAt(x, y) == kArrow ? T(L"More options") : tooltip;
 }
 
 void SplitButton::Describe(uia::Tree& t, int parent) {
@@ -837,7 +838,7 @@ void SplitButton::Describe(uia::Tree& t, int parent) {
   t[m].enabled = enabled;
   t[m].accelerator = keys;
   t[m].invoke = [this] { Invoke(); };
-  int a = t.Add(i, 2, UIA_ButtonControlTypeId, L"More options", ArrowRect());
+  int a = t.Add(i, 2, UIA_ButtonControlTypeId, T(L"More options"), ArrowRect());
   t[a].enabled = enabled;
   t[a].expand = popup_.open ? ExpandCollapseState_Expanded : ExpandCollapseState_Collapsed;
   t[a].doExpand = expand;

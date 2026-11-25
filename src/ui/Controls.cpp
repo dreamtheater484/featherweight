@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -1171,7 +1172,7 @@ void ComboBox::Describe(uia::Tree& t, int parent) {
     n.value = box_.Text();
     n.setValue = setValue;
   }
-  int b = t.Add(i, 2, UIA_ButtonControlTypeId, popup_.open ? L"Close" : L"Open", ArrowRect());
+  int b = t.Add(i, 2, UIA_ButtonControlTypeId, popup_.open ? T(L"Close") : T(L"Open"), ArrowRect());
   t[b].enabled = enabled;
   t[b].invoke = [this] {
     TakeFocus();

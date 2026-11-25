@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -36,7 +37,7 @@ std::vector<std::wstring> Words(const std::wstring& s) {
 }  // namespace
 
 CommandSearch::CommandSearch() {
-  box_.placeholder = L"Search for a command";
+  box_.placeholder = T(L"Search for a command");
   box_.maxLength = 128;
   box_.onChange = [this] { Filter(); };
   box_.onEnter = [this](bool) { Run(hot_); };
@@ -217,7 +218,7 @@ void CommandSearch::Draw(Canvas& c, bool caretVisible) {
   const D2D1_RECT_F inner = popup_.Inner(u);
   c.PushClip(inner);
   if (results_.empty()) {
-    c.Text(L"No commands match “" + fw::Trim(query_) + L"”",
+    c.Text(Fmt(T(L"No commands match “{0}”"), {fw::Trim(query_)}),
            RectF(inner.left + 12 * u, inner.top, inner.right - 12 * u, inner.top + kRowH * u), p.textSecondary, 13 * u);
   }
   const float h = kRowH * u;
@@ -235,7 +236,8 @@ void CommandSearch::Draw(Canvas& c, bool caretVisible) {
     if (i == pressed_) c.FillRound(hr, 4 * u, p.pressed);
     const D2D1_COLOR_F fg = e.enabled ? p.text : p.textDisabled;
     if (e.checked) c.Icon(icon::CheckMark, RectF(hr.left + 8 * u, r.top, hr.left + 28 * u, r.bottom), fg, 12 * u);
-    float keysW = e.shortcut.empty() ? 0 : std::ceil(c.MeasureText(e.shortcut, 12 * u));
+    const std::wstring keys = fw::lang::KeyNames(e.shortcut);  // Strg+S in German
+    float keysW = keys.empty() ? 0 : std::ceil(c.MeasureText(keys, 12 * u));
     c.Text(e.label, RectF(hr.left + 32 * u, r.top, hr.right - 24 * u - keysW, r.bottom), fg, 13 * u);
     if (!e.where.empty()) {  // where it is on the ribbon, after the name
       const float labelW = std::ceil(c.MeasureText(e.label, 13 * u));
@@ -244,7 +246,7 @@ void CommandSearch::Draw(Canvas& c, bool caretVisible) {
         c.Text(e.where, RectF(x, r.top, hr.right - 24 * u - keysW, r.bottom), p.textSecondary, 12 * u);
     }
     if (keysW > 0) {
-      c.Text(e.shortcut, RectF(hr.right - 12 * u - keysW - 2, r.top, hr.right - 12 * u, r.bottom),
+      c.Text(keys, RectF(hr.right - 12 * u - keysW - 2, r.top, hr.right - 12 * u, r.bottom),
              e.enabled ? p.textSecondary : p.textDisabled, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);
     }
   }
@@ -307,10 +309,10 @@ void CommandSearch::Describe(uia::Tree& t, int parent, const std::function<void(
     all = RectF(std::min(all.left, popup_.rc.left), std::min(all.top, popup_.rc.top),
                 std::max(all.right, popup_.rc.right), std::max(all.bottom, popup_.rc.bottom));
   }
-  const int pane = t.Add(parent, 10, UIA_PaneControlTypeId, L"Command search", all);
+  const int pane = t.Add(parent, 10, UIA_PaneControlTypeId, T(L"Command search"), all);
   t[pane].layer = 2;
   const bool itemFocus = box_.focused && inList_ && hot_ >= 0;
-  const int edit = uia::AddTextBox(t, pane, 1, box_, L"Search for a command (Alt+Q)", focusBox);
+  const int edit = uia::AddTextBox(t, pane, 1, box_, T(L"Search for a command (Alt+Q)"), focusBox);
   t[edit].focused = box_.focused && !itemFocus;
   t[edit].focus = [this, focusBox] {
     inList_ = false;
@@ -318,10 +320,10 @@ void CommandSearch::Describe(uia::Tree& t, int parent, const std::function<void(
   };
   if (!popup_.open) return;
   if (results_.empty()) {
-    t.Add(pane, 3, UIA_TextControlTypeId, L"No commands match", popup_.rc);
+    t.Add(pane, 3, UIA_TextControlTypeId, T(L"No commands match"), popup_.rc);
     return;
   }
-  const int list = t.Add(pane, 2, UIA_ListControlTypeId, L"Commands", popup_.rc);
+  const int list = t.Add(pane, 2, UIA_ListControlTypeId, T(L"Commands"), popup_.rc);
   const D2D1_RECT_F inner = popup_.Inner(ui_);
   {
     uia::Node& n = t[list];
@@ -346,7 +348,7 @@ void CommandSearch::Describe(uia::Tree& t, int parent, const std::function<void(
     n.layer = 2;
     n.accelerator = e.shortcut;
     n.enabled = e.enabled;
-    if (e.checked) n.status = L"On";
+    if (e.checked) n.status = T(L"On");
     n.offscreen = !inView;
     n.selectable = true;
     n.selected = i == hot_;

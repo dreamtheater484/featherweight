@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "sheet/numfmt/NumLocale.h"
@@ -23,64 +24,69 @@ namespace fw::sheet::view {
 
 namespace {
 
-const wchar_t* const kCategories[] = {L"General", L"Number",   L"Currency", L"Accounting", L"Date", L"Time",
-                                      L"Percentage", L"Fraction", L"Scientific", L"Text", L"Custom"};
-const wchar_t* const kFractions[] = {L"Up to one digit (1/4)",  L"Up to two digits (21/25)", L"Up to three digits (312/943)",
-                                     L"As halves (1/2)",        L"As quarters (2/4)",        L"As eighths (4/8)",
-                                     L"As sixteenths (8/16)",   L"As tenths (3/10)",         L"As hundredths (30/100)"};
-const wchar_t* const kHorizontal[] = {L"General", L"Left",    L"Center", L"Right", L"Fill", L"Justify",
-                                      L"Center across selection", L"Distributed"};
-const wchar_t* const kVertical[] = {L"Bottom", L"Top", L"Center", L"Justify", L"Distributed"};
-const wchar_t* const kStyles[] = {L"Regular", L"Italic", L"Bold", L"Bold italic"};
-const wchar_t* const kUnderlines[] = {L"None", L"Single", L"Double", L"Single accounting", L"Double accounting"};
+const UiText kCategories[] = {N_(L"General"), N_(L"Number"),   N_(L"Currency"), N_(L"Accounting"), N_(L"Date"), N_(L"Time"),
+                                      N_(L"Percentage"), N_(L"Fraction"), N_(L"Scientific"), N_(L"Text"), N_(L"Custom")};
+const UiText kFractions[] = {N_(L"Up to one digit (1/4)"),  N_(L"Up to two digits (21/25)"), N_(L"Up to three digits (312/943)"),
+                                     N_(L"As halves (1/2)"),        N_(L"As quarters (2/4)"),        N_(L"As eighths (4/8)"),
+                                     N_(L"As sixteenths (8/16)"),   N_(L"As tenths (3/10)"),         N_(L"As hundredths (30/100)")};
+const UiText kHorizontal[] = {N_(L"General"), N_(L"Left"),    N_(L"Center"), N_(L"Right"), N_(L"Fill"), N_(L"Justify"),
+                                      N_(L"Center across selection"), N_(L"Distributed")};
+const UiText kVertical[] = {N_(L"Bottom"), N_(L"Top"), N_(L"Center"), N_(L"Justify"), N_(L"Distributed")};
+const UiText kStyles[] = {N_(L"Regular"), N_(L"Italic"), N_(L"Bold"), N_(L"Bold italic")};
+const UiText kUnderlines[] = {N_(L"None"), N_(L"Single"), N_(L"Double"), N_(L"Single accounting"), N_(L"Double accounting")};
 const wchar_t* const kSizes[] = {L"8",  L"9",  L"10", L"11", L"12", L"14", L"16", L"18",
                                  L"20", L"22", L"24", L"26", L"28", L"36", L"48", L"72"};
-const wchar_t* const kBorderButtons[] = {L"None", L"Outline", L"All",    L"Inside",      L"Top",
-                                        L"Bottom", L"Left",   L"Right", L"Diagonal up", L"Diagonal down"};
-const wchar_t* const kDirections[] = {L"Context", L"Left to right", L"Right to left"};  // readingOrder 0, 1, 2
+const UiText kBorderButtons[] = {N_(L"None"), N_(L"Outline"), N_(L"All"),    N_(L"Inside"),      N_(L"Top"),
+                                        N_(L"Bottom"), N_(L"Left"),   N_(L"Right"), N_(L"Diagonal up"), N_(L"Diagonal down")};
+const UiText kDirections[] = {N_(L"Context"), N_(L"Left to right"), N_(L"Right to left")};  // readingOrder 0, 1, 2
 
 struct LineChoice {
   BorderStyle style;
-  const wchar_t* name;
+  UiText name;
 };
 const LineChoice kLines[] = {
-    {BorderStyle::Thin, L"Thin"},           {BorderStyle::Hair, L"Hair"},
-    {BorderStyle::Dotted, L"Dotted"},       {BorderStyle::Dashed, L"Dashed"},
-    {BorderStyle::DashDot, L"Dash dot"},    {BorderStyle::DashDotDot, L"Dash dot dot"},
-    {BorderStyle::Double, L"Double"},       {BorderStyle::Medium, L"Medium"},
-    {BorderStyle::MediumDashed, L"Medium dashed"}, {BorderStyle::MediumDashDot, L"Medium dash dot"},
-    {BorderStyle::MediumDashDotDot, L"Medium dash dot dot"}, {BorderStyle::SlantDashDot, L"Slanted dash dot"},
-    {BorderStyle::Thick, L"Thick"}};
+    {BorderStyle::Thin, N_(L"Thin")},           {BorderStyle::Hair, N_(L"Hair")},
+    {BorderStyle::Dotted, N_(L"Dotted")},       {BorderStyle::Dashed, N_(L"Dashed")},
+    {BorderStyle::DashDot, N_(L"Dash dot")},    {BorderStyle::DashDotDot, N_(L"Dash dot dot")},
+    {BorderStyle::Double, N_(L"Double")},       {BorderStyle::Medium, N_(L"Medium")},
+    {BorderStyle::MediumDashed, N_(L"Medium dashed")}, {BorderStyle::MediumDashDot, N_(L"Medium dash dot")},
+    {BorderStyle::MediumDashDotDot, N_(L"Medium dash dot dot")}, {BorderStyle::SlantDashDot, N_(L"Slanted dash dot")},
+    {BorderStyle::Thick, N_(L"Thick")}};
 
 struct PatternChoice {
   PatternType type;
-  const wchar_t* name;
+  UiText name;
 };
 const PatternChoice kPatterns[] = {
-    {PatternType::None, L"None"},
-    {PatternType::Solid, L"Solid"},
-    {PatternType::DarkGray, L"75% gray"},
-    {PatternType::MediumGray, L"50% gray"},
-    {PatternType::LightGray, L"25% gray"},
-    {PatternType::Gray125, L"12.5% gray"},
-    {PatternType::Gray0625, L"6.25% gray"},
-    {PatternType::DarkHorizontal, L"Horizontal stripe"},
-    {PatternType::DarkVertical, L"Vertical stripe"},
-    {PatternType::DarkDown, L"Reverse diagonal stripe"},
-    {PatternType::DarkUp, L"Diagonal stripe"},
-    {PatternType::DarkGrid, L"Diagonal crosshatch"},
-    {PatternType::DarkTrellis, L"Thick diagonal crosshatch"},
-    {PatternType::LightHorizontal, L"Thin horizontal stripe"},
-    {PatternType::LightVertical, L"Thin vertical stripe"},
-    {PatternType::LightDown, L"Thin reverse diagonal stripe"},
-    {PatternType::LightUp, L"Thin diagonal stripe"},
-    {PatternType::LightGrid, L"Thin horizontal crosshatch"},
-    {PatternType::LightTrellis, L"Thin diagonal crosshatch"}};
+    {PatternType::None, N_(L"None")},
+    {PatternType::Solid, N_(L"Solid")},
+    {PatternType::DarkGray, N_(L"75% gray")},
+    {PatternType::MediumGray, N_(L"50% gray")},
+    {PatternType::LightGray, N_(L"25% gray")},
+    {PatternType::Gray125, N_(L"12.5% gray")},
+    {PatternType::Gray0625, N_(L"6.25% gray")},
+    {PatternType::DarkHorizontal, N_(L"Horizontal stripe")},
+    {PatternType::DarkVertical, N_(L"Vertical stripe")},
+    {PatternType::DarkDown, N_(L"Reverse diagonal stripe")},
+    {PatternType::DarkUp, N_(L"Diagonal stripe")},
+    {PatternType::DarkGrid, N_(L"Diagonal crosshatch")},
+    {PatternType::DarkTrellis, N_(L"Thick diagonal crosshatch")},
+    {PatternType::LightHorizontal, N_(L"Thin horizontal stripe")},
+    {PatternType::LightVertical, N_(L"Thin vertical stripe")},
+    {PatternType::LightDown, N_(L"Thin reverse diagonal stripe")},
+    {PatternType::LightUp, N_(L"Thin diagonal stripe")},
+    {PatternType::LightGrid, N_(L"Thin horizontal crosshatch")},
+    {PatternType::LightTrellis, N_(L"Thin diagonal crosshatch")}};
 
 // Excel's sample for dates and times in Format Cells: 14 March 2012, 13:30:55.
 constexpr double kSampleDate = 40982.563136574;
 
 std::vector<std::wstring> List(const wchar_t* const* items, size_t n) { return std::vector<std::wstring>(items, items + n); }
+std::vector<std::wstring> List(const UiText* items, size_t n) {
+  std::vector<std::wstring> v;
+  for (size_t i = 0; i < n; ++i) v.emplace_back(items[i]);
+  return v;
+}
 
 D2D1_COLOR_F ToD2D(uint32_t argb) {
   return D2D1_COLOR_F{static_cast<float>((argb >> 16) & 255) / 255.f, static_cast<float>((argb >> 8) & 255) / 255.f,
@@ -121,7 +127,7 @@ std::wstring PointsText(double size) {
 // Format Cells
 
 WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
-  const wchar_t* tabNames[kPages] = {L"Number", L"Align", L"Font", L"Border", L"Fill", L"Protect"};
+  const wchar_t* tabNames[kPages] = {T(L"Number"), T(L"Align"), T(L"Font"), T(L"Border"), T(L"Fill"), T(L"Protect")};
   for (int i = 0; i < kPages; ++i) {
     tabs_[i].text = tabNames[i];
     tabs_[i].toggle = true;
@@ -129,7 +135,7 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
     tabs_[i].onInvoke = [this, i] { ShowPage(i); };
   }
   // Number
-  category_.label = L"Category";
+  category_.label = T(L"Category");
   category_.items = List(kCategories, std::size(kCategories));
   category_.onChange = [this](int i) {
     if (i < 0) return;
@@ -141,32 +147,32 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
     }
     ApplyNumber();
   };
-  decimals_.label = L"Decimal places";
+  decimals_.label = T(L"Decimal places");
   decimals_.minValue = 0;
   decimals_.maxValue = 30;
   decimals_.onChange = [this](double d) {
     choice_.decimals = static_cast<int>(d);
     ApplyNumber();
   };
-  thousands_.text = L"Use 1000 separator";
+  thousands_.text = T(L"Use 1000 separator");
   thousands_.toggle = true;
   thousands_.onInvoke = [this] {
     choice_.thousands = thousands_.checked;
     ApplyNumber();
   };
-  negative_.label = L"Negative numbers";
+  negative_.label = T(L"Negative numbers");
   negative_.onChange = [this](int i) {
     choice_.negative = std::max(0, i);
     ApplyNumber();
   };
-  types_.label = L"Type";
+  types_.label = T(L"Type");
   types_.rowHeight = 28;
   types_.onSelect = [this](int i) {
     if (i < 0) return;
     choice_.type = i;
     ApplyNumber();
   };
-  code_.label = L"Format code";
+  code_.label = T(L"Format code");
   code_.autoComplete = false;
   code_.validate = [this](std::wstring& text) {
     std::wstring invariant;
@@ -180,30 +186,30 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
     ApplyNumber();
   };
   // Alignment
-  horizontal_.label = L"Horizontal";
+  horizontal_.label = T(L"Horizontal");
   horizontal_.items = List(kHorizontal, std::size(kHorizontal));
   horizontal_.onChange = [this](int i) {
     if (i >= 0)
-      v_.ChangeFormat(u"Alignment", [i](Xf& x) {
+      v_.ChangeFormat(T(u"Alignment"), [i](Xf& x) {
         x.alignment.horizontal = static_cast<HAlign>(i);
         x.applyAlignment = true;
       });
   };
-  vertical_.label = L"Vertical";
+  vertical_.label = T(L"Vertical");
   vertical_.items = List(kVertical, std::size(kVertical));
   vertical_.onChange = [this](int i) {
     if (i >= 0)
-      v_.ChangeFormat(u"Alignment", [i](Xf& x) {
+      v_.ChangeFormat(T(u"Alignment"), [i](Xf& x) {
         x.alignment.vertical = static_cast<VAlign>(i);
         x.applyAlignment = true;
       });
   };
-  indent_.label = L"Indent";
+  indent_.label = T(L"Indent");
   indent_.minValue = 0;
   indent_.maxValue = 250;
   indent_.onChange = [this](double d) {
     const uint16_t n = static_cast<uint16_t>(d);
-    v_.ChangeFormat(u"Indent", [n](Xf& x) {
+    v_.ChangeFormat(T(u"Indent"), [n](Xf& x) {
       x.alignment.indent = n;
       // An indent needs a side to count from, as Excel sets it.
       const HAlign h = x.alignment.horizontal;
@@ -211,71 +217,71 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
       x.applyAlignment = true;
     });
   };
-  rotation_.label = L"Orientation";
+  rotation_.label = T(L"Orientation");
   rotation_.minValue = -90;
   rotation_.maxValue = 90;
   rotation_.unit = L"°";
   rotation_.onChange = [this](double d) {
     const int deg = static_cast<int>(std::lround(d));
     const uint16_t r = static_cast<uint16_t>(deg >= 0 ? deg : 90 - deg);  // clockwise: 91..180
-    v_.ChangeFormat(u"Orientation", [r](Xf& x) {
+    v_.ChangeFormat(T(u"Orientation"), [r](Xf& x) {
       x.alignment.rotation = r;
       x.applyAlignment = true;
     });
   };
-  wrap_.text = L"Wrap text";
+  wrap_.text = T(L"Wrap text");
   wrap_.toggle = true;
   wrap_.onInvoke = [this] {
     const bool on = wrap_.checked;
-    v_.ChangeFormat(u"Wrap Text", [on](Xf& x) {
+    v_.ChangeFormat(T(u"Wrap Text"), [on](Xf& x) {
       x.alignment.wrap = on;
       x.applyAlignment = true;
     });
   };
-  shrink_.text = L"Shrink to fit";
+  shrink_.text = T(L"Shrink to fit");
   shrink_.toggle = true;
   shrink_.onInvoke = [this] {
     const bool on = shrink_.checked;
-    v_.ChangeFormat(u"Shrink to Fit", [on](Xf& x) {
+    v_.ChangeFormat(T(u"Shrink to Fit"), [on](Xf& x) {
       x.alignment.shrinkToFit = on;
       x.applyAlignment = true;
     });
   };
-  merge_.text = L"Merge cells";
+  merge_.text = T(L"Merge cells");
   merge_.toggle = true;
   merge_.onInvoke = [this] {
     v_.MergeCells(merge_.checked ? 2 : 3);
     Sync();
   };
-  direction_.label = L"Text direction";
+  direction_.label = T(L"Text direction");
   direction_.items = List(kDirections, std::size(kDirections));
   direction_.onChange = [this](int i) {
     if (i >= 0)
-      v_.ChangeFormat(u"Text Direction", [i](Xf& x) {
+      v_.ChangeFormat(T(u"Text Direction"), [i](Xf& x) {
         x.alignment.readingOrder = static_cast<uint8_t>(i);
         x.applyAlignment = true;
       });
   };
   // Font
-  font_.label = L"Font";
+  font_.label = T(L"Font");
   font_.onCommit = [this](const std::wstring& text, int) {
     if (text.empty()) return;
     const std::string name = WideToUtf8(text);
-    v_.ChangeFont(u"Font", [&name](Font& f) {
+    v_.ChangeFont(T(u"Font"), [&name](Font& f) {
       f.name = name;
       f.scheme = FontScheme::None;  // a font picked by name no longer follows the theme's
     });
   };
-  style_.label = L"Style";
+  style_.label = T(L"Style");
   style_.items = List(kStyles, std::size(kStyles));
   style_.onChange = [this](int i) {
     if (i >= 0)
-      v_.ChangeFont(u"Font Style", [i](Font& f) {
+      v_.ChangeFont(T(u"Font Style"), [i](Font& f) {
         f.bold = i >= 2;
         f.italic = (i & 1) != 0;
       });
   };
-  size_.label = L"Size";
+  size_.label = T(L"Size");
   size_.items = List(kSizes, std::size(kSizes));
   size_.autoComplete = false;
   size_.validate = [](std::wstring& text) {
@@ -287,44 +293,44 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
   };
   size_.onCommit = [this](const std::wstring& text, int) {
     const double s = std::wcstod(text.c_str(), nullptr);
-    if (s >= 1) v_.ChangeFont(u"Font Size", [s](Font& f) { f.size = s; });
+    if (s >= 1) v_.ChangeFont(T(u"Font Size"), [s](Font& f) { f.size = s; });
   };
-  underline_.label = L"Underline";
+  underline_.label = T(L"Underline");
   underline_.items = List(kUnderlines, std::size(kUnderlines));
   underline_.onChange = [this](int i) {
-    if (i >= 0) v_.ChangeFont(u"Underline", [i](Font& f) { f.underline = static_cast<Underline>(i); });
+    if (i >= 0) v_.ChangeFont(T(u"Underline"), [i](Font& f) { f.underline = static_cast<Underline>(i); });
   };
-  color_.label = L"Color";
-  color_.automaticLabel = L"Automatic";
+  color_.label = T(L"Color");
+  color_.automaticLabel = T(L"Automatic");
   color_.onChange = [this](D2D1_COLOR_F c, bool automatic) {
     const Color color = FromD2D(c, automatic);
-    v_.ChangeFont(u"Font Color", [color](Font& f) { f.color = color; });
+    v_.ChangeFont(T(u"Font Color"), [color](Font& f) { f.color = color; });
   };
-  strike_.text = L"Strikethrough";
+  strike_.text = T(L"Strikethrough");
   strike_.textSize = superscript_.textSize = subscript_.textSize = 12;
   strike_.toggle = true;
   strike_.onInvoke = [this] {
     const bool on = strike_.checked;
-    v_.ChangeFont(u"Strikethrough", [on](Font& f) { f.strike = on; });
+    v_.ChangeFont(T(u"Strikethrough"), [on](Font& f) { f.strike = on; });
   };
-  superscript_.text = L"Superscript";
+  superscript_.text = T(L"Superscript");
   superscript_.toggle = true;
   superscript_.onInvoke = [this] {
     const VertAlign a = superscript_.checked ? VertAlign::Superscript : VertAlign::Baseline;
-    v_.ChangeFont(u"Superscript", [a](Font& f) { f.vertAlign = a; });
+    v_.ChangeFont(T(u"Superscript"), [a](Font& f) { f.vertAlign = a; });
   };
-  subscript_.text = L"Subscript";
+  subscript_.text = T(L"Subscript");
   subscript_.toggle = true;
   subscript_.onInvoke = [this] {
     const VertAlign a = subscript_.checked ? VertAlign::Subscript : VertAlign::Baseline;
-    v_.ChangeFont(u"Subscript", [a](Font& f) { f.vertAlign = a; });
+    v_.ChangeFont(T(u"Subscript"), [a](Font& f) { f.vertAlign = a; });
   };
   // Border
-  line_.label = L"Line";
-  for (const LineChoice& l : kLines) line_.items.push_back(l.name);
+  line_.label = T(L"Line");
+  for (const LineChoice& l : kLines) line_.items.emplace_back(l.name);
   line_.selected = 0;
-  lineColor_.label = L"Line color";
-  lineColor_.automaticLabel = L"Automatic";
+  lineColor_.label = T(L"Line color");
+  lineColor_.automaticLabel = T(L"Automatic");
   lineColor_.automatic = true;
   color_.automaticColor = lineColor_.automaticColor = patternColor_.automaticColor = D2D1_COLOR_F{0, 0, 0, 1};
   for (int i = 0; i < static_cast<int>(std::size(borders_)); ++i) {
@@ -346,32 +352,32 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
       if (!f.fg.IsSet()) f.fg.kind = Color::Kind::Auto;
       if (!fillColor_.automatic) f.bg = FromD2D(fillColor_.color, false);
     }
-    v_.ChangeFormat(u"Fill", [this, f](Xf& x) {
+    v_.ChangeFormat(T(u"Fill"), [this, f](Xf& x) {
       x.fill = v_.Ed().AddFill(f);
       x.applyFill = true;
     });
   };
-  fillColor_.label = L"Background color";
-  fillColor_.automaticLabel = L"No color";
+  fillColor_.label = T(L"Background color");
+  fillColor_.automaticLabel = T(L"No color");
   fillColor_.onChange = [this, applyFill](D2D1_COLOR_F, bool automatic) {
     if (automatic) pattern_.selected = 0;
     else if (pattern_.selected <= 0) pattern_.selected = 1;
     applyFill();
   };
-  pattern_.label = L"Pattern style";
-  for (const PatternChoice& p : kPatterns) pattern_.items.push_back(p.name);
+  pattern_.label = T(L"Pattern style");
+  for (const PatternChoice& p : kPatterns) pattern_.items.emplace_back(p.name);
   pattern_.onChange = [applyFill](int) { applyFill(); };
-  patternColor_.label = L"Pattern color";
-  patternColor_.automaticLabel = L"Automatic";
+  patternColor_.label = T(L"Pattern color");
+  patternColor_.automaticLabel = T(L"Automatic");
   patternColor_.onChange = [applyFill](D2D1_COLOR_F, bool) { applyFill(); };
   // Protection
-  locked_.text = L"Locked";
-  hidden_.text = L"Hidden (formulas)";
+  locked_.text = T(L"Locked");
+  hidden_.text = T(L"Hidden (formulas)");
   for (PanelButton* b : {&locked_, &hidden_}) {
     b->toggle = true;
     b->onInvoke = [this, b] {
       const bool on = b->checked, locked = b == &locked_;
-      v_.ChangeFormat(locked ? u"Locked" : u"Hidden", [on, locked](Xf& x) {
+      v_.ChangeFormat(locked ? T(u"Locked") : T(u"Hidden"), [on, locked](Xf& x) {
         (locked ? x.protection.locked : x.protection.hidden) = on;
         x.applyProtection = true;
       });
@@ -460,50 +466,50 @@ void WorkbookView::FormatPanel::Place() {
   const FormatCategory cat = choice_.category;
   switch (page_) {
     case kNumber: {
-      row(L"Category", {&category_});
-      labels_.push_back({L"Sample", RectF(left, y, right, y + 18 * u)});
+      row(T(L"Category"), {&category_});
+      labels_.push_back({T(L"Sample"), RectF(left, y, right, y + 18 * u)});
       sampleRc_ = RectF(left, y + 20 * u, right, y + 40 * u);
       y += 52 * u;
       const bool decimals = cat == FormatCategory::Number || cat == FormatCategory::Currency ||
                             cat == FormatCategory::Accounting || cat == FormatCategory::Percentage ||
                             cat == FormatCategory::Scientific;
-      if (decimals) row(L"Decimal places", {&decimals_});
+      if (decimals) row(T(L"Decimal places"), {&decimals_});
       if (cat == FormatCategory::Number) row(nullptr, {&thousands_});
-      if (cat == FormatCategory::Number || cat == FormatCategory::Currency) row(L"Negative numbers", {&negative_});
+      if (cat == FormatCategory::Number || cat == FormatCategory::Currency) row(T(L"Negative numbers"), {&negative_});
       if (cat == FormatCategory::Date || cat == FormatCategory::Time || cat == FormatCategory::Fraction)
-        row(L"Type", {&types_}, std::clamp((body_.bottom - y) / u - 40, 120.f, 330.f));
-      if (cat == FormatCategory::Custom) row(L"Format code, as typed in this region", {&code_});
+        row(T(L"Type"), {&types_}, std::clamp((body_.bottom - y) / u - 40, 120.f, 330.f));
+      if (cat == FormatCategory::Custom) row(T(L"Format code, as typed in this region"), {&code_});
       break;
     }
     case kAlignment:
-      labeled({{L"Horizontal", &horizontal_}, {L"Vertical", &vertical_}});
-      labeled({{L"Indent", &indent_}, {L"Orientation", &rotation_}});
+      labeled({{T(L"Horizontal"), &horizontal_}, {T(L"Vertical"), &vertical_}});
+      labeled({{T(L"Indent"), &indent_}, {T(L"Orientation"), &rotation_}});
       row(nullptr, {&wrap_, &shrink_});
       row(nullptr, {&merge_});
-      row(L"Text direction", {&direction_});
+      row(T(L"Text direction"), {&direction_});
       break;
     case kFont:
-      row(L"Font", {&font_});
-      labeled({{L"Style", &style_}, {L"Size", &size_}});
-      labeled({{L"Underline", &underline_}, {L"Color", &color_}});
-      row(L"Effects", {&strike_, &superscript_, &subscript_});
+      row(T(L"Font"), {&font_});
+      labeled({{T(L"Style"), &style_}, {T(L"Size"), &size_}});
+      labeled({{T(L"Underline"), &underline_}, {T(L"Color"), &color_}});
+      row(T(L"Effects"), {&strike_, &superscript_, &subscript_});
       break;
     case kBorder:
-      labeled({{L"Line", &line_}, {L"Line color", &lineColor_}});
-      row(L"Presets", {&borders_[0], &borders_[1], &borders_[2], &borders_[3]});
-      row(L"Edges", {&borders_[4], &borders_[5], &borders_[6], &borders_[7]});
-      row(L"Diagonals", {&borders_[8], &borders_[9]});
+      labeled({{T(L"Line"), &line_}, {T(L"Line color"), &lineColor_}});
+      row(T(L"Presets"), {&borders_[0], &borders_[1], &borders_[2], &borders_[3]});
+      row(T(L"Edges"), {&borders_[4], &borders_[5], &borders_[6], &borders_[7]});
+      row(T(L"Diagonals"), {&borders_[8], &borders_[9]});
       break;
     case kFill:
-      row(L"Background color", {&fillColor_});
-      row(L"Pattern style", {&pattern_});
-      row(L"Pattern color", {&patternColor_});
+      row(T(L"Background color"), {&fillColor_});
+      row(T(L"Pattern style"), {&pattern_});
+      row(T(L"Pattern color"), {&patternColor_});
       break;
     case kProtection:
       row(nullptr, {&locked_, &hidden_});
-      labels_.push_back({L"These take effect once the sheet is protected:", RectF(left, y, right, y + 16 * u)});
-      labels_.push_back({L"locked cells can't be changed, hidden formulas", RectF(left, y + 18 * u, right, y + 34 * u)});
-      labels_.push_back({L"don't show in the formula bar.", RectF(left, y + 36 * u, right, y + 52 * u)});
+      labels_.push_back({T(L"These take effect once the sheet is protected:"), RectF(left, y, right, y + 16 * u)});
+      labels_.push_back({T(L"locked cells can't be changed, hidden formulas"), RectF(left, y + 18 * u, right, y + 34 * u)});
+      labels_.push_back({T(L"don't show in the formula bar."), RectF(left, y + 36 * u, right, y + 52 * u)});
       break;
   }
 }
@@ -629,7 +635,7 @@ void WorkbookView::FormatPanel::Sync() {
 void WorkbookView::FormatPanel::ApplyNumber() {
   const std::wstring code = FormatCode(choice_, v_.text_->Locale());
   const uint32_t id = v_.NumFmtId(code);
-  v_.ChangeFormat(u"Number Format", [id](Xf& x) {
+  v_.ChangeFormat(T(u"Number Format"), [id](Xf& x) {
     x.numFmt = id;
     x.applyNumFmt = true;
   });
@@ -658,7 +664,7 @@ bool WorkbookView::ApplyBorders(int which, const BorderSide& side) {
   const BorderSide none;
   edit::Editor& ed = Ed();
   const Styles& st = book_->GetStyles();
-  edit::EditGroup group(ed, u"Borders");
+  edit::EditGroup group(ed, T(u"Borders"));
   bool ok = true;
   // Sides of the cells of `r` through `fn`.
   auto apply = [&](Range r, auto&& fn) {
@@ -775,7 +781,7 @@ void WorkbookView::ShowFormatPanel(int page) {
 bool WorkbookView::ApplyNumberCode(const std::wstring& code) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   const uint32_t id = NumFmtId(code);
-  return ChangeFormat(u"Number Format", [id](Xf& x) {
+  return ChangeFormat(T(u"Number Format"), [id](Xf& x) {
     x.numFmt = id;
     x.applyNumFmt = true;
   });
@@ -820,9 +826,9 @@ bool WorkbookView::MergeCells(int how) {
 namespace {
 
 // The toolbar's number formats, and their codes (invariant; empty: a command).
-const wchar_t* const kNumberChoices[] = {L"General",    L"Number",    L"Currency",   L"Accounting",       L"Short date",
-                                         L"Long date",  L"Time",      L"Percentage", L"Fraction",         L"Scientific",
-                                         L"Text",       L"Increase decimal", L"Decrease decimal", L"More number formats…"};
+const UiText kNumberChoices[] = {N_(L"General"),    N_(L"Number"),    N_(L"Currency"),   N_(L"Accounting"),       N_(L"Short date"),
+                                         N_(L"Long date"),  N_(L"Time"),      N_(L"Percentage"), N_(L"Fraction"),         N_(L"Scientific"),
+                                         N_(L"Text"),       N_(L"Increase decimal"), N_(L"Decrease decimal"), N_(L"More number formats…")};
 
 std::wstring NumberChoiceCode(int i, const NumLocale& loc) {
   FormatChoice c;
@@ -846,16 +852,16 @@ std::wstring NumberChoiceCode(int i, const NumLocale& loc) {
 
 // The toolbar's borders: what each choice applies (FormatPanel's numbering) and with which line.
 struct BorderChoice {
-  const wchar_t* name;
+  UiText name;
   int which;
   BorderStyle style;
 };
 const BorderChoice kBorderChoices[] = {
-    {L"Bottom border", 5, BorderStyle::Thin},      {L"Top border", 4, BorderStyle::Thin},
-    {L"Left border", 6, BorderStyle::Thin},        {L"Right border", 7, BorderStyle::Thin},
-    {L"No border", 0, BorderStyle::Thin},          {L"All borders", 2, BorderStyle::Thin},
-    {L"Outside borders", 1, BorderStyle::Thin},    {L"Thick outside borders", 1, BorderStyle::Thick},
-    {L"Bottom double border", 5, BorderStyle::Double}, {L"Thick bottom border", 5, BorderStyle::Thick}};
+    {N_(L"Bottom border"), 5, BorderStyle::Thin},      {N_(L"Top border"), 4, BorderStyle::Thin},
+    {N_(L"Left border"), 6, BorderStyle::Thin},        {N_(L"Right border"), 7, BorderStyle::Thin},
+    {N_(L"No border"), 0, BorderStyle::Thin},          {N_(L"All borders"), 2, BorderStyle::Thin},
+    {N_(L"Outside borders"), 1, BorderStyle::Thin},    {N_(L"Thick outside borders"), 1, BorderStyle::Thick},
+    {N_(L"Bottom double border"), 5, BorderStyle::Double}, {N_(L"Thick bottom border"), 5, BorderStyle::Thick}};
 
 }  // namespace
 
@@ -1055,11 +1061,11 @@ void WorkbookView::PaintFormats() {
     to.lastCol = std::min<uint32_t>(kMaxCols - 1, to.firstCol + w - 1);
   }
   if (uint64_t{to.lastRow - to.firstRow + 1} * (to.lastCol - to.firstCol + 1) > 200000) {
-    host_.ViewMessage(BannerKind::Warning, L"That's more cells than the format painter paints at once.");
+    host_.ViewMessage(BannerKind::Warning, T(L"That's more cells than the format painter paints at once."));
     return;
   }
   const int sheet = static_cast<int>(sheet_);
-  edit::EditGroup group(Ed(), u"Format Painter");
+  edit::EditGroup group(Ed(), T(u"Format Painter"));
   edit::Result r;
   for (uint32_t row = to.firstRow; r && row <= to.lastRow; ++row)
     for (uint32_t col = to.firstCol; r && col <= to.lastCol; ++col) {
@@ -1085,48 +1091,48 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     return true;
   };
   switch (cmd) {
-    case CmdFormatCells: return set(L"Format cells…", L"Ctrl+1");
-    case CmdBold: return set(L"Bold", L"Ctrl+B", f && f->bold);
-    case CmdItalic: return set(L"Italic", L"Ctrl+I", f && f->italic);
-    case CmdUnderline: return set(L"Underline", L"Ctrl+U", f && f->underline != Underline::None);
-    case CmdStrikethrough: return set(L"Strikethrough", L"Ctrl+5", f && f->strike);
-    case CmdAlignLeft: return set(L"Align left", L"", x && x->alignment.horizontal == HAlign::Left);
-    case CmdAlignCenter: return set(L"Center", L"", x && x->alignment.horizontal == HAlign::Center);
-    case CmdAlignRight: return set(L"Align right", L"", x && x->alignment.horizontal == HAlign::Right);
-    case CmdFontColor: return set(L"Font color", L"");
-    case CmdFillColor: return set(L"Fill color", L"");
-    case CmdBordersBox: return set(L"Borders", L"");
-    case CmdMergeBox: return set(L"Merge", L"");
-    case CmdNumberFormatBox: return set(L"More number formats…", L"");  // Format cells' Number page
-    case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
-    case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
-    case CmdNumGeneral: return set(L"General format", L"Ctrl+Shift+~");
-    case CmdNumNumber: return set(L"Number format", L"Ctrl+Shift+1");
-    case CmdNumTime: return set(L"Time format", L"Ctrl+Shift+2");
-    case CmdNumDate: return set(L"Date format", L"Ctrl+Shift+3");
-    case CmdNumCurrency: return set(L"Currency format", L"Ctrl+Shift+4");
-    case CmdNumPercent: return set(L"Percent format", L"Ctrl+Shift+5");
-    case CmdNumScientific: return set(L"Scientific format", L"Ctrl+Shift+6");
-    case CmdBorderOutline: return set(L"Outline border", L"Ctrl+Shift+7");
-    case CmdBorderRemove: return set(L"Remove borders", L"Ctrl+Shift+-");
-    case CmdCellStyles: return set(L"Cell styles", L"");
-    case CmdFormatPainter: return set(L"Format painter: copy these cells' formats to the cells you select next", L"",
+    case CmdFormatCells: return set(T(L"Format cells…"), L"Ctrl+1");
+    case CmdBold: return set(T(L"Bold"), L"Ctrl+B", f && f->bold);
+    case CmdItalic: return set(T(L"Italic"), L"Ctrl+I", f && f->italic);
+    case CmdUnderline: return set(T(L"Underline"), L"Ctrl+U", f && f->underline != Underline::None);
+    case CmdStrikethrough: return set(T(L"Strikethrough"), L"Ctrl+5", f && f->strike);
+    case CmdAlignLeft: return set(T(L"Align left"), L"", x && x->alignment.horizontal == HAlign::Left);
+    case CmdAlignCenter: return set(T(L"Center"), L"", x && x->alignment.horizontal == HAlign::Center);
+    case CmdAlignRight: return set(T(L"Align right"), L"", x && x->alignment.horizontal == HAlign::Right);
+    case CmdFontColor: return set(T(L"Font color"), L"");
+    case CmdFillColor: return set(T(L"Fill color"), L"");
+    case CmdBordersBox: return set(T(L"Borders"), L"");
+    case CmdMergeBox: return set(T(L"Merge"), L"");
+    case CmdNumberFormatBox: return set(T(L"More number formats…"), L"");  // Format cells' Number page
+    case CmdIncreaseDecimal: return set(T(L"Increase decimal"), L"");
+    case CmdDecreaseDecimal: return set(T(L"Decrease decimal"), L"");
+    case CmdNumGeneral: return set(T(L"General format"), L"Ctrl+Shift+~");
+    case CmdNumNumber: return set(T(L"Number format"), L"Ctrl+Shift+1");
+    case CmdNumTime: return set(T(L"Time format"), L"Ctrl+Shift+2");
+    case CmdNumDate: return set(T(L"Date format"), L"Ctrl+Shift+3");
+    case CmdNumCurrency: return set(T(L"Currency format"), L"Ctrl+Shift+4");
+    case CmdNumPercent: return set(T(L"Percent format"), L"Ctrl+Shift+5");
+    case CmdNumScientific: return set(T(L"Scientific format"), L"Ctrl+Shift+6");
+    case CmdBorderOutline: return set(T(L"Outline border"), L"Ctrl+Shift+7");
+    case CmdBorderRemove: return set(T(L"Remove borders"), L"Ctrl+Shift+-");
+    case CmdCellStyles: return set(T(L"Cell styles"), L"");
+    case CmdFormatPainter: return set(T(L"Format painter: copy these cells' formats to the cells you select next"), L"",
                                       painter_.has_value());
     // Excel's Home tab (R1, r1-sheet).
-    case CmdFontBox: return set(L"Font", L"");
-    case CmdSizeBox: return set(L"Font size", L"");
-    case CmdFormatCellsFont: return set(L"Format cells: font…", L"");
-    case CmdFormatCellsAlignment: return set(L"Format cells: alignment…", L"");
-    case CmdAlignTop: return set(L"Top align", L"", x && x->alignment.vertical == VAlign::Top);
-    case CmdAlignMiddle: return set(L"Middle align", L"", x && x->alignment.vertical == VAlign::Center);
-    case CmdAlignBottom: return set(L"Bottom align", L"", x && x->alignment.vertical == VAlign::Bottom);
-    case CmdWrapText: return set(L"Wrap text", L"", x && x->alignment.wrap);
-    case CmdIndent: return set(L"Increase indent", L"");
-    case CmdOutdent: return set(L"Decrease indent", L"");
-    case CmdGrowFont: return set(L"Increase font size", L"");
-    case CmdShrinkFont: return set(L"Decrease font size", L"");
-    case CmdNumAccounting: return set(L"Accounting number format", L"");
-    case CmdCommaStyle: return set(L"Comma style", L"");
+    case CmdFontBox: return set(T(L"Font"), L"");
+    case CmdSizeBox: return set(T(L"Font size"), L"");
+    case CmdFormatCellsFont: return set(T(L"Format cells: font…"), L"");
+    case CmdFormatCellsAlignment: return set(T(L"Format cells: alignment…"), L"");
+    case CmdAlignTop: return set(T(L"Top align"), L"", x && x->alignment.vertical == VAlign::Top);
+    case CmdAlignMiddle: return set(T(L"Middle align"), L"", x && x->alignment.vertical == VAlign::Center);
+    case CmdAlignBottom: return set(T(L"Bottom align"), L"", x && x->alignment.vertical == VAlign::Bottom);
+    case CmdWrapText: return set(T(L"Wrap text"), L"", x && x->alignment.wrap);
+    case CmdIndent: return set(T(L"Increase indent"), L"");
+    case CmdOutdent: return set(T(L"Decrease indent"), L"");
+    case CmdGrowFont: return set(T(L"Increase font size"), L"");
+    case CmdShrinkFont: return set(T(L"Decrease font size"), L"");
+    case CmdNumAccounting: return set(T(L"Accounting number format"), L"");
+    case CmdCommaStyle: return set(T(L"Comma style"), L"");
   }
   return false;
 }
@@ -1145,7 +1151,7 @@ bool WorkbookView::FormatCommand(int cmd) {
   const NumLocale& loc = text_->Locale();
   auto align = [&](HAlign h) {
     const HAlign to = active.alignment.horizontal == h ? HAlign::General : h;  // a second click takes it off
-    ChangeFormat(u"Alignment", [to](Xf& x) {
+    ChangeFormat(T(u"Alignment"), [to](Xf& x) {
       x.alignment.horizontal = to;
       x.applyAlignment = true;
     });
@@ -1155,22 +1161,22 @@ bool WorkbookView::FormatCommand(int cmd) {
   switch (cmd) {
     case CmdBold: {
       const bool on = !activeFont.bold;  // all bold, unless the active cell is
-      ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
+      ChangeFont(T(u"Bold"), [on](Font& f) { f.bold = on; });
       break;
     }
     case CmdItalic: {
       const bool on = !activeFont.italic;
-      ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+      ChangeFont(T(u"Italic"), [on](Font& f) { f.italic = on; });
       break;
     }
     case CmdUnderline: {
       const Underline u = activeFont.underline == Underline::None ? Underline::Single : Underline::None;
-      ChangeFont(u"Underline", [u](Font& f) { f.underline = u; });
+      ChangeFont(T(u"Underline"), [u](Font& f) { f.underline = u; });
       break;
     }
     case CmdStrikethrough: {
       const bool on = !activeFont.strike;
-      ChangeFont(u"Strikethrough", [on](Font& f) { f.strike = on; });
+      ChangeFont(T(u"Strikethrough"), [on](Font& f) { f.strike = on; });
       break;
     }
     case CmdAlignLeft: align(HAlign::Left); break;
@@ -1178,14 +1184,14 @@ bool WorkbookView::FormatCommand(int cmd) {
     case CmdAlignRight: align(HAlign::Right); break;
     case CmdFontColor: {
       const Color c = FromD2D(lastFontColor_, false);
-      ChangeFont(u"Font Color", [c](Font& f) { f.color = c; });
+      ChangeFont(T(u"Font Color"), [c](Font& f) { f.color = c; });
       break;
     }
     case CmdFillColor: {
       Fill fill;
       fill.pattern = PatternType::Solid;
       fill.fg = FromD2D(lastFill_, false);
-      ChangeFormat(u"Fill", [this, fill](Xf& x) {
+      ChangeFormat(T(u"Fill"), [this, fill](Xf& x) {
         x.fill = Ed().AddFill(fill);
         x.applyFill = true;
       });
@@ -1224,7 +1230,7 @@ bool WorkbookView::FormatCommand(int cmd) {
       // As Excel's buttons: a second click on the pressed one goes back to bottom.
       const VAlign v = cmd == CmdAlignTop ? VAlign::Top : cmd == CmdAlignMiddle ? VAlign::Center : VAlign::Bottom;
       const VAlign to = active.alignment.vertical == v ? VAlign::Bottom : v;
-      ChangeFormat(u"Alignment", [to](Xf& x) {
+      ChangeFormat(T(u"Alignment"), [to](Xf& x) {
         x.alignment.vertical = to;
         x.applyAlignment = true;
       });
@@ -1232,7 +1238,7 @@ bool WorkbookView::FormatCommand(int cmd) {
     }
     case CmdWrapText: {
       const bool on = !active.alignment.wrap;
-      ChangeFormat(u"Wrap Text", [on](Xf& x) {
+      ChangeFormat(T(u"Wrap Text"), [on](Xf& x) {
         x.alignment.wrap = on;
         x.applyAlignment = true;
       });
@@ -1244,7 +1250,7 @@ bool WorkbookView::FormatCommand(int cmd) {
       // decreasing to 0 keeps the alignment.
       const int step = cmd == CmdIndent ? 1 : -1;
       if (step < 0 && active.alignment.indent == 0) break;
-      ChangeFormat(cmd == CmdIndent ? u"Increase Indent" : u"Decrease Indent", [step](Xf& x) {
+      ChangeFormat(cmd == CmdIndent ? T(u"Increase Indent") : T(u"Decrease Indent"), [step](Xf& x) {
         Alignment& a = x.alignment;
         a.indent = static_cast<uint16_t>(std::clamp(static_cast<int>(a.indent) + step, 0, 250));
         if (a.horizontal != HAlign::Right && a.horizontal != HAlign::Distributed && a.indent > 0) a.horizontal = HAlign::Left;
@@ -1268,7 +1274,7 @@ bool WorkbookView::FormatCommand(int cmd) {
         if (now > 72) to = std::max(72.0, std::ceil(now / 10) * 10 - 10);
       }
       to = std::clamp(to, 1.0, 409.0);
-      if (to != now) ChangeFont(u"Font Size", [to](Font& f) { f.size = to; });
+      if (to != now) ChangeFont(T(u"Font Size"), [to](Font& f) { f.size = to; });
       break;
     }
     case CmdNumAccounting: ApplyNumberCode(NumberChoiceCode(3, loc)); break;
@@ -1309,13 +1315,13 @@ ToolItem WorkbookView::FormatTool(int cmd) {
           fl.pattern = PatternType::Solid;
           fl.fg = FromD2D(v.color, false);
         }
-        ChangeFormat(u"Fill", [this, fl](Xf& xf) {
+        ChangeFormat(T(u"Fill"), [this, fl](Xf& xf) {
           xf.fill = Ed().AddFill(fl);
           xf.applyFill = true;
         });
       } else {
         const Color c = FromD2D(v.color, v.automatic);
-        ChangeFont(u"Font Color", [c](Font& fo) { fo.color = c; });
+        ChangeFont(T(u"Font Color"), [c](Font& fo) { fo.color = c; });
       }
     };
   };
@@ -1324,13 +1330,13 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       if (DocFormat::FontsPending()) DocFormat::ReadFonts();
       t.kind = ToolKind::ComboBox;
       t.width = 116;
-      t.tooltip = L"Font";
+      t.tooltip = T(L"Font");
       t.choices = DocFormat::FontNames();
       t.text = Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name);
       t.onChange = [this](const ToolValue& v) {
         if (v.text.empty()) return;
         const std::string name = WideToUtf8(v.text);
-        ChangeFont(u"Font", [&name](Font& fo) {
+        ChangeFont(T(u"Font"), [&name](Font& fo) {
           fo.name = name;
           fo.scheme = FontScheme::None;
         });
@@ -1339,7 +1345,7 @@ ToolItem WorkbookView::FormatTool(int cmd) {
     case CmdSizeBox:
       t.kind = ToolKind::ComboBox;
       t.width = 56;
-      t.tooltip = L"Font size";
+      t.tooltip = T(L"Font size");
       t.choices = List(kSizes, std::size(kSizes));
       t.text = PointsText(f.size > 0 ? f.size : st.DefaultFont().size);
       t.validate = [](std::wstring& text) {
@@ -1351,18 +1357,18 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       };
       t.onChange = [this](const ToolValue& v) {
         const double s = std::wcstod(v.text.c_str(), nullptr);
-        if (s >= 1) ChangeFont(u"Font Size", [s](Font& fo) { fo.size = s; });
+        if (s >= 1) ChangeFont(T(u"Font Size"), [s](Font& fo) { fo.size = s; });
       };
       break;
-    case CmdFontColor: colors(icon::FontColor, lastFontColor_, L"Automatic", false); break;
-    case CmdFillColor: colors(icon::FillBucket, lastFill_, L"No color", true); break;
+    case CmdFontColor: colors(icon::FontColor, lastFontColor_, T(L"Automatic"), false); break;
+    case CmdFillColor: colors(icon::FillBucket, lastFill_, T(L"No color"), true); break;
     case CmdBordersBox:
       // The main part repeats the last choice.
       t.kind = ToolKind::SplitButton;
       t.glyph = icon::BordersBottom;
       t.width = 52;
-      t.tooltip = std::wstring(L"Borders: ") + kBorderChoices[lastBorders_].name;
-      for (const BorderChoice& b : kBorderChoices) t.choices.push_back(b.name);
+      t.tooltip = std::wstring(T(L"Borders: ")) + kBorderChoices[lastBorders_].name;
+      for (const BorderChoice& b : kBorderChoices) t.choices.emplace_back(b.name);
       t.onChange = [this](const ToolValue& v) {
         if (v.index < 0 || v.index >= static_cast<int>(std::size(kBorderChoices))) return;
         lastBorders_ = v.index;
@@ -1375,9 +1381,9 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       t.kind = ToolKind::Dropdown;
       t.width = 92;
       t.maxRows = 20;
-      t.text = L"Styles";
+      t.text = T(L"Styles");
       t.fitText = true;
-      t.tooltip = L"Cell styles";
+      t.tooltip = T(L"Cell styles");
       for (const BuiltinStyle& s : Gallery()) t.choices.push_back(s.name);
       t.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
       break;
@@ -1386,10 +1392,10 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       t.kind = ToolKind::Dropdown;
       t.width = 116;
       t.maxRows = 12;
-      t.tooltip = L"Number format";
+      t.tooltip = T(L"Number format");
       t.text = kCategories[static_cast<int>(FormatChoiceOf(CodeOf(x.numFmt), text_->Locale()).category)];
       t.choices = List(kNumberChoices, 11);
-      t.choices.push_back(kNumberChoices[13]);
+      t.choices.emplace_back(kNumberChoices[13]);
       t.onChange = [this](const ToolValue& v) {
         if (v.index == 11) ShowFormatPanel(FormatPanel::kNumber);
         else if (v.index >= 0 && v.index < 11) ApplyNumberCode(NumberChoiceCode(v.index, text_->Locale()));
@@ -1422,23 +1428,23 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   bool ok = false;
   if (key == L"size") {
     const double s = std::wcstod(value.c_str(), nullptr);
-    ok = s >= 1 && s <= 409 && ChangeFont(u"Font Size", [s](Font& f) { f.size = s; });
+    ok = s >= 1 && s <= 409 && ChangeFont(T(u"Font Size"), [s](Font& f) { f.size = s; });
   } else if (key == L"font") {
     const std::string name = WideToUtf8(value);
-    ok = !name.empty() && ChangeFont(u"Font", [&name](Font& f) {
+    ok = !name.empty() && ChangeFont(T(u"Font"), [&name](Font& f) {
       f.name = name;
       f.scheme = FontScheme::None;
     });
   } else if (key == L"color") {
     Color c;
-    ok = rgb(c) && ChangeFont(u"Font Color", [c](Font& f) { f.color = c; });
+    ok = rgb(c) && ChangeFont(T(u"Font Color"), [c](Font& f) { f.color = c; });
   } else if (key == L"fill") {
     Fill fill;
     if (value != L"none") {
       fill.pattern = PatternType::Solid;
       if (!rgb(fill.fg)) return fwprintf(stderr, L"format: no color in %s\n", arg.c_str()), true;
     }
-    ok = ChangeFormat(u"Fill", [this, fill](Xf& x) {
+    ok = ChangeFormat(T(u"Fill"), [this, fill](Xf& x) {
       x.fill = Ed().AddFill(fill);
       x.applyFill = true;
     });
@@ -1464,22 +1470,22 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   } else if (key == L"align") {
     const HAlign h = value == L"left" ? HAlign::Left : value == L"center" ? HAlign::Center
                      : value == L"right" ? HAlign::Right : HAlign::General;
-    ok = ChangeFormat(u"Alignment", [h](Xf& x) {
+    ok = ChangeFormat(T(u"Alignment"), [h](Xf& x) {
       x.alignment.horizontal = h;
       x.applyAlignment = true;
     });
   } else if (key == L"wrap" || key == L"bold" || key == L"italic") {
     const bool on = value != L"off" && value != L"0";
     if (key == L"wrap")
-      ok = ChangeFormat(u"Wrap Text", [on](Xf& x) {
+      ok = ChangeFormat(T(u"Wrap Text"), [on](Xf& x) {
         x.alignment.wrap = on;
         x.applyAlignment = true;
       });
-    else if (key == L"bold") ok = ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
-    else ok = ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+    else if (key == L"bold") ok = ChangeFont(T(u"Bold"), [on](Font& f) { f.bold = on; });
+    else ok = ChangeFont(T(u"Italic"), [on](Font& f) { f.italic = on; });
   } else if (key == L"locked" || key == L"hidden") {
     const bool on = value != L"off" && value != L"0", locked = key == L"locked";
-    ok = ChangeFormat(locked ? u"Locked" : u"Hidden", [on, locked](Xf& x) {
+    ok = ChangeFormat(locked ? T(u"Locked") : T(u"Hidden"), [on, locked](Xf& x) {
       (locked ? x.protection.locked : x.protection.hidden) = on;
       x.applyProtection = true;
     });

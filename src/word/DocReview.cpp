@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Comments.h"
 #include "ui/Gfx.h"
@@ -41,7 +42,7 @@ int Compare(Pos a, Pos b) { return a.para != b.para ? (a.para < b.para ? -1 : 1)
 
 // "2026-11-05T10:00:00Z" -> "5 Nov 2026"
 std::wstring Day(std::string_view date) {
-  static const wchar_t* kMonths[] = {L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun", L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec"};
+  static const wchar_t* kMonths[] = {T(L"Jan"), T(L"Feb"), T(L"Mar"), T(L"Apr"), T(L"May"), T(L"Jun"), T(L"Jul"), T(L"Aug"), T(L"Sep"), T(L"Oct"), T(L"Nov"), T(L"Dec")};
   if (date.size() < 10) return Wide(date);
   const int y = std::atoi(std::string(date.substr(0, 4)).c_str()), m = std::atoi(std::string(date.substr(5, 2)).c_str()),
             d = std::atoi(std::string(date.substr(8, 2)).c_str());
@@ -101,29 +102,29 @@ std::optional<CommandState> DocView::QueryD4(int cmd) {
   switch (cmd) {
     case CmdReviewPane:
       s = {Ready(), reviewPanel_ && host_.ViewShownPanel() == reviewPanel_.get()};
-      s.label = L"Comments and changes";
+      s.label = T(L"Comments and changes");
       break;
     case CmdNewComment:  // in the main text, as in Word
       s = {edit && focus_.para < doc_->Paragraphs().size() && StoryOf(focus_) == doc_->MainStory(), false};
-      s.label = L"New comment";
+      s.label = T(L"New comment");
       s.shortcut = L"Ctrl+Alt+M";
       break;
     case CmdTrackChanges:
       s = {edit, edit && editor_->Tracking()};
-      s.label = L"Track changes";
+      s.label = T(L"Track changes");
       s.shortcut = L"Ctrl+Shift+E";
       break;
-    case CmdAcceptChange: s = {edit && any, false}; s.label = L"Accept change"; break;
-    case CmdRejectChange: s = {edit && any, false}; s.label = L"Reject change"; break;
-    case CmdAcceptAll: s = {edit && any, false}; s.label = L"Accept all changes"; break;
-    case CmdRejectAll: s = {edit && any, false}; s.label = L"Reject all changes"; break;
-    case CmdNextChange: s = {Ready() && any, false}; s.label = L"Next change"; break;
-    case CmdPrevChange: s = {Ready() && any, false}; s.label = L"Previous change"; break;
-    case CmdMarkupSimple: s = {Ready(), markup_ == Markup::Simple}; s.label = L"Simple markup"; break;
-    case CmdMarkupAll: s = {Ready() && MarkupLaidOut(), markup_ == Markup::All}; s.label = L"All markup"; break;
-    case CmdMarkupNone: s = {Ready(), markup_ == Markup::None}; s.label = L"No markup"; break;
-    case CmdMarkupOriginal: s = {Ready() && MarkupLaidOut(), markup_ == Markup::Original}; s.label = L"Original"; break;
-    case CmdReviewerName: s = {edit, false}; s.label = L"Your name for changes and comments…"; break;
+    case CmdAcceptChange: s = {edit && any, false}; s.label = T(L"Accept change"); break;
+    case CmdRejectChange: s = {edit && any, false}; s.label = T(L"Reject change"); break;
+    case CmdAcceptAll: s = {edit && any, false}; s.label = T(L"Accept all changes"); break;
+    case CmdRejectAll: s = {edit && any, false}; s.label = T(L"Reject all changes"); break;
+    case CmdNextChange: s = {Ready() && any, false}; s.label = T(L"Next change"); break;
+    case CmdPrevChange: s = {Ready() && any, false}; s.label = T(L"Previous change"); break;
+    case CmdMarkupSimple: s = {Ready(), markup_ == Markup::Simple}; s.label = T(L"Simple markup"); break;
+    case CmdMarkupAll: s = {Ready() && MarkupLaidOut(), markup_ == Markup::All}; s.label = T(L"All markup"); break;
+    case CmdMarkupNone: s = {Ready(), markup_ == Markup::None}; s.label = T(L"No markup"); break;
+    case CmdMarkupOriginal: s = {Ready() && MarkupLaidOut(), markup_ == Markup::Original}; s.label = T(L"Original"); break;
+    case CmdReviewerName: s = {edit, false}; s.label = T(L"Your name for changes and comments…"); break;
     default: return std::nullopt;
   }
   return s;
@@ -168,8 +169,8 @@ bool DocView::ExecuteD4(int cmd) {
       if (!r) {
         if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, W(r.message));
       } else {
-        host_.ViewMessage(BannerKind::Info, on ? L"Track Changes is on: what you change is marked, with your name."
-                                               : L"Track Changes is off.");
+        host_.ViewMessage(BannerKind::Info, on ? T(L"Track Changes is on: what you change is marked, with your name.")
+                                               : T(L"Track Changes is off."));
       }
       ++editStamp_;
       host_.ViewStateChanged();
@@ -187,7 +188,7 @@ bool DocView::ExecuteD4(int cmd) {
     }
     case CmdNextChange:
     case CmdPrevChange:
-      if (!GoToChange(cmd == CmdPrevChange)) host_.ViewMessage(BannerKind::Info, L"There are no tracked changes.");
+      if (!GoToChange(cmd == CmdPrevChange)) host_.ViewMessage(BannerKind::Info, T(L"There are no tracked changes."));
       return true;
     case CmdMarkupSimple: setMarkup(Markup::Simple); return true;
     case CmdMarkupAll: setMarkup(Markup::All); return true;
@@ -258,10 +259,10 @@ void DocView::FillD4Menu(HMENU m) {
         break;
       }
   if (change) {
-    AppendItem(m, CmdAcceptChange, L"Accept change");
-    AppendItem(m, CmdRejectChange, L"Reject change");
+    AppendItem(m, CmdAcceptChange, T(L"Accept change"));
+    AppendItem(m, CmdRejectChange, T(L"Reject change"));
   }
-  AppendItem(m, CmdNewComment, L"New comment\tCtrl+Alt+M");
+  AppendItem(m, CmdNewComment, T(L"New comment\tCtrl+Alt+M"));
   AppendSeparator(m);
 }
 
@@ -270,33 +271,33 @@ void DocView::FillD4Menu(HMENU m) {
 
 DocView::ReviewPanel::ReviewPanel(DocView& view) : v_(view) {
   track_.onInvoke = [this] { v_.Execute(CmdTrackChanges); };
-  markup_.label = L"Show";
-  markup_.items = {L"Simple markup", L"All markup", L"No markup", L"Original"};
+  markup_.label = T(L"Show");
+  markup_.items = {T(L"Simple markup"), T(L"All markup"), T(L"No markup"), T(L"Original")};
   markup_.onChange = [this](int i) {
     static constexpr int kCmds[] = {CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone, CmdMarkupOriginal};
     if (i >= 0 && i < 4) v_.Execute(kCmds[i]);
   };
-  prev_.text = L"Previous";
+  prev_.text = T(L"Previous");
   prev_.onInvoke = [this] { v_.Execute(CmdPrevChange); };
-  next_.text = L"Next";
+  next_.text = T(L"Next");
   next_.onInvoke = [this] { v_.Execute(CmdNextChange); };
-  accept_.text = L"Accept";
+  accept_.text = T(L"Accept");
   accept_.onInvoke = [this] { v_.Execute(CmdAcceptChange); };
-  reject_.text = L"Reject";
+  reject_.text = T(L"Reject");
   reject_.onInvoke = [this] { v_.Execute(CmdRejectChange); };
-  acceptAll_.text = L"Accept all";
+  acceptAll_.text = T(L"Accept all");
   acceptAll_.onInvoke = [this] { v_.Execute(CmdAcceptAll); };
-  rejectAll_.text = L"Reject all";
+  rejectAll_.text = T(L"Reject all");
   rejectAll_.onInvoke = [this] { v_.Execute(CmdRejectAll); };
-  name_.label = L"Your name";
+  name_.label = T(L"Your name");
   name_.autoComplete = false;
-  name_.tooltip = L"Changes and comments are made with this name";
+  name_.tooltip = T(L"Changes and comments are made with this name");
   name_.onCommit = [this](const std::wstring& text, int) {
     v_.host_.ViewSetReviewer(Trim(text));
     if (v_.editor_) v_.editor_->SetAuthor(v_.ReviewerName());
     name_.SetText(Wide(v_.ReviewerName()));
   };
-  box_.label = L"Comment";
+  box_.label = T(L"Comment");
   box_.autoComplete = false;
   box_.onCommit = [this](const std::wstring&, int) {};
   // Enter posts: a reply when a card was picked, else the new comment (or the edited one).
@@ -304,27 +305,27 @@ DocView::ReviewPanel::ReviewPanel(DocView& view) : v_(view) {
     if (replying_ && editing_.empty() && !picked_.empty()) Reply();
     else Post();
   };
-  post_.text = L"Comment";
+  post_.text = T(L"Comment");
   post_.primary = true;
   post_.onInvoke = [this] { Post(); };
-  reply_.text = L"Reply";
+  reply_.text = T(L"Reply");
   reply_.onInvoke = [this] { Reply(); };
-  edit_.text = L"Edit";
+  edit_.text = T(L"Edit");
   edit_.onInvoke = [this] { Edit(); };
-  resolve_.text = L"Resolve";
+  resolve_.text = T(L"Resolve");
   resolve_.onInvoke = [this] { Resolve(); };
-  delete_.text = L"Delete";
+  delete_.text = T(L"Delete");
   delete_.onInvoke = [this] { Delete(); };
 }
 
 std::vector<Control*> DocView::ReviewPanel::Layout(const D2D1_RECT_F& body, float ui) {
   Refresh();
   std::vector<Control*> out = LayOutRows({{L"", {&track_}},
-                                          {L"Show", {&markup_}},
-                                          {L"Changes", {&prev_, &next_, &accept_, &reject_}},
+                                          {T(L"Show"), {&markup_}},
+                                          {T(L"Changes"), {&prev_, &next_, &accept_, &reject_}},
                                           {L"", {&acceptAll_, &rejectAll_}},
-                                          {L"Your name", {&name_}},
-                                          {L"Comments", {&box_}},
+                                          {T(L"Your name"), {&name_}},
+                                          {T(L"Comments"), {&box_}},
                                           {L"", {&post_, &reply_}},
                                           {L"", {&edit_, &resolve_, &delete_}}},
                                          body, ui);
@@ -336,7 +337,8 @@ std::vector<Control*> DocView::ReviewPanel::Layout(const D2D1_RECT_F& body, floa
 void DocView::ReviewPanel::Refresh() {
   seen_ = v_.editStamp_;
   const bool editing = v_.Editing() && v_.editor_;
-  track_.text = std::wstring(editing && v_.editor_->Tracking() ? L"☑" : L"☐") + L" Track changes (Ctrl+Shift+E)";
+  track_.text =
+      std::wstring(editing && v_.editor_->Tracking() ? L"☑ " : L"☐ ") + T(L"Track changes (Ctrl+Shift+E)");
   track_.enabled = editing;
   markup_.selected = static_cast<int>(v_.markup_ == Markup::Simple ? 0 : v_.markup_ == Markup::All ? 1 : v_.markup_ == Markup::None ? 2 : 3);
   const bool any = !v_.changes_.empty() || v_.allChanges_ > 0;
@@ -349,7 +351,7 @@ void DocView::ReviewPanel::Refresh() {
   cards_.clear();
   const auto all = v_.doc_ ? v_.doc_->Comments() : std::vector<fw::doc::CommentInfo>();
   auto lineOf = [&](const fw::doc::CommentInfo& c) {
-    std::wstring head = (c.author.empty() ? std::wstring(L"Someone") : Wide(c.author)) + L" · " + Day(c.date);
+    std::wstring head = (c.author.empty() ? std::wstring(T(L"Someone")) : Wide(c.author)) + L" · " + Day(c.date);
     return std::pair{head, W(edit::CommentText(*v_.doc_, c))};
   };
   for (const auto& c : all) {
@@ -380,11 +382,11 @@ void DocView::ReviewPanel::Refresh() {
   for (const Card& k : cards_)
     if (k.id == picked_) done = k.done;
   reply_.enabled = edit_.enabled = resolve_.enabled = delete_.enabled = editing && picked;
-  resolve_.text = done ? L"Reopen" : L"Resolve";
-  post_.text = editing_.empty() ? L"Comment" : L"Save";
-  box_.label = !editing_.empty() ? L"Comment" : replying_ && picked ? L"Reply" : L"Comment";
-  if (cards_.empty()) note_ = editing ? L"No comments yet. Select text and type one above." : L"No comments.";
-  else if (note_.starts_with(L"No comments")) note_.clear();
+  resolve_.text = done ? T(L"Reopen") : T(L"Resolve");
+  post_.text = editing_.empty() ? T(L"Comment") : T(L"Save");
+  box_.label = !editing_.empty() ? T(L"Comment") : replying_ && picked ? T(L"Reply") : T(L"Comment");
+  if (cards_.empty()) note_ = editing ? T(L"No comments yet. Select text and type one above.") : T(L"No comments.");
+  else if (note_ == T(L"No comments yet. Select text and type one above.") || note_ == T(L"No comments.")) note_.clear();
 }
 
 void DocView::ReviewPanel::PlaceCards() {
@@ -432,7 +434,7 @@ void DocView::ReviewPanel::Draw(Canvas& c) {
       const D2D1_RECT_F head = RectF(k.rc.left + indent, y, k.rc.right - 12 * u, y + 18 * u);
       const D2D1_COLOR_F text = k.done ? p.textSecondary : p.text;
       c.Text((l == 0 ? L"" : L"↳ ") + k.lines[l].first, head, text, 12 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-      if (l == 0 && k.done) c.Text(L"Resolved", head, p.textSecondary, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);
+      if (l == 0 && k.done) c.Text(T(L"Resolved"), head, p.textSecondary, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);
       y += 20 * u;
       const float h = c.TextWrapped(k.lines[l].second, RectF(k.rc.left + indent, y, k.rc.right - 12 * u, k.rc.bottom), text,
                                     13 * u, 4);
@@ -474,7 +476,7 @@ bool DocView::ReviewPanel::OnWheel(int delta, float x, float y) {
 }
 
 std::wstring DocView::ReviewPanel::TooltipAt(float x, float y) {
-  return CardAt(x, y) >= 0 ? L"Click to go to the text it's about" : L"";
+  return CardAt(x, y) >= 0 ? T(L"Click to go to the text it's about") : L"";
 }
 
 void DocView::ReviewPanel::Pick(int card) {
@@ -533,12 +535,12 @@ void DocView::ReviewPanel::Post() {
       editing_.clear();
       box_.SetText(L"");
     }
-    Done(r, L"Saved.");
+    Done(r, T(L"Saved."));
     return;
   }
   const edit::Result r = edit::AddComment(*v_.editor_, v_.SelFrom(), v_.SelTo(), U16(text));
   if (r) box_.SetText(L"");
-  Done(r, L"Comment added.");
+  Done(r, T(L"Comment added."));
   if (r) {
     const auto all = v_.doc_->Comments();
     if (!all.empty()) picked_ = std::string(all.back().id);
@@ -551,7 +553,7 @@ void DocView::ReviewPanel::Reply() {
   v_.editor_->SetAuthor(v_.ReviewerName());
   const edit::Result r = edit::ReplyToComment(*v_.editor_, picked_, U16(Trim(box_.Text())));
   if (r) box_.SetText(L"");
-  Done(r, L"Reply added.");
+  Done(r, T(L"Reply added."));
 }
 
 void DocView::ReviewPanel::Edit() {
@@ -569,12 +571,12 @@ void DocView::ReviewPanel::Resolve() {
   bool done = false;
   for (const Card& k : cards_)
     if (k.id == picked_) done = k.done;
-  Done(edit::ResolveComment(*v_.editor_, picked_, !done), done ? L"Open again." : L"Resolved.");
+  Done(edit::ResolveComment(*v_.editor_, picked_, !done), done ? T(L"Open again.") : T(L"Resolved."));
 }
 
 void DocView::ReviewPanel::Delete() {
   if (!v_.editor_ || picked_.empty()) return;
   const edit::Result r = edit::DeleteComment(*v_.editor_, picked_);
   if (r) picked_.clear();
-  Done(r, L"Comment deleted.");
+  Done(r, T(L"Comment deleted."));
 }

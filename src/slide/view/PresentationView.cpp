@@ -10,6 +10,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
@@ -78,7 +79,7 @@ PresentationView::~PresentationView() {
 
 std::unique_ptr<PresentationView> PresentationView::NewPresentation(ViewHost& host, int number) {
   auto view = std::make_unique<PresentationView>(host, std::wstring());
-  view->untitled_ = L"Presentation" + std::to_wstring(number);
+  view->untitled_ = T(L"Presentation") + std::to_wstring(number);
   view->newDeck_ = true;
   view->File().New(number);
   return view;
@@ -126,7 +127,7 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
     return OpenResult::Failed;
   }
   if (newNumber_) {  // a template: the tab is a new presentation from it, saved with Save As
-    untitled_ = L"Presentation" + std::to_wstring(newNumber_);
+    untitled_ = T(L"Presentation") + std::to_wstring(newNumber_);
     path_.clear();
   }
   FileOpened();
@@ -145,9 +146,11 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
     const size_t dot = path_.find_last_of(L'.');
     const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
     File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
-    host_.ViewMessage(BannerKind::Info, imported_ +
-                                            (odf ? L" is an OpenDocument presentation" : L" is a PowerPoint 97–2003 presentation") +
-                                            L". Saving makes a new " + stem + L".pptx and leaves it as it is.");
+    host_.ViewMessage(
+        BannerKind::Info,
+        Fmt(odf ? T(L"{0} is an OpenDocument presentation. Saving makes a new {1}.pptx and leaves it as it is.")
+                : T(L"{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."),
+            {imported_, stem}));
     untitled_ = imported_;
     path_.clear();  // Save is Save As
   }
@@ -419,7 +422,7 @@ void PresentationView::DrawThumbnails(Canvas& c, ID2D1DeviceContext* dc) {
 void PresentationView::DrawSlide(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   if (SlideCount() == 0) {
-    c.Text(L"This presentation has no slides.", view_, p.textSecondary, 14 * ui_, DWRITE_FONT_WEIGHT_REGULAR,
+    c.Text(T(L"This presentation has no slides."), view_, p.textSecondary, 14 * ui_, DWRITE_FONT_WEIGHT_REGULAR,
            Align::Center);
     return;
   }
@@ -502,7 +505,7 @@ void PresentationView::DrawNotes(Canvas& c) {
   if (notes.empty()) {
     // P2: an editable deck invites notes, as PowerPoint does.
     edit::Editor* ed = SlideCount() ? SlideEditor() : nullptr;
-    c.Text(ed && ed->CanEdit() ? L"Click to add notes" : L"This slide has no speaker notes.",
+    c.Text(ed && ed->CanEdit() ? T(L"Click to add notes") : T(L"This slide has no speaker notes."),
            {box.left, box.top, box.right, box.top + 20 * ui_}, p.textDisabled, size);
     return;
   }
@@ -818,10 +821,10 @@ std::wstring PresentationView::TooltipAt(int x, int y) {
     if (std::wstring tip = commentsPanel_->Tooltip(static_cast<float>(x), static_cast<float>(y)); !tip.empty()) return tip;
   if (const SlideLink* link = LinkAt(x, y)) {
     std::wstring tip = link->tooltip.empty() ? link->url : link->tooltip;
-    return tip + (tip.empty() ? L"" : L"\n") + L"Ctrl+click to follow the link";
+    return tip + (tip.empty() ? L"" : L"\n") + T(L"Ctrl+click to follow the link");
   }
   if (const int t = ThumbAt(x, y); t >= 0 && deck_->Hidden(static_cast<size_t>(t)))
-    return L"Slide " + std::to_wstring(t + 1) + L" is hidden: the slide show skips it";
+    return Fmt(T(L"Slide {0} is hidden: the slide show skips it"), {std::to_wstring(t + 1)});
   return {};
 }
 

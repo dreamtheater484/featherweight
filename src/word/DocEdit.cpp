@@ -7,6 +7,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "doc/edit/Clip.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/TreeEdit.h"
@@ -172,7 +173,7 @@ void DocView::Cut() {
     table_->ReplaceCells(u"");
     return;
   }
-  editor_->BeginGroup(u"Cut");
+  editor_->BeginGroup(T(u"Cut"));
   Result r = editor_->Delete(SelFrom(), SelTo());
   editor_->EndGroup();
   Apply(r);
@@ -201,7 +202,7 @@ void DocView::Paste(bool formatted, bool merge) {
     if (text.empty()) return;
     t.assign(text.begin(), text.end());
   }
-  editor_->BeginGroup(u"Paste");
+  editor_->BeginGroup(T(u"Paste"));
   fw::doc::Pos from = SelFrom(), to = SelTo();
   Result r;
   r.caret = from;
@@ -281,7 +282,7 @@ bool DocView::TextDragUp(UINT mods) {
   const edit::Clip clip = edit::CopyClip(*doc_, ToDoc(a), ToDoc(b), clipSource_);
   if (clip.Empty()) return true;
   const bool copy = (mods & kModCtrl) != 0;
-  editor_->BeginGroup(copy ? u"Copy" : u"Move");
+  editor_->BeginGroup(copy ? T(u"Copy") : T(u"Move"));
   fw::doc::Pos at = ToDoc(*dropAt_);
   Result r;
   r.caret = at;
@@ -454,7 +455,7 @@ bool DocView::EditKey(UINT vk, UINT mods) {
             if (own->next != fw::doc::kNone && own->next < doc_->Styles().size() && &doc_->Styles()[own->next] != own &&
                 doc_->Styles()[own->next].type == fw::doc::StyleType::Paragraph)
               next = &doc_->Styles()[own->next];
-        editor_->BeginGroup(u"New paragraph");
+        editor_->BeginGroup(T(u"New paragraph"));
         Result r = editor_->SplitParagraph(ToDoc(focus_));
         if (r && next) {
           fw::doc::edit::PropEdit e;
@@ -686,7 +687,7 @@ int DocView::ReplaceAll(const std::wstring& with) {
   std::stable_sort(all.begin(), all.end(), [](const Match& a, const Match& b) { return b.from < a.from; });
   const std::u16string text(with.begin(), with.end());
   int replaced = 0;
-  editor_->BeginGroup(u"Replace all");
+  editor_->BeginGroup(T(u"Replace all"));
   for (const Match& m : all)
     if (editor_->Replace(ToDoc(m.from), ToDoc(m.to), text)) ++replaced;  // one inside a field's code is left
   editor_->EndGroup();

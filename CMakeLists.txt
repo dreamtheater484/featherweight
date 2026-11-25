@@ -28,6 +28,8 @@ add_library(fwcore STATIC
   src/core/FileKinds.cpp
   src/core/Ini.cpp
   src/core/Json.cpp
+  src/core/Lang.cpp
+  src/core/LangCatalog.cpp
   src/core/Layout.cpp
   src/core/LayoutDump.cpp
   src/core/PageRange.cpp
@@ -36,6 +38,7 @@ add_library(fwcore STATIC
 target_include_directories(fwcore PUBLIC src)
 target_compile_options(fwcore PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
+target_link_libraries(fwcore PRIVATE miniz)  # f1-lang: the catalogs are deflated (src/core/Lang.cpp)
 
 # --- The app ---
 file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp src/word/*.cpp)
@@ -44,6 +47,8 @@ option(FW_TEST_SCREENS "Build the widget gallery and other test-only screens int
 if(NOT FW_TEST_SCREENS)
   list(FILTER FW_APP_SOURCES EXCLUDE REGEX "/src/ui/WidgetGallery\.cpp$")
 endif()
+# f1-lang: the pseudo-language (src/core/Lang.cpp) is in test builds only.
+target_compile_definitions(fwcore PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 add_executable(Featherweight WIN32
   ${FW_APP_SOURCES}
   src/resource.rc
@@ -51,6 +56,11 @@ add_executable(Featherweight WIN32
 )
 # The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
 set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
+                            PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# So are the PDF tab's page tools, OCR and signing panels and the share sheet (F1, f1-pdf): their
+# work is PDFium's, Windows' or fwpdftools'.
+set_source_files_properties(src/pdf/PagesPanel.cpp src/pdf/PdfPages.cpp src/pdf/PdfOcr.cpp src/pdf/PdfSign.cpp
+                            src/pdf/SignaturePanel.cpp src/Share.cpp src/ShareSheet.cpp
                             PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 # F1 f1-trust: crash reports and help links run once in a while at most: built for size too.
 set_source_files_properties(src/CrashReport.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
@@ -72,6 +82,25 @@ target_compile_options(Featherweight PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL 
 target_compile_options(fwcore PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 set_target_properties(Featherweight PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:Featherweight>")
 
+# f1-lang: the interface's catalogs (strings/*.po, template strings/featherweight.pot), compiled by
+# fwstrings into one compressed resource per language (src/core/LangCatalog.h); resource.rc includes
+# the list. Test builds always carry the keys, for the pseudo-language's check of unmarked strings.
+add_executable(fwstrings tools/strings/fwstrings.cpp src/core/LangCatalog.cpp)
+target_include_directories(fwstrings PRIVATE src)
+target_compile_definitions(fwstrings PRIVATE ${FW_DEFINITIONS})
+target_compile_options(fwstrings PRIVATE ${FW_COMPILE_OPTIONS})
+target_link_libraries(fwstrings PRIVATE miniz)
+file(GLOB FW_LANG_CATALOGS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/strings/*.po")
+set(_fw_lang_out "${CMAKE_BINARY_DIR}/generated/lang")
+add_custom_command(OUTPUT "${_fw_lang_out}/LangData.rc"
+  COMMAND fwstrings "${CMAKE_SOURCE_DIR}/strings/featherweight.pot" "${_fw_lang_out}"
+          "$<$<BOOL:${FW_TEST_SCREENS}>:--keys>" ${FW_LANG_CATALOGS}
+  DEPENDS fwstrings "${CMAKE_SOURCE_DIR}/strings/featherweight.pot" ${FW_LANG_CATALOGS}
+  COMMENT "Compiling the interface's catalogs" VERBATIM COMMAND_EXPAND_LISTS)
+add_custom_target(fwlang DEPENDS "${_fw_lang_out}/LangData.rc")
+add_dependencies(Featherweight fwlang)
+set_source_files_properties(src/resource.rc PROPERTIES OBJECT_DEPENDS "${_fw_lang_out}/LangData.rc")
+
 add_custom_command(TARGET Featherweight POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FW_PDFIUM_DIR}/bin/pdfium.dll" "$<TARGET_FILE_DIR:Featherweight>"
   COMMENT "Copying pdfium.dll")
@@ -84,6 +113,7 @@ if(FW_BUILD_TESTS)
   target_compile_options(fw_tests PRIVATE ${FW_COMPILE_OPTIONS})
   add_test(NAME unit COMMAND fw_tests)
   # File kinds, settings and file associations: temporary settings files, and registry dry runs only.
+  target_sources(fw_tests PRIVATE tests/unit/test_f1_lang.cpp)  # f1-lang: the catalog's format
   target_sources(fw_tests PRIVATE tests/unit/test_filekinds.cpp tests/unit/test_settings.cpp
     tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp
     tests/unit/test_usertemplates.cpp src/UserTemplates.cpp)
@@ -108,8 +138,9 @@ add_subdirectory(src/slide/show)
 add_subdirectory(src/slide/objects)  # p2-objects: objects on slides
 add_subdirectory(src/slide/odp)  # p3-files: OpenDocument presentations
 add_subdirectory(src/slide/view)  # p1-view: the presentation tab
+add_subdirectory(src/pdf)  # f1-pdf: the PDF tab's page tools, OCR and signing
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview)
+target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview fwpdftools)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)
@@ -165,6 +196,19 @@ if(FW_BUILD_TESTS)
   # and dark, and its states (keyboard, filter, hidden, empty, narrow, 200 %).
   add_test(NAME start_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
            "-DOUT=${CMAKE_BINARY_DIR}/screens/start" -P "${CMAKE_SOURCE_DIR}/tests/screens/start.cmake")
+  # f1-lang, the clipping check: each editor at 1366 x 768 in the pseudo-language (every text 40 % longer),
+  # every ribbon tab and File page section drawn, no label cut (tests/screens/lang.cmake).
+  if(FW_TEST_SCREENS)
+    add_test(NAME lang_clipping COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+             "-DFILES=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/lang" -P "${CMAKE_SOURCE_DIR}/tests/screens/lang.cmake")
+  endif()
+  # f1-lang, the catalog check: every string a person reads goes through T() (docs/f1-plan.md, Rules).
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME strings_marked COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/strings/mark.py" --check)
+    # Each language's catalog: placeholders, shortcuts, line breaks and access keys as the English's.
+    add_test(NAME strings_catalogs COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/strings/check.py")
+  endif()
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
@@ -156,17 +157,17 @@ Result AddBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
   if (from.para >= doc.Paragraphs().size() || to.para >= doc.Paragraphs().size() ||
       doc.Para(from.para).story != doc.Para(to.para).story || from.offset > doc.Para(from.para).text.size() ||
       to.offset > doc.Para(to.para).text.size())
-    return Fail(u"A bookmark starts and ends in the same part of the document.");
+    return Fail(T(u"A bookmark starts and ends in the same part of the document."));
   // An id no bookmark has: above every one in the document, those only in kept XML too (a text
   // box's fallback copy; D5 corpus pass T4).
   const std::string id = std::to_string(docx::TopBookmarkId(doc) + 1);
   TreeEdit te(editor, from);
-  te.Begin(u"Bookmark");
+  te.Begin(T(u"Bookmark"));
   te.Local();
   Tree& t = te.GetTree();
   if (!te.SplitRunAt(from.para, from.offset) || !te.SplitRunAt(to.para, to.offset)) {
     te.Abort();
-    return Fail(u"A bookmark can't start or end here.");
+    return Fail(T(u"A bookmark can't start or end here."));
   }
   auto s = SpotAt(doc, t, from.para, from.offset, kBookmarkStart);
   ElemId start = s ? te.InsertElement(s->parent, kBookmarkStart, s->before, from.offset) : kNoElem;
@@ -174,7 +175,7 @@ Result AddBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
   ElemId end = e ? te.InsertElement(e->parent, kBookmarkEnd, e->before, to.offset) : kNoElem;
   if (end == kNoElem) {
     te.Abort();
-    return Fail(u"A bookmark can't start or end here.");
+    return Fail(T(u"A bookmark can't start or end here."));
   }
   te.SetAttr(start, names::kId, id);
   te.SetAttr(start, kName, name);
@@ -213,9 +214,9 @@ Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16strin
   if (!editor.CanEdit(&why)) return Fail(why);
   if (instr.empty() || !XmlSafe(instr) || result.empty() || at.para >= doc.Paragraphs().size() ||
       result.find_first_of(u"\r\n\v\t") != std::u16string_view::npos)
-    return Fail(u"This field can't be inserted.");
+    return Fail(T(u"This field can't be inserted."));
   if (auto r = RunAt(doc, at); r && (InField(*r) || r->displayOnly))
-    return Fail(u"A field can't go inside another field.");
+    return Fail(T(u"A field can't go inside another field."));
   editor.BeginGroup(name);
   Result typed = editor.InsertText(at, result);
   if (!typed) {
@@ -246,7 +247,7 @@ Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16strin
   }
   if (!ok) {
     editor.CancelGroup();  // the text alone: never a field half made
-    return Fail(u"A field can't be inserted here.");
+    return Fail(T(u"A field can't be inserted here."));
   }
   editor.EndGroup();
   return typed;
@@ -276,22 +277,22 @@ Result InsertLink(Editor& editor, Pos from, Pos to, std::string_view target, std
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (target.empty() || (target[0] == '#' && target.size() == 1)) return Fail(u"Type an address for the link.");
-  if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
+  if (target.empty() || (target[0] == '#' && target.size() == 1)) return Fail(T(u"Type an address for the link."));
+  if (!XmlSafe(target)) return Fail(T(u"A link's address can't hold control characters."));
   if (editor.Compare(to, from) < 0) std::swap(from, to);
-  if (from.para != to.para) return Fail(u"Select text in one paragraph to make it a link.");
-  if (from == to && text.empty()) return Fail(u"Type the text to show for the link.");
-  if (text.find_first_of(u"\r\n") != std::u16string_view::npos) return Fail(u"A link's text is one paragraph.");
+  if (from.para != to.para) return Fail(T(u"Select text in one paragraph to make it a link."));
+  if (from == to && text.empty()) return Fail(T(u"Type the text to show for the link."));
+  if (text.find_first_of(u"\r\n") != std::u16string_view::npos) return Fail(T(u"A link's text is one paragraph."));
   // Where the text will be: never inside another link or a field.
   if (from == to) {
     if (auto r = RunAt(doc, from); r && (r->hyperlink || InField(*r) || r->displayOnly || r->contentControl))
-      return Fail(u"A link can't go here.");
+      return Fail(T(u"A link can't go here."));
   } else {
     for (const TextRun& r : doc.Runs(from.para))
       if (r.end > from.offset && r.start < to.offset && (r.hyperlink || InField(r) || r.displayOnly))
-        return Fail(u"This text can't be made a link.");
+        return Fail(T(u"This text can't be made a link."));
   }
-  editor.BeginGroup(u"Link");
+  editor.BeginGroup(T(u"Link"));
   Pos a = from, b = to;
   const std::u16string_view current = std::u16string_view(doc.Para(from.para).text).substr(from.offset, to.offset - from.offset);
   if (!text.empty() && text != current) {
@@ -302,7 +303,7 @@ Result InsertLink(Editor& editor, Pos from, Pos to, std::string_view target, std
     }
     b = r.caret;
   }
-  Result r = b.para == a.para ? editor.SetLink(a, b, target) : Fail(u"This text can't be made a link.");
+  Result r = b.para == a.para ? editor.SetLink(a, b, target) : Fail(T(u"This text can't be made a link."));
   if (r) {
     TreeEdit te(editor, b);
     ApplyStyle(te, {a, b}, "Hyperlink");
@@ -321,13 +322,13 @@ Result EditLink(Editor& editor, Pos at, std::string_view target, std::u16string_
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   std::optional<LinkInfo> link = LinkAt(doc, at);
-  if (!link) return Fail(u"There's no link here.");
-  if (target.empty() || (target[0] == '#' && target.size() == 1)) return Fail(u"Type an address for the link.");
-  if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
-  if (text.find_first_of(u"\r\n") != std::u16string_view::npos) return Fail(u"A link's text is one paragraph.");
+  if (!link) return Fail(T(u"There's no link here."));
+  if (target.empty() || (target[0] == '#' && target.size() == 1)) return Fail(T(u"Type an address for the link."));
+  if (!XmlSafe(target)) return Fail(T(u"A link's address can't hold control characters."));
+  if (text.find_first_of(u"\r\n") != std::u16string_view::npos) return Fail(T(u"A link's text is one paragraph."));
   const Pos from = link->from;
   const std::u16string current(std::u16string_view(doc.Para(from.para).text).substr(from.offset, link->to.offset - from.offset));
-  editor.BeginGroup(u"Edit Link");
+  editor.BeginGroup(T(u"Edit Link"));
   bool ok = true;
   if (!text.empty() && text != current) {
     // The new text goes in after the link's first character, so it is inside the link with that
@@ -346,7 +347,7 @@ Result EditLink(Editor& editor, Pos at, std::string_view target, std::u16string_
       ok = false;
     } else {
       TreeEdit te(editor, link->to);
-      te.Begin(u"Edit Link");
+      te.Begin(T(u"Edit Link"));
       te.Local();
       if (rid.empty()) {
         te.RemoveAttr(link->elem, kRelId);
@@ -360,7 +361,7 @@ Result EditLink(Editor& editor, Pos at, std::string_view target, std::u16string_
   }
   if (!ok) {
     editor.CancelGroup();  // what it changed so far, and nothing before it
-    return Fail(u"This link can't be changed.");
+    return Fail(T(u"This link can't be changed."));
   }
   editor.EndGroup();
   Result r;
@@ -373,10 +374,10 @@ Result RemoveLink(Editor& editor, Pos at) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   std::optional<LinkInfo> link = LinkAt(doc, at);
-  if (!link) return Fail(u"There's no link here.");
+  if (!link) return Fail(T(u"There's no link here."));
   const std::string style = HyperlinkStyleId(doc);
   TreeEdit te(editor, at);
-  te.Begin(u"Remove Link");
+  te.Begin(T(u"Remove Link"));
   te.Local();
   Tree& t = te.GetTree();
   // The link's look goes with it.
@@ -389,7 +390,7 @@ Result RemoveLink(Editor& editor, Pos at) {
   }
   if (!te.Unwrap(link->elem)) {
     te.Abort();
-    return Fail(u"This link holds content Featherweight keeps as it is, so it stays.");
+    return Fail(T(u"This link holds content Featherweight keeps as it is, so it stays."));
   }
   te.Commit();
   Result r;
@@ -441,10 +442,10 @@ bool ValidBookmarkName(std::string_view utf8) {
 
 Result InsertBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
   if (!ValidBookmarkName(name))
-    return Fail(u"A bookmark's name starts with a letter and holds only letters, digits and underscores (at most 40).");
+    return Fail(T(u"A bookmark's name starts with a letter and holds only letters, digits and underscores (at most 40)."));
   // As in Word, adding a name that's taken moves that bookmark here.
   if (FindBookmark(editor.Doc(), name)) {
-    editor.BeginGroup(u"Bookmark");
+    editor.BeginGroup(T(u"Bookmark"));
     Result gone = DeleteBookmark(editor, name);
     Result r = gone ? AddBookmark(editor, from, to, name) : gone;
     if (r) editor.EndGroup();
@@ -467,9 +468,9 @@ Result DeleteBookmark(Editor& editor, std::string_view name) {
       at = p.openPos;
       break;
     }
-  if (!open) return Fail(u"There's no bookmark with that name.");
+  if (!open) return Fail(T(u"There's no bookmark with that name."));
   TreeEdit te(editor, at);
-  te.Begin(u"Delete Bookmark");
+  te.Begin(T(u"Delete Bookmark"));
   te.Local();
   te.RemoveElement(open.Id());
   if (close) te.RemoveElement(close.Id());
@@ -496,7 +497,7 @@ std::vector<std::string> BookmarksForParagraphs(Editor& editor, const std::vecto
   }
   int64_t top = docx::TopBookmarkId(doc);
   TreeEdit te(editor, paras.empty() ? Pos{} : Pos{paras.front(), 0});
-  te.Begin(u"Bookmark");
+  te.Begin(T(u"Bookmark"));
   te.Local();
   Tree& t = te.GetTree();
   uint32_t n = 0;

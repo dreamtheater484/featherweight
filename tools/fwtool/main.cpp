@@ -354,7 +354,11 @@ int wmain(int argc, wchar_t** argv) {
   fwtool::InstallFileLog();  // FW_FILE_LOG_DIR: before anything opens a file
   fw::chart::Install();
   // Substitutes to measure (draw/FontSubstitutes.h): rows of their own, before the table's.
-  if (const wchar_t* tuning = _wgetenv(L"FW_SUBSTITUTES")) draw::SetSubstituteTuning(tuning);
+  if (const DWORD n = GetEnvironmentVariableW(L"FW_SUBSTITUTES", nullptr, 0); n > 1) {
+    std::wstring tuning(n, L'\0');
+    tuning.resize(GetEnvironmentVariableW(L"FW_SUBSTITUTES", tuning.data(), n));
+    draw::SetSubstituteTuning(tuning);
+  }
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
   // The count first: with no arguments argv[1] is null (fwtool alone then prints the usage below).
   if ((argc == 4 || (argc == 6 && std::wstring(argv[2]) == L"--password")) && std::wstring(argv[1]) == L"convert") {

@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 
 namespace fw::slide::edit {
@@ -124,7 +125,7 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
   if (applied) *applied = 0;
   Editor::Impl& m = editor.Internals();
   const PartStore& store = m.store;
-  Call call(editor, u"Recover");
+  Call call(editor, T(u"Recover"));
   std::string_view in = records;
   bool ok = true;
   while (!in.empty() && ok) {
@@ -207,7 +208,7 @@ Result Replay(Editor& editor, std::string_view records, size_t* applied) {
   m.Full();
   if (applied) *applied = count;
   Result r = call.End({});
-  if (!ok && r) return Result::Fail(u"Some of the changes couldn't be recovered.");
+  if (!ok && r) return Result::Fail(T(u"Some of the changes couldn't be recovered."));
   return r;
 }
 

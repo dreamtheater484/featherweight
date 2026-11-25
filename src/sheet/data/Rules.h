@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/model/Styles.h"
 #include "sheet/model/Types.h"
 
@@ -53,9 +54,9 @@ std::vector<CfRule> ReadCfRules(const detail::PartText& t);
 void WriteCfRules(const std::vector<CfRule>& rules, const detail::PartText& t, std::string& xml, std::string& ext);
 
 // Excel's formats for highlight rules (its "Format cells that..." list).
-inline constexpr const wchar_t* kCfPresets[] = {
-    L"Light Red Fill with Dark Red Text", L"Yellow Fill with Dark Yellow Text", L"Green Fill with Dark Green Text",
-    L"Light Red Fill", L"Red Text", L"Bold"};
+inline constexpr UiText kCfPresets[] = {
+    N_(L"Light Red Fill with Dark Red Text"), N_(L"Yellow Fill with Dark Yellow Text"), N_(L"Green Fill with Dark Green Text"),
+    N_(L"Light Red Fill"), N_(L"Red Text"), N_(L"Bold")};
 Dxf CfPreset(int preset);
 
 // New rules as Excel writes them; `dxf` is the format's index (Editor::AddDxf). Formulas and values
@@ -67,23 +68,23 @@ enum class CfText : uint8_t { Contains, NotContains, BeginsWith, EndsWith };
 CfRule TextRule(const std::string& sqref, CfText kind, const std::string& text, uint32_t dxf);
 // Excel's periods, in its order: yesterday, today, tomorrow, last 7 days, last week, this week,
 // next week, last month, this month, next month.
-inline constexpr const wchar_t* kCfPeriods[] = {L"Yesterday", L"Today", L"Tomorrow", L"In the last 7 days",
-                                                L"Last week", L"This week", L"Next week", L"Last month",
-                                                L"This month", L"Next month"};
+inline constexpr UiText kCfPeriods[] = {N_(L"Yesterday"), N_(L"Today"), N_(L"Tomorrow"), N_(L"In the last 7 days"),
+                                                N_(L"Last week"), N_(L"This week"), N_(L"Next week"), N_(L"Last month"),
+                                                N_(L"This month"), N_(L"Next month")};
 CfRule DateRule(const std::string& sqref, int period, uint32_t dxf);
 CfRule DuplicateRule(const std::string& sqref, bool unique, uint32_t dxf);
 CfRule TopRule(const std::string& sqref, uint32_t rank, bool percent, bool bottom, uint32_t dxf);
 CfRule AverageRule(const std::string& sqref, bool above, uint32_t dxf);
 // Excel's galleries.
-inline constexpr const wchar_t* kColorScales[] = {
-    L"Green - Yellow - Red", L"Red - Yellow - Green", L"Green - White - Red", L"Red - White - Green",
-    L"Blue - White - Red",   L"Red - White - Blue",   L"White - Red",         L"Red - White",
-    L"Green - White",        L"White - Green",        L"Green - Yellow",      L"Yellow - Green"};
+inline constexpr UiText kColorScales[] = {
+    N_(L"Green - Yellow - Red"), N_(L"Red - Yellow - Green"), N_(L"Green - White - Red"), N_(L"Red - White - Green"),
+    N_(L"Blue - White - Red"),   N_(L"Red - White - Blue"),   N_(L"White - Red"),         N_(L"Red - White"),
+    N_(L"Green - White"),        N_(L"White - Green"),        N_(L"Green - Yellow"),      N_(L"Yellow - Green")};
 CfRule ColorScaleRule(const std::string& sqref, int preset);
-inline constexpr const wchar_t* kDataBars[] = {L"Blue",       L"Green",          L"Red",          L"Orange",
-                                               L"Light Blue", L"Purple",         L"Blue (solid)", L"Green (solid)",
-                                               L"Red (solid)", L"Orange (solid)", L"Light Blue (solid)",
-                                               L"Purple (solid)"};
+inline constexpr UiText kDataBars[] = {N_(L"Blue"),       N_(L"Green"),          N_(L"Red"),          N_(L"Orange"),
+                                               N_(L"Light Blue"), N_(L"Purple"),         N_(L"Blue (solid)"), N_(L"Green (solid)"),
+                                               N_(L"Red (solid)"), N_(L"Orange (solid)"), N_(L"Light Blue (solid)"),
+                                               N_(L"Purple (solid)")};
 // `id`: the GUID that ties the rule to its x14 part ("{...}"); empty makes one.
 CfRule DataBarRule(const std::string& sqref, int preset, std::string id = {});
 inline constexpr const char* kIconSets[] = {"3Arrows",  "3ArrowsGray",    "4Arrows",        "4ArrowsGray", "5Arrows",

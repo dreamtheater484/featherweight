@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/Theme.h"
 #include "draw/Xml.h"
@@ -37,8 +38,8 @@ std::string Declare(const Prefixes& ns, bool p, bool r) {
 const std::vector<SlideSizeChoice>& SlideSizes() {
   // 12192000 x 6858000 and 9144000 x 6858000 EMU, as PowerPoint writes them.
   static const std::vector<SlideSizeChoice> sizes = {
-      {L"Widescreen (16:9)", {960, 540}, ""},
-      {L"Standard (4:3)", {720, 540}, "screen4x3"},
+      {T(L"Widescreen (16:9)"), {960, 540}, ""},
+      {T(L"Standard (4:3)"), {720, 540}, "screen4x3"},
   };
   return sizes;
 }
@@ -166,8 +167,8 @@ std::string BackgroundXml(const Background& bg, std::string_view pictureRel, con
 
 const std::vector<GradientPreset>& GradientPresets() {
   static const std::vector<GradientPreset> presets = {
-      {L"Top to bottom", 90}, {L"Left to right", 0}, {L"Diagonal down", 45}, {L"Diagonal up", 315},
-      {L"Bottom to top", 270}, {L"Right to left", 180},
+      {T(L"Top to bottom"), 90}, {T(L"Left to right"), 0}, {T(L"Diagonal down"), 45}, {T(L"Diagonal up"), 315},
+      {T(L"Bottom to top"), 270}, {T(L"Right to left"), 180},
   };
   return presets;
 }

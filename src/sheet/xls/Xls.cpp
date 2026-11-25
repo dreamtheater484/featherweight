@@ -16,6 +16,7 @@
 
 #include <pugixml.hpp>
 
+#include "core/Lang.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "sheet/model/Types.h"
@@ -605,7 +606,7 @@ bool Converter::Globals(pkg::Status& status) {
   Records rs(stream_);
   Record r;
   if (!rs.Next(r) || r.type != 0x0809 || r.data.size() < 4) {
-    status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't an Excel workbook or it is damaged.");
+    status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't an Excel workbook or it is damaged."));
     return false;
   }
   {
@@ -613,7 +614,7 @@ bool Converter::Globals(pkg::Status& status) {
     const uint16_t vers = b.U16(), dt = b.U16();
     if (vers != 0x0600 || dt != 0x0005) {
       status = pkg::Status::Fail(pkg::Status::Code::Unsupported,
-                                 "it was saved by Excel 5.0/95 or older, which Featherweight can't open. Save it as a newer Excel workbook first.");
+                                 T("it was saved by Excel 5.0/95 or older, which Featherweight can't open. Save it as a newer Excel workbook first."));
       return false;
     }
   }
@@ -627,14 +628,14 @@ bool Converter::Globals(pkg::Status& status) {
         const detail::CryptResult cr = detail::DecryptWorkbook(stream_, rs.Start(), stopAtFilepass ? std::wstring_view(L"VelvetSweatshop") : pw);
         if (cr == detail::CryptResult::WrongPassword) {
           needsPassword = true;
-          status = pkg::Status::Fail(pkg::Status::Code::Rejected, password.empty() ? "it is protected with a password."
-                                                                                  : "the password is wrong.");
+          status = pkg::Status::Fail(pkg::Status::Code::Rejected, password.empty() ? T("it is protected with a password.")
+                                                                                  : T("the password is wrong."));
           return false;
         }
         if (cr != detail::CryptResult::Ok) {
           status = pkg::Status::Fail(cr == detail::CryptResult::Damaged ? pkg::Status::Code::Damaged : pkg::Status::Code::Unsupported,
-                                     cr == detail::CryptResult::Damaged ? "it seems to be damaged."
-                                                                        : "it is protected in a way Featherweight doesn't support.");
+                                     cr == detail::CryptResult::Damaged ? T("it seems to be damaged.")
+                                                                        : T("it is protected in a way Featherweight doesn't support."));
           return false;
         }
         if (stopAtFilepass) return false;
@@ -764,7 +765,7 @@ bool Converter::Globals(pkg::Status& status) {
   }
 done:
   if (sheets_.empty()) {
-    status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it has no sheets or it is damaged.");
+    status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it has no sheets or it is damaged."));
     return false;
   }
   return true;
@@ -2709,9 +2710,9 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
   if (!workbook) {
     if (streams("Book"))
       status = pkg::Status::Fail(pkg::Status::Code::Unsupported,
-                                 "it was saved by Excel 5.0/95 or older, which Featherweight can't open. Save it as a newer Excel workbook first.");
+                                 T("it was saved by Excel 5.0/95 or older, which Featherweight can't open. Save it as a newer Excel workbook first."));
     else
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't an Excel workbook or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't an Excel workbook or it is damaged."));
     return {};
   }
   stream_ = std::move(*workbook);
@@ -2826,7 +2827,7 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
                            rels + "</Relationships>"});
   }
   if (kept == 0) {
-    status = pkg::Status::Fail(pkg::Status::Code::Unsupported, "it has no worksheets Featherweight can show.");
+    status = pkg::Status::Fail(pkg::Status::Code::Unsupported, T("it has no worksheets Featherweight can show."));
     return {};
   }
   int sheetRels = 0;  // the sheets' relationships are rId1..rIdN, chart sheets among them
@@ -2907,11 +2908,11 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
   pkg::ZipWriter zip(sink);
   for (const Part& p : parts)
     if (!zip.Add(p.name, std::span(reinterpret_cast<const uint8_t*>(p.text.data()), p.text.size())).Ok()) {
-      status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+      status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
       return {};
     }
   if (!zip.Finish().Ok()) {
-    status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+    status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
     return {};
   }
   return std::move(sink.bytes);
