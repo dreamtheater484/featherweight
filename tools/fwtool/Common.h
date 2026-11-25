@@ -55,6 +55,7 @@ struct Options {
   bool threads = false;              // formulas: one thread against four, every value compared (S4)
   bool idleThreads = false;          // bench-app: list the threads that woke while idle, and when
   bool modules = false;              // bench-app: the DLLs loaded once launched and settled (F1, f1-gate)
+  std::string languages;             // bench-app: launch in each of these interface languages ("en,de"; F1)
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt

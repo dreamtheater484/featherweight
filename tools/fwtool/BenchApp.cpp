@@ -412,12 +412,17 @@ constexpr double kIdleSeconds = 3;
 // microseconds.
 constexpr ULONG64 kBusyCycles = 2000000;
 
+// --languages (F1): the interface language the private copy starts in, written to its settings as
+// [General] Language=<tag> (f1-lang's setting; empty: as Windows' display language).
+std::string g_language;
+
 void WriteSettings(const std::filesystem::path& ini, const std::wstring& version) {
   // For builds without --sandbox: no update check, no notices, the same theme each time.
   std::ofstream out(ini, std::ios::binary | std::ios::trunc);
   out << "[General]\r\nTheme=light\r\nUpdateAutomatically=false\r\nLastUpdateCheck="
       << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()
       << "\r\nLastRunVersion=" << fw::WideToUtf8(version) << "\r\nOfferedDefaultApp=true\r\n";
+  if (!g_language.empty()) out << "Language=" << g_language << "\r\n";
 }
 
 Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const std::filesystem::path& file,
@@ -631,6 +636,47 @@ int RunBenchApp(const Options& options) {
                      std::to_string(std::filesystem::file_size(source, ec)) + ",\n  \"runs\": " + std::to_string(runs) +
                      ",\n  \"idleSeconds\": " + Num(kIdleSeconds, 0) + ",\n  \"scenarios\": [";
   int failed = 0;
+  if (!options.languages.empty()) {
+    // F1: launch to window in each interface language, the runs interleaved (en, de, en, de, ...) so
+    // the PC's drift falls on all of them alike. Each language warms up once first.
+    std::vector<std::string> langs;
+    for (size_t a = 0, b = 0; a <= options.languages.size(); ++a)
+      if (a == options.languages.size() || options.languages[a] == ',') {
+        if (a > b) langs.push_back(options.languages.substr(b, a - b));
+        b = a + 1;
+      }
+    std::map<std::string, std::vector<double>> window, ready, memory;
+    std::string error;
+    for (const auto& l : langs) g_language = l, RunOnce(exe, version, {}, false);
+    for (int r = 0; r < runs; ++r)
+      for (const auto& l : langs) {
+        g_language = l;
+        Run x = RunOnce(exe, version, {}, false);
+        if (!x.error.empty()) { error = x.error; continue; }
+        window[l].push_back(x.windowMs);
+        ready[l].push_back(x.readyMs);
+        memory[l].push_back(x.memory.privateWorkingSetMB);
+      }
+    g_language.clear();
+    json += "],\n  \"languages\": {";
+    for (size_t i = 0; i < langs.size(); ++i) {
+      const auto& l = langs[i];
+      std::printf("%-24s %8s %8s %24s %6s MB\n", ("launch, " + l).c_str(), Num(Median(window[l])).c_str(),
+                  Num(Median(ready[l])).c_str(), "", Num(Median(memory[l])).c_str());
+      json += std::string(i ? ", " : "") + JsonString(l) + ": {\"launchMs\": " + Num(Median(window[l])) +
+              ", \"readyMs\": " + Num(Median(ready[l])) + ", \"memoryMB\": " + Num(Median(memory[l])) +
+              ", \"runs\": " + std::to_string(window[l].size()) + "}";
+    }
+    if (!error.empty()) std::printf("failed runs: %s\n", error.c_str());
+    json += "}\n}\n";
+    timeEndPeriod(1);
+    std::filesystem::remove_all(sandbox, ec);
+    if (!options.jsonOut.empty()) {
+      std::ofstream out(options.jsonOut, std::ios::binary);
+      out << json;
+    }
+    return error.empty() ? 0 : 1;
+  }
   for (size_t s = 0; s < files.size(); ++s) {
     const auto& file = files[s];
     std::string name = file.empty() ? "launch" : fw::WideToUtf8(file.filename().wstring());
