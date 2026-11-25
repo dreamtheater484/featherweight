@@ -13,6 +13,8 @@
 #include <cstring>
 
 #include "Commands.h"
+#include "Share.h"
+#include "pdf/PdfText.h"
 #include "FileAssoc.h"
 #include "UserTemplates.h"
 #include "Util.h"
@@ -1544,6 +1546,14 @@ void App::Execute(int cmd) {
     case CmdDeleteBackups: DeleteBackups(); break;
     case CmdPrint: PrintActive(); break;
     case CmdExportPdf: ExportPdfActive(); break;
+    case CmdShareFile:
+    case CmdSharePdf: {  // F1, f1-pdf: Windows' share sheet (src/Share.*)
+      std::wstring message;
+      if (ready && !share::ShareTab(hwnd_, *v, cmd == CmdSharePdf, message) && !message.empty())
+        banner_.Show(BannerKind::Info, message, {}, 6000);
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      break;
+    }
     case CmdCloseTab:
       if (active_ >= 0) CloseTab(active_);
       break;
@@ -1767,6 +1777,7 @@ bool App::FillWindowMenu(int which, HMENU m) {
     AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
+    if (ready) AppendItem(m, CmdShareFile, T(L"Share…"));  // F1, f1-pdf
     if (ready && v->Kind() == TabKind::Workbook) {  // a document's is on its ribbon (Layout)
       const CommandState setup = v->QueryCommand(CmdPageSetup);
       if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);

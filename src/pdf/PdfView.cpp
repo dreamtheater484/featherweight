@@ -16,6 +16,7 @@
 #include "pdf/PdfText.h"
 #include "pdf/Print.h"
 #include "pdf/tools/PageOps.h"
+#include "pkg/SafeFile.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -949,6 +950,18 @@ bool PdfView::Save(const std::wstring& path, std::wstring& error) {
   return ok;
 }
 
+bool PdfView::WriteCopy(const std::wstring& path, std::wstring& message) {
+  std::string bytes;
+  if (!Ready() || !doc_->CurrentBytes(bytes)) {
+    message = T(L"The PDF couldn't be written.");
+    return false;
+  }
+  const fw::pkg::SaveResult r = fw::pkg::SafeWrite(path, std::span<const uint8_t>(
+                                                             reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  if (!r.Ok()) message = fw::Utf8ToWide(r.message);
+  return r.Ok();
+}
+
 bool PdfView::ExportPdf(const std::wstring& path, std::wstring& message) {
   if (!Ready() || !CanExportPdf()) {
     message = L"This PDF can't be exported.";
@@ -1624,7 +1637,11 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   sign.width = 52;
   sign.priority = 3;
   sign.menuLabel = T(L"Sign");
-  m.left = {save, saveAs, print, pages, ocr, sign};
+  ToolItem shareIt = item(CmdShareFile, icon::Share);
+  shareIt.tooltip = T(L"Share: send the PDF to mail or another app");
+  shareIt.priority = 2;
+  shareIt.menuLabel = T(L"Share");
+  m.left = {save, saveAs, print, pages, ocr, sign, shareIt};
 
   m.pager = true;
   m.page = currentPage_;

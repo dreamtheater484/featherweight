@@ -12,6 +12,7 @@
 #include "Util.h"
 #include "core/FileKinds.h"
 #include "core/Strings.h"
+#include "pdf/PdfText.h"
 #include "pkg/Backups.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -323,6 +324,12 @@ ui::FilePage::Model App::CurrentFilePage() {
     print.insert(print.begin(), {command(CmdPrint, icon::Print, L"Ctrl+P"), heading(L"Settings")});
   }
   m.run[FP::kClose] = CmdCloseTab;
+
+  // Share (F1, f1-pdf): Windows' share sheet, with the file itself or a PDF of it.
+  auto& shr = m.entries[FP::kShare];
+  shr.push_back(command(CmdShareFile, icon::Share, T(L"The file itself, to mail or another app")));
+  shr.push_back(command(CmdSharePdf, icon::PDF, T(L"A PDF of it, to mail or another app")));
+  m.enabled[FP::kShare] = ready;
 
   // Export.
   auto& exp = m.entries[FP::kExport];

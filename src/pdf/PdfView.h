@@ -98,6 +98,8 @@ class PdfView : public PagedView, public DocumentHost {
   // printer gives, without the printer. Only where printing is allowed.
   bool CanExportPdf() const override { return doc_ && doc_->CanPrint() && doc_->CanExportFlattened(); }
   bool ExportPdf(const std::wstring& path, std::wstring& message) override;
+  // The PDF as it is now, unsaved changes and all, written to `path` (to share it).
+  bool WriteCopy(const std::wstring& path, std::wstring& message);
 
   // ---- Text ----
   bool HasSelection() const { return !selection_.Empty(); }
