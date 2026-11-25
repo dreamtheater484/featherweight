@@ -949,11 +949,12 @@ const std::vector<BuiltinStyle>& Gallery() {
 // The workbook keeps the English name (Excel's own files do too).
 std::wstring ShownCellStyle(const std::wstring& name) {
   static constexpr UiText kNames[] = {
-      N_(L"Normal"),      N_(L"Good"),         N_(L"Bad"),          N_(L"Neutral"),  N_(L"Calculation"),
+      N_(L"Good"),         N_(L"Bad"),          N_(L"Neutral"),  N_(L"Calculation"),
       N_(L"Check cell"),  N_(L"Explanatory text"), N_(L"Input"),    N_(L"Linked cell"), N_(L"Note"),
       N_(L"Output"),      N_(L"Warning text"), N_(L"Title"),        N_(L"Heading 1"), N_(L"Heading 2"),
       N_(L"Heading 3"),   N_(L"Heading 4"),    N_(L"Total"),        N_(L"Comma"),    N_(L"Comma [0]"),
       N_(L"Currency"),    N_(L"Currency [0]"), N_(L"Percent")};
+  if (name == L"Normal") return T(L"Normal", L"style");  // not the view: Standard in German
   for (const UiText& n : kNames)
     if (name == n.en) return std::wstring(n);
   // "Accent3" and "40% - Accent3".

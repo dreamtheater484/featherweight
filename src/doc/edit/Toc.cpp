@@ -153,7 +153,7 @@ Result Build(Editor& editor, Pos at, const PageText& pages, const std::string& c
   }
   std::u16string text;
   for (size_t i = 0; i < headings.size(); ++i) text += headings[i].text + u"\t" + shown[i] + u"\r";
-  if (headings.empty()) text = T(u"No table of contents entries found.\r");
+  if (headings.empty()) text = std::u16string(T(u"No table of contents entries found.")) + u"\r";
   const uint32_t first = q.para;
   const auto count = static_cast<uint32_t>(headings.empty() ? 1 : headings.size());
   const uint32_t endPara = first + count;

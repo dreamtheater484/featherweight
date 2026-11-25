@@ -4,9 +4,10 @@
 // compiler (tools/strings/fwstrings.cpp) and the fuzzer (tests/fuzz/fuzz_catalog.cpp).
 //
 // Two kinds of resource (RCDATA):
-//   LANG_KEYS: "FWLK", version 1, seed, count, then count hashes of the template's keys, ascending,
-//              then for each hash (as a 16-bit number) the key's place in the template. One table
-//              serves every language.
+//   LANG_KEYS: "FWLK", version 2, seed, count, then the template's keys' hashes, ascending, each as
+//              its difference from the one before (LEB128: 7 bits a byte, low first; the first from
+//              0), then a byte w and each hash's place in the template in w bits (packed, low bits
+//              first). One table serves every language.
 //   LANG_<CODE> (LANG_DE): "FWLZ", the inflated size, then raw deflate of
 //              "FWLT", version 1, count, the keys' check (KeysCheck), then count UTF-8 texts in the
 //              template's order (sorted by their English, which compresses best), each ended by a 0
@@ -27,8 +28,8 @@ uint32_t Hash(uint32_t seed, const wchar_t* context, const wchar_t* en);
 struct Keys {
   uint32_t seed = 0;
   uint32_t count = 0;
-  const uint32_t* hashes = nullptr;  // ascending
-  const uint16_t* places = nullptr;  // per hash: the key's place in the template
+  std::vector<uint32_t> hashes;  // ascending
+  std::vector<uint16_t> places;  // per hash: the key's place in the template
 };
 
 // A check of the key table, stored with each language so a language from another build is refused.

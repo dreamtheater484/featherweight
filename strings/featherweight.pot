@@ -2469,7 +2469,23 @@ msgid "Click to reply; its marker is outlined on the slide"
 msgstr ""
 
 #: src/word/DocRuler.cpp
-msgid "Click to set a {0}"
+msgid "Click to set a bar tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a center tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a decimal tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a left tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a right tab"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
@@ -7015,7 +7031,7 @@ msgid "No tab stops of its own: tabs go to the default stops, every {0}."
 msgstr ""
 
 #: src/doc/edit/Toc.cpp
-msgid "No table of contents entries found.\r"
+msgid "No table of contents entries found."
 msgstr ""
 
 #: src/word/DocPage.cpp
@@ -7026,7 +7042,12 @@ msgstr ""
 msgid "None"
 msgstr ""
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookPageSetup.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocFormat.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocPage.cpp
+msgid "Normal"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
+msgctxt "style"
 msgid "Normal"
 msgstr ""
 

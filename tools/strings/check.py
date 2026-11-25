@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # update.py, also under python -I (the gate)
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 POT = os.path.join(ROOT, 'strings', 'featherweight.pot')
 

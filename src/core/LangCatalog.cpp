@@ -9,7 +9,8 @@
 namespace fw::lang::catalog {
 namespace {
 
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 1;      // LANG_<CODE>'s texts
+constexpr uint32_t kKeysVersion = 2;  // LANG_KEYS: deltas and packed places
 
 uint32_t Get32(const uint8_t* p) {
   uint32_t v;
@@ -45,16 +46,43 @@ uint32_t KeysCheck(const Keys& k) {
 }
 
 bool ReadKeys(const uint8_t* p, size_t n, Keys& keys) {
-  if (n < 16 || std::memcmp(p, "FWLK", 4) != 0 || Get32(p + 4) != kVersion) return false;
-  keys.seed = Get32(p + 8);
-  keys.count = Get32(p + 12);
-  if (keys.count == 0 || keys.count > 65536 || keys.count > (n - 16) / 6) return false;
-  keys.hashes = reinterpret_cast<const uint32_t*>(p + 16);
-  keys.places = reinterpret_cast<const uint16_t*>(p + 16 + 4 * static_cast<size_t>(keys.count));
-  for (uint32_t i = 0; i < keys.count; ++i) {
-    if (i > 0 && keys.hashes[i - 1] >= keys.hashes[i]) return false;
-    if (keys.places[i] >= keys.count) return false;
+  keys = {};
+  if (n < 17 || std::memcmp(p, "FWLK", 4) != 0 || Get32(p + 4) != kKeysVersion) return false;
+  const uint32_t seed = Get32(p + 8), count = Get32(p + 12);
+  if (count == 0 || count > 65536 || count > n - 16) return false;  // a hash takes a byte at least
+  std::vector<uint32_t> hashes(count);
+  size_t at = 16;
+  uint64_t h = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint64_t delta = 0;
+    for (int shift = 0;; shift += 7) {
+      if (at >= n || shift > 28) return false;
+      const uint8_t b = p[at++];
+      delta |= static_cast<uint64_t>(b & 0x7F) << shift;
+      if (!(b & 0x80)) break;
+    }
+    if (i > 0 && delta == 0) return false;  // strictly ascending
+    h += delta;
+    if (h > UINT32_MAX) return false;
+    hashes[i] = static_cast<uint32_t>(h);
   }
+  if (at >= n) return false;
+  const unsigned w = p[at++];
+  if (w == 0 || w > 16 || (count - 1) >> w || n - at < (static_cast<size_t>(count) * w + 7) / 8) return false;
+  std::vector<uint16_t> places(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t v = 0;
+    for (unsigned b = 0; b < w; ++b) {
+      const size_t bit = static_cast<size_t>(i) * w + b;
+      v |= static_cast<uint32_t>((p[at + bit / 8] >> (bit % 8)) & 1) << b;
+    }
+    if (v >= count) return false;
+    places[i] = static_cast<uint16_t>(v);
+  }
+  keys.seed = seed;
+  keys.count = count;
+  keys.hashes = std::move(hashes);
+  keys.places = std::move(places);
   return true;
 }
 
@@ -84,11 +112,25 @@ std::vector<uint8_t> WriteKeys(uint32_t seed, const std::vector<uint32_t>& hashe
   std::iota(order.begin(), order.end(), uint16_t{0});
   std::sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) { return hashes[a] < hashes[b]; });
   std::vector<uint8_t> out = {'F', 'W', 'L', 'K'};
-  Put32(out, kVersion);
+  Put32(out, kKeysVersion);
   Put32(out, seed);
   Put32(out, static_cast<uint32_t>(hashes.size()));
-  for (uint16_t i : order) Put32(out, hashes[i]);
-  for (uint16_t i : order) out.push_back(static_cast<uint8_t>(i)), out.push_back(static_cast<uint8_t>(i >> 8));
+  uint32_t last = 0;
+  for (uint16_t i : order) {
+    for (uint32_t d = hashes[i] - last;; d >>= 7) {
+      out.push_back(static_cast<uint8_t>((d & 0x7F) | (d >= 0x80 ? 0x80 : 0)));
+      if (d < 0x80) break;
+    }
+    last = hashes[i];
+  }
+  unsigned w = 1;
+  while (w < 16 && (hashes.size() - 1) >> w) ++w;
+  out.push_back(static_cast<uint8_t>(w));
+  const size_t start = out.size();
+  out.resize(start + (hashes.size() * w + 7) / 8, 0);
+  for (size_t k = 0; k < order.size(); ++k)
+    for (unsigned b = 0; b < w; ++b)
+      if ((order[k] >> b) & 1) out[start + (k * w + b) / 8] |= static_cast<uint8_t>(1u << ((k * w + b) % 8));
   return out;
 }
 

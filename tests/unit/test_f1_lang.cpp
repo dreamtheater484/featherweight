@@ -96,17 +96,30 @@ TEST(Lang_CatalogRefusesDamage) {
   bad[16] = static_cast<uint8_t>(0xC3);  // "Vet" -> a lead byte and "et"
   bad[17] = 0x28;
   CHECK(!catalog::ReadTexts(bad.data(), bad.size(), b.table, text, offsets));
-  // Keys out of order, or a place past the end.
-  std::vector<uint8_t> keys = b.keys;
-  std::swap(keys[16], keys[20]);
-  std::swap(keys[17], keys[21]);
-  std::swap(keys[18], keys[22]);
-  std::swap(keys[19], keys[23]);
+  // Format 2, byte for byte (tests/fuzz/make_catalog_seeds.py writes the same): the hashes 1, 2, 3 as
+  // the differences 1, 1, 1, then 2 bits a place: 0, 1, 2.
+  const std::vector<uint8_t> want = {'F', 'W', 'L', 'K', 2, 0, 0, 0, 7, 0, 0, 0, 3, 0, 0, 0, 1, 1, 1, 2, 0x24};
+  CHECK(otherKeys == want);
+  CHECK(other.hashes == std::vector<uint32_t>({1, 2, 3}) && other.places == std::vector<uint16_t>({0, 1, 2}));
+  // Two keys with one hash (a difference of 0), a place past the end, too few bits a place, a
+  // difference past 32 bits, cut short.
   catalog::Keys k;
+  auto refused = [&](size_t at, uint8_t value) {
+    std::vector<uint8_t> keys = want;
+    keys[at] = value;
+    return !catalog::ReadKeys(keys.data(), keys.size(), k);
+  };
+  CHECK(refused(17, 0));
+  CHECK(refused(20, 0x34));
+  CHECK(refused(19, 1));
+  CHECK(refused(19, 0));
+  std::vector<uint8_t> keys = want;
+  for (size_t i = 16; i < 21; ++i) keys[i] = 0x80;
   CHECK(!catalog::ReadKeys(keys.data(), keys.size(), k));
-  keys = b.keys;
-  keys[16 + 4 * 3] = 3;
-  keys[16 + 4 * 3 + 1] = 0;
+  keys = want;
+  keys[16] = 0xFF, keys[17] = 0xFF, keys[18] = 0xFF, keys[19] = 0xFF, keys[20] = 0x1F;  // 2^33 - 1
   CHECK(!catalog::ReadKeys(keys.data(), keys.size(), k));
-  CHECK(!catalog::ReadKeys(keys.data(), 12, k));
+  CHECK(!catalog::ReadKeys(want.data(), want.size() - 1, k));
+  CHECK(!catalog::ReadKeys(want.data(), 12, k));
+  CHECK(catalog::ReadKeys(b.keys.data(), b.keys.size(), k) && k.hashes == b.table.hashes);
 }

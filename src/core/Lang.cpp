@@ -35,10 +35,10 @@ bool g_pseudo = false;
 
 // The key's place in the template, if it has a translation; else -1.
 int Find(const Table& t, uint32_t h) {
-  const uint32_t* end = t.keys.hashes + t.keys.count;
-  const uint32_t* it = std::lower_bound(t.keys.hashes, end, h);
+  const auto end = t.keys.hashes.end();
+  const auto it = std::lower_bound(t.keys.hashes.begin(), end, h);
   if (it == end || *it != h) return -1;
-  const uint16_t place = t.keys.places[it - t.keys.hashes];
+  const uint16_t place = t.keys.places[static_cast<size_t>(it - t.keys.hashes.begin())];
   return t.offsets[place] == kNone ? -1 : static_cast<int>(place);
 }
 
@@ -122,7 +122,7 @@ std::unordered_map<std::string, std::string>* g_pseudoUtf8 = nullptr;
 bool InTemplate(const wchar_t* context, const wchar_t* en) {
   if (!g_pseudoKeys.count) return true;  // a build without the keys: nothing to check against
   const uint32_t h = catalog::Hash(g_pseudoKeys.seed, context, en);
-  return std::binary_search(g_pseudoKeys.hashes, g_pseudoKeys.hashes + g_pseudoKeys.count, h);
+  return std::binary_search(g_pseudoKeys.hashes.begin(), g_pseudoKeys.hashes.end(), h);
 }
 
 const wchar_t* PseudoWide(const wchar_t* en, const wchar_t* context) {

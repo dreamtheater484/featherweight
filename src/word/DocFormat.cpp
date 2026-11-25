@@ -705,7 +705,7 @@ std::wstring ShownStyleName(std::string_view name) {
   const std::wstring shown = W(std::string_view(edit::DisplayName(name)));
   // Word's built-in styles its galleries and style lists show, which Word shows in its own language.
   static constexpr UiText kBuiltIn[] = {
-      N_(L"Normal"),           N_(L"No Spacing"),        N_(L"Heading 1"),         N_(L"Heading 2"),
+      N_(L"No Spacing"),        N_(L"Heading 1"),         N_(L"Heading 2"),
       N_(L"Heading 3"),        N_(L"Heading 4"),         N_(L"Heading 5"),         N_(L"Heading 6"),
       N_(L"Heading 7"),        N_(L"Heading 8"),         N_(L"Heading 9"),         N_(L"Title"),
       N_(L"Subtitle"),         N_(L"Subtle Emphasis"),   N_(L"Emphasis"),          N_(L"Intense Emphasis"),
@@ -715,6 +715,7 @@ std::wstring ShownStyleName(std::string_view name) {
       N_(L"Endnote Text"),     N_(L"Hyperlink"),         N_(L"Default Paragraph Font"), N_(L"Bibliography"),
       N_(L"Plain Text"),       N_(L"Normal (Web)"),      N_(L"TOC 1"),             N_(L"TOC 2"),
       N_(L"TOC 3"),            N_(L"Comment Text"),      N_(L"Table Grid")};
+  if (shown == L"Normal") return T(L"Normal", L"style");  // not the view: Standard in German
   for (const UiText& b : kBuiltIn)
     if (shown == b.en) return std::wstring(b);
   return shown;

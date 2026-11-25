@@ -46,8 +46,19 @@ def seed_file(seed, keys, texts):
     hs = [hash_key(seed, c, e) for c, e in keys]
     order = sorted(range(len(hs)), key=lambda i: hs[i])
     hashes = [hs[i] for i in order]
-    table = b'FWLK' + struct.pack('<III', 1, seed, len(hs))
-    table += b''.join(struct.pack('<I', h) for h in hashes) + b''.join(struct.pack('<H', i) for i in order)
+    table = b'FWLK' + struct.pack('<III', 2, seed, len(hs))
+    last = 0
+    for h in hashes:  # each as its difference from the one before, LEB128
+        d = h - last
+        while True:
+            table += bytes([(d & 0x7F) | (0x80 if d >= 0x80 else 0)])
+            d >>= 7
+            if not d:
+                break
+        last = h
+    w = max(1, (len(hs) - 1).bit_length())  # then the places, w bits each, low bits first
+    packed = sum(i << (k * w) for k, i in enumerate(order))
+    table += bytes([w]) + packed.to_bytes((len(hs) * w + 7) // 8, 'little')
     body = b'FWLT' + struct.pack('<III', 1, len(hs), keys_check(seed, hashes, order))
     body += b''.join(t.encode('utf-8') + b'\0' for t in texts)
     return struct.pack('<I', len(table)) + table + body
