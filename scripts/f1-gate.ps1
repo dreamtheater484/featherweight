@@ -91,10 +91,10 @@ $catalogBudget = 40 * 1024             # each language, compressed, in the exe
 $baselines = [ordered]@{
   # docs/TEST_CHECKLIST.md, P1's and P3's rows, on 4.0's final head (6fe39e23). Slides are compared with 4.0
   # measured without Office's cloud fonts (the coordinator, 2026-11-25): f1-word's slide-pages run on 04e9a4bc
-  # with the cloud fonts gone and no line-breaker change (r1-word-5f2617\build\spB0): .pptx 2,349 (2,370 with
-  # them). .ppt and .odp hold format copies of the same decks: their numbers without them follow from f1-word.
+  # with the cloud fonts gone and no line-breaker change (r1-word-5f2617\build\spB0, spPB0): .pptx 2,349 (2,370 with
+  # them), .ppt 2,322 (2,344). .odp holds format copies of the same decks: its number without them follows from f1-word.
   slidesPptx = @{ passing = 2349; slides = 2516; folder = "pptx"; through = "fwtool" }
-  slidesPpt  = @{ passing = 2344; slides = 2577; folder = "ppt"; through = "fwtool" }
+  slidesPpt  = @{ passing = 2322; slides = 2577; folder = "ppt"; through = "fwtool" }  # f1-word: 2,263 of 2,575 through fwtool (spPB0) + the two encrypted decks 59 of 60
   slidesOdp  = @{ passing = 2059; slides = 2547; folder = "odp"; through = "app" }
 }
 # Measured on 4.0's binaries by f1-gate (-Checks fidelity.baseline); null until then.
@@ -508,7 +508,7 @@ function Invoke-SlidePages([string]$id, $base) {
   if (-not $s) { return $null }
   [ordered]@{ passing = [int]$s.passing; slides = [int]$s.slides; percent = $s.percent; exit = $code }
 }
-Check "fidelity.slides" long "Slides against PowerPoint's (scripts\slide-pages.ps1): .pptx, .ppt, .odp" "No lower than 4.0's without cloud fonts: .pptx 2,349 of 2,516, .ppt 2,344 of 2,577, .odp 2,059 of 2,547 (SSIM >= 0.95; .ppt and .odp to be measured without them)" {
+Check "fidelity.slides" long "Slides against PowerPoint's (scripts\slide-pages.ps1): .pptx, .ppt, .odp" "No lower than 4.0's without cloud fonts: .pptx 2,349 of 2,516, .ppt 2,322 of 2,577, .odp 2,059 of 2,547 (SSIM >= 0.95; .odp to be measured without them)" {
   $n = [ordered]@{}; $bad = @()
   foreach ($k in "slidesPptx", "slidesPpt", "slidesOdp") {
     $base = $baselines[$k]
