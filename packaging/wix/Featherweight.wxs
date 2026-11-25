@@ -22,9 +22,12 @@
         <Component Id="Engine">
           <File Source="$(SourceDir)\pdfium.dll" KeyPath="yes" />
         </Component>
-        <Component Id="Licences">
+        <!-- One file per component: WiX generates a component's GUID only when its key path is its one file. -->
+        <Component Id="Licence">
           <File Source="$(SourceDir)\LICENSE.txt" KeyPath="yes" />
-          <File Source="$(SourceDir)\THIRD_PARTY_NOTICES.md" />
+        </Component>
+        <Component Id="Notices">
+          <File Source="$(SourceDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
         </Component>
         <!-- "Open with" for every user: one ProgID per kind of file, as the installer's registration has them. -->
         <Component Id="FileTypes">
@@ -62,7 +65,8 @@
     <Feature Id="Featherweight">
       <ComponentRef Id="Program" />
       <ComponentRef Id="Engine" />
-      <ComponentRef Id="Licences" />
+      <ComponentRef Id="Licence" />
+      <ComponentRef Id="Notices" />
       <ComponentRef Id="FileTypes" />
       <ComponentRef Id="StartMenu" />
     </Feature>
