@@ -667,4 +667,9 @@ enum Cmd : int {
   CmdPdfSignatures,           // the signatures in the file and whether they're valid
   CmdShareFile = 4090,        // Share: the file itself, through Windows' share sheet (Send as attachment)
   CmdSharePdf,                // Share as PDF: Export PDF to a temporary file, then the share sheet
+  // F1, f1-trust: help and support, 4150-4169.
+  CmdHelp = 4150,             // Help: the website's help pages, in the browser (F1)
+  CmdKnownIssues,             // Help: the known issues, on the website
+  CmdReportProblem,           // Help: a new GitHub issue, prefilled with the versions
+  CmdThirdPartyNotices,       // Help: THIRD_PARTY_NOTICES.md (also linked from About)
 };

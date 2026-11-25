@@ -51,6 +51,10 @@ constexpr AppCommand kAppCommands[] = {
     {CmdToggleAutoUpdate, L"Update automatically", L""},
     {CmdCheckUpdates, L"Check for updates now", L""},
     {CmdMakeDefault, L"Make Featherweight the default PDF app", L""},
+    {CmdHelp, L"Help", L"F1"},  // f1-trust
+    {CmdKnownIssues, L"Known issues", L""},
+    {CmdReportProblem, L"Report a problem", L""},
+    {CmdThirdPartyNotices, L"Third-party notices", L""},
     {CmdAbout, L"About Featherweight", L""},
     {CmdExit, L"Exit", L"Alt+F4"},
     {CmdRibbonCollapse, L"Collapse the ribbon", L"Ctrl+F1"},
