@@ -16,6 +16,11 @@ on:
     branches: [main, claude/f1-int, claude/f1-ship]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      scan:
+        description: Also scan the packages (VirusTotal, Hybrid Analysis; f1-trust's scan-release.yml), as a tag build does
+        type: boolean
+        default: false
 
 permissions:
   contents: read

@@ -102,6 +102,22 @@ if ($LASTEXITCODE -ne 0) { throw "release.yml failed for $tag: https://github.co
 $jobs = (gh run view $run.databaseId --repo $repo --json jobs | ConvertFrom-Json).jobs
 $repro = $jobs | Where-Object { $_.name -like "reproducible (compare)*" }
 if (-not $repro -or $repro.conclusion -ne "success") { throw "The second build didn't match the first." }
+# The scan of the tag build's files (f1-trust's scan-release.yml, its "scan-report" artifact): a file a scanner
+# flagged stops the release; "waiting" (no keys yet, Roy's step 5) doesn't.
+$scanDir = Join-Path ([IO.Path]::GetTempPath()) "fw-scan-$($run.databaseId)"
+Remove-Item -Recurse -Force $scanDir -ErrorAction SilentlyContinue
+& {
+  $ErrorActionPreference = "Continue"  # no artifact is an answer, not an error
+  gh run download $run.databaseId --repo $repo -n scan-report -D $scanDir 2>&1 | Out-Null
+}
+$summaryFile = Get-ChildItem $scanDir -Recurse -Filter summary.json -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($summaryFile) {
+  $scan = Get-Content $summaryFile.FullName -Raw | ConvertFrom-Json
+  Write-Host "The scan: $($scan.verdict)"
+  if (-not $scan.pass -and -not $scan.waiting) { throw "The scan flagged the tag build's files: $($scan.verdict)" }
+} else {
+  Write-Warning "The tag build has no scan report (scan-report): not checked."
+}
 
 Step "Publishing the draft"
 $view = gh release view $tag --repo $repo --json isDraft,assets | ConvertFrom-Json
