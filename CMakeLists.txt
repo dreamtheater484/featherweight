@@ -28,6 +28,8 @@ add_library(fwcore STATIC
   src/core/FileKinds.cpp
   src/core/Ini.cpp
   src/core/Json.cpp
+  src/core/Lang.cpp
+  src/core/LangCatalog.cpp
   src/core/Layout.cpp
   src/core/LayoutDump.cpp
   src/core/PageRange.cpp
@@ -36,6 +38,7 @@ add_library(fwcore STATIC
 target_include_directories(fwcore PUBLIC src)
 target_compile_options(fwcore PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
+target_link_libraries(fwcore PRIVATE miniz)  # f1-lang: the catalogs are deflated (src/core/Lang.cpp)
 
 # --- The app ---
 file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp src/word/*.cpp)
@@ -44,6 +47,8 @@ option(FW_TEST_SCREENS "Build the widget gallery and other test-only screens int
 if(NOT FW_TEST_SCREENS)
   list(FILTER FW_APP_SOURCES EXCLUDE REGEX "/src/ui/WidgetGallery\.cpp$")
 endif()
+# f1-lang: the pseudo-language (src/core/Lang.cpp) is in test builds only.
+target_compile_definitions(fwcore PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 add_executable(Featherweight WIN32
   ${FW_APP_SOURCES}
   src/resource.rc
