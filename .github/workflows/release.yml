@@ -58,6 +58,16 @@ jobs:
         with:
           path: third_party/pdfium
           key: pdfium-release-${{ matrix.arch }}-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+      # MSVC names anonymous namespaces (?A0x..., which reach RTTI and the layout) from the active computer name, and
+      # each runner image has its own: one fixed name keeps the bytes the same on every image. The runner is thrown
+      # away; the name is restored after the build.
+      - name: A fixed computer name for the compiler
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName'
+          "FW_COMPUTERNAME=$((Get-ItemProperty $key).ComputerName)" >> $env:GITHUB_ENV
+          Set-ItemProperty $key -Name ComputerName -Value FWBUILD
+          Write-Host "Image $env:ImageVersion; the compiler sees the computer name FWBUILD"
       - name: Configure
         run: cmake -S . -B build-release -A ${{ matrix.platform }} ${{ env.FW_CONFIGURE }}
       - name: Build
@@ -65,6 +75,13 @@ jobs:
         env:
           LINK: /MAP
         run: cmake --build build-release --config Release
+      - name: The computer name back
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:FW_COMPUTERNAME) {
+            Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName' -Name ComputerName -Value $env:FW_COMPUTERNAME
+          }
       - name: Unit tests
         run: ctest --test-dir build-release -C Release --output-on-failure
       - name: Stage the program files
@@ -195,12 +212,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: A fixed computer name for the compiler  # as the build job
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName'
+          "FW_COMPUTERNAME=$((Get-ItemProperty $key).ComputerName)" >> $env:GITHUB_ENV
+          Set-ItemProperty $key -Name ComputerName -Value FWBUILD
+          Write-Host "Image $env:ImageVersion; the compiler sees the computer name FWBUILD"
       - name: Configure
         run: cmake -S . -B build-release -A ${{ matrix.platform }} ${{ env.FW_CONFIGURE }}
       - name: Build the program
         env:
           LINK: /MAP  # as the build job
         run: cmake --build build-release --config Release --target Featherweight
+      - name: The computer name back
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:FW_COMPUTERNAME) {
+            Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName' -Name ComputerName -Value $env:FW_COMPUTERNAME
+          }
       - name: Hash
         shell: pwsh
         run: |
