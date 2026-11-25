@@ -63,7 +63,10 @@ $all = @(
   @{ id = "language"; owner = "f1-lang"; target = "Acrobat: 8 C, 1 D"; budget = 8; decisions = 1; size = "1072x686"; out = $null; steps = @()
      verify = { param($f) @() } },
   @{ id = "share"; owner = "f1-pdf"; target = "Word: 4 C (to the share sheet)"; budget = 4; decisions = 0; size = "1072x686"
-     open = "tests\office\generated\simple.docx"; out = $null; steps = @()
+     open = "tests\office\generated\simple.docx"; out = $null
+     # f1-pdf: File, Share, Share as PDF. The last click opens Windows' share sheet, which a snapshot
+     # run doesn't show (it's counted, not run); the PDF is made as Export PDF makes it.
+     steps = @("click:27,55|1C", "click:41,373|1C", "|1C")
      verify = { param($f) @() } }
 )
 $selected = @($all | Where-Object { -not $Flows.Count -or $Flows -contains $_.id })
