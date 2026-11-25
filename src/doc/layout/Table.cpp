@@ -226,6 +226,15 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       c.marginRight = WidthPt(rtl ? m.start : m.end, rtl ? defLeft : defRight);
       c.marginTop = WidthPt(m.top, defTop);
       c.marginBottom = WidthPt(m.bottom, defBottom);
+      // A left border wider than the cell's left margin pushes the text in: Word draws it inside the
+      // cell, and the text starts after it (the UN financial report's 0.25 pt border with no cell
+      // margins: its text starts 0.24 pt in). A margin at least as wide leaves the text where it is,
+      // and the right border never moves it (measured on the corpus: adding the border to the
+      // margin, or the right one too, loses lines).
+      {
+        const Border& lb = rtl ? c.props.end : c.props.start;
+        if (lb.Present()) c.marginLeft = std::max(c.marginLeft, Pt(lb.width));
+      }
       if (!c.continued) {
         Frame cf = frame;
         cf.x = 0;

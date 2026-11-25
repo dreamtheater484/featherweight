@@ -135,6 +135,9 @@ class Engine {
   // `grid`: the document grid's line pitch (PageGeom::gridPitch), or 0.
   float LineHeight(const ParaText& pt, const text::Line& line, float grid = 0);
   float BaselineIn(const ParaText& pt, const text::Line& line, float height) const;
+  // The height of the first line on a page, given its `height` from LineHeight: shorter for at-least
+  // spacing under w:suppressTopSpacing.
+  float TopLineHeight(const ParaText& pt, float height) const;
   // What of a line's height may hang below the bottom of the page: proportional spacing's extra.
   float Hang(const ParaText& pt, const text::Line& line, float height) const;
   float SpaceBefore(const ParaProps& p, const Spacing& s) const;
@@ -263,6 +266,7 @@ class Engine {
   bool joining_ = false;  // BuildText for a paragraph joined to the next: its text only, no label
   bool splitPageBreakAndMark_ = false;  // w:splitPgBreakAndParaMark
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
+  bool suppressTop_ = false;  // w:suppressTopSpacing: see TopLineHeight
   std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
   void CountStories();
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
