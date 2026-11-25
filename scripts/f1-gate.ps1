@@ -1102,6 +1102,24 @@ function Test-OnlyDocsSince([string]$from) {
   $script:docsOnly[$from] = $ok
   $ok
 }
+# A long result also holds over changes to the CI workflows and the packaging scripts: no long check
+# reads them (the quick and CI checks that do run on every commit anyway). packaging\admx is the
+# exception: ctest reads it (tests\unit\test_f1_ship.cpp).
+function Test-OnlyOutsideLongChecks([string]$file) {
+  $file -match '^docs/' -or $file -match '\.md$' -or $file -eq 'tests/budgets/ledger.json' -or
+  $file -match '^\.github/workflows/' -or ($file -match '^packaging/' -and $file -notmatch '^packaging/admx/')
+}
+$script:longHolds = @{}
+function Test-LongResultsHold([string]$from) {
+  if ($script:longHolds.ContainsKey($from)) { return $script:longHolds[$from] }
+  $ok = $false
+  & git merge-base --is-ancestor $from $script:head 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    $ok = -not @(Invoke-Git diff --name-only $from $script:head | Where-Object { -not (Test-OnlyOutsideLongChecks $_) }).Count
+  }
+  $script:longHolds[$from] = $ok
+  $ok
+}
 function Find-Kept([string]$id) {
   $dir = Join-Path $script:outDir "results"
   if (-not (Test-Path $dir)) { return $null }
@@ -1109,7 +1127,7 @@ function Find-Kept([string]$id) {
   if (Test-Path $mine) { return Read-Json $mine }
   foreach ($d in @(Get-ChildItem $dir -Directory | Sort-Object LastWriteTime -Descending)) {
     $f = Join-Path $d.FullName "$id.json"
-    if ((Test-Path $f) -and $d.Name -match '^[0-9a-f]{40}$' -and (Test-OnlyDocsSince $d.Name)) { return Read-Json $f }
+    if ((Test-Path $f) -and $d.Name -match '^[0-9a-f]{40}$' -and (Test-LongResultsHold $d.Name)) { return Read-Json $f }
   }
   $null
 }
@@ -1233,7 +1251,7 @@ foreach ($r in $rowsOut) {
   $md += @("", "## $($r.title): $($r.status)", "")
   foreach ($c in $r.checks) {
     $md += "- **$($c.status)** ``$($c.id)``: $($c.title). Pass: $($c.pass)."
-    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); only docs changed since)" })"
+    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); only $(if (Test-OnlyDocsSince $c.carriedFrom) { 'docs' } else { 'docs, CI workflows and packaging scripts' }) changed since)" })"
     if ($c.numbers) {
       $pairs = @()
       $nums = $c.numbers
