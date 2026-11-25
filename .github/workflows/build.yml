@@ -1,10 +1,16 @@
 name: build
 
 # Builds and runs the unit tests, checks the size budgets, and fuzzes each parser for a minute,
-# on every push. Packaging and releases happen locally (scripts/release.ps1), not on GitHub.
+# on every push. Releases are built by release.yml.
 on:
   push:
   pull_request:
+
+# A newer push to a branch cancels the run it replaces: the gate reads the head's run, and every branch shares the
+# runners (f1-ship).
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
