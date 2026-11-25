@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
   Packages built (and, in CI, signed) program files for one architecture (f1-ship): the portable zip, the
-  installer (Inno Setup), the per-machine MSI (WiX), the MSIX package, and the updater's assets.
+  installer (Inno Setup), the per-machine MSI (WiX), the MSIX package, and the updater's assets; with x64, also the
+  Group Policy templates' zip.
   scripts\release.ps1 calls it locally; .github\workflows\release.yml calls it in CI.
 
 .PARAMETER Stage
@@ -59,6 +60,13 @@ Copy-Item (Join-Path $Stage "Featherweight.exe") (Join-Path $Out "Featherweight$
 Copy-Item (Join-Path $Stage "pdfium.dll") (Join-Path $Out "pdfium-standard$sfx.dll") -Force
 if (Test-Path (Join-Path $Stage "pdfium-v8.dll")) {
   Copy-Item (Join-Path $Stage "pdfium-v8.dll") (Join-Path $Out "pdfium-v8$sfx.dll") -Force
+}
+
+if ($Arch -eq "x64") {
+  Step "Group Policy templates"  # the same for both architectures
+  $admx = Join-Path $Out "Featherweight-$Version-admx.zip"
+  Remove-Item $admx -ErrorAction SilentlyContinue
+  Compress-Archive -Path (Join-Path $root "packaging\admx\*") -DestinationPath $admx
 }
 
 if ($Kinds -contains "Zip") {

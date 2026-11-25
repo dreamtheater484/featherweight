@@ -243,6 +243,17 @@ jobs:
           $download = (Get-Item "dist\Featherweight-${{ steps.version.outputs.version }}-Setup.exe").Length
           Write-Host ("The download (the x64 installer): {0:N0} bytes, {1:N2} MB of 10" -f $download, ($download / 1MB))
           if ($env:SIGNPATH -ne 'true') { Copy-Item $env:RUNNER_TEMP\fw-test-signing\test-publisher.cer dist\ }
+      # The package managers' manifests from this run's hashes (the gate's ship.manifests reads this artifact before
+      # the release; release.ps1 -Publish writes the committed ones from the published release's).
+      - name: Manifests (winget, Chocolatey, Scoop)
+        shell: pwsh
+        run: |
+          packaging\manifests.ps1 -Version ${{ steps.version.outputs.version }} -Sums dist\SHA256SUMS.txt -Out manifests
+          Get-ChildItem manifests -Recurse -File | ForEach-Object { $_.FullName.Substring($PWD.Path.Length + 1) }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: manifests
+          path: manifests/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages
