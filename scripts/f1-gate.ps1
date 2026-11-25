@@ -863,7 +863,7 @@ Check "friction.flows" long "The new flows: merge two PDFs, sign a PDF, OCR a sc
   if (-not (Test-Path $s)) { return NotBuilt "f1-gate" "tests\f1-friction-checks.ps1" }
   Need-Build
   $o = Join-Path $script:outDir "friction"
-  $code = Invoke-Script "friction.flows" "tests\f1-friction-checks.ps1" @("-Exe", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-Flows", "merge,sign,ocr,language,share")
+  $code = Invoke-Script "friction.flows" "tests\f1-friction-checks.ps1" @("-Exe", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-Flows", "merge,sign,certificate,ocr,language,share")
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "no summary (exit $code)" }
   $n = [ordered]@{}; foreach ($f in @($r.flows)) { $n[$f.id] = "$($f.steps) steps (target $($f.target))$(if (-not $f.ok) { ': ' + $f.why })" }
