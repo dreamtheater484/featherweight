@@ -51,6 +51,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build-release -A ${{ matrix.platform }} ${{ env.FW_CONFIGURE }}
       - name: Build
+        # A linker map beside each program (it doesn't change the program): crash stacks are read with it.
+        env:
+          LINK: /MAP
         run: cmake --build build-release --config Release
       - name: Unit tests
         run: ctest --test-dir build-release -C Release --output-on-failure
@@ -73,10 +76,31 @@ jobs:
           if (-not $failed) { exit 0 }
           # A crash: its stack (cdb, at the second-chance exception), then the same file with the V8 build and with 4.0.
           $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\${{ matrix.arch }}\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          Set-Content cdb-commands.txt "sxd -c2 `"kn 60; .ecxr; kn 60; q`" av`ng"
-          New-Item -ItemType Directory -Force v8test | Out-Null
+          Set-Content cdb-commands.txt "sxd -c2 `".exr -1; r; kn 60; q`" av`ng"
+          New-Item -ItemType Directory -Force v8test, nospell | Out-Null
           Copy-Item build-release\Release\Featherweight.exe v8test\
           Copy-Item build-release\Release\pdfium-v8.dll v8test\pdfium.dll
+          Copy-Item build-release\Release\Featherweight.exe, build-release\Release\pdfium.dll nospell\
+          Set-Content nospell\Featherweight.ini "[General]`r`nCheckSpelling=false"  # a portable copy's settings
+          # The map's symbols, to name the stack's Featherweight+0x... frames.
+          $map = "build-release\Release\Featherweight.map"
+          $syms = $null; $base = [uint64]0x140000000
+          if (Test-Path $map) {
+            $syms = [System.Collections.Generic.List[object]]::new()
+            foreach ($line in [IO.File]::ReadLines((Resolve-Path $map))) {
+              if ($line -match 'Preferred load address is ([0-9a-fA-F]+)') { $base = [Convert]::ToUInt64($Matches[1], 16) }
+              elseif ($line -match '^\s*[0-9a-fA-F]{4}:[0-9a-fA-F]{8}\s+(\S+)\s+([0-9a-fA-F]{16})\s') {
+                $syms.Add([pscustomobject]@{ va = [Convert]::ToUInt64($Matches[2], 16); name = $Matches[1] })
+              }
+            }
+            $syms = @($syms | Sort-Object va)
+          }
+          function Name([uint64]$offset) {
+            if (-not $syms) { return "" }
+            $va = $base + $offset; $lo = 0; $hi = $syms.Count - 1; $best = $null
+            while ($lo -le $hi) { $mid = [int](($lo + $hi) / 2); if ($syms[$mid].va -le $va) { $best = $syms[$mid]; $lo = $mid + 1 } else { $hi = $mid - 1 } }
+            if ($best) { return "{0}+0x{1:x}" -f $best.name, ($va - $best.va) } else { return "" }
+          }
           gh release download v4.0.0 -R "${{ github.repository }}" -p "Featherweight-4.0.0-Portable.zip" -D v40 --clobber
           if (Test-Path v40\Featherweight-4.0.0-Portable.zip) { Expand-Archive v40\Featherweight-4.0.0-Portable.zip v40\app -Force }
           foreach ($f in $failed) {
@@ -85,8 +109,15 @@ jobs:
               $p = Start-Process $cdb.FullName -ArgumentList '-G', '-lines', '-y', "$PWD\build-release\Release", '-cf', "$PWD\cdb-commands.txt",
                 "$PWD\build-release\Release\Featherweight.exe", '--snapshot', "$PWD\smoke.png", "$PWD\$f" -NoNewWindow -PassThru -RedirectStandardOutput cdb.txt
               if (-not $p.WaitForExit(180000)) { $p.Kill() }
-              Get-Content cdb.txt | Select-Object -Last 150 | Out-Host
+              $out = Get-Content cdb.txt
+              $at = ($out | Select-String -Pattern 'second chance' | Select-Object -First 1).LineNumber
+              if ($at) { $out[($at - 1)..($out.Count - 1)] | Select-Object -First 90 | Out-Host } else { $out | Select-Object -Last 60 | Out-Host }
+              Write-Host "-- the stack's frames in the program, by the linker map:"
+              foreach ($m in [regex]::Matches(($out -join "`n"), 'Featherweight\+0x([0-9a-fA-F]+)')) {
+                Write-Host ("  {0} = {1}" -f $m.Value, (Name ([Convert]::ToUInt64($m.Groups[1].Value, 16))))
+              }
             } else { Write-Host "No cdb on this runner" }
+            Write-Host "with spelling off: $(Snap nospell\Featherweight.exe $f)"
             Write-Host "with the V8 PDFium: $(Snap v8test\Featherweight.exe $f)"
             if (Test-Path v40\app\Featherweight.exe) { Write-Host "with 4.0.0: $(Snap v40\app\Featherweight.exe $f)" }
           }
@@ -132,6 +163,8 @@ jobs:
       - name: Configure
         run: cmake -S . -B build-release -A ${{ matrix.platform }} ${{ env.FW_CONFIGURE }}
       - name: Build the program
+        env:
+          LINK: /MAP  # as the build job
         run: cmake --build build-release --config Release --target Featherweight
       - name: Hash
         shell: pwsh
