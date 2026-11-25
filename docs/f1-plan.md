@@ -305,3 +305,9 @@ As in P3 (its "Rules"), plus:
   - The paid Store edition (analysis §4.3) is a listing and a price, a business step for Roy, with no code.
 - **Plan, 2026-11-25: the app never sends crash reports.** The minidump stays on disk, and the user may attach it to a prefilled issue in their browser. That keeps "no telemetry" exact.
 - **Plan, 2026-11-25: no beta release during F1.** Decision 29 publishes 4.1 in one go. The beta channel and rollback are tested against the updater's test URL, not by publishing.
+- **f1-trust, 2026-11-25: crash reports hold stacks, not memory.** A minidump of threads, stacks and modules (no heap), so a report holds as little of the open documents as possible; it's written from a fresh thread, with a note the next start reads, and offered after the recovery banner.
+- **f1-trust, 2026-11-25: the website is Markdown built by GitHub's own Jekyll action** (`site/`, `pages.yml`), published only from main and only when Pages is on; Help (F1) opens `/featherweight/help/`, and `privacy/` is the Store's privacy statement.
+- **f1-trust, 2026-11-25: CodeQL scans what ships.** It traces the shipped exe's build, and results under `third_party/` are dropped before the upload; Scorecard runs on main only, since its action refuses other branches.
+- **f1-trust, 2026-11-25: a release scan passes on Defender and the network.** Microsoft Defender clean and sandbox traffic only to GitHub (Windows' own services listed apart); other engines' detections are listed in the notes, not failed.
+- **f1-trust, 2026-11-25: the SBOM names PDFium's bundled libraries,** each with an SPDX expression that `make_sbom.py` checks against its licence text, so a PDFium update that changes a licence fails until it's reviewed.
+- **f1-trust, 2026-11-25: NLnet gets material, not a proposal.** NLnet asks for proposals "made by humans, not AI" and about AI-written code, so Roy writes it himself from `roy-steps/step-7-nlnet.md`; the next deadline is 3 January 2027.

@@ -5,7 +5,6 @@
 #include <signal.h>
 #include <stdlib.h>
 
-#include <algorithm>
 #include <cwchar>
 #include <exception>
 #include <vector>
@@ -191,11 +190,14 @@ void Prune(const std::wstring& folder, size_t keep) {
     if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) dumps.push_back({fd.ftLastWriteTime, fd.cFileName});
   } while (FindNextFileW(h, &fd));
   FindClose(h);
-  if (dumps.size() <= keep) return;
-  std::sort(dumps.begin(), dumps.end(), [](const Dump& a, const Dump& b) {
-    return CompareFileTime(&a.time, &b.time) > 0;  // newest first
-  });
-  for (size_t i = keep; i < dumps.size(); ++i) DeleteFileW((folder + L"\\" + dumps[i].name).c_str());
+  // A handful of files: remove the oldest until `keep` are left (no sort, which costs kilobytes).
+  while (dumps.size() > keep) {
+    auto oldest = dumps.begin();
+    for (auto it = dumps.begin(); it != dumps.end(); ++it)
+      if (CompareFileTime(&it->time, &oldest->time) < 0) oldest = it;
+    DeleteFileW((folder + L"\\" + oldest->name).c_str());
+    dumps.erase(oldest);
+  }
 }
 
 std::optional<Pending> TakePending(const std::wstring& folder) {

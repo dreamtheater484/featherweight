@@ -52,6 +52,8 @@ add_executable(Featherweight WIN32
 # The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
 set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
                             PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# F1 f1-trust: crash reports and help links run once in a while at most: built for size too.
+set_source_files_properties(src/CrashReport.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})

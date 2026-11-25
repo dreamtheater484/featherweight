@@ -15,6 +15,16 @@
   <a href="https://github.com/dreamtheater484/featherweight/releases"><img src="https://img.shields.io/github/downloads/dreamtheater484/featherweight/total?color=4f6bed" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-4f6bed" alt="Windows 10 and 11">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/dreamtheater484/featherweight?color=4f6bed" alt="MIT license"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/dreamtheater484/featherweight"><img src="https://api.securityscorecards.dev/projects/github.com/dreamtheater484/featherweight/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/dreamtheater484/featherweight/actions/workflows/codeql.yml"><img src="https://github.com/dreamtheater484/featherweight/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+</p>
+
+<p align="center">
+  <a href="https://dreamtheater484.github.io/featherweight/help/">Help</a> ·
+  <a href="https://dreamtheater484.github.io/featherweight/known-issues/">Known issues</a> ·
+  <a href="https://dreamtheater484.github.io/featherweight/privacy/">Privacy</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
