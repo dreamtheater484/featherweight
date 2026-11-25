@@ -15,8 +15,8 @@ Don't open a public issue for a vulnerability. If private reporting isn't availa
 asks for a private contact, without any details.
 
 Useful to include: the version (⋯ → **About Featherweight**), Windows' version, the steps, and a file
-that shows the problem. A file that crashes Featherweight is welcome; the crash dump from
-`%LOCALAPPDATA%\Featherweight\crashes` helps too.
+that shows the problem. A file that crashes Featherweight is welcome; the crash report from
+`%LOCALAPPDATA%\Featherweight\Crashes` helps too.
 
 ## What happens next
 

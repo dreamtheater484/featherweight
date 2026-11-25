@@ -85,6 +85,8 @@ if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE tests/unit/test_filekinds.cpp tests/unit/test_settings.cpp
     tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp
     tests/unit/test_usertemplates.cpp src/UserTemplates.cpp)
+  # F1, f1-trust: local crash reports (a dump of the test's own process, in a temporary folder).
+  target_sources(fw_tests PRIVATE tests/unit/test_f1_trust.cpp src/CrashReport.cpp)
   target_link_libraries(fw_tests PRIVATE bcrypt shell32 ole32 advapi32 user32)
 endif()
 
