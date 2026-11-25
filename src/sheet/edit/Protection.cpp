@@ -9,6 +9,7 @@
 
 #include <pugixml.hpp>
 
+#include "core/Lang.h"
 #include "pkg/OfficeCrypto.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/xlsx/Internal.h"
@@ -20,15 +21,15 @@ namespace {
 // Excel's words (Excel 2021, measured through automation). The second names where Featherweight
 // has Unprotect Sheet.
 constexpr char16_t kLockedCell[] =
-    u"The cell or chart you're trying to change is on a protected sheet. To make a change, unprotect the sheet. You "
-    u"might be requested to enter a password.";
-constexpr char16_t kCommand[] =
-    u"You cannot use this command on a protected sheet. To use this command, you must first unprotect the sheet "
-    u"(right-click the sheet tab, Unprotect Sheet). You may be prompted for a password.";
-constexpr char16_t kStructure[] =
-    u"The workbook's structure is protected: sheets can't be added, deleted, moved, renamed or hidden. To change "
+    N_(u"The cell or chart you're trying to change is on a protected sheet. To make a change, unprotect the sheet. You "
+    u"might be requested to enter a password.");
+constexpr UiText16 kCommand =
+    N_(u"You cannot use this command on a protected sheet. To use this command, you must first unprotect the sheet "
+    u"(right-click the sheet tab, Unprotect Sheet). You may be prompted for a password.");
+constexpr UiText16 kStructure =
+    N_(u"The workbook's structure is protected: sheets can't be added, deleted, moved, renamed or hidden. To change "
     u"them, unprotect the workbook (right-click a sheet tab, Protect Workbook). You might be requested to enter a "
-    u"password.";
+    u"password.");
 
 // The old 16-bit hash Excel 2010 and earlier kept (ECMA-376 Part 4 §14.7.1, "password").
 uint16_t LegacyHash(std::wstring_view password) {
@@ -276,7 +277,7 @@ bool AllUnlocked(const Sheet& s, const Styles& st, const Range& r) {
 const char16_t* LockedCellMessage() { return kLockedCell; }
 
 std::u16string ProtectionRefusal(const Workbook& b, int sheet, ProtectAct act, const Range& r) {
-  if (act == ProtectAct::Structure) return StructureProtected(b) ? kStructure : u"";
+  if (act == ProtectAct::Structure) return StructureProtected(b) ? std::u16string(kStructure) : u"";
   if (sheet < 0 || static_cast<size_t>(sheet) >= b.SheetCount()) return {};
   const Sheet& s = b.GetSheet(static_cast<size_t>(sheet));
   const std::optional<SheetProtection> p = SheetProtectionOf(s);
@@ -301,8 +302,8 @@ std::u16string ProtectionRefusal(const Workbook& b, int sheet, ProtectAct act, c
     case ProtectAct::InsertLink: return p->insertHyperlinks || !unlocked() ? kLockedCell : u"";
     case ProtectAct::Objects: return p->objects ? kLockedCell : u"";
     case ProtectAct::Sort: return p->sort || !unlocked() ? kLockedCell : u"";
-    case ProtectAct::Filter: return p->autoFilter ? kCommand : u"";
-    case ProtectAct::Never: return kCommand;
+    case ProtectAct::Filter: return p->autoFilter ? std::u16string(kCommand) : u"";
+    case ProtectAct::Never: return std::u16string(kCommand);
     case ProtectAct::Structure: break;
   }
   return {};

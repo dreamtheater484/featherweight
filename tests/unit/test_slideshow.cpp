@@ -1,4 +1,5 @@
 // The slide show's transitions, timing tree and animation interpreter (src/slide/show/Timing.h).
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -535,6 +536,26 @@ TEST(SlideShowTimingRobust) {
   t = ParseXml(TimingXml(Group(deep)));
   CHECK_EQ(t.main.steps.size(), 1u);
   CHECK(t.main.steps[0].behaviors.empty());
+  // Angles and points past a float's range: held, and every pose stays finite (fuzz_timing
+  // crash-7d4b40c3, an animRot by 2.3e129).
+  std::string spin = "<p:animRot by=\"2" + std::string(130, '3') + "\"><p:cBhvr><p:cTn id=\"9\" dur=\"1000\" fill=\"hold\"/>" +
+                     Tgt(4) + "<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>";
+  std::string grow = "<p:animScale><p:cBhvr><p:cTn id=\"9\" dur=\"1000\" fill=\"hold\"/>" + Tgt(5) +
+                     "</p:cBhvr><p:by x=\"1e300\" y=\"-1e300\"/></p:animScale>";
+  std::string fly = "<p:animMotion><p:cBhvr><p:cTn id=\"9\" dur=\"1000\" fill=\"hold\"/>" + Tgt(6) +
+                    "</p:cBhvr><p:by x=\"1e300\" y=\"-1e300\"/></p:animMotion>";
+  t = ParseXml(TimingXml(Group(Sub(0, Effect("emph", 8, "clickEffect", 0, spin + grow + fly, " repeatCount=\"2000\" autoRev=\"1\"")))));
+  CHECK_EQ(t.main.steps.size(), 1u);
+  Animator big(&t, BoxOf, nullptr);
+  big.Start(0);
+  big.Click(0);
+  for (double ms : {250.0, 1000.0, 2500.0, 5000.0}) {
+    big.Update(ms);
+    CHECK_EQ(big.Poses().size(), 3u);
+    for (const auto& [key, p] : big.Poses())
+      CHECK(std::isfinite(p.rotation) && std::isfinite(p.sx) && std::isfinite(p.sy) && std::isfinite(p.dx) &&
+            std::isfinite(p.dy));
+  }
   // An animator without a timing does nothing.
   Animator none;
   none.Start(0);

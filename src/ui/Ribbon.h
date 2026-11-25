@@ -143,6 +143,8 @@ class Ribbon {
   CommandState Query(int cmd) const;
   std::wstring LabelOf(const RibbonItem& it, bool large = false) const;  // "\n" kept only for a large one
   float TextW(const std::wstring& s, float dip, bool semibold = false) const;
+  // A box's width in DIPs: its design width, wider when a dropdown's choice wouldn't fit (a longer language).
+  float BoxW(const RibbonItem& it) const;
 
   // Layout of one group at a stage (0: as given ... 3: galleries as buttons), from `x` at body
   // top `y`; returns its width. Places its parts when `place`.

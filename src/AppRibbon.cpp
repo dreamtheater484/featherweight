@@ -11,6 +11,7 @@
 #include "UserTemplates.h"
 #include "Util.h"
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Backups.h"
 #include "ui/Icons.h"
@@ -217,7 +218,7 @@ ui::FilePage::Model App::CurrentFilePage() {
   const bool ready = v && v->Ready();
   if (ready) {
     m.title = v->Title();
-    m.path = v->Path().empty() ? L"Not saved yet" : v->Path();
+    m.path = v->Path().empty() ? T(L"Not saved yet") : v->Path();
   }
   auto entry = [](int cmd, std::wstring label, wchar_t glyph = 0, std::wstring detail = {}) {
     FP::Entry e;
@@ -251,26 +252,26 @@ ui::FilePage::Model App::CurrentFilePage() {
   auto& fresh = m.entries[FP::kNew];
   for (const fw::FileKindInfo& k : fw::FileKinds())
     if (fw::EditorShipped(k.kind))
-      fresh.push_back(entry(CmdNewFile + static_cast<int>(k.kind), L"Blank " + std::wstring(k.noun), kindGlyph(k.kind),
+      fresh.push_back(entry(CmdNewFile + static_cast<int>(k.kind), fw::Phrase(k.kind, fw::KindPhrase::Blank), kindGlyph(k.kind),
                             k.kind == fw::FileKind::Document ? L"Ctrl+N" : L""));
   const bool docs = fw::EditorShipped(fw::FileKind::Document);
-  if (docs || !userTemplates_.empty()) fresh.push_back(heading(L"Templates"));
+  if (docs || !userTemplates_.empty()) fresh.push_back(heading(T(L"Templates")));
   if (docs)
     for (int i = 0; i < EmptyState::kTemplateCount; ++i)
-      fresh.push_back(entry(CmdNewTemplate + i, EmptyState::kTemplates[i], icon::TextDocument));
+      fresh.push_back(entry(CmdNewTemplate + i, std::wstring(EmptyState::kTemplates[i]), icon::TextDocument));
   for (size_t i = 0; i < userTemplates_.size(); ++i) {
     std::wstring name = fw::FileNameOf(userTemplates_[i]);
     name = name.substr(0, name.find_last_of(L'.'));
     fresh.push_back(entry(CmdUserTemplate + static_cast<int>(i), name, kindGlyph(fw::KindOfPath(userTemplates_[i]))));
   }
   if (docs || fw::EditorShipped(fw::FileKind::Workbook) || fw::EditorShipped(fw::FileKind::Presentation))
-    fresh.push_back(entry(CmdUserTemplatesFolder, L"More templates…", icon::FolderOpen));
+    fresh.push_back(entry(CmdUserTemplatesFolder, T(L"More templates…"), icon::FolderOpen));
 
   // Open: browse, then the recent files.
   auto& open = m.entries[FP::kOpen];
-  open.push_back(entry(CmdOpen, L"Browse…", icon::FolderOpen, L"Ctrl+O"));
+  open.push_back(entry(CmdOpen, T(L"Browse…"), icon::FolderOpen, L"Ctrl+O"));
   if (!settings_.recent.empty() && settings_.showRecent) {
-    open.push_back(heading(L"Recent"));
+    open.push_back(heading(T(L"Recent")));
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
       const std::wstring& path = settings_.recent[i].path;
       const size_t slash = path.find_last_of(L"\\/");
@@ -301,8 +302,8 @@ ui::FilePage::Model App::CurrentFilePage() {
   // Info: this file.
   auto& info = m.entries[FP::kInfo];
   if (ready && v->Kind() == TabKind::Document && !v->Path().empty()) {
-    FP::Entry restore = entry(CmdRestoreOriginal, L"Restore original", icon::Undo,
-                              L"Open the file as it was before Featherweight first saved over it");
+    FP::Entry restore = entry(CmdRestoreOriginal, T(L"Restore original"), icon::Undo,
+                              T(L"Open the file as it was before Featherweight first saved over it"));
     restore.enabled = fileBackup_;
     info.push_back(restore);
   }
@@ -320,13 +321,13 @@ ui::FilePage::Model App::CurrentFilePage() {
   if (print.empty()) {
     m.run[FP::kPrint] = CmdPrint;
   } else {
-    print.insert(print.begin(), {command(CmdPrint, icon::Print, L"Ctrl+P"), heading(L"Settings")});
+    print.insert(print.begin(), {command(CmdPrint, icon::Print, L"Ctrl+P"), heading(T(L"Settings"))});
   }
   m.run[FP::kClose] = CmdCloseTab;
 
   // Export.
   auto& exp = m.entries[FP::kExport];
-  exp.push_back(command(CmdExportPdf, icon::PDF, L"The pages as a PDF file, as they look"));
+  exp.push_back(command(CmdExportPdf, icon::PDF, T(L"The pages as a PDF file, as they look")));
   own(RibbonFilePlace::Export, exp, false);
   // With nothing else to export (documents, workbooks), Export is Export PDF at once, as Print is
   // the dialog at once: File, Export, Enter, as ⋯, Export PDF, Enter was (the friction review, R1).
@@ -337,30 +338,38 @@ ui::FilePage::Model App::CurrentFilePage() {
 
   // Options: the app's, then this kind of tab's.
   auto& opt = m.entries[FP::kOptions];
-  opt.push_back(heading(L"App theme"));
+  opt.push_back(heading(T(L"App theme")));
   for (int cmd : {CmdThemeSystem, CmdThemeLight, CmdThemeDark}) {
     FP::Entry e = command(cmd);
     e.radio = true;
-    e.label = cmd == CmdThemeSystem ? L"Use Windows setting" : cmd == CmdThemeLight ? L"Light" : L"Dark";
+    e.label = cmd == CmdThemeSystem ? T(L"Use Windows setting") : cmd == CmdThemeLight ? T(L"Light") : T(L"Dark");
     opt.push_back(e);
   }
-  opt.push_back(heading(L"Reading"));
+  // f1-lang: the interface's language.
+  opt.push_back(heading(T(L"Language")));
+  for (int cmd = CmdLanguageWindows; cmd < CmdLanguage0 + 9; ++cmd)
+    if (QueryCommand(cmd).visible) {
+      FP::Entry e = command(cmd);
+      e.radio = true;
+      opt.push_back(e);
+    }
+  opt.push_back(heading(T(L"Reading")));
   opt.push_back(command(CmdToggleInvert, 0, {}, true));
   opt.push_back(command(CmdToggleHighlight, 0, {}, true));
   opt.push_back(command(CmdShowRecentFiles, 0, {}, true));
   if (ready && v->Kind() == TabKind::Document) {
-    opt.push_back(heading(L"Editing"));
+    opt.push_back(heading(T(L"Editing")));
     for (int cmd : {CmdToggleSpelling, CmdToggleAutoCorrect, CmdRuler}) opt.push_back(command(cmd, 0, {}, true));
   }
   const size_t before = opt.size();
-  opt.push_back(heading(ready ? v->Kind() == TabKind::Workbook       ? L"Workbooks"
-                                : v->Kind() == TabKind::Presentation ? L"Presentations"
-                                                                     : L"Documents"
-                              : L"This file"));
+  opt.push_back(heading(ready ? v->Kind() == TabKind::Workbook       ? T(L"Workbooks")
+                                : v->Kind() == TabKind::Presentation ? T(L"Presentations")
+                                                                     : T(L"Documents")
+                              : T(L"This file")));
   own(RibbonFilePlace::Options, opt, true);
   if (opt.size() == before + 1) opt.pop_back();
   if (QueryCommand(CmdCheckUpdates).visible) {  // f1-ship: inside an MSIX package the Store updates the app
-    opt.push_back(heading(L"Updates"));
+    opt.push_back(heading(T(L"Updates")));
     opt.push_back(command(CmdToggleAutoUpdate, 0, {}, true));
     opt.push_back(command(CmdUpdateBeta, 0, {}, true));
     opt.push_back(command(CmdCheckUpdates, icon::Download));
@@ -370,7 +379,7 @@ ui::FilePage::Model App::CurrentFilePage() {
   if (QueryCommand(CmdScriptEngine).visible) opt.push_back(command(CmdScriptEngine, icon::Download));  // f1-ship
   if (QueryCommand(CmdMakeDefault).visible) opt.push_back(command(CmdMakeDefault, icon::PDF));
   if (fw::pkg::backups::Any(DocFile::Config().backups))
-    opt.push_back(entry(CmdDeleteBackups, L"Delete backups", icon::Delete, L"The originals kept for Restore original, in every folder"));
+    opt.push_back(entry(CmdDeleteBackups, T(L"Delete backups"), icon::Delete, T(L"The originals kept for Restore original, in every folder")));
   // f1-trust: help and support, opened in the browser (the app sends nothing itself).
   opt.push_back(command(CmdHelp, icon::TextDocument));
   opt.push_back(command(CmdKnownIssues, icon::Warning));
@@ -608,6 +617,54 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     Report(L"ribboncheck: " + std::to_wstring(items) + L" items in " + std::to_wstring(raw.tabs.size()) + L" tabs; " +
            std::to_wstring(baseline) + L" baseline commands; reachable " + report + L"; " + std::to_wstring(problems.size()) +
            L" problems\n");
+    if (!problems.empty()) scriptFailed_ = true;
+    return true;
+  }
+  if (op == L"clipcheck") {
+    // clipcheck (F1, f1-lang): the window drawn with each ribbon tab, then each File page section;
+    // every label that doesn't fit its box is a problem. With the pseudo-language (--lang qps) only the
+    // interface's own texts count (in its brackets): a file's name or a cell's text may be cut.
+    std::vector<gfx::ClippedText> clipped;
+    std::vector<std::pair<std::wstring, std::wstring>> problems;  // where, what
+    const bool pseudo = std::wstring_view(fw::lang::Current()) == L"qps";
+    int surfaces = 0;
+    auto look = [&](const std::wstring& where) {
+      ++surfaces;
+      clipped.clear();
+      gfx::WatchClipping(&clipped);
+      DrawSnapshotFrame();
+      gfx::WatchClipping(nullptr);
+      for (const gfx::ClippedText& c : clipped) {
+        if (pseudo && c.text.find(L'·') == std::wstring::npos) continue;
+        const std::wstring what = L"\"" + c.text + L"\" needs " + std::to_wstring(std::lround(c.need)) + L" px, has " +
+                                  std::to_wstring(std::lround(c.room));
+        if (std::none_of(problems.begin(), problems.end(), [&](const auto& p) { return p.second == what; }))
+          problems.push_back({where, what});
+      }
+    };
+    const std::wstring was = ribbon_.Selected();
+    std::vector<std::wstring> tabNames;
+    for (const RibbonTab& t : ribbon_.Model().tabs) tabNames.push_back(t.name);
+    for (const std::wstring& name : tabNames) {
+      ribbon_.Select(name);
+      Layout();
+      look(name);
+    }
+    ribbon_.Select(was);
+    Layout();
+    if (ribbonShown_ && !presentation_) {
+      OpenFilePage();
+      for (int s = 0; s < ui::FilePage::kSectionCount; ++s) {
+        filePage_.Open(static_cast<ui::FilePage::Section>(s));
+        Layout();
+        look(std::wstring(T(L"File")) + L" › " + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(s)));
+      }
+      CloseFilePage();
+    }
+    for (const auto& [where, what] : problems) Report(L"clipcheck: " + where + L": " + what + L"\n");
+    // The summary tools/strings/clipping.ps1 reads: the language actually in use, what was drawn, what didn't fit.
+    Report(L"clipcheck: language " + std::wstring(fw::lang::Current()) + L", " + std::to_wstring(surfaces) + L" surfaces, " +
+           std::to_wstring(problems.size()) + L" clipped\n");
     if (!problems.empty()) scriptFailed_ = true;
     return true;
   }

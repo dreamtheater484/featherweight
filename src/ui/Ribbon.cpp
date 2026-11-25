@@ -6,6 +6,7 @@
 #include <cwctype>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
@@ -220,13 +221,23 @@ int Ribbon::GalleryColumns(const RibbonItem& it, int stage) const {
   }
 }
 
+float Ribbon::BoxW(const RibbonItem& it) const {
+  float w = std::max(it.tool.width, 20.f);
+  if (it.tool.kind == ToolKind::Dropdown) {  // ui::Dropdown: 11 DIPs before its text, 28 for the chevron, 13-DIP text
+    float text = 0;
+    for (const std::wstring& c : it.tool.choices) text = std::max(text, TextW(c, 13.f));
+    w = std::max(w, text + 39 + (it.tool.glyph ? 24 : 0) + 1);
+  }
+  return w;
+}
+
 float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumns) const {
   const float u = ui_;
   if (galleryColumns > 0)
     return std::round((galleryColumns * it.gallery->choiceWidth + 2 + kGalleryScrollW) * u);
   if (LabelledPicker(it, size)) return std::round((TextW(LabelOf(it), kItemFont) + 52) * u);
-  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + std::max(it.tool.width, 20.f)) * u);
-  if (!OwnDrawn(it, size) && !it.gallery) return std::round(std::max(it.tool.width, 20.f) * u);
+  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + BoxW(it)) * u);
+  if (!OwnDrawn(it, size) && !it.gallery) return std::round(BoxW(it) * u);
   const bool arrow = IsMenuButton(it) || IsSplit(it, size) || it.gallery.has_value();
   const std::wstring label = LabelOf(it, size == RibbonSize::Large);
   switch (size) {
@@ -453,7 +464,7 @@ void Ribbon::PlaceTabs() {
     parts_.push_back(p);
     x += w + 2 * u;
   };
-  add(PartKind::File, -1, L"File");
+  add(PartKind::File, -1, T(L"File"));
   bool contextual = false;
   for (int t = 0; t < static_cast<int>(model_.tabs.size()); ++t) {
     if (model_.tabs[t].contextual && !contextual) {
@@ -853,7 +864,7 @@ void Ribbon::DrawPart(Canvas& c, const Part& part, size_t index) {
       const bool selected = !file && part.index == tab_ && (!collapsed_ || overlay_);
       const D2D1_RECT_F hr = RectF(part.rc.left, part.rc.top + 2 * u, part.rc.right, part.rc.bottom - 3 * u);
       if (hot) c.FillRound(hr, 4 * u, press ? p.pressed : p.hover);
-      const std::wstring& name = file ? std::wstring(L"File") : t->name;
+      const std::wstring& name = file ? std::wstring(T(L"File")) : t->name;
       const D2D1_COLOR_F fg = t && t->contextual ? p.accentText : p.text;
       c.Text(name, RectF(part.rc.left, part.rc.top, part.rc.right, part.rc.bottom - 2 * u), fg, kTabFont * u,
              selected ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
@@ -1228,16 +1239,16 @@ std::wstring Ribbon::TooltipAt(int x, int y) const {
   const float u = ui_;
   (void)u;
   switch (p.kind) {
-    case PartKind::File: return L"File: new, open, save, print and options";
-    case PartKind::Collapse: return collapsed_ ? L"Keep the ribbon shown (Ctrl+F1)" : L"Collapse the ribbon (Ctrl+F1)";
+    case PartKind::File: return T(L"File: new, open, save, print and options");
+    case PartKind::Collapse: return collapsed_ ? T(L"Keep the ribbon shown (Ctrl+F1)") : T(L"Collapse the ribbon (Ctrl+F1)");
     case PartKind::Launcher: {
       const CommandState s = Query(Tab()->groups[p.group].launcher);
-      return s.label.empty() ? Tab()->groups[p.group].name + L" options" : s.Tooltip();
+      return s.label.empty() ? Fmt(T(L"{0} options"), {Tab()->groups[p.group].name}) : s.Tooltip();
     }
     case PartKind::GroupButton: return Tab()->groups[p.group].name;
-    case PartKind::GalleryUp: return L"Previous row";
-    case PartKind::GalleryDown: return L"Next row";
-    case PartKind::GalleryMore: return L"More";
+    case PartKind::GalleryUp: return T(L"Previous row");
+    case PartKind::GalleryDown: return T(L"Next row");
+    case PartKind::GalleryMore: return T(L"More");
     case PartKind::GalleryChoice:
     case PartKind::GridChoice: {
       const RibbonItem* it = ItemAt(p.group, p.item);
@@ -1530,13 +1541,13 @@ void Ribbon::Forget() {
 
 void Ribbon::Describe(uia::Tree& t, int parent) {
   if (model_.tabs.empty()) return;
-  int bar = t.Add(parent, CmdFilePage, UIA_ToolBarControlTypeId, L"Ribbon", RectF(rc_));
+  int bar = t.Add(parent, CmdFilePage, UIA_ToolBarControlTypeId, T(L"Ribbon"), RectF(rc_));
   for (size_t i = 0; i < parts_.size(); ++i) {
     const Part& p = parts_[i];
     switch (p.kind) {
       case PartKind::File:
       case PartKind::Tab: {
-        const std::wstring name = p.kind == PartKind::File ? L"File" : model_.tabs[p.index].name;
+        const std::wstring name = p.kind == PartKind::File ? T(L"File") : model_.tabs[p.index].name;
         int n = t.Add(bar, 10000 + p.index, p.kind == PartKind::File ? UIA_ButtonControlTypeId : UIA_TabItemControlTypeId, name, p.rc);
         t[n].accelerator = L"Alt, " + (partTips_.count(i) ? partTips_[i] : L"");
         t[n].invoke = [this, i] { Activate(i, true); };
@@ -1549,7 +1560,7 @@ void Ribbon::Describe(uia::Tree& t, int parent) {
       case PartKind::Launcher:
       case PartKind::GroupButton: {
         const RibbonItem* it = ItemAt(p.group, p.item);
-        const std::wstring name = p.kind == PartKind::Launcher ? Tab()->groups[p.group].name + L" options"
+        const std::wstring name = p.kind == PartKind::Launcher ? Fmt(T(L"{0} options"), {Tab()->groups[p.group].name})
                                   : p.kind == PartKind::GroupButton ? Tab()->groups[p.group].name
                                   : it ? LabelOf(*it) : L"";
         int n = t.Add(bar, 20000 + static_cast<int64_t>(i), UIA_ButtonControlTypeId, name, p.rc);

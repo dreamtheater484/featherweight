@@ -16,6 +16,7 @@
 #include "Util.h"
 #include "Version.h"
 #include "core/Json.h"
+#include "core/Lang.h"
 #include "core/SemVer.h"
 #include "core/Strings.h"
 
@@ -258,10 +259,10 @@ Verdict CheckFile(const Signature& running, const Signature& file, const std::ws
 const wchar_t* VerdictText(Verdict v) {
   switch (v) {
     case Verdict::Accepted: return L"accepted";
-    case Verdict::NotSigned: return L"the download isn’t signed";
-    case Verdict::BadSignature: return L"the download’s signature isn’t valid";
-    case Verdict::OtherPublisher: return L"the download is signed by another publisher";
-    case Verdict::OtherProduct: return L"the download is signed for another product";
+    case Verdict::NotSigned: return T(L"the download isn’t signed");
+    case Verdict::BadSignature: return T(L"the download’s signature isn’t valid");
+    case Verdict::OtherPublisher: return T(L"the download is signed by another publisher");
+    case Verdict::OtherProduct: return T(L"the download is signed for another product");
   }
   return L"";
 }
@@ -362,16 +363,16 @@ std::wstring FetchChecked(const std::wstring& url, const std::string& sha256, co
                           const wchar_t* product, const updater::Signature& running, updater::Signature* signature) {
   std::string data;
   if (Fetch(url, data, 256u << 20) != 200 || util::Sha256(data.data(), data.size()) != sha256)
-    return L"The download didn’t pass verification.";
+    return T(L"The download didn’t pass verification.");
   if (!WriteBytes(fresh, data)) {
     DeleteFileW(fresh.c_str());
-    return L"Couldn’t write the update.";
+    return T(L"Couldn’t write the update.");
   }
   updater::Signature sig = updater::ReadSignature(fresh);
   updater::Verdict verdict = updater::CheckFile(running, sig, product);
   if (verdict != updater::Verdict::Accepted) {
     DeleteFileW(fresh.c_str());
-    return std::wstring(L"The update was refused: ") + updater::VerdictText(verdict) + L".";
+    return Fmt(T(L"The update was refused: {0}."), {updater::VerdictText(verdict)});
   }
   if (signature) *signature = sig;
   return {};
@@ -452,7 +453,7 @@ std::wstring Updater::PreviousVersion() {
 bool Updater::RollBack(std::wstring* error) {
   const std::wstring dir = InstallDir(), prev = dir + L"\\" + kPrevious;
   if (PreviousVersion().empty()) {
-    if (error) *error = L"There’s no earlier version to go back to.";
+    if (error) *error = T(L"There’s no earlier version to go back to.");
     return false;
   }
   // The running files can be renamed but not replaced: each goes to .old (removed at the next start).
@@ -469,7 +470,7 @@ bool Updater::RollBack(std::wstring* error) {
         MoveFileExW(t.c_str(), (prev + L"\\" + g).c_str(), 0);
         MoveFileExW((t + L".old").c_str(), t.c_str(), 0);
       }
-      if (error) *error = L"The earlier version couldn’t be put back.";
+      if (error) *error = T(L"The earlier version couldn’t be put back.");
       return false;
     }
     done.push_back(f);
@@ -497,16 +498,16 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
   std::string body;
   int status = Fetch(url, body, 4u << 20);
   if (status == 404) return finish({Status::UpToDate});  // no releases yet
-  if (status != 200) return finish({Status::Failed, L"", L"", L"Couldn’t reach GitHub."});
+  if (status != 200) return finish({Status::Failed, L"", L"", T(T(L"Couldn’t reach GitHub."))});
   auto json = fw::ParseJson(body);
-  if (!json) return finish({Status::Failed, L"", L"", L"Unexpected response from GitHub."});
+  if (!json) return finish({Status::Failed, L"", L"", T(L"Unexpected response from GitHub.")});
   const fw::JsonValue* release = updater::PickRelease(*json, options.beta);
   if (!release) return finish({Status::UpToDate});
 
   std::string tag = release->StringOr("tag_name");
   auto latest = fw::ParseSemVer(tag);
   auto current = fw::ParseSemVer(FW_VERSION_STRING);
-  if (!latest || !current) return finish({Status::Failed, L"", L"", L"Unexpected version number."});
+  if (!latest || !current) return finish({Status::Failed, L"", L"", T(L"Unexpected version number.")});
   r.version = fw::Utf8ToWide(tag.size() && (tag[0] == 'v' || tag[0] == 'V') ? tag.substr(1) : tag);
   r.pageUrl = fw::Utf8ToWide(release->StringOr("html_url", "https://github.com/dreamtheater484/featherweight/releases"));
   if (fw::CompareSemVer(*latest, *current) <= 0) {
@@ -530,7 +531,7 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
     return finish(r);
   }
   std::string sumsText;
-  if (Fetch(sumsUrl->second, sumsText, 1u << 20) != 200) return finish({Status::Failed, r.version, r.pageUrl, L"Download failed."});
+  if (Fetch(sumsUrl->second, sumsText, 1u << 20) != 200) return finish({Status::Failed, r.version, r.pageUrl, T(L"Download failed.")});
   auto sums = ParseSums(sumsText);
 
   const std::wstring dir = InstallDir();
@@ -570,7 +571,7 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
     if (running.state == updater::Signature::State::Trusted && w.product == std::wstring(L"Featherweight")) {
       auto fileVersion = fw::ParseSemVer(fw::WideToUtf8(sig.fileVersion));
       if (!fileVersion || fw::CompareSemVer(*fileVersion, *latest) != 0)
-        return fail(L"The update was refused: the program isn’t the release’s version.");
+        return fail(T(L"The update was refused: the program isn’t the release’s version."));
     }
   }
   if (plan.empty()) {
@@ -608,7 +609,7 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
       MoveFileExW((keep ? prev + L"\\" + p.name : p.target + L".old").c_str(), p.target.c_str(), 0);
     }
     for (auto& p : plan) DeleteFileW(p.fresh.c_str());
-    return finish({Status::Failed, r.version, r.pageUrl, L"The update couldn’t be installed."});
+    return finish({Status::Failed, r.version, r.pageUrl, T(L"The update couldn’t be installed.")});
   }
   if (keep) util::WriteFileAtomic(prev + L"\\version.txt", FW_VERSION_STRING);
   r.status = Status::Installed;
@@ -654,20 +655,20 @@ void Updater::RunScriptEngine(std::shared_ptr<Shared> shared, HWND notify) {
   };
   const std::wstring dir = InstallDir(), target = dir + L"\\pdfium.dll", fresh = target + L".new";
   if (updater::IsScriptEngine(target)) return finish(Status::Installed);
-  if (!CanSelfUpdate()) return finish(Status::Failed, L"Featherweight can’t change its own folder.");
+  if (!CanSelfUpdate()) return finish(Status::Failed, T(L"Featherweight can’t change its own folder."));
 
   std::wstring url = std::wstring(kTagUrl) + L"v" + FW_VERSION_WSTRING;
   if (!g_testUrl.empty()) url = IsFileUrl(g_testUrl) ? g_testUrl + L"\\tag.json" : g_testUrl;
   std::string body;
   int status = Fetch(url, body, 4u << 20);
-  if (status != 200) return finish(Status::Failed, L"Couldn’t reach GitHub.");
+  if (status != 200) return finish(Status::Failed, T(L"Couldn’t reach GitHub."));
   auto json = fw::ParseJson(body);
-  if (!json || json->type != fw::JsonValue::Type::Object) return finish(Status::Failed, L"Unexpected response from GitHub.");
+  if (!json || json->type != fw::JsonValue::Type::Object) return finish(Status::Failed, T(L"Unexpected response from GitHub."));
   r.pageUrl = fw::Utf8ToWide(json->StringOr("html_url", "https://github.com/dreamtheater484/featherweight/releases"));
   auto tagVersion = fw::ParseSemVer(json->StringOr("tag_name"));
   auto current = fw::ParseSemVer(FW_VERSION_STRING);
   if (!tagVersion || !current || fw::CompareSemVer(*tagVersion, *current) != 0)
-    return finish(Status::Failed, L"This version’s release wasn’t found.");
+    return finish(Status::Failed, T(L"This version’s release wasn’t found."));
   std::map<std::wstring, std::wstring> assets;
   if (const fw::JsonValue* list = json->Find("assets"); list && list->type == fw::JsonValue::Type::Array) {
     for (const auto& a : list->array)
@@ -677,19 +678,19 @@ void Updater::RunScriptEngine(std::shared_ptr<Shared> shared, HWND notify) {
   auto sumsUrl = assets.find(L"sha256sums.txt");
   auto assetUrl = assets.find(asset);
   if (sumsUrl == assets.end() || assetUrl == assets.end())
-    return finish(Status::Failed, L"This version’s release has no script engine.");
+    return finish(Status::Failed, T(L"This version’s release has no script engine."));
   std::string sumsText;
-  if (Fetch(sumsUrl->second, sumsText, 1u << 20) != 200) return finish(Status::Failed, L"Download failed.");
+  if (Fetch(sumsUrl->second, sumsText, 1u << 20) != 200) return finish(Status::Failed, T(L"Download failed."));
   auto sums = ParseSums(sumsText);
   auto sum = sums.find(asset);
-  if (sum == sums.end()) return finish(Status::Failed, L"The download didn’t pass verification.");
+  if (sum == sums.end()) return finish(Status::Failed, T(L"The download didn’t pass verification."));
 
   const updater::Signature& running = g_testRunning ? *g_testRunning : updater::RunningSignature();
   if (std::wstring why = FetchChecked(assetUrl->second, sum->second, fresh, L"pdfium", running, nullptr); !why.empty())
     return finish(Status::Failed, why);
   if (!updater::IsScriptEngine(fresh)) {
     DeleteFileW(fresh.c_str());
-    return finish(Status::Failed, L"The download isn’t the script engine.");
+    return finish(Status::Failed, T(L"The download isn’t the script engine."));
   }
   // pdfium.dll may be loaded: it's renamed, not replaced, and removed at the next start.
   {
@@ -702,7 +703,7 @@ void Updater::RunScriptEngine(std::shared_ptr<Shared> shared, HWND notify) {
   if (!moved || !MoveFileExW(fresh.c_str(), target.c_str(), 0)) {
     if (moved && !util::FileExists(target)) MoveFileExW(old.c_str(), target.c_str(), 0);
     DeleteFileW(fresh.c_str());
-    return finish(Status::Failed, L"The script engine couldn’t be installed.");
+    return finish(Status::Failed, T(L"The script engine couldn’t be installed."));
   }
   finish(Status::Installed);
 }

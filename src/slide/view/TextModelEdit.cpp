@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/Xml.h"
 #include "slide/Presentation.h"
@@ -68,14 +69,14 @@ bool EditTextModel::SetText(const TextTarget& t, pugi::xml_node txBody, std::u16
         const std::string_view name = n.name();
         return name == "a14:m" || name.ends_with(":oMath") || name.ends_with(":oMathPara");
       })) {
-    error = L"This text holds an equation, which Featherweight can't edit yet.";
+    error = T(L"This text holds an equation, which Featherweight can't edit yet.");
     return false;
   }
   std::ostringstream os;
   txBody.print(os, "", pugi::format_raw);
   // Typing is marked as typing from its first keystroke, so the ones after join its step; a
   // keystroke the session doesn't coalesce (the caret moved) starts a new one.
-  const bool typing = step == u"Typing";
+  const bool typing = step == T(u"Typing");
   if (typing && !coalesce) editor_.EndTyping();
   const edit::Result r = editor_.SetTextBodyXml(Their(t), os.str(), std::u16string(step), typing);
   if (!r) error.assign(r.message.begin(), r.message.end());

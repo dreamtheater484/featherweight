@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/view/WorkbookView.h"
@@ -226,7 +227,7 @@ void WorkbookView::AutoSum() {
       if (wholeRows) sel.lastCol = std::max(used->lastCol, sel.firstCol);
     }
     if (uint64_t{sel.lastRow - sel.firstRow + 1} * (sel.lastCol - sel.firstCol + 1) > 1000000) {
-      host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight totals at once.");
+      host_.ViewMessage(BannerKind::Warning, T(L"That's more cells than Featherweight totals at once."));
       return;
     }
     auto lineEmpty = [&](bool row, uint32_t at) {
@@ -256,7 +257,7 @@ void WorkbookView::AutoSum() {
     // Nothing to total: from an empty active cell, as from one cell (=SUM() to be given a range);
     // never by editing a cell that holds something.
     if (kind(static_cast<int32_t>(active_.row), static_cast<int32_t>(active_.col)) != calc::SumCell::kEmpty) {
-      host_.ViewMessage(BannerKind::Warning, L"There's no empty cell left on the sheet for the total.");
+      host_.ViewMessage(BannerKind::Warning, T(L"There's no empty cell left on the sheet for the total."));
       return;
     }
   }

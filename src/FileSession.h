@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "pkg/OfficeCrypto.h"
 #include "pkg/OwnerFile.h"
 #include "pkg/Recovery.h"
@@ -38,9 +39,9 @@ class FileSession {
     Copy,  // a recovered document or a backup: saved with Save As
   };
 
-  // `newName` titles a new document ("Document " -> "Document 1", "Book" -> "Book1"); `owner` is
+  // `newName` titles a new document ("Document {0}" -> "Document 1", "Book{0}" -> "Book1"); `owner` is
   // the owner file's naming (Word's or Excel's).
-  explicit FileSession(std::wstring newName = L"Document ", fw::pkg::OwnerStyle owner = fw::pkg::OwnerStyle::Word)
+  explicit FileSession(std::wstring newName = T(L"Document {0}"), fw::pkg::OwnerStyle owner = fw::pkg::OwnerStyle::Word)
       : newName_(std::move(newName)), owner_(owner) {}
   // A clean close: our owner file and autosave go. (After a crash they stay, and the autosave is
   // offered at the next start.)

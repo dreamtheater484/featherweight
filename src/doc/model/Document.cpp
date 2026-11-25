@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Utf.h"
 
@@ -772,9 +773,9 @@ const pkg::RelationshipSet* Document::RelationshipsOf(uint32_t part) const {
 pkg::Status Document::ReadTarget(uint32_t part, std::string_view relId, std::vector<uint8_t>& out) const {
   const pkg::RelationshipSet* rels = RelationshipsOf(part);
   const pkg::Relationship* r = rels ? rels->Find(relId) : nullptr;
-  if (!r) return pkg::Status::Fail(pkg::Status::Code::NotFound, "A picture or object in this document is missing.");
+  if (!r) return pkg::Status::Fail(pkg::Status::Code::NotFound, T("A picture or object in this document is missing."));
   // External content is never fetched (plan §4.7).
-  if (r->external) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This picture is linked to a file outside the document.");
+  if (r->external) return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This picture is linked to a file outside the document."));
   return package_->ReadPart(r->targetPart, out);
 }
 

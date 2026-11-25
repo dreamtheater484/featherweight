@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
 
@@ -64,14 +65,14 @@ Result Make(Editor& ed, Pos from, Pos to, Pos refAt, std::u16string_view text, c
   const Document& doc = ed.Doc();
   std::u16string why;
   if (!ed.CanEdit(&why)) return Fail(why);
-  if (Blank(text)) return Fail(u"Type the comment first.");
+  if (Blank(text)) return Fail(T(u"Type the comment first."));
   if (from.para >= doc.Paragraphs().size() || to.para >= doc.Paragraphs().size() ||
       doc.Para(from.para).story != doc.Para(to.para).story)
-    return Fail(u"A comment is about text in one place.");
+    return Fail(T(u"A comment is about text in one place."));
   const StoryKind kind = doc.Stories()[doc.Para(from.para).story].kind;
   // As in Word, which keeps comments to the main text (one in a note is refused by its validator).
   if (kind != StoryKind::Main)
-    return Fail(u"Comments go in the document's text, not in notes, headers, footers or other comments.");
+    return Fail(T(u"Comments go in the document's text, not in notes, headers, footers or other comments."));
   const std::string id = ed.NewChangeId(), author = ed.ChangeAuthor();
   ed.BeginGroup(name);
   auto fail = [&](Result r) {
@@ -82,9 +83,9 @@ Result Make(Editor& ed, Pos from, Pos to, Pos refAt, std::u16string_view text, c
   // Its marks first: where they're refused, nothing else is made (not the part, nor the comment).
   if (Result r = ed.InsertCommentMarks(from, to, refAt, id); !r) return fail(r);
   TreeEdit te(ed, from);
-  if (te.EnsurePart(PartKind::Comments) == kNoElem) return fail(Fail(u"Comments can't be added to this document."));
+  if (te.EnsurePart(PartKind::Comments) == kNoElem) return fail(Fail(T(u"Comments can't be added to this document.")));
   const uint32_t story = te.NewComment(id, author, Initials(author), ed.ChangeDate(), ed.NewParaId());
-  if (story == kNone) return fail(Fail(u"Comments can't be added to this document."));
+  if (story == kNone) return fail(Fail(T(u"Comments can't be added to this document.")));
   // Its text, which isn't tracked.
   const uint32_t first = doc.StoryParagraphs(story).front();
   ed.PauseTracking(true);
@@ -150,13 +151,13 @@ std::u16string CommentText(const Document& doc, const CommentInfo& comment) {
 
 Result AddComment(Editor& editor, Pos from, Pos to, std::u16string_view text) {
   if (editor.Compare(to, from) < 0) std::swap(from, to);
-  return Make(editor, from, to, to, text, nullptr, u"Comment");
+  return Make(editor, from, to, to, text, nullptr, T(u"Comment"));
 }
 
 Result ReplyToComment(Editor& editor, std::string_view id, std::u16string_view text) {
   const std::vector<CommentInfo> all = editor.Doc().Comments();
   const CommentInfo* c = Find(all, id);
-  if (!c) return Fail(u"That comment isn't there any more.");
+  if (!c) return Fail(T(u"That comment isn't there any more."));
   const CommentInfo* top = Top(all, *c);
   // About the same text, its reference after the one it answers.
   Pos refAt = top->reference;
@@ -164,24 +165,24 @@ Result ReplyToComment(Editor& editor, std::string_view id, std::u16string_view t
   Pos from = top->start, to = top->end;
   if (from.para == kNone || to.para == kNone) from = to = top->reference;
   if (refAt.para == kNone) refAt = to;
-  if (from.para == kNone) return Fail(u"This comment isn't anchored in the text, so it can't be answered.");
-  return Make(editor, from, to, refAt, text, top, u"Reply");
+  if (from.para == kNone) return Fail(T(u"This comment isn't anchored in the text, so it can't be answered."));
+  return Make(editor, from, to, refAt, text, top, T(u"Reply"));
 }
 
 Result EditComment(Editor& editor, std::string_view id, std::u16string_view text) {
   const Document& doc = editor.Doc();
   const std::vector<CommentInfo> all = doc.Comments();
   const CommentInfo* c = Find(all, id);
-  if (!c) return Fail(u"That comment isn't there any more.");
-  if (Blank(text)) return Fail(u"A comment can't be empty. Delete it instead.");
+  if (!c) return Fail(T(u"That comment isn't there any more."));
+  if (Blank(text)) return Fail(T(u"A comment can't be empty. Delete it instead."));
   const std::vector<uint32_t> paras = doc.StoryParagraphs(c->story);
-  if (paras.empty()) return Fail(u"This comment can't be changed.");
+  if (paras.empty()) return Fail(T(u"This comment can't be changed."));
   // Its text: after the annotation mark, to the end of its last paragraph.
   const std::u16string& head = doc.Para(paras.front()).text;
   uint32_t o = 0;
   while (o < head.size() && head[o] == 0x05) ++o;
   const Pos from{paras.front(), o}, to{paras.back(), editor.ParaLength(paras.back())};
-  editor.BeginGroup(u"Edit comment");
+  editor.BeginGroup(T(u"Edit comment"));
   editor.PauseTracking(true);
   Result r = editor.Replace(from, to, text);
   editor.PauseTracking(false);
@@ -197,7 +198,7 @@ Result DeleteComment(Editor& editor, std::string_view id) {
   const Document& doc = editor.Doc();
   const std::vector<CommentInfo> all = doc.Comments();
   const CommentInfo* c = Find(all, id);
-  if (!c) return Fail(u"That comment isn't there any more.");
+  if (!c) return Fail(T(u"That comment isn't there any more."));
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   // Copies: the list is read again as the marks go.
@@ -207,14 +208,14 @@ Result DeleteComment(Editor& editor, std::string_view id) {
   };
   std::vector<Gone> gone;
   for (const CommentInfo* k : Thread(all, *c)) gone.push_back({std::string(k->id), std::string(k->paraId), k->story});
-  editor.BeginGroup(u"Delete comment");
+  editor.BeginGroup(T(u"Delete comment"));
   for (auto it = gone.rbegin(); it != gone.rend(); ++it)
     if (Result r = editor.RemoveCommentMarks(it->id); !r) {
       editor.CancelGroup();
       return r;
     }
   TreeEdit te(editor, c->start.para != kNone ? c->start : c->reference);
-  te.Begin(u"Delete comment");
+  te.Begin(T(u"Delete comment"));
   for (const Gone& g : gone) {
     te.UnlinkComment(g.story);
     if (!g.paraId.empty()) te.RemoveCommentState(g.paraId);
@@ -233,12 +234,12 @@ Result DeleteComment(Editor& editor, std::string_view id) {
 Result ResolveComment(Editor& editor, std::string_view id, bool done) {
   const std::vector<CommentInfo> all = editor.Doc().Comments();
   const CommentInfo* c = Find(all, id);
-  if (!c) return Fail(u"That comment isn't there any more.");
+  if (!c) return Fail(T(u"That comment isn't there any more."));
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   const CommentInfo* top = Top(all, *c);
   TreeEdit te(editor, top->start.para != kNone ? top->start : top->reference);
-  te.Begin(done ? u"Resolve comment" : u"Reopen comment");
+  te.Begin(done ? T(u"Resolve comment") : T(u"Reopen comment"));
   const std::string topId = EnsureParaId(te, editor, *top);
   for (const CommentInfo* k : Thread(all, *top)) {
     const std::string paraId = k == top ? topId : EnsureParaId(te, editor, *k);

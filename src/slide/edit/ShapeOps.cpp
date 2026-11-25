@@ -4,6 +4,7 @@
 #include <cmath>
 #include <sstream>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/XmlWriter.h"
 #include "slide/edit/EditInternal.h"
@@ -540,10 +541,10 @@ bool WriteLink(Editor::Impl& m, std::string_view part, pugi::xml_node link, cons
 Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, int z, uint32_t* id, uint32_t parentGroup) {
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node tree = P(P(root, "cSld"), "spTree");
-  if (!tree) return Result::Fail(u"The slide can't be read.");
+  if (!tree) return Result::Fail(T(u"The slide can't be read."));
   if (parentGroup) {
     tree = Editor::Impl::FindShape(root, parentGroup);
-    if (!tree || LocalNameOf(tree) != "grpSp") return Result::Fail(u"That group isn't on the slide.");
+    if (!tree || LocalNameOf(tree) != "grpSp") return Result::Fail(T(u"That group isn't on the slide."));
     tree = Editor::Impl::Unwrap(tree);
   }
   // Ids the shape defines that the slide uses: new ones above the slide's highest.
@@ -567,28 +568,28 @@ Result PutShape(Editor::Impl& m, std::string_view part, pugi::xml_node shape, in
 }
 
 Result Editor::MoveShape(size_t slide, uint32_t id, uint32_t parentGroup, int index) {
-  Call call(*this, u"Arrange");
+  Call call(*this, T(u"Arrange"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node shape = Impl::FindShape(root, id);
-  if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
   pugi::xml_node parent = P(P(root, "cSld"), "spTree");
   if (parentGroup) {
     parent = Impl::FindShape(root, parentGroup);
-    if (!parent || LocalNameOf(parent) != "grpSp") return call.End(Result::Fail(u"That group isn't on the slide."));
+    if (!parent || LocalNameOf(parent) != "grpSp") return call.End(Result::Fail(T(u"That group isn't on the slide.")));
     parent = Impl::Unwrap(parent);
     shape = Impl::FindShape(root, id);
   }
   pugi::xml_node unit = UnitOf(shape);
   for (pugi::xml_node a = parent; a; a = a.parent()) {
-    if (a == unit) return call.End(Result::Fail(u"A group can't go into itself."));
+    if (a == unit) return call.End(Result::Fail(T(u"A group can't go into itself.")));
   }
   // Into or out of a group inside mc:AlternateContent, the other branches would lack the shape or
   // have it twice.
   if (BranchOf(unit) != (LocalNameOf(parent) == "grpSp" ? BranchOf(parent) : pugi::xml_node())) {
-    return call.End(Result::Fail(u"Shapes can't be moved into or out of that group."));
+    return call.End(Result::Fail(T(u"Shapes can't be moved into or out of that group.")));
   }
   pugi::xml_node before = InsertPoint(parent, index);
   if (before != unit) before ? parent.insert_move_before(unit, before) : parent.append_move(unit);
@@ -598,20 +599,20 @@ Result Editor::MoveShape(size_t slide, uint32_t id, uint32_t parentGroup, int in
 }
 
 Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int z, uint32_t parentGroup) {
-  Call call(*this, u"Insert Shape");
+  Call call(*this, T(u"Insert Shape"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_document doc;
   if (!ParseFragment(xml, doc) || !IsShapeElement(doc.document_element()) || !CNvPr(doc.document_element())) {
-    return call.End(Result::Fail(u"That isn't a shape Featherweight can insert."));
+    return call.End(Result::Fail(T(u"That isn't a shape Featherweight can insert.")));
   }
   // The relationships it names must be the slide's.
   std::set<std::string> rels;
   RelsIn(m.registry, doc.document_element(), rels);
   const pkg::RelationshipSet* have = m.Rels(part);
   for (const std::string& r : rels) {
-    if (!r.empty() && (!have || !have->Find(r))) return call.End(Result::Fail(u"The shape names a part the slide doesn't have."));
+    if (!r.empty() && (!have || !have->Find(r))) return call.End(Result::Fail(T(u"The shape names a part the slide doesn't have.")));
   }
   return call.End(PutShape(m, part, doc.document_element(), z, id, parentGroup));
 }
@@ -619,10 +620,10 @@ Result Editor::InsertShape(size_t slide, std::string_view xml, uint32_t* id, int
 Result Editor::InsertTextBox(size_t slide, const draw::Rect& r, std::wstring_view text, uint32_t* id) {
   const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
   text = clean;
-  Call call(*this, u"Insert Text Box");
+  Call call(*this, T(u"Insert Text Box"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   uint32_t next = Impl::NextShapeId(m.Root(part));
   std::string xml = "<p:sp" + std::string(kNs) + "><p:nvSpPr><p:cNvPr id=\"" + std::to_string(next) + "\" name=\"TextBox " +
                     std::to_string(next - 1) + "\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr>" + XfrmXml(r) +
@@ -641,12 +642,12 @@ Result Editor::InsertTextBox(size_t slide, const draw::Rect& r, std::wstring_vie
 }
 
 Result Editor::InsertAutoShape(size_t slide, std::string_view preset, const draw::Rect& r, uint32_t* id) {
-  Call call(*this, u"Insert Shape");
+  Call call(*this, T(u"Insert Shape"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   if (preset.empty() || preset.find_first_of("<>\"&'") != std::string_view::npos) {
-    return call.End(Result::Fail(u"That isn't a shape Featherweight knows."));
+    return call.End(Result::Fail(T(u"That isn't a shape Featherweight knows.")));
   }
   uint32_t next = Impl::NextShapeId(m.Root(part));
   std::string name = ShapeName(preset) + " " + std::to_string(next - 1);
@@ -668,7 +669,7 @@ Result Editor::InsertAutoShape(size_t slide, std::string_view preset, const draw
           "<a:endParaRPr lang=\"en-US\" dirty=\"0\"/></a:p></p:txBody></p:sp>";
   }
   pugi::xml_document doc;
-  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(u"That isn't a shape Featherweight knows."));
+  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(T(u"That isn't a shape Featherweight knows.")));
   return call.End(PutShape(m, part, doc.document_element(), -1, id));
 }
 
@@ -690,12 +691,12 @@ std::string StoreMedia(Editor::Impl& m, std::vector<uint8_t> bytes, std::string_
 
 Result Editor::InsertPicture(size_t slide, std::vector<uint8_t> bytes, const draw::Rect& r, std::wstring_view altText,
                              uint32_t* id) {
-  Call call(*this, u"Insert Picture");
+  Call call(*this, T(u"Insert Picture"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   auto [ext, type] = PictureType(bytes);
-  if (ext.empty()) return call.End(Result::Fail(u"That picture's format can't be put in a presentation."));
+  if (ext.empty()) return call.End(Result::Fail(T(u"That picture's format can't be put in a presentation.")));
   std::string media = StoreMedia(m, std::move(bytes), "/ppt/media/image", ext, type);
   std::string rel = m.AddRel(part, kRelImage, media);
   uint32_t next = Impl::NextShapeId(m.Root(part));
@@ -711,12 +712,12 @@ Result Editor::InsertPicture(size_t slide, std::vector<uint8_t> bytes, const dra
 }
 
 Result Editor::InsertTable(size_t slide, int rows, int columns, const draw::Rect& r, uint32_t* id) {
-  Call call(*this, u"Insert Table");
+  Call call(*this, T(u"Insert Table"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   if (rows < 1 || columns < 1 || rows > 75 || columns > 75) {
-    return call.End(Result::Fail(u"A table has 1 to 75 rows and 1 to 75 columns."));
+    return call.End(Result::Fail(T(u"A table has 1 to 75 rows and 1 to 75 columns.")));
   }
   long long width = std::max(ToEmu(r.Width()), static_cast<long long>(columns) * 12700);
   long long rowH = std::max(370840LL, ToEmu(r.Height()) / rows);
@@ -745,22 +746,22 @@ Result Editor::InsertTable(size_t slide, int rows, int columns, const draw::Rect
   }
   xml += "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
   pugi::xml_document doc;
-  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(u"The table can't be made."));
+  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(T(u"The table can't be made.")));
   return call.End(PutShape(m, part, doc.document_element(), -1, id));
 }
 
 Result Editor::DeleteShapes(size_t slide, const std::vector<uint32_t>& ids) {
-  Call call(*this, u"Delete");
+  Call call(*this, T(u"Delete"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   if (ids.empty()) return call.End({});
   pugi::xml_node root = m.Root(part);
   std::vector<pugi::xml_node> units;
   std::set<uint32_t> gone;
   for (uint32_t id : ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
-    if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+    if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
     IdsIn(UnitOf(shape), gone);
     if (UnitOf(shape) == shape) {
       for (pugi::xml_node t : TwinsOf(shape)) IdsIn(t, gone);
@@ -772,7 +773,7 @@ Result Editor::DeleteShapes(size_t slide, const std::vector<uint32_t>& ids) {
     for (uint32_t g : gone) impact.values.push_back(std::to_string(g));
     if (!m.registry.WouldStrand(root, {impact}).empty()) {
       return call.End(Result::Fail(
-          u"The shape can't be deleted, because the slide has content from a newer program that may refer to it."));
+          T(u"The shape can't be deleted, because the slide has content from a newer program that may refer to it.")));
     }
   }
   root = m.Edit(part);
@@ -801,14 +802,14 @@ Result Editor::DeleteShapes(size_t slide, const std::vector<uint32_t>& ids) {
 Result Editor::SetTransform(size_t slide, uint32_t id, const Transform& t) { return SetTransforms(slide, {{id, t}}); }
 
 Result Editor::SetTransforms(size_t slide, const std::vector<std::pair<uint32_t, Transform>>& shapes) {
-  Call call(*this, u"Move");
+  Call call(*this, T(u"Move"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   for (const auto& [id, t] : shapes) {
     pugi::xml_node shape = Impl::FindShape(root, id);
-    if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+    if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
     shape = Impl::Unwrap(shape);
     std::string_view k = LocalNameOf(shape);
     xfrm::Box b;
@@ -838,19 +839,19 @@ Result Editor::SetTransforms(size_t slide, const std::vector<std::pair<uint32_t,
 }
 
 Result Editor::Arrange(size_t slide, const std::vector<uint32_t>& ids, ZOrder order) {
-  static const char16_t* kNames[] = {u"Bring to Front", u"Bring Forward", u"Send Backward", u"Send to Back"};
+  static const char16_t* kNames[] = {T(u"Bring to Front"), T(u"Bring Forward"), T(u"Send Backward"), T(u"Send to Back")};
   Call call(*this, kNames[static_cast<int>(order)]);
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   std::vector<pugi::xml_node> units;
   pugi::xml_node parent;
   for (uint32_t id : ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
-    if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+    if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
     pugi::xml_node unit = UnitOf(shape);
-    if (parent && unit.parent() != parent) return call.End(Result::Fail(u"Shapes in different groups can't be arranged together."));
+    if (parent && unit.parent() != parent) return call.End(Result::Fail(T(u"Shapes in different groups can't be arranged together.")));
     parent = unit.parent();
     if (std::find(units.begin(), units.end(), unit) == units.end()) units.push_back(unit);
     m.Touched(part, id);
@@ -896,11 +897,11 @@ Result Editor::Arrange(size_t slide, const std::vector<uint32_t>& ids, ZOrder or
 }
 
 Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* groupId) {
-  Call call(*this, u"Group");
+  Call call(*this, T(u"Group"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  if (ids.size() < 2) return call.End(Result::Fail(u"Select two or more shapes to group them."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
+  if (ids.size() < 2) return call.End(Result::Fail(T(u"Select two or more shapes to group them.")));
   pugi::xml_node root = m.Edit(part);
   // What moves into the group: the shapes, or the mc:AlternateContent blocks holding them (every
   // branch goes along).
@@ -908,12 +909,12 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
   pugi::xml_node parent;
   for (uint32_t id : ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
-    if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
-    if (PlaceholderOf(shape)) return call.End(Result::Fail(u"Placeholders can't be grouped."));
+    if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
+    if (PlaceholderOf(shape)) return call.End(Result::Fail(T(u"Placeholders can't be grouped.")));
     shape = Impl::Unwrap(shape);
-    if (!xfrm::XfrmOf(shape, false)) return call.End(Result::Fail(u"That shape can't be grouped."));
+    if (!xfrm::XfrmOf(shape, false)) return call.End(Result::Fail(T(u"That shape can't be grouped.")));
     pugi::xml_node unit = UnitOf(shape);
-    if (parent && unit.parent() != parent) return call.End(Result::Fail(u"Shapes in different groups can't be grouped together."));
+    if (parent && unit.parent() != parent) return call.End(Result::Fail(T(u"Shapes in different groups can't be grouped together.")));
     parent = unit.parent();
     if (std::find(members.begin(), members.end(), unit) == members.end()) members.push_back(unit);
     if (std::find(shapes.begin(), shapes.end(), shape) == shapes.end()) shapes.push_back(shape);
@@ -949,13 +950,13 @@ Result Editor::Group(size_t slide, const std::vector<uint32_t>& ids, uint32_t* g
 }
 
 Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* ids) {
-  Call call(*this, u"Ungroup");
+  Call call(*this, T(u"Ungroup"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node group = Impl::FindShape(root, groupId);
-  if (!group || LocalNameOf(group) != "grpSp") return call.End(Result::Fail(u"That isn't a group."));
+  if (!group || LocalNameOf(group) != "grpSp") return call.End(Result::Fail(T(u"That isn't a group.")));
   group = Impl::Unwrap(group);
   xfrm::Box g;
   xfrm::Read(group, g);
@@ -1004,18 +1005,18 @@ Result Editor::Ungroup(size_t slide, uint32_t groupId, std::vector<uint32_t>* id
 }
 
 Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, const ShapePatch& patch) {
-  Call call(*this, u"Format Shape");
+  Call call(*this, T(u"Format Shape"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   for (uint32_t id : ids) {
     pugi::xml_node shape = Impl::FindShape(root, id);
-    if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+    if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
     shape = Impl::Unwrap(shape);
     std::string_view k = LocalNameOf(shape);
     if (patch.fill || patch.line || patch.effects || patch.geometry) {
-      if (k == "graphicFrame") return call.End(Result::Fail(u"A table's or chart's frame has no fill or outline of its own."));
+      if (k == "graphicFrame") return call.End(Result::Fail(T(u"A table's or chart's frame has no fill or outline of its own.")));
       // A group's formatting goes to the shapes in it, as PowerPoint's Format Shape does (p:grpSpPr
       // holds no outline or geometry); frames in it are left as they are.
       bool ok = true;
@@ -1045,7 +1046,7 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
                          (patch.effects ? kTwinEffects : 0));
       };
       format(shape);
-      if (!ok) return call.End(Result::Fail(u"That formatting isn't DrawingML Featherweight can write."));
+      if (!ok) return call.End(Result::Fail(T(u"That formatting isn't DrawingML Featherweight can write.")));
     }
     pugi::xml_node c = CNvPr(shape);
     if (patch.name) (c.attribute("name") ? c.attribute("name") : c.append_attribute("name")).set_value(Utf8(*patch.name).c_str());
@@ -1064,17 +1065,17 @@ Result Editor::SetShapeProps(size_t slide, const std::vector<uint32_t>& ids, con
 }
 
 Result Editor::SetCrop(size_t slide, uint32_t id, const Crop& crop) {
-  Call call(*this, u"Crop");
+  Call call(*this, T(u"Crop"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node shape = Impl::FindShape(root, id);
-  if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
   shape = Impl::Unwrap(shape);
   pugi::xml_node fill = LocalNameOf(shape) == "pic" ? P(shape, "blipFill") : A(P(shape, "spPr"), "blipFill");
   pugi::xml_node blip = A(fill, "blip");
-  if (!blip) return call.End(Result::Fail(u"Only pictures can be cropped."));
+  if (!blip) return call.End(Result::Fail(T(u"Only pictures can be cropped.")));
   pugi::xml_node rect = A(fill, "srcRect");
   bool none = crop.left == 0 && crop.top == 0 && crop.right == 0 && crop.bottom == 0;
   if (none) {
@@ -1095,21 +1096,21 @@ Result Editor::SetShapeXml(size_t slide, uint32_t id, std::string_view xml, std:
   Call call(*this, std::move(stepName));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_document doc;
   if (!ParseFragment(xml, doc) || !IsShapeElement(doc.document_element()) || !CNvPr(doc.document_element())) {
-    return call.End(Result::Fail(u"That isn't a shape Featherweight can write."));
+    return call.End(Result::Fail(T(u"That isn't a shape Featherweight can write.")));
   }
   std::set<std::string> rels;
   RelsIn(m.registry, doc.document_element(), rels);
   const pkg::RelationshipSet* have = m.Rels(part);
   for (const std::string& r : rels) {
-    if (!r.empty() && (!have || !have->Find(r))) return call.End(Result::Fail(u"The shape names a part the slide doesn't have."));
+    if (!r.empty() && (!have || !have->Find(r))) return call.End(Result::Fail(T(u"The shape names a part the slide doesn't have.")));
   }
   CNvPr(doc.document_element()).attribute("id").set_value(id);
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node shape = Impl::FindShape(root, id);
-  if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
   // In mc:AlternateContent the Choice's shape is replaced where it is: the block, its other Choices and
   // its Fallback stay, and what changed that applies to the Fallback's shape goes there too.
   shape = Impl::Unwrap(shape);
@@ -1137,13 +1138,13 @@ std::string Editor::ShapeXml(size_t slide, uint32_t id) const {
 }
 
 Result Editor::SetShapeLink(size_t slide, uint32_t id, const std::optional<LinkTarget>& link) {
-  Call call(*this, u"Link");
+  Call call(*this, T(u"Link"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node root = m.Edit(part);
   pugi::xml_node shape = Impl::FindShape(root, id);
-  if (!shape) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  if (!shape) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
   shape = Impl::Unwrap(shape);
   pugi::xml_node c = CNvPr(shape);
   std::set<std::string> old;
@@ -1153,7 +1154,7 @@ Result Editor::SetShapeLink(size_t slide, uint32_t id, const std::optional<LinkT
   }
   if (link) {
     pugi::xml_node h = c.prepend_child((PrefixFor(c, kA, "a") + ":hlinkClick").c_str());
-    if (!WriteLink(m, part, h, *link)) return call.End(Result::Fail(u"That link can't be made."));
+    if (!WriteLink(m, part, h, *link)) return call.End(Result::Fail(T(u"That link can't be made.")));
   }
   DropUnusedRels(m, part, root, old);
   m.Touched(part, id);

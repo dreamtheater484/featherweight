@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/Inline.h"
 #include "ui/Controls.h"
 #include "ui/SidePanel.h"
@@ -58,7 +59,7 @@ class PanelTextBox : public ComboBox {
 class DocView::LinkPanel : public PanelContent, DocPanelRows {
  public:
   explicit LinkPanel(DocView& view);
-  std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
+  std::wstring Title() const override { return editing_ ? T(L"Edit link") : T(L"Insert link"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   // Fills the boxes from the link at the caret, or the selection. The keyboard goes to the address,
@@ -84,7 +85,7 @@ class DocView::LinkPanel : public PanelContent, DocPanelRows {
 class DocView::BookmarkPanel : public PanelContent, DocPanelRows {
  public:
   explicit BookmarkPanel(DocView& view);
-  std::wstring Title() const override { return L"Bookmarks"; }
+  std::wstring Title() const override { return T(L"Bookmarks"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   // The keyboard goes to the name, and Enter adds the bookmark, as in Word's dialog.
@@ -106,7 +107,7 @@ class DocView::BookmarkPanel : public PanelContent, DocPanelRows {
 class DocView::PageNumberPanel : public PanelContent, DocPanelRows {
  public:
   explicit PageNumberPanel(DocView& view);
-  std::wstring Title() const override { return L"Page numbers"; }
+  std::wstring Title() const override { return T(L"Page numbers"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override { DrawLabels(c); }
   void Open();
@@ -128,7 +129,7 @@ class DocView::PageNumberPanel : public PanelContent, DocPanelRows {
 class DocView::ReviewPanel : public PanelContent, DocPanelRows {
  public:
   explicit ReviewPanel(DocView& view);
-  std::wstring Title() const override { return L"Review"; }
+  std::wstring Title() const override { return T(L"Review"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   bool OnMouseDown(float x, float y, bool dbl) override;
@@ -177,7 +178,7 @@ class DocView::ReviewPanel : public PanelContent, DocPanelRows {
 class DocView::NavPanel : public PanelContent {
  public:
   explicit NavPanel(DocView& view) : v_(view) {}
-  std::wstring Title() const override { return L"Navigation"; }
+  std::wstring Title() const override { return T(L"Navigation"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   bool TakesFocus() const override { return true; }

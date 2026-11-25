@@ -9,6 +9,7 @@
 #include <new>
 #include <thread>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Zip.h"
 #include "sheet/edit/Edit.h"
@@ -30,7 +31,7 @@ struct WorkbookFile::Running {
   pkg::SaveResult result;
 };
 
-WorkbookFile::WorkbookFile() : FileSession(L"Book", pkg::OwnerStyle::Excel) {}
+WorkbookFile::WorkbookFile() : FileSession(T(L"Book{0}"), pkg::OwnerStyle::Excel) {}
 
 WorkbookFile::~WorkbookFile() {
   if (run_ && run_->worker.joinable()) run_->worker.join();
@@ -105,7 +106,7 @@ std::wstring WorkbookFile::SuggestedPath(const fw::sheet::Workbook& book) const 
 bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor, const std::wstring& path,
                              std::function<void()> done, std::wstring& error) {
   if (run_) {
-    error = Title() + L" is being saved already.";
+    error = Fmt(T(L"{0} is being saved already."), {Title()});
     return false;
   }
   auto r = std::make_unique<Running>();
@@ -114,7 +115,7 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
   // A workbook read from CSV has no package yet: the smallest one, which the save fills from the model.
   if (!book.GetPackage()) {
     if (const pkg::Status st = fw::sheet::xlsx::GiveBasePackage(book); !st.Ok()) {
-      error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
+      error = Fmt(T(L"{0} couldn't be saved. {1}"), {r->job.name, fw::Utf8ToWide(st.message)});
       return false;
     }
   }
@@ -122,7 +123,7 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
   pkg::Status st = fw::sheet::xlsx::PrepareSave(book, editor, r->plan, FormatOf(r->job.target, book.Format()));
   if (!st.Ok()) {
     editor.EndSave();
-    error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
+    error = Fmt(T(L"{0} couldn't be saved. {1}"), {r->job.name, fw::Utf8ToWide(st.message)});
     return false;
   }
   r->book = &book;
@@ -135,7 +136,7 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
       if (p->written.Ok())
         p->result = FileSession::WriteSave(p->job, std::move(sink.bytes), &p->book->GetPackage()->GetSnapshot());
     } catch (const std::bad_alloc&) {
-      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, "There isn't enough memory to write it.");
+      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("There isn't enough memory to write it."));
     }
     if (done) done();
   });
@@ -147,7 +148,7 @@ bool WorkbookFile::StartCsv(std::unique_ptr<Running> r, fw::sheet::Workbook& boo
                             std::function<void()> done, std::wstring& error) {
   if (book.Format() != FileFormat::Csv) {
     // An Excel workbook keeps its own file; CSV is a copy of its first sheet's values.
-    error = r->job.name + L" would keep only the values of the first sheet. Save a copy as CSV instead.";
+    error = Fmt(T(L"{0} would keep only the values of the first sheet. Save a copy as CSV instead."), {r->job.name});
     return false;
   }
   editor.BeginSave();
@@ -177,7 +178,7 @@ bool WorkbookFile::StartCsv(std::unique_ptr<Running> r, fw::sheet::Workbook& boo
       }
       p->result = FileSession::WriteSave(p->job, std::vector<uint8_t>(bytes.begin(), bytes.end()), original.get());
     } catch (const std::bad_alloc&) {
-      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, "There isn't enough memory to write it.");
+      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("There isn't enough memory to write it."));
     }
     if (done) done();
   });
@@ -187,7 +188,7 @@ bool WorkbookFile::StartCsv(std::unique_ptr<Running> r, fw::sheet::Workbook& boo
 
 bool WorkbookFile::FinishSave(std::wstring& error) {
   if (!run_) {
-    error = L"No save is running.";
+    error = T(L"No save is running.");
     return false;
   }
   if (run_->worker.joinable()) run_->worker.join();
@@ -202,7 +203,7 @@ bool WorkbookFile::FinishSave(std::wstring& error) {
   }
   if (!r->written.Ok()) {
     r->editor->EndSave();
-    error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(r->written.message);
+    error = Fmt(T(L"{0} couldn't be saved. {1}"), {r->job.name, fw::Utf8ToWide(r->written.message)});
     return false;
   }
   if (!r->result.Ok()) {

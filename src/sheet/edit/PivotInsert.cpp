@@ -7,6 +7,7 @@
 #include <iterator>
 #include <set>
 
+#include "core/Lang.h"
 #include "pkg/Package.h"
 #include "pkg/XmlDom.h"
 #include "sheet/edit/Edit.h"
@@ -34,7 +35,7 @@ std::string HeaderName(const Value& v) {
   }
 }
 
-Result Failed() { return Result::Fail(u"The PivotTable couldn't be added to the workbook."); }
+Result Failed() { return Result::Fail(T(u"The PivotTable couldn't be added to the workbook.")); }
 
 // workbook.xml with <pivotCache cacheId r:id> added to its pivotCaches (made where Excel puts it).
 bool ListCache(std::string& xml, uint32_t cacheId, const std::string& relId) {
@@ -73,28 +74,28 @@ bool ListCache(std::string& xml, uint32_t cacheId, const std::string& relId) {
 
 Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p) {
   pkg::Package* package = book.GetPackage();
-  if (!package) return Result::Fail(u"PivotTables need an Excel workbook: save this one as .xlsx first.");
+  if (!package) return Result::Fail(T(u"PivotTables need an Excel workbook: save this one as .xlsx first."));
   // The source.
   int srcSheet = p.sourceSheet;
   Range src = p.source;
   if (!p.table.empty()) {
     size_t at = 0;
     const Table* t = book.FindTable(p.table, &at);
-    if (!t) return Result::Fail(u"The reference to the PivotTable's data source isn't valid.");
+    if (!t) return Result::Fail(T(u"The reference to the PivotTable's data source isn't valid."));
     srcSheet = static_cast<int>(at);
     src = t->ref;
     if (t->totalsRows && src.lastRow > src.firstRow) src.lastRow -= t->totalsRows;
   }
   if (srcSheet < 0 || static_cast<size_t>(srcSheet) >= book.SheetCount() || p.sheet < 0 ||
       static_cast<size_t>(p.sheet) >= book.SheetCount())
-    return Result::Fail(u"There's no such sheet.");
+    return Result::Fail(T(u"There's no such sheet."));
   if (!book.LoadSheet(static_cast<size_t>(srcSheet)).Ok() || !book.LoadSheet(static_cast<size_t>(p.sheet)).Ok())
-    return Result::Fail(u"This sheet couldn't be read.");
+    return Result::Fail(T(u"This sheet couldn't be read."));
   const Sheet& from = book.GetSheet(static_cast<size_t>(srcSheet));
   const Sheet& to = book.GetSheet(static_cast<size_t>(p.sheet));
-  if (to.Kind() != SheetKind::Worksheet) return Result::Fail(u"A PivotTable goes on a worksheet.");
+  if (to.Kind() != SheetKind::Worksheet) return Result::Fail(T(u"A PivotTable goes on a worksheet."));
   if (src.lastRow <= src.firstRow || src.lastCol - src.firstCol >= 16384 || src.lastRow >= kMaxRows)
-    return Result::Fail(u"The PivotTable needs a header row and at least one row of data.");
+    return Result::Fail(T(u"The PivotTable needs a header row and at least one row of data."));
   // Its fields: the header's names (one used twice gets 2, 3...), each with its first value's format.
   pivot::Cache cache;
   const uint32_t ncols = src.lastCol - src.firstCol + 1;
@@ -102,8 +103,8 @@ Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p)
     pivot::CacheField f;
     f.name = HeaderName(from.GetValue(src.firstRow, src.firstCol + c));
     if (f.name.empty())
-      return Result::Fail(u"The PivotTable field name is not valid. To create a PivotTable, you must use data that is "
-                          u"organized as a list with labeled columns.");
+      return Result::Fail(T(u"The PivotTable field name is not valid. To create a PivotTable, you must use data that is "
+                          u"organized as a list with labeled columns."));
     const std::string base = f.name;
     for (int n = 2;; ++n) {
       bool taken = false;
@@ -127,17 +128,17 @@ Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p)
   std::set<uint32_t> used;
   for (const auto& [in, out] : lists)
     for (uint32_t c : *in) {
-      if (c >= ncols || !used.insert(c).second) return Result::Fail(u"A field can be in one area only: rows, columns or filters.");
+      if (c >= ncols || !used.insert(c).second) return Result::Fail(T(u"A field can be in one area only: rows, columns or filters."));
       out->push_back(c);
     }
   static constexpr pivot::Func kFuncs[] = {pivot::Func::Sum, pivot::Func::Count, pivot::Func::Average, pivot::Func::Max,
                                            pivot::Func::Min};
   for (const Editor::NewPivotTable::Value& v : p.values) {
-    if (v.column >= ncols || v.func >= std::size(kFuncs)) return Result::Fail(u"There's no such column in the PivotTable's source.");
+    if (v.column >= ncols || v.func >= std::size(kFuncs)) return Result::Fail(T(u"There's no such column in the PivotTable's source."));
     spec.values.push_back({v.column, kFuncs[v.func]});
   }
   if (spec.rows.empty() && spec.cols.empty() && spec.values.empty())
-    return Result::Fail(u"Choose the fields for the PivotTable's rows, columns or values.");
+    return Result::Fail(T(u"Choose the fields for the PivotTable's rows, columns or values."));
   // A cache id and a name no other pivot has.
   const std::string wbPart = book.WorkbookPart();
   std::string wbXml = ed.PartBytes(wbPart);

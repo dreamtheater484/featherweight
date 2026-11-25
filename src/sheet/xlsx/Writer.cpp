@@ -2,6 +2,7 @@
 // model, and what the reader kept as written around them. Saving comes in S2.
 #include <charconv>
 
+#include "core/Lang.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -393,7 +394,7 @@ Status WritePart(const Workbook& book, std::string_view partName, std::string& o
     SheetWriter(s, out, s.Text()).Write();
     return {};
   }
-  return Status::Fail(Status::Code::NotFound, "The model doesn't write " + std::string(partName) + ".");
+  return Status::Fail(Status::Code::NotFound, Fmt(T("The model doesn't write {0}."), {partName}));
 }
 
 }  // namespace fw::sheet::xlsx

@@ -32,6 +32,7 @@
 
 struct AppOptions {
   std::vector<std::wstring> files;
+  std::wstring language;  // --lang de: the interface's language for this run (f1-lang)
   int showCommand = SW_SHOWDEFAULT;
   // Snapshot mode (used for automated visual checks): render off-screen to a PNG and exit.
   std::wstring snapshotPath;

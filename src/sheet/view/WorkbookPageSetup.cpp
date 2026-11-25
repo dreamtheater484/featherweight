@@ -13,6 +13,7 @@
 #include <optional>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Formula.h"
 #include "sheet/view/WorkbookFormat.h"
@@ -30,25 +31,25 @@ namespace fw::sheet::view {
 namespace {
 
 struct Paper {
-  const wchar_t* name;
+  UiText name;
   uint32_t code;  // ECMA-376's paperSize
 };
-constexpr Paper kPapers[] = {{L"Letter", 1},   {L"Legal", 5},    {L"Executive", 7},     {L"Tabloid", 3},
+constexpr Paper kPapers[] = {{N_(L"Letter"), 1},   {N_(L"Legal"), 5},    {N_(L"Executive"), 7},     {N_(L"Tabloid"), 3},
                              {L"A3", 8},       {L"A4", 9},       {L"A5", 11},           {L"B4 (JIS)", 12},
-                             {L"B5 (JIS)", 13}, {L"Envelope #10", 20}, {L"Envelope DL", 27}};
+                             {L"B5 (JIS)", 13}, {N_(L"Envelope #10"), 20}, {N_(L"Envelope DL"), 27}};
 
 // Excel's margin presets (Page Layout › Margins), inches: top, bottom, left, right, header, footer.
 struct MarginPreset {
-  const wchar_t* name;
+  UiText name;
   double top, bottom, left, right, header, footer;
 };
-constexpr MarginPreset kMargins[] = {{L"Normal", 0.75, 0.75, 0.7, 0.7, 0.3, 0.3},
-                                     {L"Wide", 1, 1, 1, 1, 0.5, 0.5},
-                                     {L"Narrow", 0.75, 0.75, 0.25, 0.25, 0.3, 0.3}};
+constexpr MarginPreset kMargins[] = {{N_(L"Normal"), 0.75, 0.75, 0.7, 0.7, 0.3, 0.3},
+                                     {N_(L"Wide"), 1, 1, 1, 1, 0.5, 0.5},
+                                     {N_(L"Narrow"), 0.75, 0.75, 0.25, 0.25, 0.3, 0.3}};
 
 // The scaling shortcuts of Excel's print preview.
-constexpr const wchar_t* kScalings[] = {L"No scaling", L"Fit sheet on one page", L"Fit all columns on one page",
-                                        L"Fit all rows on one page"};
+constexpr const wchar_t* kScalings[] = {N_(L"No scaling"), N_(L"Fit sheet on one page"), N_(L"Fit all columns on one page"),
+                                        N_(L"Fit all rows on one page")};
 
 // Which of them the sheet has (-1: a scale or a fit of its own).
 int ScalingOf(const Sheet& s) {
@@ -143,12 +144,12 @@ struct HfPreset {
 };
 std::vector<HfPreset> Presets(const std::wstring& sheet, const std::wstring& file) {
   return {{L"(none)", ""},
-          {L"Page 1", "&CPage &P"},
-          {L"Page 1 of ?", "&CPage &P of &N"},
+          {T(L"Page 1"), "&CPage &P"},
+          {T(L"Page 1 of ?"), "&CPage &P of &N"},
           {sheet, "&C&A"},
-          {L"Confidential, date, Page 1", "&LConfidential&C&D&RPage &P"},
+          {T(L"Confidential, date, Page 1"), "&LConfidential&C&D&RPage &P"},
           {file, "&C&F"},
-          {L"Path and " + file, "&C&Z&F"}};
+          {Fmt(T(L"Path and {0}"), {file}), "&C&Z&F"}};
 }
 
 // Lengths in the user's units: centimeters where Windows measures metric, else inches.
@@ -231,20 +232,20 @@ class WorkbookView::PageSetupPanel : public PanelContent {
   enum Tab { kTabPage, kTabMargins, kTabHeader, kTabSheet, kTabs };
 
   explicit PageSetupPanel(WorkbookView& view) : v_(view) {
-    const wchar_t* names[] = {L"Page", L"Margins", L"Header", L"Sheet"};
+    const wchar_t* names[] = {T(L"Page"), T(L"Margins"), T(L"Header"), T(L"Sheet")};
     for (int i = 0; i < kTabs; ++i) {
       tabs_[i].text = names[i];
       tabs_[i].toggle = true;
       tabs_[i].textSize = 12;
       tabs_[i].onInvoke = [this, i] { Show(static_cast<Tab>(i)); };
     }
-    what_.items = {L"Active sheet", L"Entire workbook", L"Selection"};
+    what_.items = {T(L"Active sheet"), T(L"Entire workbook"), T(L"Selection")};
     Choice(what_, [this](int i) { v_.PageSetupCommand(CmdPrintActiveSheet + i); });
     // Page
-    Toggle(portrait_, L"Portrait", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.orientation = Orientation::Portrait; }); });
-    Toggle(landscape_, L"Landscape",
+    Toggle(portrait_, T(L"Portrait"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.orientation = Orientation::Portrait; }); });
+    Toggle(landscape_, T(L"Landscape"),
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.orientation = Orientation::Landscape; }); });
-    for (const Paper& p : kPapers) paper_.items.push_back(p.name);
+    for (const Paper& p : kPapers) paper_.items.emplace_back(p.name);
     Choice(paper_, [this](int i) {
       Change([&](PageSetup& p, HeaderFooter&, bool&) {
         p.paperSize = kPapers[i].code;
@@ -274,7 +275,8 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     first_.autoComplete = false;
     first_.validate = [](std::wstring& t) {
       double v;
-      return t.empty() || _wcsicmp(t.c_str(), L"Auto") == 0 || (ParseNumber(t, v) && v == std::floor(v) && std::abs(v) < 32767);
+      return t.empty() || _wcsicmp(t.c_str(), L"Auto") == 0 || _wcsicmp(t.c_str(), T(L"Auto")) == 0 ||
+             (ParseNumber(t, v) && v == std::floor(v) && std::abs(v) < 32767);
     };
     first_.onCommit = [this](const std::wstring& t, int) {
       double v = 0;
@@ -285,7 +287,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       });
     };
     // Margins
-    for (const MarginPreset& m : kMargins) preset_.items.push_back(m.name);
+    for (const MarginPreset& m : kMargins) preset_.items.emplace_back(m.name);
     Choice(preset_, [this](int i) {
       Change([&](PageSetup& p, HeaderFooter&, bool&) {
         const MarginPreset& m = kMargins[i];
@@ -306,9 +308,9 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         if (ParseLength(t, v)) Change([&](PageSetup& p, HeaderFooter&, bool&) { p.margins.*field = v; });
       };
     }
-    Toggle(centerH_, L"Horizontally",
+    Toggle(centerH_, T(L"Horizontally"),
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.horizontalCentered = !p.horizontalCentered; }); });
-    Toggle(centerV_, L"Vertically",
+    Toggle(centerV_, T(L"Vertically"),
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.verticalCentered = !p.verticalCentered; }); });
     // Header and footer (the odd pages', or the even or first page's when those differ)
     Choice(which_, [this](int i) {
@@ -332,13 +334,13 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         };
       }
     }
-    Toggle(oddEven_, L"Different odd and even pages",
+    Toggle(oddEven_, T(L"Different odd and even pages"),
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.differentOddEven = !h.differentOddEven; }); });
-    Toggle(firstDiff_, L"Different first page",
+    Toggle(firstDiff_, T(L"Different first page"),
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.differentFirst = !h.differentFirst; }); });
-    Toggle(scaleDoc_, L"Scale with document",
+    Toggle(scaleDoc_, T(L"Scale with document"),
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.scaleWithDoc = !h.scaleWithDoc; }); });
-    Toggle(alignMargins_, L"Align with margins",
+    Toggle(alignMargins_, T(L"Align with margins"),
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.alignWithMargins = !h.alignWithMargins; }); });
     // Sheet
     for (FocusComboBox* b : {&area_, &rows_, &cols_}) {
@@ -369,11 +371,11 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         Refresh();
       };
     }
-    Toggle(gridlines_, L"Gridlines", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.gridLines = !p.gridLines; }); });
-    Toggle(headings_, L"Headings", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
-    Toggle(bw_, L"Black and white", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.blackAndWhite = !p.blackAndWhite; }); });
-    Toggle(draft_, L"Draft quality", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.draft = !p.draft; }); });
-    notes_.items = {L"(none)", L"At end of sheet", L"As displayed on sheet"};
+    Toggle(gridlines_, T(L"Gridlines"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.gridLines = !p.gridLines; }); });
+    Toggle(headings_, T(L"Headings"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
+    Toggle(bw_, T(L"Black and white"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.blackAndWhite = !p.blackAndWhite; }); });
+    Toggle(draft_, T(L"Draft quality"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.draft = !p.draft; }); });
+    notes_.items = {L"(none)", T(L"At end of sheet"), T(L"As displayed on sheet")};
     Choice(notes_, [this](int i) {
       Change([&](PageSetup& p, HeaderFooter&, bool&) {
         p.cellComments = i == 1 ? CellComments::AtEnd : i == 2 ? CellComments::AsDisplayed : CellComments::None;
@@ -381,13 +383,13 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     });
     errors_.items = {L"displayed", L"<blank>", L"--", L"#N/A"};  // PrintErrors' order
     Choice(errors_, [this](int i) { Change([&](PageSetup& p, HeaderFooter&, bool&) { p.errors = static_cast<PrintErrors>(i); }); });
-    Toggle(down_, L"Down, then over",
+    Toggle(down_, T(L"Down, then over"),
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.pageOrder = PageOrder::DownThenOver; }); });
-    Toggle(over_, L"Over, then down",
+    Toggle(over_, T(L"Over, then down"),
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.pageOrder = PageOrder::OverThenDown; }); });
   }
 
-  std::wstring Title() const override { return L"Page setup"; }
+  std::wstring Title() const override { return T(L"Page setup"); }
 
   void Open(Tab tab) {
     tab_ = tab;
@@ -407,18 +409,18 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     landscape_.checked = !portrait_.checked;
     const auto* paper = std::find_if(std::begin(kPapers), std::end(kPapers), [&](const Paper& x) { return x.code == p.paperSize; });
     paper_.ReplaceText(!p.paperWidth.empty() ? Utf8ToWide(p.paperWidth + " x " + p.paperHeight)
-                       : paper != std::end(kPapers) ? paper->name
-                                                     : L"Paper " + std::to_wstring(p.paperSize));
+                       : paper != std::end(kPapers) ? std::wstring(paper->name)
+                                                     : Fmt(T(L"Paper {0}"), {std::to_wstring(p.paperSize)}));
     const int scaling = ScalingOf(s);
-    scaling_.ReplaceText(scaling < 0 ? std::wstring(L"Custom") : kScalings[scaling]);
+    scaling_.ReplaceText(scaling < 0 ? std::wstring(T(L"Custom")) : kScalings[scaling]);
     scale_.ReplaceText(std::to_wstring(p.scale));
     fitW_.ReplaceText(std::to_wstring(p.fitToWidth));
     fitH_.ReplaceText(std::to_wstring(p.fitToHeight));
-    first_.ReplaceText(p.useFirstPageNumber ? std::to_wstring(p.firstPageNumber) : L"Auto");
+    first_.ReplaceText(p.useFirstPageNumber ? std::to_wstring(p.firstPageNumber) : T(L"Auto"));
     const PageMargins& m = p.margins;
     const double values[] = {m.top, m.bottom, m.left, m.right, m.header, m.footer};
     for (int i = 0; i < 6; ++i) margin_[i].ReplaceText(Length(values[i]));
-    std::wstring preset = L"Custom";
+    std::wstring preset = T(L"Custom");
     for (const MarginPreset& x : kMargins)
       if (x.top == m.top && x.bottom == m.bottom && x.left == m.left && x.right == m.right && x.header == m.header && x.footer == m.footer)
         preset = x.name;
@@ -433,9 +435,9 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       whichOf_.push_back(which);
     };
     if (h.differentOddEven || h.differentFirst) {
-      pages(h.differentOddEven ? L"Odd pages" : L"Other pages", 0);
-      if (h.differentOddEven) pages(L"Even pages", 1);
-      if (h.differentFirst) pages(L"First page", 2);
+      pages(h.differentOddEven ? T(L"Odd pages") : T(L"Other pages"), 0);
+      if (h.differentOddEven) pages(T(L"Even pages"), 1);
+      if (h.differentFirst) pages(T(L"First page"), 2);
     }
     const auto shownPages = std::find(whichOf_.begin(), whichOf_.end(), hfWhich_);
     if (shownPages == whichOf_.end()) hfWhich_ = 0;
@@ -444,7 +446,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     for (int f = 0; f < 2; ++f) {
       const std::string& code = HfField(h, hfWhich_, f);
       hfPreset_[f].items.clear();
-      std::wstring shown = L"Custom";
+      std::wstring shown = T(L"Custom");
       for (const HfPreset& x : presets) {
         hfPreset_[f].items.push_back(x.label);
         if (x.code == code) shown = x.label;
@@ -504,7 +506,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     };
     for (Control* c : All()) c->visible = false;
     if (v_.preview_) {
-      label(L"Print");
+      label(T(L"Print"));
       y += 18 * ui;
       full(what_);
     }
@@ -522,54 +524,54 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     const std::wstring unit = Metric() ? L" (cm)" : L" (in)";
     switch (tab_) {
       case kTabPage:
-        label(L"Orientation");
+        label(T(L"Orientation"));
         y += 18 * ui;
         pair(portrait_, landscape_);
-        label(L"Paper size");
+        label(T(L"Paper size"));
         y += 18 * ui;
         full(paper_);
         if (chart) {
-          label(L"First page number");
+          label(T(L"First page number"));
           y += 18 * ui;
           full(first_);
           break;
         }
-        label(L"Scaling");
+        label(T(L"Scaling"));
         y += 18 * ui;
         full(scaling_);
-        labelled(L"Adjust to (%)", L"First page number");
+        labelled(T(L"Adjust to (%)"), T(L"First page number"));
         pair(scale_, first_);
-        labelled(L"Fit to: pages wide", L"by pages tall");
+        labelled(T(L"Fit to: pages wide"), T(L"by pages tall"));
         pair(fitW_, fitH_);
         break;
       case kTabMargins: {
-        label(L"Margins");
+        label(T(L"Margins"));
         y += 18 * ui;
         full(preset_);
-        const wchar_t* names[] = {L"Top", L"Bottom", L"Left", L"Right", L"Header", L"Footer"};
+        const wchar_t* names[] = {T(L"Top"), T(L"Bottom"), T(L"Left"), T(L"Right"), T(L"Header"), T(L"Footer")};
         for (int i = 0; i < 6; i += 2) {
           labelled(names[i] + unit, names[i + 1] + unit);
           pair(margin_[i], margin_[i + 1]);
         }
         if (chart) break;
-        label(L"Center on page");
+        label(T(L"Center on page"));
         y += 18 * ui;
         pair(centerH_, centerV_);
         break;
       }
       case kTabHeader:
         if (!whichOf_.empty()) {
-          label(L"Header and footer for");
+          label(T(L"Header and footer for"));
           y += 18 * ui;
           full(which_);
         }
         for (int f = 0; f < 2; ++f) {
-          label(f ? L"Footer" : L"Header");
+          label(f ? T(L"Footer") : T(L"Header"));
           y += 18 * ui;
           y -= 4 * ui;
           full(hfPreset_[f]);
           // Left, center and right, a row each: wide enough for "Page &[Page] of &[Pages]".
-          const wchar_t* sides[] = {L"Left", L"Center", L"Right"};
+          const wchar_t* sides[] = {T(L"Left"), T(L"Center"), T(L"Right")};
           const float labelW = 52 * ui;
           y -= 4 * ui;
           for (int k = 0; k < 3; ++k) {
@@ -589,22 +591,22 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         hintRc_ = RectF(left, y, right, y + 40 * ui);
         break;
       case kTabSheet:
-        label(L"Print area");
+        label(T(L"Print area"));
         y += 18 * ui;
         full(area_);
-        label(L"Rows to repeat at top");
+        label(T(L"Rows to repeat at top"));
         y += 18 * ui;
         full(rows_);
-        label(L"Columns to repeat at left");
+        label(T(L"Columns to repeat at left"));
         y += 18 * ui;
         full(cols_);
-        label(L"Print");
+        label(T(L"Print"));
         y += 18 * ui;
         pair(gridlines_, headings_);
         pair(bw_, draft_);
-        labelled(L"Notes", L"Cell errors as");
+        labelled(T(L"Notes"), T(L"Cell errors as"));
         pair(notes_, errors_);
-        label(L"Page order");
+        label(T(L"Page order"));
         y += 18 * ui;
         pair(down_, over_);
         break;
@@ -772,7 +774,7 @@ edit::Result WorkbookView::ChangeBreaks(int cmd) {
   const Range sel = Selected();
   const bool wholeRows = sel.firstCol == 0 && sel.lastCol == kMaxCols - 1;
   const bool wholeCols = sel.firstRow == 0 && sel.lastRow == kMaxRows - 1;
-  const char16_t* name = u"Insert Page Break";
+  const char16_t* name = T(u"Insert Page Break");
   if (cmd == CmdInsertPageBreak) {
     // Above and left of the active cell (only one way for whole rows or columns, as Excel).
     if (active_.row > 0 && !wholeCols && std::none_of(rows.begin(), rows.end(), [&](const PageBreak& b) { return b.id == active_.row; }))
@@ -780,13 +782,13 @@ edit::Result WorkbookView::ChangeBreaks(int cmd) {
     if (active_.col > 0 && !wholeRows && std::none_of(cols.begin(), cols.end(), [&](const PageBreak& b) { return b.id == active_.col; }))
       cols.push_back(PageBreak{active_.col, 0, kMaxRows - 1, true, false});
   } else if (cmd == CmdRemovePageBreak) {
-    name = u"Remove Page Break";
+    name = T(u"Remove Page Break");
     if (!wholeCols)
       rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const PageBreak& b) { return b.manual && b.id == active_.row; }), rows.end());
     if (!wholeRows)
       cols.erase(std::remove_if(cols.begin(), cols.end(), [&](const PageBreak& b) { return b.manual && b.id == active_.col; }), cols.end());
   } else {
-    name = u"Reset All Page Breaks";
+    name = T(u"Reset All Page Breaks");
     rows.erase(std::remove_if(rows.begin(), rows.end(), [](const PageBreak& b) { return b.manual; }), rows.end());
     cols.erase(std::remove_if(cols.begin(), cols.end(), [](const PageBreak& b) { return b.manual; }), cols.end());
   }
@@ -807,23 +809,23 @@ bool WorkbookView::PageSetupCommandState(int cmd, CommandState& s) {
   const bool grid = sheet && !preview_;
   bool rowBreak = false, colBreak = false;
   switch (cmd) {
-    case CmdPageSetup: s.label = L"Page setup"; s.enabled = Ready(); break;  // a chart sheet's too
-    case CmdSetPrintArea: s.label = L"Set print area"; s.enabled = grid; break;
+    case CmdPageSetup: s.label = T(L"Page setup"); s.enabled = Ready(); break;  // a chart sheet's too
+    case CmdSetPrintArea: s.label = T(L"Set print area"); s.enabled = grid; break;
     case CmdAddToPrintArea:
-      s.label = L"Add to print area";
+      s.label = T(L"Add to print area");
       s.enabled = grid && NameOf(*book_, "_xlnm.Print_Area", sheet_);
       break;
     case CmdClearPrintArea:
-      s.label = L"Clear print area";
+      s.label = T(L"Clear print area");
       s.enabled = sheet && NameOf(*book_, "_xlnm.Print_Area", sheet_);
       break;
-    case CmdPrintTitles: s.label = L"Print titles"; s.enabled = sheet; break;
+    case CmdPrintTitles: s.label = T(L"Print titles"); s.enabled = sheet; break;
     case CmdInsertPageBreak:
-      s.label = L"Insert page break";
+      s.label = T(L"Insert page break");
       s.enabled = grid && (active_.row > 0 || active_.col > 0);
       break;
     case CmdRemovePageBreak:
-      s.label = L"Remove page break";
+      s.label = T(L"Remove page break");
       s.enabled = grid && BreakHere(rowBreak, colBreak);
       break;
     case CmdResetPageBreaks: {
@@ -831,12 +833,12 @@ bool WorkbookView::PageSetupCommandState(int cmd, CommandState& s) {
       if (sheet)
         for (const auto* list : {&Current().RowBreaks(), &Current().ColBreaks()})
           for (const PageBreak& b : *list) any = any || b.manual;
-      s.label = L"Reset all page breaks";
+      s.label = T(L"Reset all page breaks");
       s.enabled = any;
       break;
     }
     case CmdPageBreakPreview:
-      s.label = L"Page break preview";
+      s.label = T(L"Page break preview");
       s.enabled = grid;
       s.checked = sheet && BreakPreviewOn();
       break;
@@ -851,7 +853,7 @@ bool WorkbookView::PageSetupCommandState(int cmd, CommandState& s) {
     case CmdPrintActiveSheet:
     case CmdPrintWorkbook:
     case CmdPrintSelection: {
-      const wchar_t* labels[] = {L"Print active sheet", L"Print entire workbook", L"Print selection"};
+      const wchar_t* labels[] = {T(L"Print active sheet"), T(L"Print entire workbook"), T(L"Print selection")};
       s.label = labels[cmd - CmdPrintActiveSheet];
       s.enabled = Ready();
       s.checked = printWhat_ == cmd - CmdPrintActiveSheet;
@@ -1027,8 +1029,9 @@ void WorkbookView::DrawPageBreakPreview(Canvas& c) {
       // "Page N", large and pale, in the page's middle.
       const float size = std::clamp(std::min(Width(r), Height(r)) / 6, 12 * static_cast<float>(ui_), 96 * static_cast<float>(ui_));
       const float cy = (r.top + r.bottom) / 2;
-      c.Text(L"Page " + std::to_wstring(page->number), RectF(r.left, cy - size * 0.7f, r.right, cy + size * 0.7f),
-             Rgb(0x7F7F7F, 0.45f), size, DWRITE_FONT_WEIGHT_BOLD, Align::Center);
+      c.Text(Fmt(T(L"Page {0}"), {std::to_wstring(page->number)}),
+             RectF(r.left, cy - size * 0.7f, r.right, cy + size * 0.7f), Rgb(0x7F7F7F, 0.45f), size,
+             DWRITE_FONT_WEIGHT_BOLD, Align::Center);
       // Its edges: a break between pages dashed (an automatic one) or solid (a manual one).
       auto edge = [&](float x1, float y1, float x2, float y2, bool rows, uint32_t at) {
         const bool inner = Inner(*pages, rows, at) && at > 0;
@@ -1157,7 +1160,7 @@ bool WorkbookView::BreakDragEnd(int, int) {
     uint32_t& last = d.rows ? r.lastRow : r.lastCol;
     if (d.from == first) first = std::min(d.to, last);
     else last = std::max(d.to, first + 1) - 1;
-    edit::EditGroup group(Ed(), u"Set Print Area");
+    edit::EditGroup group(Ed(), T(u"Set Print Area"));
     if (!EditRefused(SetPrintArea({r}))) group.done = true;
     return true;
   }
@@ -1167,7 +1170,7 @@ bool WorkbookView::BreakDragEnd(int, int) {
   list.erase(std::remove_if(list.begin(), list.end(), [&](const PageBreak& b) { return b.id == d.from || b.id == d.to; }),
              list.end());
   list.push_back(PageBreak{d.to, 0, d.rows ? kMaxCols - 1 : kMaxRows - 1, true, false});
-  edit::EditGroup group(Ed(), u"Move Page Break");
+  edit::EditGroup group(Ed(), T(u"Move Page Break"));
   if (EditRefused(Ed().SetPageBreaks(static_cast<int>(sheet_), rows, cols))) return true;
   group.done = true;
   breakPages_.reset();
@@ -1231,7 +1234,7 @@ bool WorkbookView::PageScriptOp(const std::wstring& arg) {
   }
   if (key == L"margins") {
     for (const MarginPreset& m : kMargins)
-      if (_wcsicmp(value.c_str(), m.name) == 0)
+      if (_wcsicmp(value.c_str(), m.name.en) == 0)
         return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {m.left, m.right, m.top, m.bottom, m.header, m.footer}; });
     if (!numbers(v) || v.size() != 6) return false;
     return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {v[2], v[3], v[0], v[1], v[4], v[5]}; });

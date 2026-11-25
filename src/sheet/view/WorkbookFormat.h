@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/numfmt/FormatCells.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Controls.h"
@@ -19,7 +20,7 @@ namespace fw::sheet::view {
 class WorkbookView::FormatPanel : public PanelContent {
  public:
   explicit FormatPanel(WorkbookView& view);
-  std::wstring Title() const override { return L"Format cells"; }
+  std::wstring Title() const override { return T(L"Format cells"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   enum Page { kNumber, kAlignment, kFont, kBorder, kFill, kProtection, kPages };

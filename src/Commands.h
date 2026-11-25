@@ -651,6 +651,9 @@ enum Cmd : int {
   CmdUpdateBeta = 4120,  // File > Options > Updates: Get beta versions (the beta channel, GitHub pre-releases)
   CmdRollBackUpdate,     // Go back to version x: the files the last update replaced, from the next start
   CmdScriptEngine = 4125,  // Get the form script engine (PDFium with V8 and XFA), offered by a PDF with scripts
+  // F1, f1-lang: the interface's language, 4020-4039.
+  CmdLanguageWindows = 4020,  // File > Options: the language Windows shows its own interface in
+  CmdLanguage0 = 4021,        // ... + i: fw::lang::Languages()[i] (English, Nederlands, ...; up to 4029)
   // F1, f1-trust: help and support, 4150-4169.
   CmdHelp = 4150,             // Help: the website's help pages, in the browser (F1)
   CmdKnownIssues,             // Help: the known issues, on the website

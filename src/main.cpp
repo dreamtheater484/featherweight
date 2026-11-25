@@ -71,6 +71,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     else if (a == L"--window") opts.snapshotWindow = true;
     else if (a == L"--warp") opts.forceWarp = true;
     else if (a == L"--sandbox") opts.sandbox = true;
+    else if (a == L"--lang") opts.language = next();
     else if (a == L"--show") opts.showPath = next();
     else if (a == L"--show-bench") opts.showBench = next();
     else if (a == L"--show-capture") opts.showCapture = next();

@@ -9,6 +9,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
@@ -56,14 +57,14 @@ uint32_t ToRgb(D2D1_COLOR_F c) {
 // Design
 
 PresentationView::DesignPanel::DesignPanel(PresentationView& view) : v_(view) {
-  const wchar_t* names[kTabs] = {L"Themes", L"Background", L"Slide size"};
+  const wchar_t* names[kTabs] = {T(L"Themes"), T(L"Background"), T(L"Slide size")};
   for (int i = 0; i < kTabs; ++i) {
     tabs_[i].text = names[i];
     tabs_[i].toggle = true;
     tabs_[i].textSize = 12;
     tabs_[i].onInvoke = [this, i] { Open(static_cast<Tab>(i)); };
   }
-  const wchar_t* kinds[3] = {L"Solid", L"Gradient", L"Picture"};
+  const wchar_t* kinds[3] = {T(L"Solid"), T(L"Gradient"), T(L"Picture")};
   for (int i = 0; i < 3; ++i) {
     kind_[i].text = kinds[i];
     kind_[i].toggle = true;
@@ -77,27 +78,27 @@ PresentationView::DesignPanel::DesignPanel(PresentationView& view) : v_(view) {
       ApplyBackground();
     };
   }
-  color1_.label = L"Color";
+  color1_.label = T(L"Color");
   color1_.onChange = [this](D2D1_COLOR_F c, bool) {
     bg_.color = ToRgb(c);
     if (bg_.kind != Background::Kind::Gradient) bg_.kind = Background::Kind::Solid;
     ApplyBackground();
   };
-  color2_.label = L"Second color";
+  color2_.label = T(L"Second color");
   color2_.onChange = [this](D2D1_COLOR_F c, bool) {
     bg_.color2 = ToRgb(c);
     bg_.kind = Background::Kind::Gradient;
     ApplyBackground();
   };
   for (const GradientPreset& g : GradientPresets()) direction_.items.push_back(g.name);
-  direction_.label = L"Direction";
+  direction_.label = T(L"Direction");
   direction_.onChange = [this](int i) {
     if (i < 0 || static_cast<size_t>(i) >= GradientPresets().size()) return;
     bg_.angle = GradientPresets()[static_cast<size_t>(i)].angle;
     bg_.kind = Background::Kind::Gradient;
     ApplyBackground();
   };
-  picture_.text = L"Choose picture…";
+  picture_.text = T(L"Choose picture…");
   picture_.textSize = 12;
   picture_.onInvoke = [this] {
     // The pictures dialog Insert > Pictures uses (p2-objects); SetBackground reads and stores the file.
@@ -107,21 +108,21 @@ PresentationView::DesignPanel::DesignPanel(PresentationView& view) : v_(view) {
     bg_.kind = Background::Kind::Picture;
     ApplyBackground();
   };
-  hide_.text = L"Hide background graphics";
+  hide_.text = T(L"Hide background graphics");
   hide_.toggle = true;
   hide_.textSize = 12;
   hide_.onInvoke = [this] {
     bg_.hideGraphics = hide_.checked;
     ApplyBackground();
   };
-  all_.text = L"Apply to all slides";
+  all_.text = T(L"Apply to all slides");
   all_.textSize = 12;
   all_.onInvoke = [this] {
     std::vector<size_t> every(v_.SlideCount());
     for (size_t i = 0; i < every.size(); ++i) every[i] = i;
     v_.SetBackground(every, bg_, picturePath_);
   };
-  reset_.text = L"Reset background";
+  reset_.text = T(L"Reset background");
   reset_.textSize = 12;
   reset_.onInvoke = [this] { v_.ResetBackground(v_.SelectedSlides()); };
   for (int i = 0; i < 2; ++i) {
@@ -133,9 +134,9 @@ PresentationView::DesignPanel::DesignPanel(PresentationView& view) : v_(view) {
       Sync();
     };
   }
-  scale_.items = {L"Ensure fit", L"Maximize"};
+  scale_.items = {T(L"Ensure fit"), T(L"Maximize")};
   scale_.selected = 0;
-  scale_.label = L"When the slide gets smaller";
+  scale_.label = T(L"When the slide gets smaller");
 }
 
 void PresentationView::DesignPanel::Open(Tab tab) {
@@ -197,7 +198,7 @@ std::vector<Control*> PresentationView::DesignPanel::Layout(const D2D1_RECT_F& b
   switch (tab_) {
     case kThemes: area_ = RectF(left, y, right, body.bottom); break;
     case kBackground: {
-      label(L"Fill", left, right);
+      label(T(L"Fill"), left, right);
       y += 18 * ui;
       const float w = (right - left - 2 * gap) / 3;
       for (int i = 0; i < 3; ++i) place(kind_[i], left + i * (w + gap), left + i * (w + gap) + w);
@@ -207,14 +208,14 @@ std::vector<Control*> PresentationView::DesignPanel::Layout(const D2D1_RECT_F& b
         y += rowH + 10 * ui;
       } else {
         const bool grad = bg_.kind == Background::Kind::Gradient;
-        label(grad ? L"From" : L"Color", left, mid - gap);
-        if (grad) label(L"To", mid + gap, right);
+        label(grad ? T(L"From") : T(L"Color"), left, mid - gap);
+        if (grad) label(T(L"To"), mid + gap, right);
         y += 18 * ui;
         place(color1_, left, mid - gap);
         if (grad) place(color2_, mid + gap, right);
         y += rowH + 10 * ui;
         if (grad) {
-          label(L"Direction", left, right);
+          label(T(L"Direction"), left, right);
           y += 18 * ui;
           place(direction_, left, right);
           y += rowH + 10 * ui;
@@ -225,21 +226,21 @@ std::vector<Control*> PresentationView::DesignPanel::Layout(const D2D1_RECT_F& b
       place(all_, left, mid - gap);
       place(reset_, mid + gap, right);
       y += rowH + 10 * ui;
-      labels_.push_back({L"Changes apply to the selected slides as you make them.", RectF(left, y, right, y + 34 * ui)});
+      labels_.push_back({T(L"Changes apply to the selected slides as you make them."), RectF(left, y, right, y + 34 * ui)});
       break;
     }
     case kSize:
-      label(L"Slide size", left, right);
+      label(T(L"Slide size"), left, right);
       y += 18 * ui;
       place(sizes_[0], left, mid - gap);
       place(sizes_[1], mid + gap, right);
       y += rowH + 14 * ui;
-      label(L"When the slide gets smaller", left, right);
+      label(T(L"When the slide gets smaller"), left, right);
       y += 18 * ui;
       place(scale_, left, right);
       y += rowH + 10 * ui;
-      labels_.push_back({L"Ensure fit scales the content down so all of it stays on the slide; Maximize keeps it as large as "
-                         L"it is and lets it run over the sides.",
+      labels_.push_back({T(L"Ensure fit scales the content down so all of it stays on the slide; Maximize keeps it as large as "
+                         L"it is and lets it run over the sides."),
                          RectF(left, y, right, y + 60 * ui)});
       break;
     default: break;
@@ -344,7 +345,7 @@ void PresentationView::DesignPanel::Draw(Canvas& c) {
   for (const auto& [text, rc] : labels_) c.TextWrapped(text, rc, p.textSecondary, 12 * ui_, 3);
   if (tab_ != kThemes) return;
   c.PushClip(area_);
-  c.Text(L"Themes", RectF(area_.left, area_.top - scroll_, area_.right, area_.top + 18 * ui_ - scroll_), p.textSecondary, 12 * ui_);
+  c.Text(T(L"Themes"), RectF(area_.left, area_.top - scroll_, area_.right, area_.top + 18 * ui_ - scroll_), p.textSecondary, 12 * ui_);
   for (int i = 0; i < static_cast<int>(BuiltInThemes().size()); ++i) {
     const D2D1_RECT_F r = ThemeRect(i);
     if (r.bottom + kThemeName * ui_ < area_.top || r.top > area_.bottom) continue;
@@ -354,7 +355,7 @@ void PresentationView::DesignPanel::Draw(Canvas& c) {
     c.Text(BuiltInThemes()[static_cast<size_t>(i)].name, RectF(r.left, r.bottom + 2 * ui_, r.right, r.bottom + kThemeName * ui_), p.text, 12 * ui_);
   }
   const D2D1_RECT_F first = ColorsRect(0);
-  c.Text(L"Theme colors", RectF(area_.left, first.top - 24 * ui_, area_.right, first.top - 6 * ui_), p.textSecondary, 12 * ui_);
+  c.Text(T(L"Theme colors"), RectF(area_.left, first.top - 24 * ui_, area_.right, first.top - 6 * ui_), p.textSecondary, 12 * ui_);
   for (int i = 0; i < static_cast<int>(ColorSchemes().size()); ++i) {
     const D2D1_RECT_F r = ColorsRect(i);
     if (r.bottom < area_.top || r.top > area_.bottom) continue;
@@ -398,8 +399,9 @@ bool PresentationView::DesignPanel::OnWheel(int delta, float x, float y) {
 
 std::wstring PresentationView::DesignPanel::TooltipAt(float x, float y) {
   const Hit h = At(x, y);
-  if (h.theme >= 0) return std::wstring(L"Apply the ") + BuiltInThemes()[static_cast<size_t>(h.theme)].name + L" theme to the presentation";
-  if (h.colors >= 0) return std::wstring(L"Use the ") + ColorSchemes()[static_cast<size_t>(h.colors)].name + L" theme colors";
+  if (h.theme >= 0)
+    return Fmt(T(L"Apply the {0} theme to the presentation"), {BuiltInThemes()[static_cast<size_t>(h.theme)].name});
+  if (h.colors >= 0) return Fmt(T(L"Use the {0} theme colors"), {ColorSchemes()[static_cast<size_t>(h.colors)].name});
   return {};
 }
 
@@ -413,28 +415,28 @@ PresentationView::HeaderFooterPanel::HeaderFooterPanel(PresentationView& view) :
     b.textSize = 12;
     b.onInvoke = std::move(fn);
   };
-  toggle(date_, L"Date and time", [this] { s_.date = date_.checked; Refresh(); });
-  toggle(auto_, L"Update automatically", [this] { s_.dateAuto = true; Refresh(); });
-  toggle(fixed_, L"Fixed", [this] { s_.dateAuto = false; Refresh(); });
-  toggle(number_, L"Slide number", [this] { s_.slideNumber = number_.checked; Refresh(); });
-  toggle(footer_, L"Footer", [this] { s_.footer = footer_.checked; Refresh(); });
-  toggle(notTitle_, L"Don't show on title slide", [this] { s_.notOnTitle = notTitle_.checked; Refresh(); });
-  format_.label = L"Date format";
+  toggle(date_, T(L"Date and time"), [this] { s_.date = date_.checked; Refresh(); });
+  toggle(auto_, T(L"Update automatically"), [this] { s_.dateAuto = true; Refresh(); });
+  toggle(fixed_, T(L"Fixed"), [this] { s_.dateAuto = false; Refresh(); });
+  toggle(number_, T(L"Slide number"), [this] { s_.slideNumber = number_.checked; Refresh(); });
+  toggle(footer_, T(L"Footer"), [this] { s_.footer = footer_.checked; Refresh(); });
+  toggle(notTitle_, T(L"Don't show on title slide"), [this] { s_.notOnTitle = notTitle_.checked; Refresh(); });
+  format_.label = T(L"Date format");
   format_.onChange = [this](int i) { s_.dateFormat = i + 1; };
   fixedText_.autoComplete = false;
-  fixedText_.label = L"Fixed date";
+  fixedText_.label = T(L"Fixed date");
   fixedText_.onCommit = [this](const std::wstring& t, int) { s_.dateFixed = t; };
   footerText_.autoComplete = false;
-  footerText_.label = L"Footer text";
+  footerText_.label = T(L"Footer text");
   footerText_.onCommit = [this](const std::wstring& t, int) {
     s_.footerText = t;
     s_.footer = s_.footer || !t.empty();
     Refresh();
   };
-  apply_.text = L"Apply";
+  apply_.text = T(L"Apply");
   apply_.textSize = 12;
   apply_.onInvoke = [this] { v_.ApplyHeaderFooter(s_, v_.SelectedSlides()); };
-  applyAll_.text = L"Apply to all";
+  applyAll_.text = T(L"Apply to all");
   applyAll_.textSize = 12;
   applyAll_.onInvoke = [this] { v_.ApplyHeaderFooter(s_, {}); };
 }
@@ -480,7 +482,7 @@ std::vector<Control*> PresentationView::HeaderFooterPanel::Layout(const D2D1_REC
     out.push_back(&b);
     y += rowH + 8 * ui;
   };
-  labels_.push_back({L"Shown on the slides", RectF(left, y, right, y + 16 * ui)});
+  labels_.push_back({T(L"Shown on the slides"), RectF(left, y, right, y + 16 * ui)});
   y += 20 * ui;
   full(date_);
   pair(auto_, fixed_);
@@ -495,7 +497,7 @@ std::vector<Control*> PresentationView::HeaderFooterPanel::Layout(const D2D1_REC
   full(notTitle_);
   y += 10 * ui;
   pair(apply_, applyAll_);
-  labels_.push_back({L"Apply sets the selected slides; Apply to all sets every slide.", RectF(left, y, right, y + 34 * ui)});
+  labels_.push_back({T(L"Apply sets the selected slides; Apply to all sets every slide."), RectF(left, y, right, y + 34 * ui)});
   return out;
 }
 
@@ -532,22 +534,22 @@ bool PresentationView::DesignCommandState(int cmd, CommandState& s) {
     case CmdDesignPanel:
       s.enabled = Ready();
       s.checked = designPanel_ && shown == designPanel_.get();
-      s.label = L"Design: themes, colors, background, slide size";
+      s.label = T(L"Design: themes, colors, background, slide size");
       return true;
-    case CmdFormatBackground: s.enabled = any; s.label = L"Format background"; return true;
-    case CmdResetBackground: s.enabled = any; s.label = L"Reset background"; return true;
+    case CmdFormatBackground: s.enabled = any; s.label = T(L"Format background"); return true;
+    case CmdResetBackground: s.enabled = any; s.label = T(L"Reset background"); return true;
     case CmdHeaderFooter:
       s.enabled = any;
       s.checked = hfPanel_ && shown == hfPanel_.get();
-      s.label = L"Header & footer: slide numbers, footer and date";
+      s.label = T(L"Header & footer: slide numbers, footer and date");
       return true;
-    case CmdSlideSizePanel: s.enabled = Ready(); s.label = L"Slide size"; return true;
+    case CmdSlideSizePanel: s.enabled = Ready(); s.label = T(L"Slide size"); return true;
     case CmdSlideSize169:
     case CmdSlideSize43: {
       const int choice = cmd == CmdSlideSize169 ? 0 : 1;
       s.enabled = Ready();
       s.checked = Ready() && SlideSizeChoiceOf(deck_->SlideSize()) == choice;
-      s.label = std::wstring(L"Slide size: ") + SlideSizes()[static_cast<size_t>(choice)].name;
+      s.label = std::wstring(T(L"Slide size: ")) + SlideSizes()[static_cast<size_t>(choice)].name;
       return true;
     }
     default: break;
@@ -558,7 +560,7 @@ bool PresentationView::DesignCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdApplyTheme);
     if (i >= BuiltInThemes().size()) return false;
     s.enabled = any;
-    s.label = std::wstring(L"Theme: ") + BuiltInThemes()[i].name;
+    s.label = std::wstring(T(L"Theme: ")) + BuiltInThemes()[i].name;
     s.checked = slide && slide->theme && Utf8ToWide(slide->theme->Name()) == BuiltInThemes()[i].name;
     return true;
   }
@@ -566,7 +568,7 @@ bool PresentationView::DesignCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdApplyColors);
     if (i >= ColorSchemes().size()) return false;
     s.enabled = any;
-    s.label = std::wstring(L"Theme colors: ") + ColorSchemes()[i].name;
+    s.label = std::wstring(T(L"Theme colors: ")) + ColorSchemes()[i].name;
     s.checked = slide && ColorSchemeOf(*slide) == static_cast<int>(i);
     return true;
   }
@@ -659,7 +661,7 @@ bool PresentationView::ApplyTheme(int theme, const std::vector<size_t>& slides) 
   d.background = BackgroundXml(t.background);
   edit::Editor* ed = SlideEditor();
   const std::vector<size_t> masters = MastersOf(*deck_->Model(), slides);
-  return Done(ed->Run(u"Theme", [&] {
+  return Done(ed->Run(T(u"Theme"), [&] {
     for (size_t m : masters)
       if (edit::Result r = edit::ApplyThemeDesign(*ed, m, d); !r) return r;
     return edit::Result{};
@@ -670,11 +672,11 @@ bool PresentationView::ApplyColors(int scheme, const std::vector<size_t>& slides
   const auto& schemes = ColorSchemes();
   if (scheme < 0 || static_cast<size_t>(scheme) >= schemes.size() || !CanEditSlides()) return false;
   edit::ThemeDesign d;
-  d.step = u"Theme Colors";
+  d.step = T(u"Theme Colors");
   d.colorScheme = ColorSchemeXml(schemes[static_cast<size_t>(scheme)]);
   edit::Editor* ed = SlideEditor();
   const std::vector<size_t> masters = MastersOf(*deck_->Model(), slides);
-  return Done(ed->Run(u"Theme Colors", [&] {
+  return Done(ed->Run(T(u"Theme Colors"), [&] {
     for (size_t m : masters)
       if (edit::Result r = edit::ApplyThemeDesign(*ed, m, d); !r) return r;
     return edit::Result{};
@@ -690,12 +692,12 @@ bool PresentationView::SetBackground(const std::vector<size_t>& slides, const Ba
     type = PictureType(picture);
     std::string read;
     if (type.empty() || !util::ReadFileBytes(picture, read, kMaxPicture) || read.empty()) {
-      host_.ViewMessage(BannerKind::Warning, L"That picture can't be used as a background.");
+      host_.ViewMessage(BannerKind::Warning, T(L"That picture can't be used as a background."));
       return false;
     }
     bytes.assign(read.begin(), read.end());
   }
-  return Done(ed->Run(u"Format Background", [&] {
+  return Done(ed->Run(T(u"Format Background"), [&] {
     std::string media;  // the picture's part, stored once for all the slides
     for (size_t s : slides) {
       std::string rel;
@@ -707,10 +709,10 @@ bool PresentationView::SetBackground(const std::vector<size_t>& slides, const Ba
         } else {
           rel = ed->AddRelationship(part, kRelImage, media);
         }
-        if (rel.empty()) return edit::Result::Fail(u"The picture couldn't be added.");
+        if (rel.empty()) return edit::Result::Fail(T(u"The picture couldn't be added."));
       }
       const std::string xml = BackgroundXml(bg, rel);
-      if (xml.empty()) return edit::Result::Fail(u"Choose a picture first.");
+      if (xml.empty()) return edit::Result::Fail(T(u"Choose a picture first."));
       if (edit::Result r = ed->SetBackground({s}, xml); !r) return r;
     }
     return edit::SetShowMasterShapes(*ed, slides, !bg.hideGraphics);

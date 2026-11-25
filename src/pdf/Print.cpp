@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "pdf/Document.h"
 #include "resource.h"
 
@@ -113,7 +114,7 @@ void RenderToPrinter(HDC dc, FPDF_PAGE page) {
 PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std::wstring& title,
                            const std::function<void(int, int)>& progress, std::wstring& message) {
   if (!doc.CanPrint()) {
-    message = L"The author of this PDF doesn’t allow printing it.";
+    message = T(L"The author of this PDF doesn’t allow printing it.");
     return PrintOutcome::NotAllowed;
   }
   const int pageCount = doc.PageCount();
@@ -146,7 +147,7 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
   if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT || !pd.hDC) {
     cleanup();
     if (FAILED(hr)) {
-      message = L"The print dialog couldn’t be opened. Is a printer installed?";
+      message = T(L"The print dialog couldn’t be opened. Is a printer installed?");
       return PrintOutcome::Failed;
     }
     return PrintOutcome::Cancelled;
@@ -166,7 +167,7 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
   PrintCopy copy;
   if (!copy.Create(doc)) {
     cleanup();
-    message = L"This PDF couldn’t be prepared for printing.";
+    message = T(L"This PDF couldn’t be prepared for printing.");
     return PrintOutcome::Failed;
   }
 
@@ -174,7 +175,7 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
   di.lpszDocName = title.c_str();
   if (StartDocW(pd.hDC, &di) <= 0) {
     cleanup();
-    message = L"The printer didn’t accept the document.";
+    message = T(L"The printer didn’t accept the document.");
     return PrintOutcome::Failed;
   }
   bool ok = true;
@@ -201,10 +202,11 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
   else AbortDoc(pd.hDC);
   cleanup();
   if (!ok) {
-    message = L"Printing stopped because the printer reported an error.";
+    message = T(L"Printing stopped because the printer reported an error.");
     return PrintOutcome::Failed;
   }
-  message = toPrint.size() == 1 ? L"Sent 1 page to the printer" : L"Sent " + std::to_wstring(toPrint.size()) + L" pages to the printer";
+  message = toPrint.size() == 1 ? std::wstring(T(L"Sent 1 page to the printer"))
+                                : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(toPrint.size())});
   return PrintOutcome::Printed;
 }
 

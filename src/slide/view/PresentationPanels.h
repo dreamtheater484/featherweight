@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "slide/view/NotesEdit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Controls.h"
@@ -23,7 +24,7 @@ class PresentationView::DesignPanel : public PanelContent {
  public:
   enum Tab { kThemes, kBackground, kSize, kTabs };
   explicit DesignPanel(PresentationView& view);
-  std::wstring Title() const override { return L"Design"; }
+  std::wstring Title() const override { return T(L"Design"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   bool OnMouseDown(float x, float y, bool dbl) override;
@@ -76,7 +77,7 @@ void DrawColorsPreview(gfx::Canvas& c, int i, const D2D1_RECT_F& r, float ui);
 class PresentationView::HeaderFooterPanel : public PanelContent {
  public:
   explicit HeaderFooterPanel(PresentationView& view);
-  std::wstring Title() const override { return L"Header & footer"; }
+  std::wstring Title() const override { return T(L"Header & footer"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   // The settings of the current slide.

@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/Lang.h"
 #include "draw/Images.h"
 #include "draw/Theme.h"
 #include "pkg/Odf.h"
@@ -1178,12 +1179,12 @@ std::string Converter::Layout(xml_node mp, Part& part) {
 pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
   const std::string mime = odf::MimeType(zip_);
   if (!mime.empty() && !mime.starts_with("application/vnd.oasis.opendocument.presentation"))
-    return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a presentation.");
-  constexpr std::string_view kNot = "This isn't an OpenDocument presentation.";
+    return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a presentation."));
+  const char* kNot = T("This isn't an OpenDocument presentation.");
   if (pkg::Status s = odf::LoadPart(zip_, "content.xml", content_, limits_, true, kNot); !s.Ok()) return s;
   if (pkg::Status s = odf::LoadPart(zip_, "styles.xml", styles_, limits_, false, kNot); !s.Ok()) return s;
   xml_node pres = content_.Root().child("office:body").child("office:presentation");
-  if (!pres) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a presentation.");
+  if (!pres) return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a presentation."));
   xml_node sr = styles_.Root();
   st_.Add(sr.child("office:font-face-decls"), 'c');
   st_.Add(content_.Root().child("office:font-face-decls"), 'c');
@@ -1202,7 +1203,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& pptx) {
     std::string shapes;
     Shapes(page, part, shapes, 0, nullptr);
     written_ += shapes.size();
-    if (written_ > limits_.maxTotalSize) return pkg::Status::Fail(pkg::Status::Code::TooLarge, "The presentation is too large to open.");
+    if (written_ > limits_.maxTotalSize) return pkg::Status::Fail(pkg::Status::Code::TooLarge, T("The presentation is too large to open."));
     Chain pc;
     st_.Add(pc, "drawing-page", Attr(page, "draw:style-name"), false);
     std::string sld = DECL "<p:sld" NS;
