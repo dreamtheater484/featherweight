@@ -153,7 +153,7 @@ Also:
 | Piece | Session | Weight | Size budget | Command ids |
 |---|---|---|---|---|
 | Legal hygiene in the engines: cloud fonts out, substitutes, hyphenation files. Word fidelity to 97 %, the Enter in `long-300.docx`, RF2 and RF7 | f1-word | 22 % | 120 KB | 4000–4019 |
-| Languages: the catalog (`T()`, extraction, a pseudo-language, compressed resources per language, the language setting), the marking pass over the UI, NL/DE/FR/ES, the clipping check | f1-lang | 15 % | 200 KB (4 × ≤ 40 KB, plus code) | 4020–4039 |
+| Languages: the catalog (`T()`, extraction, a pseudo-language, compressed resources per language, the language setting), the marking pass over the UI, NL/DE/FR/ES, the clipping check | f1-lang | 15 % | 215 KB (4 × ≤ 40 KB, plus code; 200 KB until the coordinator raised it, see the decisions) | 4020–4039 |
 | PDF page tools, OCR, signing (drawn and certificate), the share sheet in every tab | f1-pdf | 20 % | 400 KB | 4040–4119 |
 | Shipping: the release workflow in CI with SignPath and test signing, reproducible builds, the updater (signatures, channels, rollback, policy), MSIX, MSI, ADMX, winget, Chocolatey and Scoop, V8 as a component, the PDFium update routine, the arm64 build | f1-ship | 20 % | 80 KB | 4120–4149 |
 | Trust and support: CodeQL, Scorecard, Coverity, Best Practices, the VirusTotal and sandbox uploads, SECURITY.md, the SBOM, the website with help and known issues, crash dumps with the opt-in report, the README's legal wording, the NLnet draft | f1-trust | 10 % | 40 KB | 4150–4169 |
@@ -161,7 +161,7 @@ Also:
 | Final gate, release 4.1 | coordinator | 5 % | 0 | — |
 
 **Size:**
-- The budgets add up to 840 KB, with 184 KB in reserve (1,024 KB in all).
+- The budgets add up to 855 KB, with 169 KB in reserve (1,024 KB in all; f1-lang's 15 KB raise came out of the 184 KB reserve).
 - Each piece measures with the linker-map method (`$env:LINK='/MAP'` from PowerShell, then p1-show's `mapsplit.py`) and records a ledger line with its reason.
 
 **Command ids:**
@@ -363,3 +363,4 @@ eference-renders.ps1` under quiet-pc.lock: 252 pages; ours 251, 85.0 % of lines,
 - **f1-lang, 2026-11-25 (coordinator): no string freeze; the catalogs are translated now and kept current in small passes.** `tools/strings/update.py` brings each `strings/<code>.po` in step with the template: new strings untranslated, strings whose English changed fuzzy with the old English beside them (the app shows English for both), removed ones obsolete. `check.py --json` lists each language's untranslated and fuzzy strings; f1-lang translates them in passes, and a last pass right before the gate. Pieces mark their strings with T() as they write them and don't edit `strings/`.
 - **f1-lang, 2026-11-25: the catalogs are packed tighter.** The key table, shared by every language (src/core/LangCatalog.h, format 2), keeps the sorted hashes as Rice-coded differences and each one's place in 12 bits, read into two arrays when a language other than English loads: 15,459 bytes for 3,670 strings instead of 21,982. The texts are in one order for every language, by their French, which packs the four 1.4 KB smaller than by English, and a translation that is the English itself isn't stored (T() returns the English anyway). Together 3.8 KB less, which keeps f1-lang inside its 200 KB. English loads nothing.
 - **f1-lang, 2026-11-25: a word that translates two ways gets a context, in a table too:** `NC_(L"Bar", L"chart")` is one literal, the catalog's key for `T(L"Bar", L"chart")`; the table's reader drops the context when there's no translation, and `English()` gives the plain English (script names, keys). Chart kinds (Column, Bar, Line), the tab stop's Bar, the Letter template, Excel's Outline group and border preset have one. A panel button's label that's too long for a language is drawn a little smaller (down to 10 DIPs) before it would be cut, and the clipping check sees panel buttons.
+- **f1-lang, 2026-11-25 (coordinator): f1-lang's budget is 215 KB, 15 KB from F1's reserve, which leaves 169 KB.** The four catalogs grow with every piece's new strings, about 59 bytes a string in four languages and the key table; f1-pdf's 110 took f1-lang from 198.5 to about 205 KB. The languages are one feature, so their translations count to f1-lang, not to the piece that adds the English: charging each piece would make every ledger line harder to read. No LZMA for the catalogs: 15.7 KB smaller, but a new decoder (about 5 KB of third-party code) isn't worth the 10 KB it would save.
