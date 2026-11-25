@@ -39,16 +39,26 @@ $all = @(
   @{ id = "RF7"; owner = "f1-word"; target = "Word: 1 C"; budget = 1; decisions = 0; size = "1366x768"; out = "rf7.docx"; steps = @()
      verify = { param($f) if (-not (@(& $Fwtool dump --model $f 2>&1 | Where-Object { "$_" -match 'Title' }).Count)) { "no paragraph in the Title style" } } },
   @{ id = "merge"; owner = "f1-pdf"; target = "Acrobat: 6 C + 1 K, 2 D"; budget = 7; decisions = 2; size = "1072x686"
-     open = "build\pdf-corpus\plain-text.pdf"; out = "merged.pdf"; steps = @()
+     open = "build\pdf-corpus\plain-text.pdf"; out = "merged.pdf"
+     # f1-pdf: Pages, the last page's thumbnail, Insert (+) and B in the Open dialog (B, Open), Ctrl+S.
+     steps = @("click:171,64|1C", "click:835,485|1C", "pdftool:insert:$root\build\pdf-corpus\images.pdf|3|3C", "|1D", "save:{out}|1K")
      verify = { param($f) $v = & $Fwtool pdf-valid $f 2>&1; if ($LASTEXITCODE) { "pdf-valid: $($v -join ' ')" } } },
   @{ id = "sign"; owner = "f1-pdf"; target = "Acrobat: 5 C + 1 drag + 1 K, 1 D"; budget = 7; decisions = 1; size = "1072x686"
-     open = "build\pdf-corpus\plain-text.pdf"; out = "signed-drawn.pdf"; steps = @()
+     open = "build\pdf-corpus\plain-text.pdf"; out = "signed-drawn.pdf"
+     # f1-pdf: Sign ▾, Draw signature…, the drawing (pdftool:stamp draws and places it), Place on a
+     # page and the click on the page (where: 1 D), Ctrl+S.
+     steps = @("cmd:4071|2C", "pdftool:stamp|1G", "|2C", "|1D", "save:{out}|1K")
      verify = { param($f) $v = & $Fwtool pdf-valid $f 2>&1; if ($LASTEXITCODE) { "pdf-valid: $($v -join ' ')" } } },
   @{ id = "certificate"; owner = "f1-pdf"; target = "Acrobat: 6 C + 1 drag, 2 D"; budget = 7; decisions = 2; size = "1072x686"
-     open = "build\pdf-corpus\plain-text.pdf"; out = "signed-certificate.pdf"; steps = @()
+     open = "build\pdf-corpus\plain-text.pdf"; out = "signed-certificate.pdf"
+     # f1-pdf: Sign ▾, Sign with a certificate…, the certificate in its menu (1 D), Enter in the Save
+     # dialog with "<name> (signed)" suggested (1 D). The test PFX stands in for the store's certificate.
+     steps = @("pdftool:sign:$root\tests\pdfs\signing\test-signer.pfx|featherweight|{out}|3C", "|1K", "|2D")
      verify = { param($f) $j = Join-Path $Out "cert.json"; & $Fwtool pdf-valid --json $j $f | Out-Null; if (-not @((Get-Content $j -Raw | ConvertFrom-Json).files[0].signatures).Count) { "no signature" } } },
   @{ id = "ocr"; owner = "f1-pdf"; target = "Acrobat: 5 C + 1 K"; budget = 6; decisions = 0; size = "1072x686"
-     open = "build\pdf-ocr\scans\scan-01.pdf"; out = "ocr.pdf"; steps = @()
+     open = "build\pdf-ocr\scans\scan-01.pdf"; out = "ocr.pdf"
+     # f1-pdf: Recognize text on the toolbar (pdftool:ocr runs it to the end), Ctrl+S.
+     steps = @("pdftool:ocr|1C", "save:{out}|1K")
      verify = { param($f) $t = Join-Path $Out "ocr-text"; & $Fwtool pdf-valid --out $t $f | Out-Null; if ((Get-Content (Join-Path $t "ocr.txt") -Raw) -notmatch '\w{4,}') { "no text layer" } } },
   @{ id = "language"; owner = "f1-lang"; target = "Acrobat: 8 C, 1 D"; budget = 8; decisions = 1; size = "1072x686"; out = $null; steps = @()
      verify = { param($f) @() } },
