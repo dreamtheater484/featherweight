@@ -180,15 +180,27 @@ float Engine::LineHeight(const ParaText& pt, const text::Line& line, float grid)
   }
 }
 
+float Engine::TopLineHeight(const ParaText& pt, float height) const {
+  // Word's w:suppressTopSpacing: the first line on a page with at-least spacing is shorter by as much
+  // as its minimum exceeds 9.6 pt, whatever its font, size or text height (measured in Word with Times
+  // New Roman, Arial and Calibri at 10, 11 and 20 pt: at least 12 pt, 2.4 pt shorter; at least 30,
+  // 20.4; at least 6, as it is). The UN financial report's pages then hold Word's 55th line.
+  const ParaProps& p = *pt.props;
+  if (!suppressTop_ || p.lineRule != LineRule::AtLeast) return height;
+  return height - std::max(0.0f, static_cast<float>(p.line) / 20.0f - 9.6f);
+}
+
 float Engine::BaselineIn(const ParaText& pt, const text::Line& line, float height) const {
-  // Proportional and at-least spacing add their space below the text: a double-spaced first line on
-  // a page has its baseline where a single-spaced one would. An exact height puts the baseline 4/5
-  // of the way down, cutting off what doesn't fit; so does proportional spacing under single.
+  // Proportional spacing adds its space below the text: a double-spaced first line on a page has its
+  // baseline where a single-spaced one would. At-least spacing adds it above: the text sits on the
+  // line's bottom (measured in Word: at least 30 pt, Times New Roman 10, the baseline 27.8 pt down).
+  // An exact height puts the baseline 4/5 of the way down, cutting off what doesn't fit; so does
+  // proportional spacing under single.
   const ParaProps& p = *pt.props;
   const float single = line.ascent + line.descent + line.lineGap;
   if (p.lineRule == LineRule::Exact) return height * 0.8f;
   if (p.lineRule == LineRule::Auto && p.line > 0 && p.line < 240) return height * 0.8f;
-  if (height >= single) return line.lineGap + line.ascent;
+  if (height >= single && p.lineRule != LineRule::AtLeast) return line.lineGap + line.ascent;
   return height - line.descent;
 }
 
@@ -493,7 +505,12 @@ Engine::Placed Engine::PlaceBlocks(const std::vector<Block>& group, const Placem
   out.content = stack(fp && fp->w.Value() > 0 ? Pt(fp->w) : columnRight - columnLeft);
   float w = fp && fp->w.Value() > 0 ? Pt(fp->w) : 0;
   if (w <= 0) {
-    for (const LineBox& lb : out.content.lines) w = std::max(w, lb.x + lb.line.contentRight);
+    // A table is as wide as its cells. A turned line's x is in its turned frame: a vertical cell's
+    // line counted at its length made the UN report's landscape footers (the page number in a table
+    // 21.6 pt wide, in a row 246 pt tall) push the body's text 246 pt in.
+    for (const LineBox& lb : out.content.lines)
+      if (!lb.turn) w = std::max(w, lb.x + lb.line.contentRight);
+    for (const CellRect& c : out.content.cells) w = std::max(w, c.box.right);
     for (const Edge& e : out.content.edges) w = std::max({w, e.x1, e.x2});
     for (const Fill& f : out.content.fills) w = std::max(w, f.rect.right);
     if (autoWidth) {

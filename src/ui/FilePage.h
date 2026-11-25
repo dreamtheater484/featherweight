@@ -12,12 +12,13 @@
 namespace ui {
 
 // The File page (plan §5.6): Office's File tab, over the ribbon and the page. A rail on the left
-// (New, Open, Info, Save, Save as, Print, Export, Close, Options) and the chosen section's
+// (New, Open, Info, Save, Save as, Print, Share, Export, Close, Options) and the chosen section's
 // entries on the right. The window fills it from its own commands and the editor's
 // (RibbonModel::file); every entry runs a command, as the ☰ and ⋯ menus did.
 class FilePage {
  public:
-  enum Section { kNew, kOpen, kInfo, kSave, kSaveAs, kPrint, kExport, kClose, kOptions, kSectionCount };
+  // Share: F1, f1-pdf (Windows' share sheet), where Word has it.
+  enum Section { kNew, kOpen, kInfo, kSave, kSaveAs, kPrint, kShare, kExport, kClose, kOptions, kSectionCount };
   struct Entry {
     int cmd = 0;  // 0: a heading
     std::wstring label;
@@ -34,7 +35,7 @@ class FilePage {
     std::vector<Entry> entries[kSectionCount];
     // The sections that run a command at once instead of showing entries (Save, Print, Close).
     int run[kSectionCount] = {};
-    bool enabled[kSectionCount] = {true, true, true, true, true, true, true, true, true};
+    bool enabled[kSectionCount] = {true, true, true, true, true, true, true, true, true, true};
   };
 
   bool IsOpen() const { return open_; }

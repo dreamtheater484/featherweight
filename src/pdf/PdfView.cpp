@@ -12,7 +12,12 @@
 #include "Util.h"
 #include "core/Lang.h"
 #include "core/Strings.h"
+#include "pdf/PagesPanel.h"
+#include "pdf/SignaturePanel.h"
+#include "pdf/PdfText.h"
 #include "pdf/Print.h"
+#include "pdf/tools/PageOps.h"
+#include "pkg/SafeFile.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -84,6 +89,7 @@ OpenResult PdfView::Load(const std::wstring& password, std::wstring& error) {
   notes_.clear();
   noteScanNext_ = 0;
   Relayout(nullptr);
+  if (doc_->SignatureCount() > 0) CheckSignatures(false);  // a signed PDF says so, and whether it's intact
   return r;
 }
 
@@ -360,12 +366,13 @@ void PdfView::DrawOverlays(Canvas& c, int first, int last) {
 
 bool PdfView::HasIdleWork() const {
   if (!Ready()) return false;
+  if (ocr_ && OcrHasWork()) return true;
   return cache_->HasWork() || (search_.Active() && !search_.Done()) || noteScanNext_ < PageCount();
 }
 
 bool PdfView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
   if (!Ready()) return false;
-  bool repaint = false;
+  bool repaint = ocr_ && OcrHasWork() && OcrStep();
   if (search_.Active() && !search_.Done()) {
     double searchDeadline = std::min(deadlineMs, anim::Now() + 5);
     if (search_.Work(*doc_, searchDeadline)) repaint = true;
@@ -424,6 +431,13 @@ void PdfView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     }
   }
   selBar_ = false;
+  if (placingSignature_ && button == 0) {  // f1-pdf: the click that places a drawn signature
+    const int page = PageAtPoint(x, y);
+    double px = 0, py = 0;
+    if (page >= 0 && ToPagePoint(page, x, y, px, py))
+      PlaceSignatureAt(page, static_cast<float>(px), static_cast<float>(py));
+    return;
+  }
   BeginPress(x, y);
 
   if (button == 2) {  // middle button pans
@@ -653,6 +667,7 @@ HCURSOR PdfView::CursorAt(int x, int y) {
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return ibeam;
   if (OverScrollbar(x, y)) return arrow;
+  if (placingSignature_) return PageAtPoint(x, y) >= 0 ? LoadCursor(nullptr, IDC_CROSS) : arrow;
   if (selBar_) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y)) return hand;
@@ -790,6 +805,14 @@ bool PdfView::OnKeyDown(UINT vk, UINT mods) {
     return false;
   }
   if (vk == VK_ESCAPE) {
+    if (placingSignature_) {
+      StopPlacingSignature();
+      return true;
+    }
+    if (ocr_) {
+      StopOcr();
+      return true;
+    }
     if (!selection_.Empty()) {
       selection_.Clear();
       host_.ViewInvalidate();
@@ -918,10 +941,26 @@ bool PdfView::Save(const std::wstring& path, std::wstring& error) {
   if (!Ready()) return false;
   bool ok = doc_->Save(path, error);
   if (ok) path_ = doc_->Path();
+  // Undo and Redo bring back a document that's no longer the file: a change to save.
+  if (ok)
+    for (auto* list : {&pageUndo_, &pageRedo_})
+      for (PageUndo& u : *list) u.modified = true;
   lastModified_ = doc_->Modified();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
   return ok;
+}
+
+bool PdfView::WriteCopy(const std::wstring& path, std::wstring& message) {
+  std::string bytes;
+  if (!Ready() || !doc_->CurrentBytes(bytes)) {
+    message = T(L"The PDF couldn't be written.");
+    return false;
+  }
+  const fw::pkg::SaveResult r = fw::pkg::SafeWrite(path, std::span<const uint8_t>(
+                                                             reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  if (!r.Ok()) message = fw::Utf8ToWide(r.message);
+  return r.Ok();
 }
 
 bool PdfView::ExportPdf(const std::wstring& path, std::wstring& message) {
@@ -947,6 +986,8 @@ void PdfView::OnFormInvalidate(int page, double l, double t, double r, double b)
 void PdfView::OnFormCursor(int type) { formCursor_ = type; }
 
 void PdfView::OnFormChanged() {
+  pageUndo_.clear();
+  pageRedo_.clear();
   if (doc_ && doc_->Modified() != lastModified_) {
     lastModified_ = doc_->Modified();
     host_.ViewStateChanged();
@@ -1024,6 +1065,9 @@ void PdfView::OnFormFocusChanged(int page, bool hasRect, const FS_RECTF& rect) {
 // Highlights and notes
 
 void PdfView::AnnotationsChanged(int page) {
+  // Page tools' Undo brings back the whole document as it was: not past an edit of another kind.
+  pageUndo_.clear();
+  pageRedo_.clear();
   cache_->InvalidatePage(page);
   RescanNotes(page);
   hoverNote_ = HoverNote{};
@@ -1349,6 +1393,9 @@ struct CommandName {
   const wchar_t* keys;
 };
 
+constexpr wchar_t kPagesGlyph = 0xE8A9;  // ViewAll: a grid of pages
+constexpr wchar_t kSignGlyph = 0xE70F;   // Edit: a pen
+
 constexpr CommandName kCommandNames[] = {
     {CmdGoToPage, N_(L"Go to page"), L"Ctrl+G"},
     {CmdNextPage, N_(L"Next page"), N_(L"Page Down")},
@@ -1402,8 +1449,77 @@ int PdfView::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
+int PdfView::ShortcutFor(UINT vk, UINT mods) const {
+  // Ctrl+Z and Ctrl+Y undo the page tools, unless a form field has the keys (its own undo).
+  if ((mods & (kModCtrl | kModAlt)) == kModCtrl && (vk == 'Z' || vk == 'Y') && doc_) {
+    int fp = -1;
+    if (!doc_->FocusedField(fp) && (vk == 'Z' ? CanUndoPages() : CanRedoPages())) return vk == 'Z' ? CmdUndo : CmdRedo;
+  }
+  return Shortcut(vk, mods);
+}
+
 CommandState PdfView::QueryCommand(int cmd) {
   CommandState s;
+  // The page tools (F1, f1-pdf).
+  const bool tools = Ready() && PageToolsBlocked().empty();
+  switch (cmd) {
+    case CmdPdfPagesPanel:
+      s = {Ready(), pagesPanel_ && host_.ViewShownPanel() == pagesPanel_.get()};
+      s.label = T(L"Pages");
+      return s;
+    case CmdPdfRotatePagesRight:
+    case CmdPdfRotatePagesLeft:
+      s = {tools, false};
+      s.label = cmd == CmdPdfRotatePagesRight ? T(L"Rotate pages clockwise") : T(L"Rotate pages counterclockwise");
+      return s;
+    case CmdPdfDeletePages:
+      s = {tools && static_cast<int>(ToolPages().size()) < PageCount(), false};
+      s.label = T(L"Delete pages");
+      return s;
+    case CmdPdfInsertPages:
+      s = {tools, false};
+      s.label = T(L"Insert pages from a PDF…");
+      return s;
+    case CmdPdfExtractPages:
+      s = {tools, false};
+      s.label = T(L"Extract pages…");
+      return s;
+    case CmdPdfSplitMenu:
+    case CmdPdfSplitEvery1:
+    case CmdPdfSplitEvery1 + 1:
+    case CmdPdfSplitEvery1 + 2:
+    case CmdPdfSplitEvery1 + 3:
+    case CmdPdfSplitSelected:
+      s = {tools && PageCount() > 1, false};
+      s.label = T(L"Split…");
+      return s;
+    case CmdPdfOcr:
+    case CmdPdfOcrPage:
+      s = {tools, OcrRunning()};
+      s.label = OcrRunning() ? T(L"Stop recognizing text") : cmd == CmdPdfOcr ? T(L"Recognize text") : T(L"Recognize text on this page");
+      return s;
+    case CmdPdfSignMenu:
+      s = {Ready(), false};
+      s.label = T(L"Sign");
+      return s;
+    case CmdPdfDrawSignature:
+      s = {tools, false};
+      s.label = T(L"Draw signature…");
+      return s;
+    case CmdPdfSignCertificate:
+      s = {Ready() && SigningBlocked().empty(), false};
+      s.label = T(L"Sign with a certificate…");
+      return s;
+    case CmdPdfSignatures:
+      s = {Ready() && doc_->SignatureCount() > 0, false};
+      s.label = T(L"Check signatures");
+      return s;
+    case CmdUndo:
+    case CmdRedo:
+      s = {cmd == CmdUndo ? CanUndoPages() : CanRedoPages(), false};
+      s.visible = s.enabled;
+      return s;
+  }
   switch (cmd) {
     case CmdSave: s = {Modified(), false}; break;
     case CmdPrint: s = {Ready() && CanPrint(), false}; break;
@@ -1424,13 +1540,43 @@ CommandState PdfView::QueryCommand(int cmd) {
 }
 
 std::vector<int> PdfView::Commands() {
-  std::vector<int> ids;
+  std::vector<int> ids = {CmdPdfPagesPanel,   CmdPdfRotatePagesRight, CmdPdfRotatePagesLeft, CmdPdfDeletePages,
+                          CmdPdfInsertPages, CmdPdfExtractPages,     CmdPdfOcr,             CmdPdfOcrPage,
+                          CmdPdfDrawSignature, CmdPdfSignCertificate, CmdPdfSignatures};
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   return ids;
 }
 
 bool PdfView::Execute(int cmd) {
   switch (cmd) {
+    // The page tools (F1, f1-pdf: PdfPages.cpp).
+    case CmdPdfPagesPanel: TogglePagesPanel(); return true;
+    case CmdPdfRotatePagesRight: RotatePages(ToolPages(), 1); return true;
+    case CmdPdfRotatePagesLeft: RotatePages(ToolPages(), -1); return true;
+    case CmdPdfDeletePages: DeletePages(ToolPages()); return true;
+    case CmdPdfInsertPages: {
+      // After the selected pages in the Pages panel; otherwise at the end, which is a merge.
+      const bool panel = pagesPanel_ && host_.ViewShownPanel() == pagesPanel_.get() && !pagesPanel_->Selection().empty();
+      InsertPagesFromFiles(panel ? pagesPanel_->Selection().back() + 1 : PageCount());
+      return true;
+    }
+    case CmdPdfExtractPages: ExtractPages(ToolPages()); return true;
+    case CmdPdfSplitEvery1:
+    case CmdPdfSplitEvery1 + 1:
+    case CmdPdfSplitEvery1 + 2:
+    case CmdPdfSplitEvery1 + 3: {
+      static constexpr int kEvery[] = {1, 2, 5, 10};
+      SplitPages(pdftools::SplitEvery(PageCount(), kEvery[cmd - CmdPdfSplitEvery1]));
+      return true;
+    }
+    case CmdPdfSplitSelected: SplitPages(pdftools::SplitAt(PageCount(), ToolPages())); return true;
+    case CmdPdfOcr: StartOcr({}); return true;
+    case CmdPdfOcrPage: StartOcr({CurrentPage()}); return true;
+    case CmdPdfSignCertificate: SignWithCertificate(); return true;
+    case CmdPdfDrawSignature: OpenSignaturePanel(); return true;
+    case CmdPdfSignatures: CheckSignatures(true); return true;
+    case CmdUndo: UndoPages(); return true;
+    case CmdRedo: RedoPages(); return true;
     case CmdCopy: Copy(); return true;
     case CmdCut: FieldKey('X', kModCtrl); return true;
     case CmdPaste: FieldKey('V', kModCtrl); return true;
@@ -1471,7 +1617,32 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"" : T(L"This PDF doesn’t allow printing"));
   print.enabled = CanPrint();
-  m.left = {save, saveAs, print};
+  ToolItem pages = item(CmdPdfPagesPanel, kPagesGlyph);
+  pages.tooltip = T(L"Pages: reorder, rotate, delete, insert, extract and split");
+  pages.toggle = true;
+  pages.checked = QueryCommand(CmdPdfPagesPanel).checked;
+  pages.sepBefore = true;
+  pages.priority = 4;
+  pages.menuLabel = T(L"Pages");
+  // Recognize text: scanned pages become searchable (on again while it runs: stop).
+  ToolItem ocr = item(CmdPdfOcr, icon::FontCase);
+  ocr.tooltip = OcrRunning() ? T(L"Stop recognizing text (Esc)") : T(L"Recognize text: make scanned pages searchable");
+  ocr.toggle = true;
+  ocr.checked = OcrRunning();
+  ocr.enabled = QueryCommand(CmdPdfOcr).enabled;
+  ocr.priority = 3;
+  ocr.menuLabel = T(L"Recognize text");
+  ToolItem sign = item(CmdPdfSignMenu, kSignGlyph);
+  sign.tooltip = T(L"Sign: draw a signature, or sign with a certificate");
+  sign.dropdown = true;
+  sign.width = 52;
+  sign.priority = 3;
+  sign.menuLabel = T(L"Sign");
+  ToolItem shareIt = item(CmdShareFile, icon::Share);
+  shareIt.tooltip = T(L"Share: send the PDF to mail or another app");
+  shareIt.priority = 2;
+  shareIt.menuLabel = T(L"Share");
+  m.left = {save, saveAs, print, pages, ocr, sign, shareIt};
 
   m.pager = true;
   m.page = currentPage_;
@@ -1532,7 +1703,9 @@ void PdfView::FillContextMenu(HMENU m, int x, int y) {
     AppendItem(m, CmdHighlight, T(L"Highlight"));
     AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"));
   }
-  if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
+  if (contextAnnot_.kind == AnnotHit::Kind::Stamp) {
+    AppendItem(m, CmdRemoveAnnot, T(L"Delete signature"));
+  } else if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
     AppendItem(m, CmdRemoveAnnot, T(L"Remove highlight"));
   } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
     AppendItem(m, CmdOpenNote, T(L"Open note"));
