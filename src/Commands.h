@@ -654,6 +654,26 @@ enum Cmd : int {
   // F1, f1-lang: the interface's language, 4020-4039.
   CmdLanguageWindows = 4020,  // File > Options: the language Windows shows its own interface in
   CmdLanguage0 = 4021,        // ... + i: fw::lang::Languages()[i] (English, Nederlands, ...; up to 4029)
+  // F1, f1-pdf: the PDF tab's page tools, OCR, signing, and sharing in every tab, 4040-4119.
+  CmdPdfPagesPanel = 4040,    // the Pages panel: thumbnails to reorder, rotate and delete pages
+  CmdPdfRotatePagesRight,     // the selected pages (or the current one), a quarter turn clockwise, in the file
+  CmdPdfRotatePagesLeft,      // counterclockwise
+  CmdPdfDeletePages,          // Delete in the Pages panel
+  CmdPdfInsertPages,          // Insert pages from another PDF (merge), after the selected pages
+  CmdPdfExtractPages,         // the selected pages as a new PDF
+  CmdPdfSplitMenu,            // Split ▾
+  CmdPdfSplitEvery1 = 4050,   // + 0..3: every 1, 2, 5 or 10 pages
+  CmdPdfSplitSelected = 4054, // a new file starts at each selected page
+  CmdPdfMovePagesUp = 4056,   // Ctrl+Up in the Pages panel
+  CmdPdfMovePagesDown,        // Ctrl+Down
+  CmdPdfOcr = 4060,           // Recognize text: scanned pages get an invisible text layer
+  CmdPdfOcrPage,              // the current page only
+  CmdPdfSignMenu = 4070,      // Sign ▾
+  CmdPdfDrawSignature,        // draw, type or pick a signature and place it as a stamp
+  CmdPdfSignCertificate,      // sign with a certificate from the Windows store (PAdES B-B)
+  CmdPdfSignatures,           // the signatures in the file and whether they're valid
+  CmdShareFile = 4090,        // Share: the file itself, through Windows' share sheet (Send as attachment)
+  CmdSharePdf,                // Share as PDF: Export PDF to a temporary file, then the share sheet
   // F1, f1-trust: help and support, 4150-4169.
   CmdHelp = 4150,             // Help: the website's help pages, in the browser (F1)
   CmdKnownIssues,             // Help: the known issues, on the website

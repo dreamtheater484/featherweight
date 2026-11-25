@@ -257,6 +257,10 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
           c.turnedLength = old->turnedLength;
         } else {
           StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
+          // HTML's automatic space after (w:afterAutospacing) isn't left below a cell's last
+          // paragraph, as a <p>'s margin doesn't show at the bottom of a <td>: Word's rows in
+          // govuk-revised-methodology's reference tables are a line shorter than with it.
+          if (sp.prev && sp.prev->spaceAfterAuto && !sumSpacing_) c.content.height -= sp.after;
           c.content.height += BorderBelow(sp);
           if (c.turn) {
             float longest = 0;

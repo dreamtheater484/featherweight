@@ -18,12 +18,12 @@ constexpr float kRailW = 200;
 constexpr float kRailRow = 40;
 constexpr float kRow = 40, kRowDetail = 54, kHeading = 34;
 constexpr float kContentMaxW = 640;
-constexpr wchar_t kTips[FilePage::kSectionCount] = {L'N', L'O', L'I', L'S', L'A', L'P', L'E', L'C', L'T'};
+constexpr wchar_t kTips[FilePage::kSectionCount] = {L'N', L'O', L'I', L'S', L'A', L'P', L'H', L'E', L'C', L'T'};
 }  // namespace
 
 const wchar_t* FilePage::SectionName(Section s) {
   static const wchar_t* const names[kSectionCount] = {T(L"New"),   T(L"Open"),   T(L"Info"),  T(L"Save"),   T(L"Save as"),
-                                                      T(L"Print"), T(L"Export"), T(L"Close"), T(L"Options")};
+                                                      T(L"Print"), T(L"Share"), T(L"Export"), T(L"Close"), T(L"Options")};
   return names[s];
 }
 

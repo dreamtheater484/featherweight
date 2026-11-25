@@ -13,6 +13,8 @@
 #include <cstring>
 
 #include "Commands.h"
+#include "Share.h"
+#include "pdf/PdfText.h"
 #include "FileAssoc.h"
 #include "Policy.h"
 #include "UserTemplates.h"
@@ -1572,6 +1574,14 @@ void App::Execute(int cmd) {
     case CmdDeleteBackups: DeleteBackups(); break;
     case CmdPrint: PrintActive(); break;
     case CmdExportPdf: ExportPdfActive(); break;
+    case CmdShareFile:
+    case CmdSharePdf: {  // F1, f1-pdf: Windows' share sheet (src/Share.*)
+      std::wstring message;
+      if (ready && !share::ShareTab(hwnd_, *v, cmd == CmdSharePdf, message) && !message.empty())
+        banner_.Show(BannerKind::Info, message, {}, 6000);
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      break;
+    }
     case CmdCloseTab:
       if (active_ >= 0) CloseTab(active_);
       break;
@@ -1824,6 +1834,7 @@ bool App::FillWindowMenu(int which, HMENU m) {
     AppendItem(m, CmdSaveAs, T(L"Save as…\tCtrl+Shift+S"), ready);
     AppendItem(m, CmdPrint, T(L"Print…\tCtrl+P"), ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, T(L"Export PDF…"));
+    if (ready) AppendItem(m, CmdShareFile, T(L"Share…"));  // F1, f1-pdf
     if (ready && v->Kind() == TabKind::Workbook) {  // a document's is on its ribbon (Layout)
       const CommandState setup = v->QueryCommand(CmdPageSetup);
       if (setup.visible) AppendItem(m, CmdPageSetup, T(L"Page setup…"), setup.enabled);
@@ -3155,6 +3166,13 @@ void App::RunScript(const std::wstring& script) {
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
     } else if (op == L"highlight") {
       if (PdfView* v = ActivePdf()) v->HighlightSelection();
+    } else if (op == L"pdftool") {
+      // F1, f1-pdf: the PDF tab's page tools without their dialogs (PdfView::RunPageScript).
+      PdfView* v = ActivePdf();
+      if (!v || !v->RunPageScript(arg)) {
+        fwprintf(stderr, L"pdftool failed: %s\n", arg.c_str());
+        scriptFailed_ = true;
+      }
     } else if (op == L"dumpedit") {
       wchar_t buf[512] = {};
       GetWindowTextW(notes_.Edit(), buf, 512);

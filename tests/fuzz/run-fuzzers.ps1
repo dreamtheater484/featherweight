@@ -83,6 +83,8 @@ $all = [ordered]@{
   fuzz_ppt     = @{ Seeds = @("$seeds\ppt", "$regressions\ppt"); MaxLen = 131072 }
   # Language catalogs (F1, f1-lang): a key table and a language's texts read as the app reads them at start, and written back the same.
   fuzz_catalog = @{ Seeds = @("$seeds\catalog"); MaxLen = 65536 }
+  # PDF structure under signing (F1): objects write back as read; a signature's update reads again, its byte range exact.
+  fuzz_pdfpages = @{ Seeds = @("$seeds\pdf", "$regressions\pdfpages"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

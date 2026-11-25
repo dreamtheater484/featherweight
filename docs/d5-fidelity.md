@@ -2,6 +2,26 @@
 
 The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` against Word's renders in the private corpus (108 Word documents with a reference PDF, made by Word on Roy's PC).
 
+## F1 (f1-word, 25 Nov 2026): 147 of 152
+
+On claude/f1-word, measured against the corpus references, one of them re-rendered (bund). The misses D5 left, as they stand:
+
+- **worldbank-sustainable, worldbank-guidance:** match. The held rules A, B and C landed (C not on document-grid pages), after two fwtext fixes: a list number is never broken, and a justified paragraph's last line squeezes like a wrapped one. See docs/f1-plan.md.
+- **who-lqsi Arabic:** matches. Times New Roman Italic has no Arabic: Word draws italic Arabic in the regular face, where we drew .notdef boxes about twice as wide.
+- **govuk revised-methodology:** matches (119 -> 109, +87 lines). Its reference tables use HTML automatic spacing (`w:afterAutospacing`). Word leaves no automatic space below a cell's last paragraph, as a `<p>`'s margin doesn't show at the bottom of a `<td>`. Each row was a line taller here.
+- **bund-abnahmeprotokoll:** the reference was wrong for the document, and is re-rendered (the coordinator's decision).
+  - Its headers hold `STYLEREF "Überschrift 1;Überschrift-1"`. The reference PC's Word is English (Office's only UI language here), can't resolve the German name of the built-in Heading 1, and prints an error over three lines.
+  - Word's render of the file: 5 pages. Word's render of a copy whose three fields say "Heading 1": 4 pages, and we lay out 4 with 101 of 102 lines.
+  - The reference is now that render; the manifest entry says so (`renderedFrom`). English Word's render and the copy are in `FeatherweightNotes\f1\evidence`. The .doc and .odt copies keep English Word's renders.
+- **gojp-mhlw-form b1 and b4:** the references are wrong for the documents, and wait for MS Mincho on the reference PC (Roy's decision: Windows' "Japanese Supplemental Fonts").
+  - The files ask only for ＭＳ 明朝 (MS Mincho), ＭＳ ゴシック, Century and Times New Roman.
+  - On this English Windows, MS Mincho exists only as an Office cloud font, and Word stopped drawing it on 6 Nov: b2's reference (6 Nov, 11:51) draws its body in MS Mincho (7,148 characters, 22 pages). Re-rendered on 25 Nov by the same Word, b2 draws 6,780 of those characters in Yu Gothic, which no file asks for, and runs to 28 pages. b1 and b4 do the same (23 and 20 pages, also on 6 Nov at 14:33).
+  - The pages each form's own Word saved in `docProps/app.xml`: b1 18, b2 22, b3 8, b4 13. These are ours.
+  - b2's current reference is the good one and is kept.
+- **acuk-example-cv:** still a miss. Word's baselines fall on a 0.12 pt (1/600 inch) grid. But rounding line heights, or the space between paragraphs, to it makes the drift worse (+1.02 pt at the page end, against +0.72): Word rounds positions, not heights.
+- **un-financial** (348 / 351): still a miss, from single-line differences spread over the report.
+- **EPA brownfields QAPP** (171 / 162): still a miss. Its fonts are all installed and drawn as asked, so the reference stands. The file's saved page count (160) isn't evidence by itself.
+
 ## Handover (6 Nov 2026, paused for the weekly usage limit)
 
 ### Where it stands
@@ -129,6 +149,7 @@ These documents differ only because the reference Word is English. We show what 
 - **bund-abnahmeprotokoll** (5 pages in Word, 4 here). Its headers hold `STYLEREF "Überschrift 1;Überschrift-1"`.
   - English Word doesn't know the German style name, so it prints "Error! Use the Home tab to apply …" over three lines, and page 4's body moves down 26 pt.
   - German Word, and we, show the heading.
+  - F1: re-rendered from a copy whose fields name "Heading 1" (4 pages); see "F1" above.
 
 ## Fonts
 

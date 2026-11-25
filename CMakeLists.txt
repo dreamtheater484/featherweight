@@ -66,6 +66,11 @@ add_executable(Featherweight WIN32
 # The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
 set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
                             PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# So are the PDF tab's page tools, OCR and signing panels and the share sheet (F1, f1-pdf): their
+# work is PDFium's, Windows' or fwpdftools'.
+set_source_files_properties(src/pdf/PagesPanel.cpp src/pdf/PdfPages.cpp src/pdf/PdfOcr.cpp src/pdf/PdfSign.cpp
+                            src/pdf/SignaturePanel.cpp src/Share.cpp src/ShareSheet.cpp
+                            PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 # F1 f1-trust: crash reports and help links run once in a while at most: built for size too.
 set_source_files_properties(src/CrashReport.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
@@ -169,8 +174,9 @@ add_subdirectory(src/slide/show)
 add_subdirectory(src/slide/objects)  # p2-objects: objects on slides
 add_subdirectory(src/slide/odp)  # p3-files: OpenDocument presentations
 add_subdirectory(src/slide/view)  # p1-view: the presentation tab
+add_subdirectory(src/pdf)  # f1-pdf: the PDF tab's page tools, OCR and signing
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview)
+target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview fwpdftools)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)
