@@ -658,6 +658,10 @@ TEST(Text_SubstituteTuningReplacesTableRows) {
   CHECK(fonts.Resolve(L"Nonexistent Family F1") == L"Arial");
   const Face* face = fonts.FaceFor(L"Nonexistent Family F1", false, false);
   CHECK(face != nullptr && std::abs(face->WidthScale() - 0.9f) < 1e-6f);
+  // The same when the caller's substitute picks the table's family (a presentation's does).
+  Fonts chosen([](std::wstring_view) { return std::wstring(L"Arial"); });
+  const Face* picked = chosen.FaceFor(L"Nonexistent Family F1", false, false);
+  CHECK(picked != nullptr && std::abs(picked->WidthScale() - 0.9f) < 1e-6f);
 }
 
 TEST(Text_MissingFontsAreSubstitutedAndReported) {

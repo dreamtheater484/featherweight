@@ -14,7 +14,10 @@ struct Row {
 };
 
 // Windows' own families first; Office's (Arial Narrow, Garamond), where a PC has them, only where
-// Windows has nothing close. Scales and heights: measured on the corpus (docs/f1-plan.md, f1-word).
+// Windows has nothing close. Scales and heights measured on the corpus (docs/f1-plan.md, f1-word):
+// line breaks against Word's PDFs for the families documents use (Aptos Display, Open Sans), slide
+// SSIM against PowerPoint's for the ones decks use (Montserrat, Poppins, Open Sans's weights). The
+// rest keep the substitute's own widths until the corpus has them.
 constexpr Row kRows[] = {
     // Office's default since 2024 and its relatives.
     {L"Aptos", {{L"Segoe UI"}, {L"Calibri"}, {L"Arial"}}},
@@ -32,13 +35,15 @@ constexpr Row kRows[] = {
     {L"Libre Baskerville", {{L"Georgia"}, {L"Cambria"}}},
     {L"Mangal", {{L"Nirmala UI"}}},
     {L"MingLiU", {{L"NSimSun"}, {L"Microsoft JhengHei"}}},
-    {L"Montserrat", {{L"Verdana"}, {L"Segoe UI"}}},
+    {L"Montserrat", {{L"Arial", 1.12f}, {L"Segoe UI", 1.15f}}},
     {L"MS Mincho", {{L"MS Gothic"}, {L"Yu Gothic"}}},
     {L"MS PMincho", {{L"MS PGothic"}, {L"Yu Gothic"}}},
     {L"Open Sans", {{L"Segoe UI", 1.06f, 1.36f}, {L"Arial"}}},
+    {L"Open Sans Light", {{L"Segoe UI Semilight", 1.04f}, {L"Segoe UI", 1.04f}}},  // PowerPoint's names for its weights
+    {L"Open Sans SemiBold", {{L"Segoe UI Semibold", 0.9f}, {L"Segoe UI", 0.9f}}},
     {L"Oswald", {{L"Bahnschrift Condensed"}, {L"Arial Narrow"}, {L"Segoe UI", 0.8f}}},
     {L"PMingLiU", {{L"SimSun"}, {L"Microsoft JhengHei"}}},
-    {L"Poppins", {{L"Segoe UI"}, {L"Verdana"}}},
+    {L"Poppins", {{L"Segoe UI", 1.1f}, {L"Arial", 1.12f}}},
     {L"Raleway", {{L"Segoe UI"}, {L"Arial"}}},
     {L"Roboto", {{L"Arial"}, {L"Segoe UI"}}},
     {L"Source Code Pro", {{L"Consolas"}, {L"Courier New"}}},

@@ -359,16 +359,22 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
       std::wstring s = substitute_(family);
       if (Installed(s)) used = s;
     }
+    const std::span<const draw::FontSubstitute> table = draw::BuiltInSubstitutes(family);
     if (used.empty()) {
-      for (const draw::FontSubstitute& s : draw::BuiltInSubstitutes(family)) {
+      for (const draw::FontSubstitute& s : table) {
         if (!Installed(s.family)) continue;
         used = s.family;
-        // Its width and line height as measured against Word's renders (draw/FontSubstitutes.h).
-        if (s.scale != 1 || s.height > 0) adjust_[key] = {s.scale, s.height};
         break;
       }
     }
     if (used.empty()) used = lastResort_;
+    // The table's width and line height for the family drawn, whoever chose it (a presentation's
+    // substitute picks from the table too): measured against Office's renders (draw/FontSubstitutes.h).
+    for (const draw::FontSubstitute& s : table)
+      if (Lower(s.family) == Lower(used)) {
+        if (s.scale != 1 || s.height > 0) adjust_[key] = {s.scale, s.height};
+        break;
+      }
     Substitution sub{std::wstring(family), used};
     if (std::find(substitutions_.begin(), substitutions_.end(), sub) == substitutions_.end()) substitutions_.push_back(sub);
   }
