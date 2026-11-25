@@ -221,13 +221,23 @@ int Ribbon::GalleryColumns(const RibbonItem& it, int stage) const {
   }
 }
 
+float Ribbon::BoxW(const RibbonItem& it) const {
+  float w = std::max(it.tool.width, 20.f);
+  if (it.tool.kind == ToolKind::Dropdown) {  // ui::Dropdown: 11 DIPs before its text, 28 for the chevron, 13-DIP text
+    float text = 0;
+    for (const std::wstring& c : it.tool.choices) text = std::max(text, TextW(c, 13.f));
+    w = std::max(w, text + 39 + (it.tool.glyph ? 24 : 0) + 1);
+  }
+  return w;
+}
+
 float Ribbon::ItemWidth(const RibbonItem& it, RibbonSize size, int galleryColumns) const {
   const float u = ui_;
   if (galleryColumns > 0)
     return std::round((galleryColumns * it.gallery->choiceWidth + 2 + kGalleryScrollW) * u);
   if (LabelledPicker(it, size)) return std::round((TextW(LabelOf(it), kItemFont) + 52) * u);
-  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + std::max(it.tool.width, 20.f)) * u);
-  if (!OwnDrawn(it, size) && !it.gallery) return std::round(std::max(it.tool.width, 20.f) * u);
+  if (LabelledBox(it, size)) return std::round((TextW(BoxLabel(it), kItemFont) + 6 + BoxW(it)) * u);
+  if (!OwnDrawn(it, size) && !it.gallery) return std::round(BoxW(it) * u);
   const bool arrow = IsMenuButton(it) || IsSplit(it, size) || it.gallery.has_value();
   const std::wstring label = LabelOf(it, size == RibbonSize::Large);
   switch (size) {

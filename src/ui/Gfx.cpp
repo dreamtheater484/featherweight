@@ -143,6 +143,7 @@ namespace {
 std::vector<ClippedText>* g_clipped = nullptr;
 }
 void WatchClipping(std::vector<ClippedText>* into) { g_clipped = into; }
+std::vector<ClippedText>* WatchingClipping() { return g_clipped; }
 #endif
 
 void Canvas::Text(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COLOR_F c, float sizePx,

@@ -15,8 +15,10 @@ param(
   [Parameter(Mandatory)][string]$Json,
   [Parameter(Mandatory)][string]$Out,
   [string]$Languages = "en,nl,de,fr,es",
-  [string]$Files = (Join-Path $PSScriptRoot "..\..\tests\office\generated"))
+  [string]$Files = "")  # default: tests\office\generated
 $ErrorActionPreference = "Stop"
+if (-not $Files) { $Files = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "..\..\tests\office\generated" }
+$Exe = (Resolve-Path $Exe).Path
 New-Item -ItemType Directory -Force $Out | Out-Null
 $surfaces = 0
 $clipped = New-Object System.Collections.Generic.List[string]

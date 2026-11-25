@@ -814,8 +814,13 @@ void DocFormat::StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, fl
   const float px = std::clamp(run.size.Value() / 2.0f, 9.0f, 18.0f) * 1.2f * ui;
   const float nameH = 18 * ui;
   c.PushClip(r);
-  c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
-         run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  {
+#if FW_TEST_SCREENS
+    gfx::ClippingPause sample;  // cut at the box's edge by design, as Word's (the clipping check skips it)
+#endif
+    c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
+           run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  }
   c.Text(W(std::string_view(g[static_cast<size_t>(index)].name)), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
          p.textSecondary, 11 * ui, DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
   c.PopClip();

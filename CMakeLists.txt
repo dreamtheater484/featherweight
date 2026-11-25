@@ -190,6 +190,12 @@ if(FW_BUILD_TESTS)
   # and dark, and its states (keyboard, filter, hidden, empty, narrow, 200 %).
   add_test(NAME start_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
            "-DOUT=${CMAKE_BINARY_DIR}/screens/start" -P "${CMAKE_SOURCE_DIR}/tests/screens/start.cmake")
+  # f1-lang, the clipping check: each editor at 1366 x 768 in the pseudo-language (every text 40 % longer),
+  # every ribbon tab and File page section drawn, no label cut (tests/screens/lang.cmake).
+  if(FW_TEST_SCREENS)
+    add_test(NAME lang_clipping COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+             "-DFILES=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/lang" -P "${CMAKE_SOURCE_DIR}/tests/screens/lang.cmake")
+  endif()
   # f1-lang, the catalog check: every string a person reads goes through T() (docs/f1-plan.md, Rules).
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)

@@ -54,6 +54,13 @@ struct ClippedText {
   float need = 0, room = 0;  // pixels: width for one line, height for wrapped text
 };
 void WatchClipping(std::vector<ClippedText>* into);
+std::vector<ClippedText>* WatchingClipping();
+// Around text that's cut by design (a style's "AaBbCcDd" sample, as Word's): not noted.
+struct ClippingPause {
+  std::vector<ClippedText>* was = WatchingClipping();
+  ClippingPause() { WatchClipping(nullptr); }
+  ~ClippingPause() { WatchClipping(was); }
+};
 #endif
 
 // Thin drawing helper over a Direct2D device context. Coordinates are device pixels.
