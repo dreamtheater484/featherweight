@@ -95,4 +95,18 @@ class File {
 // Inflates zlib data (FlateDecode), at most `limit` bytes out.
 bool Inflate(std::string_view in, std::string& out, size_t limit);
 
+// One object of an incremental update: its number, generation and the object as PDF syntax.
+struct Update {
+  int num = 0, gen = 0;
+  std::string text;
+};
+
+// `file` (opened as `f`) with an incremental update after it: the objects, then a cross-reference
+// section of the kind the file's last one is (a table, or an uncompressed stream with /Type /XRef)
+// with /Size `size` (the next free number, before a stream's own), /Prev, and the trailer's /Root,
+// /Info and /ID. `at` gets the offset in `out` of each object's "num gen obj". Not for encrypted
+// files (their strings would have to be encrypted). False when an offset doesn't fit.
+bool AppendUpdate(std::string_view file, const File& f, const std::vector<Update>& objects, int size, std::string& out,
+                  std::vector<size_t>* at = nullptr);
+
 }  // namespace pdfobj

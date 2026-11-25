@@ -222,6 +222,11 @@ bool PdfView::MovePages(const std::vector<int>& pages, int gap) {
   for (size_t k = 0; k < sorted.size(); ++k) same = same && sorted[k] == dest + static_cast<int>(k);
   if (same) return false;  // dropped where they are
   if (!BeginPageChange()) return false;
+  // What the pages inherit from the page tree goes on the pages first: a move to another branch
+  // would give them that branch's (f1-gate's finding).
+  std::string bytes = pageBefore_, pinned;
+  if ((!bytes.empty() || doc_->CurrentBytes(bytes)) && pdftools::PinInherited(bytes, sorted, PageCount(), pinned))
+    doc_->Reload(std::move(pinned), true);
   const bool ok = pdftools::Move(doc_->Handle(), sorted, gap);
   EndPageChange(ok, dest);
   if (ok && pagesPanel_) {

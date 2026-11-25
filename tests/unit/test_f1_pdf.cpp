@@ -8,6 +8,7 @@
 #include <fpdf_save.h>
 #include <fpdf_signature.h>
 #include <fpdf_text.h>
+#include <fpdf_transformpage.h>
 #include <fpdfview.h>
 
 #include <roapi.h>
@@ -401,11 +402,12 @@ TEST(F1PdfSignsAndCatchesChanges) {
   tampered[mediaBox + 12] = tampered[mediaBox + 12] == '1' ? '2' : '1';
   CHECK(Check(tampered).verdict.kind == pdfsign::Verdict::Invalid);
 
-  // A change saved after signing (PDFium's incremental update): changed after signing.
+  // A change saved after signing, as Featherweight saves a signed PDF (an incremental update):
+  // changed after signing, the signed revision intact.
   FPDF_DOCUMENT again = FPDF_LoadMemDocument64(signedPdf.data(), signedPdf.size(), nullptr);
   CHECK(pdftools::Rotate(again, {0}, 1));
   std::string changed;
-  CHECK(pdftools::SaveBytes(again, true, changed));
+  CHECK(pdftools::SaveDocument(again, signedPdf.size(), changed));
   FPDF_CloseDocument(again);
   CHECK(changed.size() > signedPdf.size() && changed.compare(0, signedPdf.size(), signedPdf) == 0);
   CHECK(Check(changed).verdict.kind == pdfsign::Verdict::Changed);
@@ -422,6 +424,17 @@ TEST(F1PdfSignsAndCatchesChanges) {
   info = Check(streamSigned);
   CHECK_EQ(info.count, 1);
   CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
+  // Changed and saved: PDFium's update after a cross-reference stream gets its /Type /XRef.
+  FPDF_DOCUMENT streamDoc = FPDF_LoadMemDocument64(streamSigned.data(), streamSigned.size(), nullptr);
+  CHECK(pdftools::Rotate(streamDoc, {0}, 1));
+  std::string streamChanged;
+  CHECK(pdftools::SaveDocument(streamDoc, streamSigned.size(), streamChanged));
+  FPDF_CloseDocument(streamDoc);
+  CHECK(streamChanged.compare(0, streamSigned.size(), streamSigned) == 0);
+  pdfobj::File typed;
+  CHECK(typed.Open(streamChanged));
+  CHECK(typed.LastXrefIsStream() && typed.Trailer().Get("Type") && typed.Trailer().Get("Type")->IsName("XRef"));
+  CHECK(Check(streamChanged).verdict.kind == pdfsign::Verdict::Changed);
   CertFreeCertificateContext(cert);
 }
 
@@ -482,4 +495,92 @@ TEST(F1PdfShareSheetPackagesTheFile) {
   CHECK(read);
   CHECK_EQ(count, 1u);
   CHECK(_wcsicmp(got.c_str(), path.c_str()) == 0);
+}
+
+// A PDF from its objects (1..n, in order), with a classic cross-reference table.
+static std::string ClassicPdf(const std::vector<std::string>& objects) {
+  std::string pdf = "%PDF-1.4\n";
+  std::vector<size_t> at;
+  for (size_t k = 0; k < objects.size(); ++k) {
+    at.push_back(pdf.size());
+    pdf += std::to_string(k + 1) + " 0 obj\n" + objects[k] + "\nendobj\n";
+  }
+  const size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(objects.size() + 1) + "\n0000000000 65535 f\r\n";
+  for (size_t a : at) {
+    char row[24];
+    std::snprintf(row, sizeof row, "%010zu 00000 n\r\n", a);
+    pdf += row;
+  }
+  pdf += "trailer\n<</Size " + std::to_string(objects.size() + 1) + " /Root 1 0 R>>\nstartxref\n" +
+         std::to_string(xref) + "\n%%EOF\n";
+  return pdf;
+}
+
+// f1-gate's finding: FPDF_MovePages gives a moved page its new parent's inherited attributes. Two
+// branches: the first turned and landscape with a font, the second portrait without.
+TEST(F1PdfMoveKeepsInheritedAttributes) {
+  InitPdfium();
+  const std::string content = "BT /F1 24 Tf 72 72 Td (Hello) Tj ET";
+  const std::string pdf = ClassicPdf({
+      "<</Type /Catalog /Pages 2 0 R>>",
+      "<</Type /Pages /Kids [3 0 R 4 0 R] /Count 4>>",
+      "<</Type /Pages /Parent 2 0 R /Kids [5 0 R 6 0 R] /Count 2 /Rotate 90 /MediaBox [0 0 842 595] /Resources 9 0 R>>",
+      "<</Type /Pages /Parent 2 0 R /Kids [7 0 R 8 0 R] /Count 2 /MediaBox [0 0 595 842] /Resources <<>>>>",
+      "<</Type /Page /Parent 3 0 R /Contents 10 0 R>>",
+      "<</Type /Page /Parent 3 0 R>>",
+      "<</Type /Page /Parent 4 0 R>>",
+      "<</Type /Page /Parent 4 0 R>>",
+      "<</Font <</F1 <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>>>>>",
+      "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "\nendstream",
+  });
+  auto movedLooksRight = [](FPDF_DOCUMENT doc) {
+    // The first page, moved to the end, is still turned and landscape.
+    FPDF_PAGE page = FPDF_LoadPage(doc, 3);
+    FS_RECTF box{};
+    const bool ok = page && FPDFPage_GetRotation(page) == 1 && FPDF_GetPageBoundingBox(page, &box) &&
+                    std::fabs(box.right - 842) < 0.5f && std::fabs(box.top - 595) < 0.5f;
+    if (page) FPDF_ClosePage(page);
+    return ok;
+  };
+
+  // PDFium's functions alone: the rotation and the visible area.
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(pdf.data(), pdf.size(), nullptr);
+  CHECK(doc != nullptr);
+  CHECK(pdftools::Move(doc, {0}, 4));
+  CHECK(movedLooksRight(doc));
+  FPDF_CloseDocument(doc);
+
+  // Pinned first: everything inherited, the font's resources too, is on the page.
+  std::string pinned;
+  CHECK(pdftools::PinInherited(pdf, {0}, 4, pinned));
+  CHECK(pinned.compare(0, pdf.size(), pdf) == 0);
+  pdfobj::File f;
+  CHECK(f.Open(pinned));
+  pdfobj::Obj page;
+  CHECK(f.Get(5, page));
+  CHECK(page.Get("Resources") && page.Get("Resources")->type == pdfobj::Obj::Ref && page.Get("Resources")->num == 9);
+  CHECK(page.Get("Rotate") && page.Get("Rotate")->Int() == 90);
+  CHECK(page.Get("MediaBox") && page.Get("MediaBox")->items.size() == 4);
+  pdfobj::Obj untouched;
+  CHECK(f.Get(6, untouched) && !untouched.Get("Rotate"));  // only the pages that move
+  doc = FPDF_LoadMemDocument64(pinned.data(), pinned.size(), nullptr);
+  CHECK(doc != nullptr);
+  CHECK(pdftools::Move(doc, {0}, 4));
+  CHECK(movedLooksRight(doc));
+  // Saved whole and read again, the same.
+  std::string saved;
+  CHECK(pdftools::SaveDocument(doc, pinned.size(), saved));
+  FPDF_CloseDocument(doc);
+  doc = FPDF_LoadMemDocument64(saved.data(), saved.size(), nullptr);
+  CHECK(doc != nullptr);
+  CHECK(movedLooksRight(doc));
+  FPDF_CloseDocument(doc);
+
+  // One branch: a move keeps every page's parent, nothing to pin.
+  FPDF_DOCUMENT flat = MakeDoc(3);
+  std::string flatBytes, none;
+  CHECK(pdftools::SaveBytes(flat, false, flatBytes));
+  FPDF_CloseDocument(flat);
+  CHECK(!pdftools::PinInherited(flatBytes, {0}, 3, none));
 }

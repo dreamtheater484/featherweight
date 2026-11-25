@@ -13,6 +13,7 @@
 #include "Util.h"
 #include "core/Strings.h"
 #include "pdf/FormFill.h"
+#include "pdf/tools/PageOps.h"
 
 namespace {
 
@@ -463,19 +464,8 @@ bool Document::CurrentBytes(std::string& out) {
     out = memory_;
     return true;
   }
-  struct MemoryWriter : FPDF_FILEWRITE {
-    std::string* bytes;
-  } w;
-  w.version = 1;
-  w.bytes = &out;
-  w.WriteBlock = [](FPDF_FILEWRITE* self, const void* data, unsigned long size) -> int {
-    static_cast<MemoryWriter*>(self)->bytes->append(static_cast<const char*>(data), size);
-    return 1;
-  };
-  out.clear();
-  if (FPDF_SaveAsCopy(doc_, &w, FPDF_INCREMENTAL)) return true;
-  out.clear();
-  return FPDF_SaveAsCopy(doc_, &w, FPDF_NO_INCREMENTAL) != FALSE;
+  // Whole, or after the file when it's signed (pdftools::SaveDocument).
+  return pdftools::SaveDocument(doc_, InMemory() ? memory_.size() : 0, out);
 }
 
 void Document::CloseAllPages() {
@@ -580,7 +570,14 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
     return ok;
   };
 
-  if (!writeTo(FPDF_INCREMENTAL) && !writeTo(FPDF_NO_INCREMENTAL)) {
+  // Unedited: the file as it is (Save over it changes nothing). Edited: written whole, except a
+  // signed PDF, updated after the file so its signatures stay intact (pdftools::SaveDocument).
+  if (!modified_ && samePath) return true;
+  const bool signedPdf = FPDF_GetSignatureCount(doc_) > 0;
+  const bool written = !modified_ ? CopyFileW(path_.c_str(), tmp.c_str(), FALSE) != FALSE
+                       : signedPdf ? writeTo(FPDF_INCREMENTAL) || writeTo(FPDF_NO_INCREMENTAL)
+                                   : writeTo(FPDF_NO_INCREMENTAL) || writeTo(FPDF_INCREMENTAL);
+  if (!written) {
     DWORD e = GetLastError();
     error = (e == ERROR_ACCESS_DENIED || e == ERROR_WRITE_PROTECT)
                 ? L"Featherweight can't save in this folder."

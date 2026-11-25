@@ -93,7 +93,7 @@ Error Prepare(std::string_view file, const Details& details, size_t reserveBytes
 
   int next = f.Size();
   const int sigNum = next++, fieldNum = next++;
-  std::vector<std::tuple<int, int, std::string>> objects;  // number, generation, the object
+  std::vector<pdfobj::Update> objects;
   bool catalogChanged = false, pageChanged = false;
 
   // The form: the field joins /Fields, and /SigFlags says the file has signatures and is
@@ -129,11 +129,11 @@ Error Prepare(std::string_view file, const Details& details, size_t reserveBytes
     if (!names.count(fieldName)) break;
   }
   fields.items.push_back(pdfobj::MakeRef(fieldNum));
-  if (fieldsNum >= 0) objects.emplace_back(fieldsNum, fieldsGen, pdfobj::Write(fields));
+  if (fieldsNum >= 0) objects.push_back({fieldsNum, fieldsGen, pdfobj::Write(fields)});
   else form.Set("Fields", fields);
   form.Set("SigFlags", pdfobj::MakeInt(3));
   if (formNum >= 0) {
-    objects.emplace_back(formNum, formGen, pdfobj::Write(form));
+    objects.push_back({formNum, formGen, pdfobj::Write(form)});
   } else {
     catalog.Set("AcroForm", form);
     catalogChanged = true;
@@ -145,7 +145,7 @@ Error Prepare(std::string_view file, const Details& details, size_t reserveBytes
     int listGen = 0;
     if (!f.Get(annots->num, list, &listGen) || list.type != Obj::Array) return Error::Unreadable;
     list.items.push_back(pdfobj::MakeRef(fieldNum));
-    objects.emplace_back(annots->num, listGen, pdfobj::Write(list));
+    objects.push_back({annots->num, listGen, pdfobj::Write(list)});
   } else {
     Obj list;
     if (annots && annots->type == Obj::Array) list = *annots;
@@ -154,14 +154,14 @@ Error Prepare(std::string_view file, const Details& details, size_t reserveBytes
     page.Set("Annots", list);
     pageChanged = true;
   }
-  if (catalogChanged) objects.emplace_back(rootRef.num, catalogGen, pdfobj::Write(catalog));
-  if (pageChanged) objects.emplace_back(pageNum, pageGen, pdfobj::Write(page));
+  if (catalogChanged) objects.push_back({rootRef.num, catalogGen, pdfobj::Write(catalog)});
+  if (pageChanged) objects.push_back({pageNum, pageGen, pdfobj::Write(page)});
 
   // The field and its widget in one, invisible (no area), printed and locked.
-  objects.emplace_back(fieldNum, 0,
-                       "<</Type /Annot /Subtype /Widget /FT /Sig /T (" + fieldName + ") /V " + std::to_string(sigNum) +
-                           " 0 R /F 132 /Rect [0 0 0 0] /P " + std::to_string(pageNum) + " " + std::to_string(pageGen) +
-                           " R>>");
+  objects.push_back({fieldNum, 0,
+                     "<</Type /Annot /Subtype /Widget /FT /Sig /T (" + fieldName + ") /V " + std::to_string(sigNum) +
+                         " 0 R /F 132 /Rect [0 0 0 0] /P " + std::to_string(pageNum) + " " + std::to_string(pageGen) +
+                         " R>>"});
 
   SYSTEMTIME when = details.utc;
   if (when.wYear == 0) GetSystemTime(&when);
@@ -172,73 +172,14 @@ Error Prepare(std::string_view file, const Details& details, size_t reserveBytes
   if (!details.location.empty()) sig += " /Location " + pdfobj::Write(pdfobj::MakeText(details.location));
   const std::string rangeHolder = "/ByteRange [0 0 0 0]" + std::string(40, ' ');
   sig += " " + rangeHolder + " /Contents <" + std::string(reserveBytes * 2, '0') + ">>>";
+  objects.push_back({sigNum, 0, sig});
 
-  // The update after the file.
-  std::string inc;
-  if (!file.empty() && file.back() != '\n' && file.back() != '\r') inc += '\n';
-  const size_t base = file.size();
-  std::vector<std::pair<int, std::pair<size_t, int>>> written;  // number, (offset, generation)
-  size_t rangeAt = 0;
-  for (const auto& [num, gen, text] : objects) {
-    written.push_back({num, {base + inc.size(), gen}});
-    inc += std::to_string(num) + " " + std::to_string(gen) + " obj\n" + text + "\nendobj\n";
-  }
-  written.push_back({sigNum, {base + inc.size(), 0}});
-  inc += std::to_string(sigNum) + " 0 obj\n";
-  rangeAt = base + inc.size() + sig.find("/ByteRange");
-  out.contentsAt = base + inc.size() + sig.find("/Contents <") + 10;
-  inc += sig + "\nendobj\n";
-
-  std::string trailerKeys = " /Root " + pdfobj::Write(rootRef);
-  for (const char* key : {"Info", "ID"})
-    if (const Obj* v = f.Trailer().Get(key)) trailerKeys += std::string(" /") + key + " " + pdfobj::Write(*v);
-  trailerKeys += " /Prev " + std::to_string(f.LastXref());
-  const size_t xrefAt = base + inc.size();
-  std::sort(written.begin(), written.end());
-  if (!f.LastXrefIsStream()) {
-    inc += "xref\n";
-    for (size_t i = 0; i < written.size();) {
-      size_t j = i;
-      while (j + 1 < written.size() && written[j + 1].first == written[j].first + 1) ++j;
-      inc += std::to_string(written[i].first) + " " + std::to_string(j - i + 1) + "\n";
-      for (size_t k = i; k <= j; ++k) {
-        char e[24];
-        snprintf(e, sizeof e, "%010llu %05d n\r\n", static_cast<unsigned long long>(written[k].second.first),
-                 written[k].second.second);
-        inc += e;
-      }
-      i = j + 1;
-    }
-    inc += "trailer\n<</Size " + std::to_string(next) + trailerKeys + ">>\n";
-  } else {
-    // The file's last cross-reference is a stream: the update's is one too (not compressed).
-    const int xrefNum = next++;
-    written.push_back({xrefNum, {xrefAt, 0}});
-    std::string rows, index;
-    for (size_t i = 0; i < written.size();) {
-      size_t j = i;
-      while (j + 1 < written.size() && written[j + 1].first == written[j].first + 1) ++j;
-      index += (index.empty() ? "" : " ") + std::to_string(written[i].first) + " " + std::to_string(j - i + 1);
-      for (size_t k = i; k <= j; ++k) {
-        const uint64_t off = written[k].second.first;
-        const auto gen = static_cast<uint16_t>(written[k].second.second);
-        rows += '\x01';
-        for (int shift : {24, 16, 8, 0}) rows += static_cast<char>((off >> shift) & 0xFF);
-        rows += static_cast<char>(gen >> 8);
-        rows += static_cast<char>(gen & 0xFF);
-      }
-      i = j + 1;
-    }
-    if (xrefAt > 0xFFFFFFFFull) return Error::Unreadable;
-    inc += std::to_string(xrefNum) + " 0 obj\n<</Type /XRef /Size " + std::to_string(next) + " /W [1 4 2] /Index [" +
-           index + "]" + trailerKeys + " /Length " + std::to_string(rows.size()) + ">>\nstream\n" + rows +
-           "\nendstream\nendobj\n";
-  }
-  inc += "startxref\n" + std::to_string(xrefAt) + "\n%%EOF\n";
-
-  out.bytes.reserve(file.size() + inc.size());
-  out.bytes.assign(file);
-  out.bytes += inc;
+  // The update after the file; the signature's object is the last one in it.
+  std::vector<size_t> at;
+  if (!pdfobj::AppendUpdate(file, f, objects, next, out.bytes, &at)) return Error::Unreadable;
+  const size_t sigAt = at.back() + (std::to_string(sigNum) + " 0 obj\n").size();
+  const size_t rangeAt = sigAt + sig.find("/ByteRange");
+  out.contentsAt = sigAt + sig.find("/Contents <") + 10;
   out.contentsHex = reserveBytes * 2;
   const size_t after = out.contentsAt + out.contentsHex + 2;
   out.range = {0, out.contentsAt, after, out.bytes.size() - after};

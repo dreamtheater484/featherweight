@@ -8,6 +8,7 @@
 #include <fpdfview.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace pdftools {
@@ -25,8 +26,17 @@ bool Rotate(FPDF_DOCUMENT doc, const std::vector<int>& pages, int quarterTurns);
 // Removes `pages`. Refuses to remove every page: a PDF needs at least one.
 bool Delete(FPDF_DOCUMENT doc, std::vector<int> pages);
 // Moves `pages` (in page order) to the gap before page `gap` of the document as it is now
-// (0..count: count is after the last page). The pages stay in their order.
+// (0..count: count is after the last page). The pages stay in their order. FPDF_MovePages gives a
+// moved page its new parent's inherited attributes, so the page's rotation and visible area are
+// written on it first; for everything a page inherits (its resources too), call PinInherited on
+// the document's bytes before loading it.
 bool Move(FPDF_DOCUMENT doc, std::vector<int> pages, int gap);
+// The attributes `pages` inherit from the page tree (/Resources, /MediaBox, /CropBox, /Rotate),
+// written on the pages themselves as an incremental update after `bytes`, so a move to another
+// branch of the tree can't change them. True with `out` when that was needed and done (load `out`
+// instead); false when not needed (one branch, or nothing inherited), or when the file can't be read
+// strictly or is encrypted (then Move's own pinning is what there is). `pageCount` is PDFium's.
+bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pageCount, std::string& out);
 // Where the first moved page ends up: what FPDF_MovePages calls the destination.
 int MoveDestination(const std::vector<int>& sortedPages, int gap);
 
@@ -54,8 +64,17 @@ std::vector<std::vector<int>> SplitAt(int pageCount, std::vector<int> starts);
 // "1-3", "4", "2, 5-7": pages (0-based) as people number them, for file names and messages.
 std::wstring PageList(const std::vector<int>& pages);
 
-// The document as a save writes it: PDFium's incremental update after the file (or the whole
-// file written again, when `incremental` is false or the update can't be made).
+// The document's bytes through PDFium: its incremental update after the file (or the whole file
+// written again, when `incremental` is false or the update can't be made).
 bool SaveBytes(FPDF_DOCUMENT doc, bool incremental, std::string& out);
+// The document as Featherweight saves an edited PDF: written whole, except a signed PDF, which gets
+// an incremental update so its signatures keep framing what they signed (a change after signing
+// shows as one). PDFium's update after a file with a cross-reference stream leaves /Type /XRef out
+// of its own stream (ISO 32000-1 table 17 requires it): it's added. `loadedSize` is the size of the
+// bytes the document was loaded from (nothing before it is ever touched).
+bool SaveDocument(FPDF_DOCUMENT doc, size_t loadedSize, std::string& out);
+// Adds /Type /XRef to the cross-reference stream `bytes` end with, when it starts at or after
+// `from` and lacks it. Exposed for the tests.
+bool TypeLastXrefStream(std::string& bytes, size_t from);
 
 }  // namespace pdftools

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <set>
 
 namespace pdfobj {
@@ -615,6 +616,71 @@ int File::FirstPage() {
     num = list.items[0].num;
   }
   return -1;
+}
+
+bool AppendUpdate(std::string_view file, const File& f, const std::vector<Update>& objects, int size, std::string& out,
+                  std::vector<size_t>* at) {
+  std::string inc;
+  if (!file.empty() && file.back() != '\n' && file.back() != '\r') inc += '\n';
+  const size_t base = file.size();
+  std::vector<std::pair<int, std::pair<size_t, int>>> written;  // number, (offset, generation)
+  if (at) at->clear();
+  for (const Update& u : objects) {
+    written.push_back({u.num, {base + inc.size(), u.gen}});
+    if (at) at->push_back(base + inc.size());
+    inc += std::to_string(u.num) + " " + std::to_string(u.gen) + " obj\n" + u.text + "\nendobj\n";
+  }
+  std::string trailerKeys;
+  if (const Obj* root = f.Trailer().Get("Root")) trailerKeys += " /Root " + Write(*root);
+  for (const char* key : {"Info", "ID"})
+    if (const Obj* v = f.Trailer().Get(key)) trailerKeys += std::string(" /") + key + " " + Write(*v);
+  trailerKeys += " /Prev " + std::to_string(f.LastXref());
+  const size_t xrefAt = base + inc.size();
+  std::sort(written.begin(), written.end());
+  if (!f.LastXrefIsStream()) {
+    inc += "xref\n";
+    for (size_t i = 0; i < written.size();) {
+      size_t j = i;
+      while (j + 1 < written.size() && written[j + 1].first == written[j].first + 1) ++j;
+      inc += std::to_string(written[i].first) + " " + std::to_string(j - i + 1) + "\n";
+      for (size_t k = i; k <= j; ++k) {
+        char e[24];
+        snprintf(e, sizeof e, "%010llu %05d n\r\n", static_cast<unsigned long long>(written[k].second.first),
+                 written[k].second.second);
+        inc += e;
+      }
+      i = j + 1;
+    }
+    inc += "trailer\n<</Size " + std::to_string(size) + trailerKeys + ">>\n";
+  } else {
+    // The file's last cross-reference is a stream: the update's is one too (not compressed).
+    const int xrefNum = size++;
+    written.push_back({xrefNum, {xrefAt, 0}});
+    std::string rows, index;
+    for (size_t i = 0; i < written.size();) {
+      size_t j = i;
+      while (j + 1 < written.size() && written[j + 1].first == written[j].first + 1) ++j;
+      index += (index.empty() ? "" : " ") + std::to_string(written[i].first) + " " + std::to_string(j - i + 1);
+      for (size_t k = i; k <= j; ++k) {
+        const uint64_t off = written[k].second.first;
+        const auto gen = static_cast<uint16_t>(written[k].second.second);
+        rows += '\x01';
+        for (int shift : {24, 16, 8, 0}) rows += static_cast<char>((off >> shift) & 0xFF);
+        rows += static_cast<char>(gen >> 8);
+        rows += static_cast<char>(gen & 0xFF);
+      }
+      i = j + 1;
+    }
+    if (xrefAt > 0xFFFFFFFFull) return false;
+    inc += std::to_string(xrefNum) + " 0 obj\n<</Type /XRef /Size " + std::to_string(size) + " /W [1 4 2] /Index [" +
+           index + "]" + trailerKeys + " /Length " + std::to_string(rows.size()) + ">>\nstream\n" + rows +
+           "\nendstream\nendobj\n";
+  }
+  inc += "startxref\n" + std::to_string(xrefAt) + "\n%%EOF\n";
+  out.reserve(file.size() + inc.size());
+  out.assign(file);
+  out += inc;
+  return true;
 }
 
 }  // namespace pdfobj

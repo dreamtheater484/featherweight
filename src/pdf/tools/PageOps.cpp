@@ -3,12 +3,55 @@
 #include <fpdf_edit.h>
 #include <fpdf_ppo.h>
 #include <fpdf_save.h>
+#include <fpdf_signature.h>
+#include <fpdf_transformpage.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <optional>
+#include <set>
+
+#include "pdf/sign/PdfObjects.h"
 
 namespace pdftools {
 
 namespace {
+
+// What a page inherits from its /Pages ancestors (ISO 32000-1, 7.7.3.4).
+constexpr const char* kInheritable[] = {"Resources", "MediaBox", "CropBox", "Rotate"};
+using Inherited = std::array<std::optional<pdfobj::Obj>, 4>;
+
+struct Leaf {
+  int num = 0, gen = 0;
+  pdfobj::Obj dict;
+  Inherited inherited;
+};
+
+// The page tree in page order, with what each page would inherit. False on anything unexpected
+// (a loop, a kid that isn't a reference, too deep or too many).
+bool WalkPages(pdfobj::File& f, int num, const Inherited& from, int depth, std::set<int>& seen, std::vector<Leaf>& leaves,
+               int& branches) {
+  if (depth > 64 || !seen.insert(num).second || leaves.size() > 1'000'000) return false;
+  pdfobj::Obj node;
+  int gen = 0;
+  if (!f.Get(num, node, &gen) || node.type != pdfobj::Obj::Dict) return false;
+  const pdfobj::Obj* kids = node.Get("Kids");
+  const pdfobj::Obj* type = node.Get("Type");
+  if (!kids || (type && type->IsName("Page"))) {
+    leaves.push_back({num, gen, std::move(node), from});
+    return true;
+  }
+  ++branches;
+  Inherited mine = from;
+  for (size_t k = 0; k < mine.size(); ++k)
+    if (const pdfobj::Obj* v = node.Get(kInheritable[k])) mine[k] = *v;
+  pdfobj::Obj list;
+  if (!f.Resolve(*kids, list) || list.type != pdfobj::Obj::Array) return false;
+  for (const pdfobj::Obj& kid : list.items)
+    if (kid.type != pdfobj::Obj::Ref || !WalkPages(f, kid.num, mine, depth + 1, seen, leaves, branches)) return false;
+  return true;
+}
 
 // PDF permission bits (ISO 32000-1, table 22).
 constexpr unsigned long kModify = 1u << 3, kCopy = 1u << 4, kAssemble = 1u << 10;
@@ -92,7 +135,57 @@ bool Move(FPDF_DOCUMENT doc, std::vector<int> pages, int gap) {
   bool same = true;
   for (size_t k = 0; k < pages.size(); ++k) same = same && pages[k] == dest + static_cast<int>(k);
   if (same) return true;
+  // What PDFium's functions can write on the page: its rotation, and its visible area (the crop
+  // box within the media box) when the page doesn't have its own boxes. PinInherited does the rest.
+  for (int p : pages) {
+    FPDF_PAGE page = FPDF_LoadPage(doc, p);
+    if (!page) continue;
+    FPDFPage_SetRotation(page, FPDFPage_GetRotation(page));
+    float l = 0, b = 0, r = 0, t = 0;
+    FS_RECTF seen{};
+    const bool media = FPDFPage_GetMediaBox(page, &l, &b, &r, &t);
+    if (FPDF_GetPageBoundingBox(page, &seen)) {
+      if (!media) FPDFPage_SetMediaBox(page, seen.left, seen.bottom, seen.right, seen.top);
+      float cl = 0, cb = 0, cr = 0, ct = 0;
+      const bool differs = std::fabs(seen.left - l) > 0.01f || std::fabs(seen.bottom - b) > 0.01f ||
+                           std::fabs(seen.right - r) > 0.01f || std::fabs(seen.top - t) > 0.01f;
+      if (media && differs && !FPDFPage_GetCropBox(page, &cl, &cb, &cr, &ct))
+        FPDFPage_SetCropBox(page, seen.left, seen.bottom, seen.right, seen.top);
+    }
+    FPDF_ClosePage(page);
+  }
   return FPDF_MovePages(doc, pages.data(), static_cast<unsigned long>(pages.size()), dest) != FALSE;
+}
+
+bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pageCount, std::string& out) {
+  pdfobj::File f;
+  if (!f.Open(bytes) || f.Trailer().Get("Encrypt")) return false;
+  const pdfobj::Obj* root = f.Trailer().Get("Root");
+  pdfobj::Obj catalog;
+  if (!root || root->type != pdfobj::Obj::Ref || !f.Get(root->num, catalog) || catalog.type != pdfobj::Obj::Dict)
+    return false;
+  const pdfobj::Obj* tree = catalog.Get("Pages");
+  if (!tree || tree->type != pdfobj::Obj::Ref) return false;
+  std::vector<Leaf> leaves;
+  std::set<int> seen;
+  int branches = 0;
+  if (!WalkPages(f, tree->num, Inherited{}, 0, seen, leaves, branches)) return false;
+  // A tree PDFium reads otherwise (it repaired the file), or one branch, where a move keeps
+  // every page's parent.
+  if (static_cast<int>(leaves.size()) != pageCount || branches < 2) return false;
+  std::vector<pdfobj::Update> updates;
+  for (int p : SortedUnique(pages, pageCount)) {
+    Leaf& leaf = leaves[static_cast<size_t>(p)];
+    bool changed = false;
+    for (size_t k = 0; k < leaf.inherited.size(); ++k) {
+      if (leaf.inherited[k] && !leaf.dict.Get(kInheritable[k])) {
+        leaf.dict.Set(kInheritable[k], *leaf.inherited[k]);
+        changed = true;
+      }
+    }
+    if (changed) updates.push_back({leaf.num, leaf.gen, pdfobj::Write(leaf.dict)});
+  }
+  return !updates.empty() && pdfobj::AppendUpdate(bytes, f, updates, f.Size(), out);
 }
 
 Source::~Source() {
@@ -188,6 +281,40 @@ bool SaveBytes(FPDF_DOCUMENT doc, bool incremental, std::string& out) {
   if (incremental && FPDF_SaveAsCopy(doc, &w, FPDF_INCREMENTAL)) return true;
   out.clear();
   return FPDF_SaveAsCopy(doc, &w, FPDF_NO_INCREMENTAL) != FALSE;
+}
+
+bool SaveDocument(FPDF_DOCUMENT doc, size_t loadedSize, std::string& out) {
+  if (FPDF_GetSignatureCount(doc) <= 0) return SaveBytes(doc, false, out);
+  if (!SaveBytes(doc, true, out)) return false;
+  if (loadedSize > 0 && out.size() > loadedSize) TypeLastXrefStream(out, loadedSize);
+  return true;
+}
+
+bool TypeLastXrefStream(std::string& bytes, size_t from) {
+  const size_t sx = bytes.rfind("startxref");
+  if (sx == std::string::npos) return false;
+  size_t at = sx + 9;
+  while (at < bytes.size() && (bytes[at] == ' ' || bytes[at] == '\r' || bytes[at] == '\n')) ++at;
+  size_t offset = 0;
+  bool digits = false;
+  for (; at < bytes.size() && bytes[at] >= '0' && bytes[at] <= '9'; ++at, digits = true) {
+    if (offset > (size_t{1} << 40)) return false;
+    offset = offset * 10 + static_cast<size_t>(bytes[at] - '0');
+  }
+  if (!digits || offset < from || offset >= sx) return false;
+  // "num gen obj", then the stream's dictionary.
+  const size_t obj = bytes.find("obj", offset);
+  if (obj == std::string::npos || obj > offset + 32) return false;
+  size_t dict = obj + 3;
+  while (dict < sx && (bytes[dict] == ' ' || bytes[dict] == '\r' || bytes[dict] == '\n')) ++dict;
+  if (bytes.compare(dict, 2, "<<") != 0) return false;
+  size_t end = dict;
+  pdfobj::Obj o;
+  if (!pdfobj::ParseObject(std::string_view(bytes).substr(0, sx), end, o) || o.type != pdfobj::Obj::Stream ||
+      !o.Get("W") || o.Get("Type"))
+    return false;
+  bytes.insert(dict + 2, "/Type /XRef ");
+  return true;
 }
 
 }  // namespace pdftools
