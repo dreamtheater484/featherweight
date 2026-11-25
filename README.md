@@ -15,6 +15,16 @@
   <a href="https://github.com/dreamtheater484/featherweight/releases"><img src="https://img.shields.io/github/downloads/dreamtheater484/featherweight/total?color=4f6bed" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-4f6bed" alt="Windows 10 and 11">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/dreamtheater484/featherweight?color=4f6bed" alt="MIT license"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/dreamtheater484/featherweight"><img src="https://api.securityscorecards.dev/projects/github.com/dreamtheater484/featherweight/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/dreamtheater484/featherweight/actions/workflows/codeql.yml"><img src="https://github.com/dreamtheater484/featherweight/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+</p>
+
+<p align="center">
+  <a href="https://dreamtheater484.github.io/featherweight/help/">Help</a> ·
+  <a href="https://dreamtheater484.github.io/featherweight/known-issues/">Known issues</a> ·
+  <a href="https://dreamtheater484.github.io/featherweight/privacy/">Privacy</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
@@ -32,7 +42,7 @@ and a 0.7 MB program.
 ## Beta: Word documents, spreadsheets and presentations (4.0)
 
 [Featherweight 4.0 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v4.0.0) opens and edits
-Word documents, Excel workbooks and PowerPoint presentations, with its own engine and a ribbon placed as in Office.
+Microsoft Word documents, Excel workbooks and PowerPoint presentations, with its own engine and a familiar ribbon.
 It doesn't use Word, Excel, PowerPoint or any Office component, and it's still one small program (13 MB). It's a beta: try it on copies of files that matter. The stable download above stays
 the PDF reader.
 
@@ -167,8 +177,9 @@ In Word documents (3.0 beta):
 
 ## Privacy
 
-Featherweight never sends your documents anywhere. Its only network access is a check of
-`api.github.com` for a new release, at most once a day. You can turn off automatic updates in the ⋯ menu.
+No telemetry, no account, no subscription; the only network access is the update check, which can be turned off.
+Featherweight never sends your documents anywhere. The update check asks `api.github.com` for a new release, at most
+once a day. Turn it off with **Update automatically** in the ⋯ menu.
 
 Two folders keep your work safe, in `%LOCALAPPDATA%\Featherweight` (or beside a portable copy's exe):
 
@@ -195,7 +206,15 @@ To build without form JavaScript (7.5 MB engine instead of 32 MB): `cmake -S . -
 - `scripts\release.ps1` builds the installer (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)), the portable zip and checksums, and publishes a release.
 - The design is described in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), and release testing in [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md).
 
-## License
+## License and trademarks
 
-MIT. See [LICENSE](LICENSE). Featherweight uses [PDFium](https://pdfium.googlesource.com/pdfium/); see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The code is MIT-licensed: see [LICENSE](LICENSE). Anyone may use, change and sell it, as long as the copyright
+notice goes with it. The licence doesn't cover the name "Featherweight" or its logo, which identify this project:
+a fork is welcome under its own name and icon.
+
+Featherweight uses [PDFium](https://pdfium.googlesource.com/pdfium/) and other open-source libraries; their
+licences are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which comes with every download.
+
+Microsoft, Windows, Office, Word, Excel and PowerPoint are trademarks of the Microsoft group of companies. Adobe and
+Acrobat are trademarks of Adobe. Featherweight is an independent project, not affiliated with, endorsed by or
+sponsored by Microsoft or Adobe. It names their products only to say which files it opens.

@@ -92,10 +92,8 @@ foreach(entry
     hyph-pt.pat.txt=6b50256e72d5448cec1801866e9027491f66552c8957f72b6e0ec315159e7931
     hyph-pt.hyp.txt=5c093a9e48dc8f87624693f31b8da7d090ed1e6eeb07fce7bcfd5689d7f941a8
     hyph-da.pat.txt=a093ef99375717fe34d261b05d2fdc8e64f8a9f741578c020204374f4c39a20c
-    hyph-sv.pat.txt=1fbf98f5d316712fd4e86f564643ad7341184f9ce8b30e0e18d06eceb4f52a79
     hyph-nb.pat.txt=e080c77da3d0f8de7e464f69082f5e2485e43ed349a2a7018b84e0adef785806
-    hyph-nb.hyp.txt=6484bbd793e20a206a2f0d7abfc499a5f8688c54ea7e91ee7af87fba53959d00
-    hyph-fi.pat.txt=ccabb0b3f403eca9999c0cd73b75d16b0220f2052d8f6aad2f98b5f1854dc027)
+    hyph-nb.hyp.txt=6484bbd793e20a206a2f0d7abfc499a5f8688c54ea7e91ee7af87fba53959d00)
   string(REPLACE "=" ";" pair "${entry}")
   list(GET pair 0 name)
   list(GET pair 1 sha256)

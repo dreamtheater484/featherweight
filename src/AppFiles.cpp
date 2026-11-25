@@ -6,6 +6,7 @@
 #include "App.h"
 #include "Commands.h"
 #include "Util.h"
+#include "Version.h"
 #include "core/FileKinds.h"
 #include "core/Lang.h"
 #include "core/Strings.h"
@@ -68,6 +69,9 @@ void App::InitFiles(bool userFolders) {
   if (base.empty()) return;
   s.backups = base + L"\\Backups";
   s.recovery = base + L"\\Recovery";
+  // f1-trust: a crash from now on leaves a dump here, and the next start offers to report it.
+  crashFolder_ = base + L"\\Crashes";
+  crash::Install(crashFolder_, FW_VERSION_WSTRING);
 }
 
 void App::NewDocument(int kind) {
@@ -124,6 +128,16 @@ void App::OfferRecovery() {
           ? Fmt(T(L"Featherweight closed before “{0}” was saved."), {orphans_.front().title})
           : Fmt(T(L"Featherweight closed before {0} documents were saved."), {std::to_wstring(orphans_.size())});
   banner_.Show(BannerKind::Warning, text, {{kActRecover, T(L"Recover"), true}, {kActDiscard, T(L"Discard")}});
+}
+
+// f1-trust: the last run's crash, if it left a report. After the recovery banner: unsaved work first,
+// so with documents to recover it's offered once they're recovered or discarded.
+void App::OfferCrashReport() {
+  if (!crash_) crash_ = crash::TakePending(crashFolder_);
+  if (!crash_ || !orphans_.empty()) return;
+  banner_.Show(BannerKind::Info,
+               T(L"Featherweight closed unexpectedly last time. A crash report was saved on this PC; nothing was sent."),
+               {{kActCrashReport, T(L"Report on GitHub"), true}, {kActCrashFolder, T(L"Show the file")}});
 }
 
 void App::RecoverDocuments(bool open) {
@@ -193,6 +207,7 @@ void App::RecoverDocuments(bool open) {
   else if (partial)
     banner_.Show(BannerKind::Warning, T(L"The last changes to a recovered file couldn’t all be made again. Check it before you save."),
                  {}, 8000);
+  else OfferCrashReport();  // f1-trust: the crash that left them, now the documents are back
   UpdateAutosaveTimer();
   Layout();
   InvalidateRect(hwnd_, nullptr, FALSE);

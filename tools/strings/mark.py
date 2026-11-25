@@ -49,6 +49,7 @@ EXCLUDE_FILES = {
     'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h', 'src/core/Lang.cpp', 'src/core/Lang.h',
     'src/pkg/Check.cpp', 'src/pkg/Derived.cpp', 'src/pkg/ReferenceRules.cpp', 'src/doc/model/Schema.cpp',
     'src/doc/proof/AutoCorrect.cpp', 'src/pkg/Recovery.cpp', 'src/sheet/numfmt/NumLocale.cpp',
+    'src/CrashReport.cpp',  # f1-trust's GitHub issue, prefilled for the maintainers: English
     'src/chart/Draw.cpp', 'src/text/Fonts.cpp', 'src/doc/layout/Layout.cpp', 'src/core/LayoutDump.cpp',
     'src/draw/FontSubstitutes.cpp', 'src/draw/FontSubstitutes.h',
     # Settings' keys and the registry's names (the language key is the catalog's own).

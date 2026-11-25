@@ -375,6 +375,11 @@ ui::FilePage::Model App::CurrentFilePage() {
   if (QueryCommand(CmdMakeDefault).visible) opt.push_back(command(CmdMakeDefault, icon::PDF));
   if (fw::pkg::backups::Any(DocFile::Config().backups))
     opt.push_back(entry(CmdDeleteBackups, T(L"Delete backups"), icon::Delete, T(L"The originals kept for Restore original, in every folder")));
+  // f1-trust: help and support, opened in the browser (the app sends nothing itself).
+  opt.push_back(command(CmdHelp, icon::TextDocument));
+  opt.push_back(command(CmdKnownIssues, icon::Warning));
+  opt.push_back(command(CmdReportProblem, icon::Comment));
+  opt.push_back(command(CmdThirdPartyNotices, icon::Document));
   opt.push_back(command(CmdAbout, icon::Info));
   return m;
 }

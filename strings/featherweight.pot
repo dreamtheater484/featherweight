@@ -4070,6 +4070,10 @@ msgstr ""
 msgid "Featherweight closed before “{0}” was saved."
 msgstr ""
 
+#: src/AppFiles.cpp
+msgid "Featherweight closed unexpectedly last time. A crash report was saved on this PC; nothing was sent."
+msgstr ""
+
 #: src/slide/view/ObjectTool.cpp
 msgid "Featherweight couldn't read that audio file."
 msgstr ""
@@ -4930,6 +4934,14 @@ msgstr ""
 msgid "Height: {0} ({1} pixels)"
 msgstr ""
 
+#: src/App.cpp src/AppShell.cpp
+msgid "Help"
+msgstr ""
+
+#: src/App.cpp
+msgid "Help\tF1"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Hidden"
 msgstr ""
@@ -5724,6 +5736,10 @@ msgstr ""
 
 #: src/word/DocShapes.cpp
 msgid "Kind"
+msgstr ""
+
+#: src/App.cpp src/AppShell.cpp
+msgid "Known issues"
 msgstr ""
 
 #: src/sheet/calc/Parser.cpp
@@ -8350,6 +8366,14 @@ msgstr ""
 msgid "Report"
 msgstr ""
 
+#: src/App.cpp src/AppShell.cpp
+msgid "Report a problem"
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "Report on GitHub"
+msgstr ""
+
 #: src/slide/view/PresentationRibbon.cpp
 msgid "Require a password to open this presentation."
 msgstr ""
@@ -9180,6 +9204,10 @@ msgstr ""
 
 #: src/App.cpp src/AppShell.cpp src/ui/EmptyState.cpp
 msgid "Show recent files"
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "Show the file"
 msgstr ""
 
 #: src/sheet/view/WorkbookFilter.h
@@ -11740,6 +11768,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Thin vertical stripe"
+msgstr ""
+
+#: src/App.cpp src/AppShell.cpp
+msgid "Third-party notices"
 msgstr ""
 
 #: src/slide/odp/Odp.cpp
