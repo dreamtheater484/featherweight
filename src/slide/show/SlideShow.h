@@ -36,6 +36,14 @@ struct ShowOptions {
   // Checking (--show-capture): no window on screen; every transition and animation step is drawn at
   // its middle and end, on a clock of its own, into PNG files in this folder.
   std::wstring captureDir;
+  // P3 (p3-present): the show in a window of its own instead of full screen (Alt+F5: with the presenter
+  // view beside it, as on one monitor; and any check that mustn't take the screen).
+  bool windowed = false;
+  // The presenter view: full screen on another monitor, or in a window of its own when windowed.
+  bool presenter = false;
+  // Checking video playback (--show-media-report): each video's frames shown and skipped go to this
+  // JSON file when the show ends.
+  std::wstring mediaReport;
 };
 
 // Starts a show of `deck` drawn by `renderer` (both outlive it). False when a show runs already or
@@ -53,6 +61,9 @@ std::vector<std::wstring> Monitors();
 // can't be opened, 2 when the bench dropped frames, 3 when the bench was stopped early (Esc, Alt+F4,
 // closing it, or another program taking the focus). Other keys, clicks and the mouse change nothing
 // during the bench.
-int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {});
+// `--show-windowed`: the show in a window; `--show-presenter`: with the presenter view;
+// `--show-media-report <report.json>`: the videos' frames (P3).
+int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {},
+                  bool windowed = false, bool presenter = false, const std::wstring& mediaReport = {});
 
 }  // namespace fw::slide::show

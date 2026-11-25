@@ -90,7 +90,7 @@ $PrintPdf = @($PrintPdf | ForEach-Object { $_ -split ',' } | Where-Object { $_ }
 $apps = @{
   Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
   Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".ods") }
-  PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm") }
+  PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm", ".ppt", ".pps", ".pot", ".odp") }
 }
 
 # The test password of a password-protected copy (D5): files in a protected\ folder, made by
@@ -562,7 +562,10 @@ if ($Child) {
       "PowerPoint" {
         $office.DisplayAlerts = 1  # ppAlertsNone: a deck that needs repair fails instead of prompting
         # ReadOnly, not untitled, no window. A .ppsx opens for editing, not into the show; a .potx as itself.
-        $doc = $office.Presentations.Open($Source, -1, 0, 0)
+        # A password-protected copy (P3's RC4 .ppt) opens with its test password ("file::password::",
+        # PowerPoint's own syntax for it); another one fails instead of prompting (alerts off).
+        $pw = Get-TestPassword $Source
+        $doc = $office.Presentations.Open($(if ($pw) { $Source + "::" + $pw + "::" } else { $Source }), -1, 0, 0)
         # What fwtool compare pairs with the PDF's pages: every slide, hidden ones too, in order.
         $result.slides = $doc.Slides.Count
         $result.hidden = @(for ($i = 1; $i -le $doc.Slides.Count; $i++) { if ($doc.Slides.Item($i).SlideShowTransition.Hidden -eq -1) { $i } })
@@ -633,12 +636,19 @@ function Get-Kind([string]$ext) {
 }
 
 # A format copy's original: the .docx it was made from (private: docx\<category>\, the same name;
-# public: generated\ or torture\, the name without "-protected"), or for xls\ and ods\ the .xlsx
-# (private: xlsx\<category>\). Null for anything else.
+# public: generated\ or torture\, the name without "-protected"), for xls\ and ods\ the .xlsx
+# (private: xlsx\<category>\), for ppt\ and odp\ (P3, scripts\make-deck-copies.ps1) the deck in
+# pptx\ or made\ (ppt\protected\: the encrypted copies). Null for anything else.
 function Get-CopyOf([string]$source, [string]$sourceRoot) {
   $parts = $source -split '/'
-  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected", "xls", "ods") -notcontains $parts[0]) { return $null }
+  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected", "xls", "ods", "ppt", "odp") -notcontains $parts[0]) { return $null }
   $stem = (($parts[1..($parts.Count - 1)] -join '/') -replace '\.[^./]+$', '') -replace '-protected$', ''
+  if (@("ppt", "odp") -contains $parts[0]) {
+    $stem = $stem -replace '^protected/', ''
+    $bases = if ($stem -like "made/*") { @($stem) } else { @("pptx/$stem", "made/$stem") }
+    foreach ($b in $bases) { foreach ($x in ".pptx", ".ppsx", ".potx") { if (Test-Path -LiteralPath (Join-Path $sourceRoot "$b$x")) { return "$b$x" } } }
+    return $null
+  }
   $candidates = if (@("xls", "ods") -contains $parts[0]) { @("xlsx/$stem.xlsx") }
                 elseif ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
   foreach ($c in $candidates) { if (Test-Path -LiteralPath (Join-Path $sourceRoot $c)) { return $c } }
@@ -667,8 +677,9 @@ if ($Corpus) {
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).files) }
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
   # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
-  # scripts\make-sheet-copies.ps1).
-  $corpusNames = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods")
+  # scripts\make-sheet-copies.ps1); ppt, odp: PowerPoint's copies of the decks, made: decks PowerPoint
+  # built for P3's edge cases (scripts\make-deck-copies.ps1, make-deck-edge-cases.ps1).
+  $corpusNames = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods", "ppt", "odp", "made")
   $CorpusFolders = @($CorpusFolders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
   if ($CorpusFolders.Count) {
     foreach ($c in $CorpusFolders) { if ($corpusNames -notcontains $c) { throw "-CorpusFolders: $c isn't one of $($corpusNames -join ', ')." } }

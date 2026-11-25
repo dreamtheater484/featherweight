@@ -40,6 +40,7 @@ constexpr UINT_PTR kTimerTooltip = 1;
 constexpr UINT_PTR kTimerCaret = 2;
 constexpr UINT_PTR kTimerModal = 3;
 constexpr UINT_PTR kTimerCursorHide = 4;
+constexpr UINT_PTR kTimerStartLists = 6;  // after the first paint: the start page's templates (5: autosave)
 constexpr float kTitleH = 40;
 constexpr float kToolbarH = 48;
 
@@ -79,10 +80,13 @@ int App::Run(const AppOptions& opts) {
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
-  if (!opts.showPath.empty()) return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture);
+  if (!opts.showPath.empty())
+    return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture, opts.showWindowed, opts.showPresenter,
+                                           opts.showMediaReport);
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
+  InitStartPage();
   InitFiles(!snapshot_ && !opts.widgetGallery && !sandbox_);
   if (snapshot_) return RunSnapshot(opts);
 
@@ -101,6 +105,7 @@ int App::Run(const AppOptions& opts) {
     show = opts.showCommand;
   ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
+  if (!opts.widgetGallery && !sandbox_) SetTimer(hwnd_, kTimerStartLists, 1, nullptr);
   if (!opts.widgetGallery && !sandbox_) MaybeCheckForUpdates(false);
   MessageLoop();
   return 0;
@@ -157,6 +162,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   toolbar_.SetWindow(hwnd_);
   toolbar_.onCommand = [this](int cmd) { Execute(cmd); };
   InitShell();
+  InitRibbon();
 
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
@@ -269,6 +275,7 @@ int App::TitleHeight() const { return (fullscreen_ || presentation_) ? 0 : stati
 
 int App::ToolbarHeight() const {
   if (presentation_) return 0;
+  if (ribbonShown_) return ui::Ribbon::HeightFor(ribbon_.Collapsed(), ui_);  // an editor's ribbon (R1)
   return static_cast<int>(std::lround(kToolbarH * ui_));
 }
 
@@ -294,13 +301,24 @@ void App::Layout() {
   if (!hwnd_) return;
   RECT rc;
   GetClientRect(hwnd_, &rc);
+  // An editor with a ribbon shows it in place of its toolbar, with quick access in the title bar.
+  RibbonModel ribbon = CurrentRibbon();
+  ribbonShown_ = !ribbon.tabs.empty();
+  if (!ribbonShown_ && filePage_.IsOpen()) filePage_.Close();
+  title_.SetQuickAccess(ribbonShown_ && !fullscreen_ ? QuickAccess(ribbon) : std::vector<TitleBar::QuickButton>{});
   const int titleH = TitleHeight();
   const int toolH = ToolbarHeight();
   title_.Layout(RECT{0, 0, rc.right, titleH}, ui_, static_cast<int>(tabs_.size()));
   title_.SetNewTabMenu(fw::AnyEditorShipped(), openMenu_ == CmdNewTab);
   int toolTop = titleH;
   if (fullscreen_) toolTop = static_cast<int>(std::lround((toolbarReveal_.V() - 1.0f) * toolH));
-  toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
+  if (ribbonShown_) {
+    ribbon_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, std::move(ribbon));
+  } else {
+    if (!ribbon_.Empty()) ribbon_.Forget();
+    toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
+  }
+  if (filePage_.IsOpen()) filePage_.Layout(RECT{0, titleH, rc.right, rc.bottom}, ui_, CurrentFilePage());
   LayoutShell();
   RECT doc = DocRect();
   search_.Layout(doc, ui_);
@@ -311,9 +329,11 @@ void App::Layout() {
     if (left - doc.left >= static_cast<LONG>(360 * ui_)) bannerArea.right = left;
   }
   banner_.Layout(bannerArea, ui_);
-  empty_.Layout(doc, ui_, settings_.recent);
+  // The start page only while it shows (0.1 ms a frame otherwise): closing the last tab lays it out again.
+  TabContent* v = Active();
+  if (!v) empty_.Layout(doc, ui_, settings_.recent, userTemplates_, settings_.showRecent);
   notes_.Layout(doc, ui_);
-  if (TabContent* v = Active()) v->SetViewport(doc, ui_);
+  if (v) v->SetViewport(doc, ui_);
 }
 
 std::wstring App::SearchStatus() {
@@ -341,7 +361,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
     v->Draw(canvas_, dc);
   } else {
     canvas_.Fill(RectF(doc), p.docBg);
-    empty_.Draw(canvas_, settings_.recent);
+    empty_.Draw(canvas_, settings_.recent, caretOn && focusBox_ == &empty_.Filter());
   }
   if (search_.Visible()) {
     bool none = v && !search_.Box().Text().empty() && v->SearchDone() && v->SearchCount() == 0;
@@ -376,15 +396,21 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   // Chrome on top.
   if (!presentation_) {
     if (!fullscreen_ || toolbarReveal_.V() > 0.01f) {
-      ToolbarModel tm = CurrentToolbar();
-      toolbar_.Draw(canvas_, tm, caretOn && focusBox_ == &toolbar_.PageBox());
+      if (ribbonShown_) {
+        ribbon_.Draw(canvas_);
+      } else {
+        ToolbarModel tm = CurrentToolbar();
+        toolbar_.Draw(canvas_, tm, caretOn && focusBox_ == &toolbar_.PageBox());
+      }
     }
+    if (filePage_.IsOpen()) filePage_.Draw(canvas_);
     if (!fullscreen_) {
       std::vector<TabInfo> tabs;
       for (auto& t : tabs_) tabs.push_back({t->Title(), t->Path(), t->Modified()});
       title_.Draw(canvas_, tabs, active_, windowActive_, IsZoomed(hwnd_) != FALSE);
     }
-    toolbar_.DrawPopup(canvas_);  // an open list of a toolbar control, above everything
+    if (ribbonShown_) ribbon_.DrawPopup(canvas_);  // folded groups, galleries, lists and KeyTips
+    else toolbar_.DrawPopup(canvas_);           // an open list of a toolbar control, above everything
     commands_.Draw(canvas_, focusBox_ == &commands_.Box() && caret::On(caretStart_));
   }
   canvas_.End();
@@ -501,7 +527,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_ACTIVATE:
       windowActive_ = LOWORD(wp) != WA_INACTIVE;
-      if (!windowActive_) HideTooltip();
+      altAlone_ = false;
+      if (!windowActive_) {
+        HideTooltip();
+        ribbon_.EndKeyTips();
+      }
       else if (!snapshot_) CheckActiveFile();
       InvalidateRect(hwnd_, nullptr, FALSE);
       break;
@@ -617,6 +647,9 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         POINT pt{x, y};
         ClientToScreen(hwnd_, &pt);
         ShowContextMenu(pt.x, pt.y);
+      } else if (RegionAt(x, y) == Region::Doc && !Active()) {
+        const EmptyState::Result res = empty_.OnRightClick(x, y);  // a recent file's menu
+        if (res.kind == EmptyState::Result::Kind::RecentMenu) ShowRecentMenu(res.index, res.at);
       }
       return 0;
     }
@@ -633,13 +666,22 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ScreenToClient(hwnd_, &pt);
       UINT keys = GET_KEYSTATE_WPARAM(wp);
       UINT mods = (keys & MK_CONTROL ? kModCtrl : 0) | (keys & MK_SHIFT ? kModShift : 0);
-      if (msg == WM_MOUSEWHEEL && (toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y) ||
-                                   ShellWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y))) {
+      if (filePage_.IsOpen() && pt.y >= TitleHeight()) {
+        if (msg == WM_MOUSEWHEEL && filePage_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y)) InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+      }
+      const bool chrome = ribbonShown_ ? ribbon_.Hit(pt.x, pt.y) && ribbon_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y)
+                                       : toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y);
+      if (msg == WM_MOUSEWHEEL && (chrome || ShellWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y))) {
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
       }
       if (TabContent* v = Active()) {
         v->OnWheel(GET_WHEEL_DELTA_WPARAM(wp), msg == WM_MOUSEHWHEEL, mods, pt.x, pt.y);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+      } else if (msg == WM_MOUSEWHEEL && empty_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp))) {
+        Layout();  // the start page scrolled: what's under the mouse changed
+        empty_.OnMouseMove(pt.x, pt.y);
         InvalidateRect(hwnd_, nullptr, FALSE);
       }
       return 0;
@@ -649,7 +691,20 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
+      // Alt pressed alone and let go shows the ribbon's KeyTips (R1).
+      if (wp == VK_MENU) {
+        if (!(lp & (1 << 30))) altAlone_ = true;
+      } else {
+        altAlone_ = false;
+      }
+      if (msg == WM_SYSKEYDOWN && wp == VK_MENU && ribbonShown_) return 0;
       if (msg == WM_SYSKEYDOWN && wp != VK_F10 && !(wp >= VK_F1 && wp <= VK_F24)) {
+        // Alt+H, Alt+N…: that ribbon tab's KeyTips; Alt+F: the File page.
+        if (!(lp & (1 << 30)) && RibbonAltKey(static_cast<UINT>(wp))) {
+          keyTipAte_ = true;
+          InvalidateRect(hwnd_, nullptr, FALSE);
+          return 0;
+        }
         if (wp == VK_LEFT || wp == VK_RIGHT) {  // Alt+Left/Right: previous/next page
           if (TabContent* v = Active())
             if (int cmd = v->ShortcutFor(static_cast<UINT>(wp), Mods())) Execute(cmd);
@@ -678,7 +733,19 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR:
       OnChar(static_cast<wchar_t>(wp));
       return 0;
+    case WM_SYSKEYUP:
+      if (wp == VK_MENU && altAlone_ && ribbonShown_ && !presentation_) {
+        altAlone_ = false;
+        RibbonAltReleased();
+        return 0;  // no system menu
+      }
+      altAlone_ = false;
+      break;
     case WM_SYSCHAR:
+      if (keyTipAte_) {  // Alt+H showed the ribbon's letters
+        keyTipAte_ = false;
+        return 0;
+      }
       if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
       if (TabContent* v = Active(); v && v->Kind() == TabKind::Workbook && (wp == L'\r' || wp == L'=')) return 0;
       break;
@@ -708,6 +775,14 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           break;
         case kTimerCursorHide:
           if (presentation_ && anim::Now() - lastMouseMove_ > 2000) SetCursor(nullptr);
+          break;
+        case kTimerStartLists:
+          // The start page's templates come from disk after the first paint, never before it.
+          KillTimer(hwnd_, kTimerStartLists);
+          if (!Active()) {
+            userTemplates_ = usertemplates::List(kUserTemplateCount);
+            if (!userTemplates_.empty()) InvalidateRect(hwnd_, nullptr, FALSE);
+          }
           break;
       }
       return 0;
@@ -799,9 +874,11 @@ App::Region App::RegionAt(int x, int y) const {
   GetClientRect(hwnd_, &rc);
   if (x < 0 || y < 0 || x >= rc.right || y >= rc.bottom) return Region::None;
   if (commands_.Hit(x, y)) return Region::Commands;
-  if (!presentation_ && toolbar_.HitPopup(x, y)) return Region::Toolbar;
+  if (!presentation_ && !ribbonShown_ && toolbar_.HitPopup(x, y)) return Region::Toolbar;
+  if (!presentation_ && ribbonShown_ && !filePage_.IsOpen() && ribbon_.HitPopup(x, y)) return Region::Toolbar;
   const int titleH = TitleHeight();
   if (y < titleH) return Region::Title;
+  if (filePage_.IsOpen()) return Region::FilePage;
   if (!presentation_) {
     int toolTop = titleH, toolH = ToolbarHeight();
     if (fullscreen_) {
@@ -837,8 +914,17 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
   if (r == Region::Commands) clickedBox = &commands_.Box();  // its results keep the box's keyboard
+  if (r == Region::Doc && !Active() && empty_.OverFilter(x, y)) clickedBox = &empty_.Filter();  // the start page's
   if (focusBox_ != clickedBox) FocusBox(clickedBox);
-  if (r != Region::Toolbar || clickedBox) toolbar_.Blur();
+  if (r != Region::Toolbar || clickedBox) {
+    toolbar_.Blur();
+    ribbon_.Blur();
+  }
+  altAlone_ = false;
+  if (r != Region::Toolbar) {  // a click elsewhere closes the ribbon's popups and letters
+    ribbon_.EndKeyTips();
+    if (ribbon_.PopupOpen()) ribbon_.ClosePopups();
+  }
   ShellMouseDown(r, x, y, button, dbl, shift);
 
   switch (r) {
@@ -854,8 +940,12 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
         else if (!clickedBox->Text().empty() && !shift) clickedBox->SelectAll();
         else clickedBox->OnMouseDown((float)x, (float)y, shift, ui_);
       } else if (button == 0) {
-        toolbar_.OnMouseDown(x, y, dbl, shift);
+        if (ribbonShown_) ribbon_.OnMouseDown(x, y, dbl, shift);
+        else toolbar_.OnMouseDown(x, y, dbl, shift);
       }
+      break;
+    case Region::FilePage:
+      if (button == 0) filePage_.OnMouseDown(x, y);
       break;
     case Region::Search:
       if (button == 0) search_.OnMouseDown(x, y, shift, dbl);
@@ -872,6 +962,10 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
         if (v->HasKeyFocus() || v->Dragging()) caretStart_ = anim::Now();
       } else if (button == 0) {
         empty_.OnMouseDown(x, y);
+        if (clickedBox == &empty_.Filter()) {
+          if (dbl) clickedBox->OnDoubleClick();
+          else clickedBox->OnMouseDown((float)x, (float)y, shift, empty_.Scale());
+        }
       }
       break;
     default: break;
@@ -894,11 +988,18 @@ void App::OnMouseMove(int x, int y) {
     switch (capture_) {
       case Region::Doc:
         if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
+        else if (focusBox_ == &empty_.Filter() && GetKeyState(VK_LBUTTON) < 0)
+          empty_.Filter().OnMouseDrag((float)x, (float)y, empty_.Scale());
         break;
       case Region::Toolbar:
+        if (ribbonShown_) {
+          ribbon_.OnMouseMove(x, y);
+          break;
+        }
         if (focusBox_ == &toolbar_.PageBox() && GetKeyState(VK_LBUTTON) < 0) toolbar_.PageBox().OnMouseDrag((float)x, (float)y, ui_);
         toolbar_.OnMouseMove(x, y);
         break;
+      case Region::FilePage: filePage_.OnMouseMove(x, y); break;
       case Region::Search:
         if ((focusBox_ == &search_.Box() || focusBox_ == &search_.WithBox()) && GetKeyState(VK_LBUTTON) < 0)
           search_.OnMouseDrag(x, y);
@@ -917,7 +1018,11 @@ void App::OnMouseMove(int x, int y) {
   if (r != hover_) {
     switch (hover_) {
       case Region::Title: title_.OnMouseLeave(); break;
-      case Region::Toolbar: toolbar_.OnMouseLeave(); break;
+      case Region::Toolbar:
+        toolbar_.OnMouseLeave();
+        ribbon_.OnMouseLeave();
+        break;
+      case Region::FilePage: filePage_.OnMouseLeave(); break;
       case Region::Search: search_.OnMouseLeave(); break;
       case Region::Banner: banner_.OnMouseLeave(); break;
       case Region::Note: notes_.OnMouseLeave(); break;
@@ -933,7 +1038,8 @@ void App::OnMouseMove(int x, int y) {
   bool changed = false;
   switch (r) {
     case Region::Title: changed = title_.OnMouseMove(x, y); break;
-    case Region::Toolbar: changed = toolbar_.OnMouseMove(x, y); break;
+    case Region::Toolbar: changed = ribbonShown_ ? ribbon_.OnMouseMove(x, y) : toolbar_.OnMouseMove(x, y); break;
+    case Region::FilePage: changed = filePage_.OnMouseMove(x, y); break;
     case Region::Search: changed = search_.OnMouseMove(x, y); break;
     case Region::Banner: changed = banner_.OnMouseMove(x, y); break;
     case Region::Note: changed = notes_.OnMouseMove(x, y); break;
@@ -960,15 +1066,22 @@ void App::OnMouseUp(int x, int y, int button) {
         case TitleBar::Part::Close: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
         case TitleBar::Part::NewTab: Execute(CmdNewTab); break;
         case TitleBar::Part::TabClose: CloseTab(a.index); break;
+        case TitleBar::Part::Quick: Execute(title_.QuickCommand(a.index)); break;
+        case TitleBar::Part::QuickList: ShowQuickList(a.index); break;
         default: break;
       }
       break;
     }
     case Region::Toolbar:
-      if (button == 0) {
+      if (button == 0 && ribbonShown_) {
+        ribbon_.OnMouseUp(x, y);
+      } else if (button == 0) {
         int cmd = toolbar_.OnMouseUp(x, y);
         if (cmd) Execute(cmd);
       }
+      break;
+    case Region::FilePage:
+      if (button == 0) filePage_.OnMouseUp(x, y);
       break;
     case Region::Search:
       if (button == 0) {
@@ -1003,6 +1116,8 @@ void App::OnMouseLeave() {
   HideTooltip();
   title_.OnMouseLeave();
   toolbar_.OnMouseLeave();
+  ribbon_.OnMouseLeave();
+  filePage_.OnMouseLeave();
   search_.OnMouseLeave();
   banner_.OnMouseLeave();
   empty_.OnMouseLeave();
@@ -1027,7 +1142,7 @@ bool App::OnSetCursor() {
   Region r = capture_ != Region::None ? capture_ : RegionAt(pt.x, pt.y);
   switch (r) {
     case Region::Toolbar:
-      if (toolbar_.HitPageBox(pt.x, pt.y) || toolbar_.OverText(pt.x, pt.y)) c = ibeam;
+      if (ribbonShown_ ? ribbon_.OverText(pt.x, pt.y) : toolbar_.HitPageBox(pt.x, pt.y) || toolbar_.OverText(pt.x, pt.y)) c = ibeam;
       break;
     case Region::Search:
       if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y) ||
@@ -1055,7 +1170,8 @@ void App::UpdateTooltip(int x, int y) {
       text = title_.TooltipAt(x, y, tabs);
       break;
     }
-    case Region::Toolbar: text = toolbar_.TooltipAt(x, y); break;
+    case Region::Toolbar: text = ribbonShown_ ? ribbon_.TooltipAt(x, y) : toolbar_.TooltipAt(x, y); break;
+    case Region::FilePage: text = filePage_.TooltipAt(x, y); break;
     case Region::Search: text = search_.TooltipAt(x, y); break;
     case Region::Note: text = notes_.TooltipAt(x, y); break;
     case Region::Doc:
@@ -1081,6 +1197,7 @@ void App::HideTooltip() {
 void App::FocusBox(TextBox* box) {
   if (box) {
     toolbar_.Blur();
+    ribbon_.Blur();
     panel_.Blur();
     status_.Blur();
   }
@@ -1136,7 +1253,7 @@ void App::SyncInputCaret(bool force) {
 
 void App::KeyFocusMoved() {
   if (TabContent* v = Active())
-    v->SetKeyFocus(!toolbar_.HasKeyFocus() && !panel_.HasKeyFocus() && !status_.HasKeyFocus() &&
+    v->SetKeyFocus(!toolbar_.HasKeyFocus() && !ribbon_.HasKeyFocus() && !panel_.HasKeyFocus() && !status_.HasKeyFocus() &&
                    (!focusBox_ || focusBox_ == v->PasswordBox()));
 }
 
@@ -1157,20 +1274,43 @@ void App::OnKeyDown(UINT vk) {
     // through the tabs).
     if (v && v->Kind() == TabKind::Workbook && (vk == VK_NEXT || vk == VK_PRIOR) && ctrl && !shift)
       if (int cmd = v->ShortcutFor(vk, mods)) return cmd;
+    // Ctrl+F1: the ribbon's tabs only, or all of it again (R1).
+    if (ribbonShown_ && vk == VK_F1 && ctrl && !shift && !(mods & kModAlt)) return CmdRibbonCollapse;
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
 
+  // The ribbon's KeyTips take the keys while they show; the File page its own (R1).
+  keyTipAte_ = false;
+  if (ribbon_.KeyTipsShown()) {
+    const bool fileWasOpen = filePage_.IsOpen();
+    if (ribbon_.KeyTipKey(vk)) {
+      keyTipAte_ = true;
+      if (!fileWasOpen && filePage_.IsOpen()) filePage_.ShowKeyTips(true);  // Alt, F: the File page's letters
+      KeyFocusMoved();
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return;
+    }
+  }
+  if (filePage_.IsOpen() && !focusBox_) {
+    if (filePage_.OnKeyDown(vk, shift)) {
+      keyTipAte_ = true;
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return;
+    }
+  }
+
   // F6, and keys for the side panel or the status bar when they have the keyboard.
   if (ShellKeyDown(vk, mods)) return;
 
-  // A combo box, dropdown or other control on the toolbar has the keyboard.
-  if (toolbar_.HasKeyFocus()) {
+  // A combo box, dropdown or other control on the toolbar or the ribbon has the keyboard.
+  if (toolbar_.HasKeyFocus() || (ribbonShown_ && ribbon_.WantsKeys())) {
     if (int cmd = global(); cmd && !(ctrl && (vk == 'A' || vk == 'C' || vk == 'V' || vk == 'X' || vk == 'Z'))) {
       Execute(cmd);
       return;
     }
-    toolbar_.OnKeyDown(vk, ctrl, shift, (mods & kModAlt) != 0);
+    if (ribbonShown_ && ribbon_.WantsKeys()) ribbon_.OnKeyDown(vk, ctrl, shift, (mods & kModAlt) != 0);
+    else toolbar_.OnKeyDown(vk, ctrl, shift, (mods & kModAlt) != 0);
     KeyFocusMoved();
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
@@ -1182,6 +1322,13 @@ void App::OnKeyDown(UINT vk) {
       return;
     }
     TextBox* box = focusBox_;
+    if (box == &empty_.Filter() && (vk == VK_TAB || vk == VK_DOWN)) {  // the start page's filter lets go
+      FocusBox(nullptr);
+      if (vk == VK_DOWN) empty_.FocusList();
+      else empty_.LeaveFilter(!shift);
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return;
+    }
     if (box->OnKeyDown(vk, ctrl, shift)) {
       InvalidateRect(hwnd_, nullptr, FALSE);
       return;
@@ -1231,6 +1378,11 @@ void App::OnKeyDown(UINT vk) {
   }
   if (vk == VK_ESCAPE) {
     if (dragOver_) return;
+    if (ribbon_.PopupOpen()) {
+      ribbon_.ClosePopups();
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return;
+    }
     if (presentation_) {
       SetPresentation(false);
       return;
@@ -1257,11 +1409,17 @@ void App::OnKeyDown(UINT vk) {
 }
 
 void App::OnChar(wchar_t ch) {
-  if (toolbar_.HasKeyFocus()) {
-    toolbar_.OnChar(ch);
+  if (keyTipAte_) {  // the letter picked a KeyTip
+    keyTipAte_ = false;
+    return;
+  }
+  if (toolbar_.HasKeyFocus() || ribbon_.HasKeyFocus()) {
+    if (ribbon_.HasKeyFocus()) ribbon_.OnChar(ch);
+    else toolbar_.OnChar(ch);
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
+  if (filePage_.IsOpen() && !focusBox_) return;
   if (ShellChar(ch)) return;
   if (focusBox_) {
     if (focusBox_->OnChar(ch)) InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1321,6 +1479,7 @@ void App::Execute(int cmd) {
     // A new document, workbook or presentation comes with that kind's editor.
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Workbook)) NewWorkbook();
+    if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Presentation)) NewPresentation();
     return;
   }
   if (cmd >= CmdNewTemplate && cmd < CmdNewTemplate + EmptyState::kTemplateCount) {
@@ -1421,6 +1580,8 @@ void App::Execute(int cmd) {
       }
       break;
     case CmdCommandSearch: OpenCommandSearch(); break;
+    case CmdRibbonCollapse: ToggleRibbon(); break;
+    case CmdFilePage: OpenFilePage(); break;
     case CmdFindNext:
     case CmdFindPrev:
       if (!search_.IsOpen() || search_.Box().Text().empty()) OpenSearch();
@@ -1489,12 +1650,23 @@ void App::Execute(int cmd) {
       settings_.Save();
       for (auto& t : tabs_) t->SettingsChanged();
       break;
+    case CmdDeveloperTab:
+      settings_.developerTab = !settings_.developerTab;
+      settings_.Save();
+      Layout();  // the ribbon gains or loses the tab
+      break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
     case CmdClearRecent:
       settings_.ClearRecent();
       settings_.Save();
+      Layout();
+      break;
+    case CmdShowRecentFiles:  // off: the start page and File > Open don't list them (sharing a screen)
+      settings_.showRecent = !settings_.showRecent;
+      if (!settings_.showRecent && focusBox_ == &empty_.Filter()) FocusBox(nullptr);
+      if (!snapshot_) settings_.Save();
       Layout();
       break;
     case CmdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
@@ -1524,7 +1696,7 @@ static std::wstring NewLabel(const fw::FileKindInfo& k) {
 // (S4): the templates in their personal templates folder, and the Open dialog there for the rest.
 static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
   const bool docs = fw::EditorShipped(fw::FileKind::Document);
-  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook)) return;
+  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook) && !fw::EditorShipped(fw::FileKind::Presentation)) return;
   HMENU sub = CreatePopupMenu();
   if (docs)
     for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
@@ -1541,9 +1713,25 @@ static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
 }
 
 void App::ShowMenu(int which) {
+  HMENU m = CreatePopupMenu();
+  const bool alignRight = FillWindowMenu(which, m);
+  if (GetMenuItemCount(m) > 0) {
+    openMenu_ = which;
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), which == CmdNewTab);
+    D2D1_RECT_F anchor = which == CmdNewTab ? title_.NewTabRect() : toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which);
+    if (ribbonShown_ && which != CmdNewTab) anchor = ribbon_.ItemRect(which);  // a ribbon button's menu (R1)
+    int cmd = TrackMenu(m, anchor, alignRight);
+    openMenu_ = 0;
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
+    if (cmd && which == CmdToolbarOverflow) cmd = toolbar_.OverflowChoice(cmd);
+    if (cmd) Execute(cmd);
+  }
+  DestroyMenu(m);
+}
+
+bool App::FillWindowMenu(int which, HMENU m) {
   TabContent* v = Active();
   const bool ready = v && v->Ready();
-  HMENU m = CreatePopupMenu();
   bool alignRight = false;
   if (which == CmdNewTab) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
@@ -1563,23 +1751,23 @@ void App::ShowMenu(int which) {
     userTemplates_ = usertemplates::List(kUserTemplateCount);
     AppendTemplates(m, userTemplates_);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
-    HMENU recent = CreatePopupMenu();
-    for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
-      std::wstring label = fw::FileNameOf(settings_.recent[i].path);
-      if (i < 9) label = L"&" + std::to_wstring(i + 1) + L"  " + label;
-      AppendItem(recent, CmdRecent + i, label);
+    if (settings_.showRecent) {
+      HMENU recent = CreatePopupMenu();
+      for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
+        std::wstring label = fw::FileNameOf(settings_.recent[i].path);
+        if (i < 9) label = L"&" + std::to_wstring(i + 1) + L"  " + label;
+        AppendItem(recent, CmdRecent + i, label);
+      }
+      if (!settings_.recent.empty()) {
+        AppendSeparator(recent);
+        AppendItem(recent, CmdClearRecent, QueryCommand(CmdClearRecent).label, QueryCommand(CmdClearRecent).enabled);
+      }
+      AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     }
-    if (!settings_.recent.empty()) {
-      AppendSeparator(recent);
-      AppendItem(recent, CmdClearRecent, L"Clear list");
-    }
-    AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
-    if (ready && v->Kind() == TabKind::Document && !v->Path().empty())
-      AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
-    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is with its Paragraph… below
+    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is on its ribbon (Layout)
       const CommandState setup = v->QueryCommand(CmdPageSetup);
       if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);
     }
@@ -1593,35 +1781,8 @@ void App::ShowMenu(int which) {
     AppendItem(themeMenu, CmdThemeDark, L"Dark", true, settings_.theme == ThemeSetting::Dark, true);
     AppendSubmenu(m, themeMenu, L"App theme");
     AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
-    if (ready && v->Kind() == TabKind::Document) {
-      AppendItem(m, CmdToggleSpelling, L"Check spelling as you type", true, settings_.spelling);
-      AppendItem(m, CmdToggleAutoCorrect, L"AutoCorrect as you type", true, settings_.autoCorrect);
-      const CommandState setup = v->QueryCommand(CmdPageSetup), hyphens = v->QueryCommand(CmdHyphenation);
-      if (setup.visible && setup.enabled) {
-        AppendItem(m, CmdParagraph, L"Paragraph…");
-        AppendItem(m, CmdPageSetup, L"Page setup…");
-        AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
-      }
-      AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
-      // Review: Track Changes, the changes one at a time or all at once, the markup shown.
-      HMENU review = CreatePopupMenu();
-      auto add = [&](HMENU menu, int cmd, bool radio = false) {
-        const CommandState s = v->QueryCommand(cmd);
-        if (!s.visible) return;
-        AppendItem(menu, cmd, s.label + (s.shortcut.empty() ? L"" : L"\t" + s.shortcut), s.enabled, s.checked, radio);
-      };
-      add(review, CmdTrackChanges);
-      AppendSeparator(review);
-      for (int cmd : {CmdAcceptChange, CmdRejectChange, CmdAcceptAll, CmdRejectAll, CmdNextChange, CmdPrevChange})
-        add(review, cmd);
-      AppendSeparator(review);
-      for (int cmd : {CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone, CmdMarkupOriginal}) add(review, cmd, true);
-      AppendSeparator(review);
-      add(review, CmdNewComment);
-      add(review, CmdReviewPane);
-      add(review, CmdReviewerName);
-      AppendSubmenu(m, review, L"Review");
-    }
+    AppendItem(m, CmdShowRecentFiles, L"Show recent files", true, settings_.showRecent);
+    // A document's spelling, AutoCorrect, Paragraph, Page setup, Ruler and Review are on its ribbon.
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
     AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
@@ -1634,18 +1795,7 @@ void App::ShowMenu(int which) {
   } else if (ready) {
     v->FillMenu(which, m);  // zoom, page layout
   }
-  if (GetMenuItemCount(m) > 0) {
-    openMenu_ = which;
-    title_.SetNewTabMenu(fw::AnyEditorShipped(), which == CmdNewTab);
-    const D2D1_RECT_F anchor =
-        which == CmdNewTab ? title_.NewTabRect() : toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which);
-    int cmd = TrackMenu(m, anchor, alignRight);
-    openMenu_ = 0;
-    title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
-    if (cmd && which == CmdToolbarOverflow) cmd = toolbar_.OverflowChoice(cmd);
-    if (cmd) Execute(cmd);
-  }
-  DestroyMenu(m);
+  return alignRight;
 }
 
 void App::ShowContextMenu(int sx, int sy) {
@@ -1680,8 +1830,11 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
-  if (fw::KindOfPath(path) == fw::FileKind::Presentation)
-    return std::make_unique<fw::slide::view::PresentationView>(*this, path);  // P1: read-only
+  if (fw::KindOfPath(path) == fw::FileKind::Presentation) {
+    auto view = std::make_unique<fw::slide::view::PresentationView>(*this, path);
+    if (fw::slide::view::PresentationView::IsTemplate(path)) view->OpenAsNew(++newPresentations_);  // "Presentation2"
+    return view;
+  }
   if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
     auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
     if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
@@ -1758,6 +1911,7 @@ void App::OpenDialog(bool templates) {
   std::wstring tmpl;
   if (fw::EditorShipped(fw::FileKind::Document)) tmpl += L"*.dotx;*.dotm;*.ott";
   if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
+  if (fw::EditorShipped(fw::FileKind::Presentation)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.potx;*.potm;*.otp";
   if (tmpl.empty()) templates = false;
   COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
                                  {L"Files Featherweight opens", all.c_str()},
@@ -1804,20 +1958,81 @@ void App::OpenDialog(bool templates) {
 }
 
 void App::OnStartScreen(EmptyState::Result res) {
+  using K = EmptyState::Result::Kind;
   switch (res.kind) {
-    case EmptyState::Result::Kind::Open: Execute(CmdOpen); break;
-    case EmptyState::Result::Kind::New: Execute(CmdNewFile + res.index); break;
-    case EmptyState::Result::Kind::Template: Execute(CmdNewTemplate + res.index); break;
-    case EmptyState::Result::Kind::OpenRecent: Execute(CmdRecent + res.index); break;
-    case EmptyState::Result::Kind::RemoveRecent:
-      if (res.index < static_cast<int>(settings_.recent.size())) {
-        settings_.RemoveRecent(settings_.recent[res.index].path);
-        settings_.Save();
-        Layout();
-      }
+    case K::Open: Execute(CmdOpen); break;
+    case K::New: Execute(CmdNewFile + res.index); break;
+    case K::Template: Execute(CmdNewTemplate + res.index); break;
+    case K::UserTemplate: Execute(CmdUserTemplate + res.index); break;
+    case K::MoreTemplates: Execute(CmdUserTemplatesFolder); break;
+    case K::OpenRecent: Execute(CmdRecent + res.index); break;
+    case K::RemoveRecent: RecentAction(CmdRecentRemove, res.index); break;
+    case K::PinRecent: RecentAction(CmdRecentPin, res.index); break;
+    case K::RecentMenu: ShowRecentMenu(res.index, res.at); break;
+    case K::ShowRecent:
+    case K::HideRecent:
+      if (settings_.showRecent != (res.kind == K::ShowRecent)) Execute(CmdShowRecentFiles);
       break;
+    case K::FocusFilter: FocusBox(&empty_.Filter()); break;
     default: break;
   }
+}
+
+void App::InitStartPage() {
+  TextBox& filter = empty_.Filter();
+  filter.onChange = [this] { InvalidateRect(hwnd_, nullptr, FALSE); };
+  filter.onEnter = [this](bool) {
+    if (const int i = empty_.FirstShown(); i >= 0) Execute(CmdRecent + i);
+  };
+  // Esc empties the filter, then lets go of it.
+  filter.onEscape = [this] {
+    if (!empty_.Filter().Text().empty()) empty_.Filter().SetText(L"");
+    else FocusBox(nullptr);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+  };
+}
+
+void App::ShowRecentMenu(int index, POINT at) {
+  if (index < 0 || index >= static_cast<int>(settings_.recent.size())) return;
+  HMENU m = CreatePopupMenu();
+  AppendItem(m, CmdRecentPin, settings_.recent[index].pinned ? L"Unpin from list" : L"Pin to list");
+  AppendItem(m, CmdRecentRemove, L"Remove from list");
+  AppendSeparator(m);
+  AppendItem(m, CmdRecentLocation, L"Open file location");
+  ClientToScreen(hwnd_, &at);
+  theme::ApplyToMenus();
+  HideTooltip();
+  const int cmd = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, at.x, at.y, hwnd_, nullptr);
+  DestroyMenu(m);
+  if (cmd) RecentAction(cmd, index);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::RecentAction(int cmd, int index) {
+  if (index < 0 || index >= static_cast<int>(settings_.recent.size())) return;
+  const std::wstring path = settings_.recent[index].path;
+  if (cmd == CmdRecentLocation) {
+    // Explorer, with the file selected; its folder when the file has gone.
+    bool shown = false;
+    if (PIDLIST_ABSOLUTE item = ILCreateFromPathW(path.c_str())) {
+      shown = SUCCEEDED(SHOpenFolderAndSelectItems(item, 0, nullptr, 0));
+      ILFree(item);
+    }
+    if (!shown) {
+      const std::wstring folder = fw::DirOf(path);
+      if (GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES)
+        ShellExecuteW(hwnd_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+      else
+        banner_.Show(BannerKind::Error, L"“" + fw::FileNameOf(path) + L"” and its folder can’t be found.", {}, 6000);
+    }
+    return;
+  }
+  if (cmd == CmdRecentPin) settings_.PinRecent(path, !settings_.recent[index].pinned);
+  else if (cmd == CmdRecentRemove) settings_.RemoveRecent(path);
+  else return;
+  if (!snapshot_) settings_.Save();
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format,
@@ -1875,9 +2090,22 @@ void App::ActivateTab(int index) {
   if (index != active_ && search_.IsOpen()) CloseSearch();
   if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   if (index != active_) panel_.Show(nullptr, false);  // its content belongs to the tab
-  if (index != active_ && Active()) Active()->OnDeactivated();
+  if (index != active_ && Active()) {
+    TabContent* was = Active();
+    was->OnDeactivated();
+    // Its "changed by another program" notice waits for it; one that was answered is done.
+    std::erase_if(fileNotices_, [was](const auto& n) { return n.first == was; });
+    if (banner_.Owner() == was) {
+      fileNotices_.emplace_back(was, fileNotice_);
+      banner_.Hide();
+    }
+  }
+  const bool switched = index != active_;
   active_ = index;
   TabContent* v = Active();
+  if (switched)
+    for (const auto& [tab, change] : fileNotices_)
+      if (tab == v) ShowFileNotice(v, change);
   FocusBox(v->PasswordBox());
   KeyFocusMoved();
   Layout();
@@ -1922,11 +2150,15 @@ bool App::CloseTab(int index) {
   }
   RememberState(v);
   if (!snapshot_) settings_.Save();
+  std::erase_if(fileNotices_, [v](const auto& n) { return n.first == v; });
+  if (banner_.Owner() == v) banner_.Hide();  // its "changed by another program" goes with it
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
   if (index == active_) {
     panel_.Show(nullptr, false);
     toolbar_.Forget();  // the tab's own toolbar controls (the Insert table grid) go with it
+    ribbon_.Forget();
+    filePage_.Close();
   }
   tabs_.erase(tabs_.begin() + index);
   UpdateAutosaveTimer();
@@ -1934,6 +2166,7 @@ bool App::CloseTab(int index) {
     active_ = -1;
     SetWindowTextW(hwnd_, L"Featherweight");
     FocusBox(nullptr);
+    if (!snapshot_) userTemplates_ = usertemplates::List(kUserTemplateCount);  // the start page's, as it shows again
   } else {
     int next = active_ > index ? active_ - 1 : std::min(active_, static_cast<int>(tabs_.size()) - 1);
     active_ = -1;
@@ -2509,6 +2742,41 @@ void App::RunScript(const std::wstring& script) {
                        MAKELPARAM(x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8));
         SendMessageW(hwnd_, WM_LBUTTONUP, 0, MAKELPARAM(x2, y2));
       }
+    } else if (op == L"dragbench") {
+      // dragbench:x1,y1,x2,y2[,steps] (p2-objects) times a drag as the window handles it, each step
+      // from the mouse message to the frame painted: the press, every move (the first one that moves
+      // starts the drag and makes its layers), and the release (the edit made). Plan §8.2: moving an
+      // object stays within the display's refresh interval.
+      auto p = fw::Split(arg, L',');
+      if (p.size() >= 4) {
+        const int x1 = _wtoi(p[0].c_str()), y1 = _wtoi(p[1].c_str()), x2 = _wtoi(p[2].c_str()), y2 = _wtoi(p[3].c_str());
+        const int count = p.size() > 4 ? std::max(1, _wtoi(p[4].c_str())) : 60;
+        LARGE_INTEGER freq, t0, t1;
+        QueryPerformanceFrequency(&freq);
+        auto timed = [&](UINT msg, WPARAM wp, int x, int y) {
+          QueryPerformanceCounter(&t0);
+          SendMessageW(hwnd_, msg, wp, MAKELPARAM(x, y));
+          DrawSnapshotFrame();
+          QueryPerformanceCounter(&t1);
+          return 1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart);
+        };
+        const double press = timed(WM_LBUTTONDOWN, MK_LBUTTON, x1, y1);
+        std::vector<double> moves;
+        for (int i = 1; i <= count; ++i)
+          moves.push_back(timed(WM_MOUSEMOVE, MK_LBUTTON, x1 + (x2 - x1) * i / count, y1 + (y2 - y1) * i / count));
+        const double release = timed(WM_LBUTTONUP, 0, x2, y2);
+        const double first = moves.front();
+        std::sort(moves.begin(), moves.end());
+        auto q = [&](double f) { return moves[std::min(moves.size() - 1, static_cast<size_t>(f * static_cast<double>(moves.size() - 1) + 0.5))]; };
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        // The display's rate; a remote or disconnected session reports a low one: then 60 Hz.
+        const double hz = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency >= 50 ? dm.dmDisplayFrequency : 60;
+        wprintf(L"dragbench: press %.2f ms; %zu moves, first %.2f ms, median %.2f ms, 90%% %.2f ms, worst %.2f ms; release %.2f ms; "
+                L"display %.0f Hz = %.2f ms a frame\n",
+                press, moves.size(), first, q(0.5), q(0.9), moves.back(), release, hz, 1000.0 / hz);
+        fflush(stdout);
+      }
     } else if (op == L"move") {
       int x, y;
       xy(x, y);
@@ -2625,6 +2893,7 @@ void App::RunScript(const std::wstring& script) {
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
         if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
       if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
+      else if (fw::EqualsNoCase(arg, L"presentation")) NewPresentation();  // new:presentation (P2)
       else NewDocument(kind);
     } else if (op == L"edited") {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
@@ -2795,6 +3064,23 @@ void App::RunScript(const std::wstring& script) {
       std::stable_sort(settings_.recent.begin(), settings_.recent.end(),
                        [](const RecentFile& a, const RecentFile& b) { return a.lastOpened > b.lastOpened; });
       Layout();
+    } else if (op == L"pin") {
+      // pin:name pins the recent file of that name (the start page's snapshots).
+      for (const RecentFile& f : settings_.recent)
+        if (fw::EqualsNoCase(fw::FileNameOf(f.path), arg)) settings_.PinRecent(f.path, true);
+      Layout();
+    } else if (op == L"startfilter") {
+      // startfilter:text types into the start page's filter, which has the keyboard.
+      Layout();
+      FocusBox(&empty_.Filter());
+      empty_.Filter().SetText(arg);
+      Layout();
+    } else if (op == L"usertemplates") {
+      // usertemplates:path,path stands in for the personal templates folder (the start page's snapshots).
+      userTemplates_.clear();
+      for (const std::wstring& path : fw::Split(arg, L','))
+        if (!path.empty()) userTemplates_.push_back(path);
+      Layout();
     } else if (op == L"editors") {
       // editors:all or editors:document,workbook shows the New choices as they'll be once those ship.
       for (const fw::FileKindInfo& k : fw::FileKinds())
@@ -2816,6 +3102,8 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"devicelost") {
       // As if the graphics driver had been reset: everything made with the device is recreated.
       gpu::DeviceLost();
+    } else if (RibbonScriptOp(op, arg)) {
+      // The ribbon's steps (AppRibbon.cpp): ribbon:, keytips:, filepage:, dumpribbon, ribboncheck.
     } else if (TabContent* v = Active(); v && v->ScriptOp(op, arg)) {
       // The tab's own operations (a workbook's format:size=14...).
     }

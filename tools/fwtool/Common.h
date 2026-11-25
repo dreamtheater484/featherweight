@@ -13,6 +13,7 @@ struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
   bool model = false;           // roundtrip: read Word documents and workbooks into their models and write their parts
   bool workbooks = false;       // roundtrip, check, dump: workbooks only
+  bool decks = false;           // torture: decks only (P2); bench: the deck editing budgets
   bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
@@ -28,6 +29,7 @@ struct Options {
   bool values = false;              // csv: every field must show its text unchanged
   bool resave = false;              // csv: saved untouched, the same bytes
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
+  double minSsim = -1;              // pdf-compare: a page passes at this SSIM (default 0.95)
   std::string folders;              // compare --cells: only the manifest's sources in these top folders ("xls,ods")
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
@@ -36,6 +38,7 @@ struct Options {
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
   bool scrolling = false;           // bench: time painting every page in order, and memory
+  bool slideText = false;           // bench: typing in a slide's text as the tab does (SlideTextBench.cpp)
   bool sheetEdits = false;          // bench: S2's editing budgets on made workbooks (SheetBench.cpp)
   int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
   unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
@@ -115,10 +118,13 @@ int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
 int RunSlides(const Options& options);
+int RunTiming(const Options& options);  // timing: transitions and animations per slide (P3, p3-anim)
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);
 int RunSheetEditBench(const Options& options);
+int RunDeckEditBench(const Options& options);  // bench --decks (DeckBench.cpp)
+int RunSlideTextBench(const Options& options);  // bench --slide-text (SlideTextBench.cpp)
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

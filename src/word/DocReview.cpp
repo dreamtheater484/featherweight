@@ -243,33 +243,6 @@ void DocView::ReviewChange(bool accept) {
   GoToChange(false);  // as Word's Accept and Move to Next
 }
 
-void DocView::AddD4Toolbar(ToolbarModel& m) {
-  ToolItem review;
-  review.cmd = CmdReviewPane;
-  review.glyph = icon::Comment;
-  review.toggle = true;
-  review.checked = reviewPanel_ && host_.ViewShownPanel() == reviewPanel_.get();
-  review.priority = 3;
-  review.tooltip = editor_ && editor_->Tracking() ? L"Comments and changes (Track Changes is on)"
-                                                  : L"Comments and changes";
-  m.left.push_back(review);
-  // Insert ▾: a comment, first among what goes at the caret.
-  for (ToolItem& t : m.left) {
-    if (t.cmd != CmdInsertBox) continue;
-    t.choices.insert(t.choices.begin(), L"Comment (Ctrl+Alt+M)");
-    auto rest = t.onChange;
-    t.onChange = [this, rest](const ToolValue& v) {
-      if (v.index == 0) {
-        Execute(CmdNewComment);
-      } else if (rest) {
-        ToolValue r = v;
-        --r.index;
-        rest(r);
-      }
-    };
-  }
-}
-
 void DocView::FillD4Menu(HMENU m) {
   if (!Editing()) return;
   using menu::AppendItem;

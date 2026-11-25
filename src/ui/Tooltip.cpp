@@ -52,7 +52,10 @@ void Tooltip::Show(const std::wstring& text, const RECT& anchor, float ui) {
   DWRITE_TEXT_METRICS m{};
   if (layout) layout->GetMetrics(&m);
   int w = static_cast<int>(std::ceil(std::min(m.widthIncludingTrailingWhitespace, 640 * ui) + 18 * ui));
-  int h = static_cast<int>(std::ceil(28 * ui));
+  // A second line (the ribbon's descriptions) makes it taller: 18 DIPs a line.
+  const int lines = 1 + static_cast<int>(std::count(text.begin(), text.end(), L'\n'));
+  int h = static_cast<int>(std::ceil((lines > 1 ? 10 + 18 * lines : 28) * ui));
+  if (lines > 1) w += static_cast<int>(8 * ui);  // the name is semibold
 
   HMONITOR mon = MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST);
   MONITORINFO mi{sizeof(mi)};
@@ -90,7 +93,19 @@ void Tooltip::Paint() {
   dc->BeginDraw();
   dc->Clear(p.popupBg);
   c.Stroke(RectF(rc), p.dark ? Rgb(0x484848) : Rgb(0xE0E0E0), 1);
-  c.Text(text_, RectF(9 * ui_, 0, rc.right - 6 * ui_, static_cast<float>(rc.bottom)), p.text, 12 * ui_);
+  if (text_.find(L'\n') == std::wstring::npos) {
+    c.Text(text_, RectF(9 * ui_, 0, rc.right - 6 * ui_, static_cast<float>(rc.bottom)), p.text, 12 * ui_);
+  } else {  // the name in semibold, then the description
+    float y = 5 * ui_;
+    size_t from = 0;
+    for (bool first = true; from <= text_.size(); first = false) {
+      const size_t to = std::min(text_.find(L'\n', from), text_.size());
+      c.Text(std::wstring_view(text_).substr(from, to - from), RectF(9 * ui_, y, rc.right - 6 * ui_, y + 18 * ui_),
+             first ? p.text : p.textSecondary, 12 * ui_, first ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_REGULAR);
+      y += 18 * ui_;
+      from = to + 1;
+    }
+  }
   HRESULT hr = dc->EndDraw();
   if (SUCCEEDED(hr)) hr = chain_.Present();
   if (gpu::IsDeviceLoss(hr)) {

@@ -3,8 +3,9 @@
   The workbook friction fixes (docs/friction-review.md, "Workbooks (S4)": W1, W2, W4, W6), checked
   through Featherweight's --script mode, off-screen (snapshot mode):
 
-  - W1: at 1366, 1280 and 1024 pixels the workbook toolbar has every item it has in a wide
-    window, on the bar or in its overflow menu (dumptoolbar), and Data is in that menu at 1366.
+  - W1: at 1366, 1024 and 800 pixels the ribbon's Data tab shows Sort A to Z and Filter, and every
+    command the toolbar and its ⋯ menu reached before R1 is reachable (ribboncheck, as ctest's
+    ribbon_sheet). Before R1 it checked the toolbar's overflow menu, which the ribbon replaced.
   - W2: command search (Alt+Q) finds Sort, Filter, Table, Conditional formatting, Data validation
     and Format cells (dumpcommands).
   - W4: a "greater than" filter by mouse: the column's button, the condition, the value typed,
@@ -70,7 +71,7 @@ function Report([string]$name, [string[]]$problems) {
 }
 
 # The flows' coordinates are for a client area of 1350x692 (--size 1366x700 where they were
-# written): a first snapshot measures this display's window frame.
+# written), with the ribbon (R1): a first snapshot measures this display's window frame.
 $probe = Join-Path $Out "probe.png"
 Start-Process -FilePath $Exe -ArgumentList @("--snapshot", "`"$probe`"", "--size", "1366x700", "--theme", "light") -Wait -NoNewWindow
 $img = [Drawing.Image]::FromFile($probe)
@@ -79,31 +80,21 @@ $size = "{0}x{1}" -f (1350 + $frameW), (700 + 692 - $img.Height)
 $img.Dispose()
 Remove-Item $probe
 
-# W1: the toolbar's items at each width, against a window wide enough for all of them.
-function Get-Toolbar([string]$name, [int]$width) {
-  $lines = Invoke-Featherweight $name "${width}x400" "editors:all;dumptoolbar"
-  $items = @{}
-  foreach ($l in $lines) {
-    if ($l -match '^toolbar: (shown|overflow) (\d+) (.*)$') { $items[[int]$Matches[2]] = @{ where = $Matches[1]; text = $Matches[3] } }
-  }
-  return $items
-}
-$all = Get-Toolbar "w1-wide" 2400
+# W1: the Data tab at each width, and the coverage check against what the toolbar reached.
 $problems = @()
-if (($all.Values | Where-Object { $_.where -eq "overflow" }).Count) { $problems += "2400 px: items in the overflow menu" }
-foreach ($w in 1366, 1280, 1024) {
-  $now = Get-Toolbar "w1-$w" $w  # a window that wide, as the review's snapshots
-  foreach ($cmd in $all.Keys) {
-    if (-not $now.ContainsKey($cmd)) { $problems += "$w px: $($all[$cmd].text) ($cmd) is neither on the bar nor in its overflow menu" }
+foreach ($w in 1366, 1024, 800) {
+  try {
+    $lines = Invoke-Featherweight "w1-$w" "${w}x600" "editors:all;ribbon:Data;dumpribbon;ribboncheck:tests/ribbon/sheet.txt"
+  } catch {
+    $problems += "$w px: $_ (ribboncheck found problems: build\workbook-friction\w1-$w.txt)"
+    continue
   }
-  foreach ($cmd in $now.Keys) {
-    if ($now[$cmd].where -eq "overflow" -and $now[$cmd].text -match '\(0 choices\)$' -and $cmd -in 2704, 2717, 2719, 2854) {
-      $problems += "$w px: $($now[$cmd].text) has no choices in the overflow menu"
+  foreach ($item in @(@{ cmd = 2720; name = "Sort A to Z" }, @{ cmd = 2718; name = "Filter" })) {
+    if (-not ($lines | Where-Object { $_ -match "^item $($item.cmd)\|[^|]*\|(large|medium|small)\|" })) {
+      $problems += "$w px: the Data tab doesn't show $($item.name) ($($item.cmd))"
     }
   }
-  if ($w -eq 1366 -and -not ($now.ContainsKey(2719) -and $now[2719].where -eq "overflow")) {
-    $problems += "1366 px: Data (2719) isn't in the overflow menu (expected there at this width)"
-  }
+  if (-not ($lines | Where-Object { $_ -match '^ribboncheck: \d+ items in ' })) { $problems += "$w px: no ribboncheck summary" }
 }
 Report "W1" $problems
 
@@ -125,7 +116,7 @@ Report "W2" $problems
 # W4: Ctrl+Shift+L, Quantity's filter button, the condition box, "is greater than", 3, Enter.
 $saved = Join-Path $Out "w4-saved.xlsx"
 Remove-Item $saved -ErrorAction SilentlyContinue
-$null = Invoke-Featherweight "w4" $size "editors:all;key:ctrl+shift+l;click:150,150;click:1125,491;click:1105,215;type:3;key:enter;saveas:$saved"
+$null = Invoke-Featherweight "w4" $size "editors:all;key:ctrl+shift+l;click:150,227;click:1125,491;click:1105,278;type:3;key:enter;saveas:$saved"
 $problems = @()
 if (-not (Test-Path $saved)) { $problems += "nothing was saved" }
 elseif ((Read-Part $saved "xl/worksheets/sheet1.xml") -notmatch '<customFilter operator="greaterThan" val="3"/>') {
@@ -136,7 +127,7 @@ Report "W4" $problems
 # W6: Ctrl+T, Medium 9's preview (the Medium group's second row, second column), Create table.
 $saved = Join-Path $Out "w6-saved.xlsx"
 Remove-Item $saved -ErrorAction SilentlyContinue
-$null = Invoke-Featherweight "w6" $size "editors:all;key:ctrl+t;click:1110,459;click:1115,633;saveas:$saved"
+$null = Invoke-Featherweight "w6" $size "editors:all;key:ctrl+t;click:1110,536;click:1115,637;saveas:$saved"
 $problems = @()
 if (-not (Test-Path $saved)) { $problems += "nothing was saved" }
 elseif ((Read-Part $saved "xl/tables/*.xml") -notmatch '<tableStyleInfo name="TableStyleMedium9"') {

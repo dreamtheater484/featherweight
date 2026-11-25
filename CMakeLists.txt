@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Featherweight VERSION 3.0.0 LANGUAGES CXX RC)
+project(Featherweight VERSION 4.0.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Featherweight builds with MSVC for 64-bit Windows only.")
@@ -49,6 +49,9 @@ add_executable(Featherweight WIN32
   src/resource.rc
   src/Featherweight.manifest
 )
+# The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
+set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
+                            PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
@@ -98,6 +101,8 @@ add_subdirectory(src/text)
 add_subdirectory(src/slide)
 add_subdirectory(src/slide/render)
 add_subdirectory(src/slide/show)
+add_subdirectory(src/slide/objects)  # p2-objects: objects on slides
+add_subdirectory(src/slide/odp)  # p3-files: OpenDocument presentations
 add_subdirectory(src/slide/view)  # p1-view: the presentation tab
 add_subdirectory(tools/fwtool)
 target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview)
@@ -134,6 +139,28 @@ if(FW_BUILD_TESTS)
     "${_fw_protected}/tables-images-links-protected.doc")
   add_test(NAME office_protected_standard COMMAND fwtool decrypt --password Password1234_
     --out "${CMAKE_BINARY_DIR}/protected-standard" "${_fw_protected}/ecma376-standard.docx")
+  # The ribbon (R1): tests/screens/ribbon.cmake. fw_ribbon_test(<name> <mode>) runs a mode of it:
+  # screens (the widget gallery's demo ribbon and the editors at 1366, 1024 and 800 px, light and
+  # dark, KeyTips, the File page, tab switches within 16 ms), or an editor's coverage check (word,
+  # sheet, slide), which r1-word, r1-sheet and r1-slide turn on once their ribbon shows.
+  function(fw_ribbon_test name mode)
+    if(NOT FW_TEST_SCREENS)  # its script steps (ribboncheck, dumpreach, ribbonbench) are test-only
+      return()
+    endif()
+    add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+             "-DFILES=${_fw_office}/generated" "-DBASELINES=${CMAKE_SOURCE_DIR}/tests/ribbon"
+             "-DOUT=${CMAKE_BINARY_DIR}/screens/${name}" -DMODE=${mode} -P "${CMAKE_SOURCE_DIR}/tests/screens/ribbon.cmake")
+  endfunction()
+  if(FW_TEST_SCREENS)
+    fw_ribbon_test(ribbon_screens screens)
+    fw_ribbon_test(ribbon_slide slide)  # r1-slide: the presentation ribbon's coverage and states
+    fw_ribbon_test(ribbon_sheet sheet)  # r1-sheet: the workbook's coverage and screens
+  endif()
+  fw_ribbon_test(ribbon_word word)  # r1-word: the document's coverage, its contextual tabs, Insert, the boxes
+  # The start page (P3, p3-start): tests/screens/start.cmake, at 1366, 1920, 2560 and 5120 px, light
+  # and dark, and its states (keyboard, filter, hidden, empty, narrow, 200 %).
+  add_test(NAME start_screens COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DOUT=${CMAKE_BINARY_DIR}/screens/start" -P "${CMAKE_SOURCE_DIR}/tests/screens/start.cmake")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

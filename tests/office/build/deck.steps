@@ -1,0 +1,89 @@
+# P2 build from scratch: a 10-slide deck made from a blank presentation (16:9, Office Theme) with
+# Featherweight alone, as someone does with the keyboard and mouse: a title slide, bullets, a picture,
+# a table, a chart, shapes, a theme, notes and slide numbers. scripts\build-deck.ps1 plays it through
+# the presentation tab's commands, saves it, has PowerPoint open the saved deck (no repair) and save
+# it as PDF, and compares each slide with what Featherweight draws (SSIM >= 0.95).
+#
+# Steps, one per line ('#' starts a comment; text in double quotes, '\"' for a quote):
+#   theme "Name"                      Design: a built-in theme for the whole deck
+#   slide "Layout name"               the first step: the blank deck's slide gets this layout; after
+#                                     that, Ctrl+M and this layout (a new slide after the current one)
+#   text title|subtitle|body|body2 "text"   click into that placeholder of the current slide (body2:
+#                                     the second content placeholder) and type;
+#                                     "|" is Enter (a new paragraph)
+#   bullets body "a" ">b" ">>c" "d"   the same, one paragraph each; each '>' is a Tab (one level down)
+#   format bold|italic|size=N|color=RRGGBB   all the text of the box just typed into (Ctrl+A in it)
+#   notes "text"                      the current slide's speaker notes, typed into the notes pane
+#   picture "file"                    Insert > Pictures (a repository file)
+#   table RxC "a|b|c" "d|e|f"         Insert > Table, then each row typed cell by cell (Tab)
+#   chart column|bar|line|pie         Insert > Chart with its sample data
+#   shape <preset> x,y,w,h ["text"] [fill=RRGGBB]   Insert > Shapes, drawn at x,y,w,h (points)
+#   textbox x,y,w,h "text"            Insert > Text box
+#   footer slide-numbers [footer="text"]   Header & Footer: slide numbers (and a footer) on every slide
+#                                     but the title slide, Apply to All
+#   save                              Save As .pptx
+
+theme "Ocean"
+
+# 1. The title slide
+slide "Title Slide"
+text title "Featherweight"
+text subtitle "Built from scratch|22 November 2026"
+notes "Welcome. Everything in this deck was made in Featherweight."
+
+# 2. Bullets on two levels
+slide "Title and Content"
+text title "What it is"
+bullets body "A small office suite" ">Documents, workbooks and decks" ">One exe, no runtimes" "Fast on a typical laptop" ">Opens in under half a second" "Never damages a file"
+notes "Three points, two of them with details."
+
+# 3. A picture
+slide "Title Only"
+text title "A picture"
+picture "tests\office\fixtures\picture.png"
+
+# 4. A table
+slide "Title Only"
+text title "A table"
+table 4x4 "Fruit|Q1|Q2|Q3" "Apples|12|15|18" "Pears|7|9|11" "Plums|3|4|8"
+
+# 5. A chart
+slide "Title Only"
+text title "A chart"
+chart column
+notes "The chart's sample data, as Insert > Chart makes it."
+
+# 6. Shapes
+slide "Title Only"
+text title "Shapes"
+shape rect 60,150,200,120 "A rectangle" fill=0070C0
+shape ellipse 320,150,180,120 "An oval"
+shape rightArrow 560,170,200,80
+shape roundRect 60,320,300,90 "Rounded" fill=00B050
+
+# 7. Two columns
+slide "Two Content"
+text title "Two columns"
+bullets body "Left side" ">a detail" "Another point"
+text body2 "Right side|With a second line"
+
+# 8. A text box, formatted
+slide "Title Only"
+text title "Formatting"
+textbox 80,180,600,60 "Bold, large and red"
+format bold
+format size=32
+format color=C00000
+
+# 9. A section header
+slide "Section Header"
+text title "The end is near"
+text body "One more slide"
+
+# 10. Closing
+slide "Title Only"
+text title "Thank you"
+notes "Questions?"
+
+footer slide-numbers footer="Featherweight P2"
+save

@@ -1,10 +1,12 @@
-// The presentation tab's keys, commands, toolbar and menus; find, copy, links and the slide show.
+// The presentation tab's keys, commands and menus; find, copy, links and the slide show. Its ribbon
+// is PresentationRibbon.cpp (R1), which took the toolbar's place.
 
 #include <windows.h>
 
 #include <wincodec.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "Commands.h"
@@ -14,11 +16,15 @@
 #include "draw/D2DPainter.h"
 #include "slide/show/SlideRenderer.h"
 #include "slide/show/SlideShow.h"
+#include "slide/view/PresentationText.h"
+#include "slide/view/TextFind.h"
+#include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
+#include "slide/edit/Edit.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/StatusBar.h"
-#include "ui/Toolbar.h"
 
 using Microsoft::WRL::ComPtr;
 using menu::AppendItem;
@@ -38,6 +44,8 @@ constexpr CommandName kNames[] = {
     {CmdPresentation, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
     {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
+    {CmdPresenterView, L"Presenter view", L"Alt+F5"},
+    {CmdUsePresenterView, L"Use Presenter View", L""},
     {CmdNextPage, L"Next slide", L"Page Down"},
     {CmdPrevPage, L"Previous slide", L"Page Up"},
     {CmdFirstPage, L"First slide", L"Home"},
@@ -52,7 +60,7 @@ constexpr CommandName kNames[] = {
     {CmdCopySlidePicture, L"Copy slide as picture", L""},
     {CmdCopyNotes, L"Copy speaker notes", L""},
     {CmdOpenSlideLink, L"Open link", L""},
-    {CmdPrintLayoutMenu, L"Print layout", L""},
+    {CmdReplace, L"Replace", L"Ctrl+H"},
     {CmdPrintSlides, L"Print and export: full page slides", L""},
     {CmdPrintHandouts1, L"Print and export: handouts, 1 slide per page", L""},
     {CmdPrintHandouts2, L"Print and export: handouts, 2 slides per page", L""},
@@ -65,22 +73,17 @@ constexpr CommandName kNames[] = {
     {CmdPrintFrame, L"Frame slides on handouts and notes pages", L""},
 };
 
-// The Print layout choices, in the order the dropdown lists them.
+// The print layouts (File › Print's choices).
 struct LayoutChoice {
   int cmd;
   PrintWhat what;
   int perPage;
-  const wchar_t* label;
 };
 constexpr LayoutChoice kLayouts[] = {
-    {CmdPrintSlides, PrintWhat::Slides, 0, L"Full page slides"},
-    {CmdPrintNotes, PrintWhat::Notes, 0, L"Notes pages"},
-    {CmdPrintHandouts1, PrintWhat::Handouts, 1, L"Handouts: 1 slide"},
-    {CmdPrintHandouts2, PrintWhat::Handouts, 2, L"Handouts: 2 slides"},
-    {CmdPrintHandouts3, PrintWhat::Handouts, 3, L"Handouts: 3 slides"},
-    {CmdPrintHandouts4, PrintWhat::Handouts, 4, L"Handouts: 4 slides"},
-    {CmdPrintHandouts6, PrintWhat::Handouts, 6, L"Handouts: 6 slides"},
-    {CmdPrintHandouts9, PrintWhat::Handouts, 9, L"Handouts: 9 slides"},
+    {CmdPrintSlides, PrintWhat::Slides, 0},       {CmdPrintNotes, PrintWhat::Notes, 0},
+    {CmdPrintHandouts1, PrintWhat::Handouts, 1}, {CmdPrintHandouts2, PrintWhat::Handouts, 2},
+    {CmdPrintHandouts3, PrintWhat::Handouts, 3}, {CmdPrintHandouts4, PrintWhat::Handouts, 4},
+    {CmdPrintHandouts6, PrintWhat::Handouts, 6}, {CmdPrintHandouts9, PrintWhat::Handouts, 9},
 };
 
 int LayoutIndex(const PrintSettings& s) {
@@ -105,8 +108,16 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 }  // namespace
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
+  // p3-review: Ctrl+Alt+M, New Comment, wherever the keyboard is (in text being edited too).
+  if (vk == 'M' && (mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && Ready()) return CmdNewComment;
+  if (int cmd = text_->Shortcut(vk, mods)) return cmd;  // text being edited: its keys first
+  // p2-objects: the objects' keys, and undo and redo wherever the keys are.
+  const bool undoKey = (mods & kModCtrl) && (vk == 'Z' || vk == 'Y');
+  if (const int c = Ready() && (!keysInThumbs_ || undoKey) ? Objects().Shortcut(vk, mods) : 0) return c;
+  if (const int slides = SlideShortcut(vk, mods)) return slides;  // P2: Ctrl+M, Ctrl+D, the thumbnails' keys
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
+  if (vk == VK_F5 && alt && !ctrl && !shift) return CmdPresenterView;
   if (ctrl && !alt) {
     switch (vk) {
       case VK_OEM_PLUS:
@@ -130,13 +141,30 @@ int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
 }
 
 CommandState PresentationView::QueryCommand(int cmd) {
+  if (CommentsPanel::Owns(cmd)) return Comments().Query(cmd);  // p3-review
+  if (CommandState ps; ProtectCommandState(cmd, ps)) return ps;  // p3-review: Encrypt with Password
+  if (text_->Owns(cmd)) return text_->Query(cmd);
   CommandState s;
+  // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
+  auto clipboardName = [cmd](CommandState& st) {
+    const wchar_t* names[][2] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
+    const int k = cmd == CmdCut ? 0 : cmd == CmdCopy ? 1 : cmd == CmdPaste ? 2 : cmd == CmdSelectAll ? 3 : -1;
+    if (k >= 0 && st.label.empty()) st.label = names[k][0], st.shortcut = names[k][1];
+    return st;
+  };
+  if (Ready() && ObjectsTake(cmd) && Objects().Query(cmd, s)) return clipboardName(s);  // p2-objects
+  if (SlideCommandState(cmd, s)) return s;  // P2: the slides' commands
+  if (PictureCommand(cmd, &s)) return s;    // P3, p3-files: Export's PNG pictures
+  if (RibbonMenuState(cmd, s)) return s;    // r1-slide: the ribbon's menu buttons
+  if (AnimCommandState(cmd, s)) return s;   // p3-anim: transitions and animations
+  if (TextEditing::Names(cmd) && cmd != CmdCopy) return clipboardName(s = text_->Query(cmd));  // named, unavailable
   const bool ready = Ready() && SlideCount() > 0;
   switch (cmd) {
-    case CmdSave: s.enabled = false; break;  // read-only until P2
+    case CmdSave: s.enabled = Ready() && deck_->Editor() != nullptr; break;  // P2: PresentationSave.cpp
     case CmdPresentation:
     case CmdSlideShowFromStart:
     case CmdSlideShowFromCurrent:
+    case CmdPresenterView:
     case CmdZoomIn:
     case CmdZoomOut:
     case CmdZoomFitPage:
@@ -152,9 +180,13 @@ CommandState PresentationView::QueryCommand(int cmd) {
       s.enabled = Ready();
       s.checked = notesShown_;
       break;
+    case CmdUsePresenterView:
+      s.enabled = Ready();
+      s.checked = usePresenter_;
+      break;
     case CmdCopyNotes: s.enabled = ready && !deck_->Notes(current_).empty(); break;
     case CmdOpenSlideLink: s.enabled = ready; break;
-    case CmdPrintLayoutMenu: s.enabled = ready; break;
+    case CmdReplace: s.enabled = CanReplace(); break;
     case CmdPrintHidden:
       s.enabled = ready;
       s.checked = print_.includeHidden;
@@ -169,6 +201,12 @@ CommandState PresentationView::QueryCommand(int cmd) {
           s.enabled = ready;
           s.checked = LayoutIndex(print_) == static_cast<int>(&l - kLayouts);
         }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {  // r1-slide: View > Zoom
+        const double z = fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)];
+        s.enabled = ready;
+        s.checked = zoom_ > 0 && std::fabs(zoom_ - z) < 1e-6;
+        s.label = fw::FormatPercent(z);
+      }
       break;
   }
   for (const CommandName& n : kNames)
@@ -183,17 +221,49 @@ CommandState PresentationView::QueryCommand(int cmd) {
 std::vector<int> PresentationView::Commands() {
   std::vector<int> out;
   for (const CommandName& n : kNames)
-    if (n.cmd != CmdOpenSlideLink && n.cmd != CmdPrintLayoutMenu) out.push_back(n.cmd);
+    if (n.cmd != CmdOpenSlideLink) out.push_back(n.cmd);
+  for (int c : Objects().Commands()) out.push_back(c);  // p2-objects
+  // P2: the slides' commands.
+  for (int cmd : {CmdSlideNew, CmdSlideDuplicate, CmdSlideDelete, CmdSlideHide, CmdSlideMoveUp, CmdSlideMoveDown,
+                  CmdSlideMoveFirst, CmdSlideMoveLast, CmdDesignPanel, CmdFormatBackground, CmdResetBackground,
+                  CmdHeaderFooter, CmdSlideSize169, CmdSlideSize43})
+    out.push_back(cmd);
+  // r1-slide: the text commands (while text is edited) and the ribbon's themes and theme colors.
+  for (int cmd : TextEditing::CommandIds())
+    if (std::find(out.begin(), out.end(), cmd) == out.end()) out.push_back(cmd);
+  for (size_t i = 0; i < BuiltInThemes().size(); ++i) out.push_back(CmdApplyTheme + static_cast<int>(i));
+  for (size_t i = 0; i < ColorSchemes().size(); ++i) out.push_back(CmdApplyColors + static_cast<int>(i));
+  // p3-review: the comments' commands.
+  for (int cmd : {CmdNewComment, CmdReviewPane, CmdDeleteThread, CmdDeleteSlideComments, CmdDeleteAllComments, CmdPrevComment,
+                  CmdNextComment, CmdShowCommentMarkup, CmdEncryptPassword})
+    out.push_back(cmd);
+  for (int cmd : AnimCommands()) out.push_back(cmd);  // p3-anim
   return out;
 }
 
 bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (cmd == CmdSpelling && text_->Owns(cmd)) {  // p2-text: F7, maybe on another slide
+    text_->NextMisspelling(current_, [this](size_t slide) { GoToSlide(slide); });
+    return true;
+  }
+  if (ProtectCommand(cmd)) return true;  // p3-review: Encrypt with Password
+  if (CommentsPanel::Owns(cmd)) {  // p3-review
+    if (cmd == CmdNewComment) text_->End();
+    return Comments().Execute(cmd);
+  }
+  if (text_->Owns(cmd)) return text_->Execute(cmd);
+  if (ObjectsTake(cmd) && Objects().Execute(cmd)) return true;  // p2-objects
+  if (SlideCommand(cmd)) return true;  // P2: the slides' commands
+  if (AnimCommand(cmd)) return true;   // p3-anim: transitions and animations
+  if (PictureCommand(cmd, nullptr)) return true;  // P3, p3-files
   const size_t n = SlideCount();
   switch (cmd) {
     case CmdPresentation:
     case CmdSlideShowFromStart: StartShow(false); return true;
     case CmdSlideShowFromCurrent: StartShow(true); return true;
+    case CmdPresenterView: StartShow(true, true); return true;
+    case CmdUsePresenterView: usePresenter_ = !usePresenter_; return true;
     case CmdNextPage:
       if (current_ + 1 < n) GoToSlide(current_ + 1);
       return true;
@@ -242,12 +312,15 @@ bool PresentationView::Execute(int cmd) {
     case CmdOpenSlideLink:
       if (const SlideLink* link = LinkAt(downX_, downY_)) FollowLink(*link);
       return true;
-    case CmdPrintLayoutMenu: return false;  // the window shows FillMenu
     case CmdPrintHidden: print_.includeHidden = !print_.includeHidden; return true;
     case CmdPrintFrame: print_.frame = !print_.frame; return true;
     default:
       if (cmd >= CmdSlideShowMonitor && cmd < CmdSlideShowMonitor + 16) {
         showMonitor_ = cmd - CmdSlideShowMonitor;
+        return true;
+      }
+      if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + static_cast<int>(fw::ZoomPresets().size())) {
+        SetZoom(fw::ZoomPresets()[static_cast<size_t>(cmd - CmdZoomPreset)]);
         return true;
       }
       for (const LayoutChoice& l : kLayouts)
@@ -261,78 +334,23 @@ bool PresentationView::Execute(int cmd) {
   }
 }
 
-void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
-  auto item = [](int cmd, wchar_t glyph, const std::wstring& tooltip = L"") {
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = tooltip;
-    return t;
-  };
-  ToolItem print = item(CmdPrint, icon::Print);
-  // What Print and Export PDF lay out, as PowerPoint's print settings choose it.
-  ToolItem layout;
-  layout.kind = ToolKind::Dropdown;
-  layout.cmd = CmdPrintLayoutMenu;
-  layout.tooltip = L"Print layout: what Print and Export PDF put on each page";
-  layout.width = 150;
-  layout.priority = 6;
-  for (const LayoutChoice& l : kLayouts) layout.choices.push_back(l.label);
-  layout.choice = LayoutIndex(print_);
-  layout.enabled = Ready() && SlideCount() > 0;
-  layout.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kLayouts))) Execute(kLayouts[v.index].cmd);
-  };
-  m.left = {print, layout};
-
-  // ▶ Present ▾: from the beginning, or the list's choice.
-  ToolItem present;
-  present.kind = ToolKind::SplitButton;
-  present.cmd = CmdPresentation;
-  present.glyph = icon::Slideshow;
-  present.tooltip = L"Present from the beginning (F5)";
-  present.choices = {L"From the beginning\tF5", L"From the current slide\tShift+F5"};
-  // With two monitors or more, where the show goes (p1-show's Monitors()).
-  const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
-  if (monitors.size() >= 2)
-    for (size_t i = 0; i < monitors.size(); ++i)
-      present.choices.push_back((static_cast<int>(i) == showMonitor_ ? L"✓ Present on " : L"Present on ") + monitors[i]);
-  present.enabled = Ready() && SlideCount() > 0;
-  present.priority = 9;
-  present.sepBefore = true;
-  present.onChange = [this](const ToolValue& v) {
-    if (v.index == 0) StartShow(false);
-    else if (v.index == 1) StartShow(true);
-    else if (v.index >= 2) showMonitor_ = v.index - 2;
-  };
-  ToolItem notes = item(CmdNotesPane, icon::TextDocument, L"Speaker notes");
-  notes.toggle = true;
-  notes.checked = notesShown_;
-  notes.priority = 4;
-  ToolItem find = item(CmdFind, icon::Search);
-  find.checked = ctx.searchOpen;
-  find.toggle = true;
-  find.priority = 5;
-  find.sepBefore = true;
-  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
-  full.priority = 2;
-  m.right = {present, notes, find, full};
-}
-
-void PresentationView::FillMenu(int which, HMENU menu) {
-  if (which != CmdPrintLayoutMenu) return;
-  for (const LayoutChoice& l : kLayouts) AppendItem(menu, l.cmd, l.label, true, LayoutIndex(print_) == &l - kLayouts, true);
-  AppendSeparator(menu);
-  AppendItem(menu, CmdPrintHidden, L"Print hidden slides", true, print_.includeHidden);
-  AppendItem(menu, CmdPrintFrame, L"Frame slides", true, print_.frame);
-}
+// The ribbon (BuildRibbon) shows the tab's commands; the toolbar has none since R1.
+void PresentationView::BuildToolbar(ToolbarModel& /*m*/, const ToolbarContext& /*ctx*/) {}
 
 void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   if (!Ready()) return;
   downX_ = x;
   downY_ = y;
-  // A right-click on a thumbnail is about that slide.
-  if (const int t = ThumbAt(x, y); t >= 0) GoToSlide(static_cast<size_t>(t));
+  if (text_->Editing() && !gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y))) {
+    text_->FillContextMenu(m, current_, SlidePoint(x, y));
+    Objects().TableContextMenu(m);  // p2-objects: a table cell's rows, columns, merge and split
+    return;
+  }
+  // A right-click on a thumbnail is about that slide (and the others selected with it).
+  if (const int t = ThumbAt(x, y); t >= 0 || gfx::Contains(thumbs_, static_cast<float>(x), static_cast<float>(y)))
+    SlideContextMenu(m, t);  // P2: new, duplicate, delete, layout, hide
+  else if (gfx::Contains(view_, static_cast<float>(x), static_cast<float>(y)))  // p2-objects
+    Objects().ContextMenu(m, static_cast<float>(x), static_cast<float>(y));
   const bool any = SlideCount() > 0;
   if (LinkAt(x, y)) {
     AppendItem(m, CmdOpenSlideLink, L"Open link");
@@ -355,7 +373,7 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
   std::wstring slide = n ? L"Slide " + std::to_wstring(current_ + 1) + L" of " + std::to_wstring(n) : L"No slides";
   if (n && deck_->Hidden(current_)) slide += L" (hidden)";
   m.segments.push_back(slide);
-  m.segments.push_back(L"Read-only");
+  if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(L"Read-only");
   m.zoom = n > 0;
   m.zoomValue = Scale() / (96.0 / 72.0 * ui_);
   m.onZoom = [this](double z) {
@@ -370,6 +388,9 @@ void PresentationView::BuildStatusBar(StatusBarModel& m) {
 void PresentationView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   matches_.clear();
   match_ = -1;
+  search_.query = query;  // p2-text: for Replace
+  search_.matchCase = matchCase;
+  search_.wholeWords = wholeWords;
   if (!Ready() || query.empty()) {
     host_.ViewInvalidate();
     return;
@@ -427,6 +448,53 @@ std::wstring PresentationView::SelectedText() {
     return text.substr(m.at, m.length);
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Replace (p2-text): the matches found again in the text as the edit layer has it, the current one
+// by its place among its slide's (or its notes') matches.
+
+bool PresentationView::CanReplace() const { return text_->Model() != nullptr; }
+
+bool PresentationView::ReplaceCurrent(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || match_ < 0 || match_ >= static_cast<int>(matches_.size())) return false;
+  const Match cur = matches_[static_cast<size_t>(match_)];
+  size_t rank = 0;
+  for (int i = 0; i < match_; ++i)
+    if (matches_[static_cast<size_t>(i)].slide == cur.slide && matches_[static_cast<size_t>(i)].notes == cur.notes) ++rank;
+  std::vector<TextMatch> here;
+  for (const TextMatch& m : fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords))
+    if (m.target.slide == cur.slide && m.target.notes == cur.notes) here.push_back(m);
+  if (rank >= here.size() || !ReplaceMatch(*model, here[rank], search_.query, search_.matchCase, with)) {
+    host_.ViewMessage(BannerKind::Warning, L"That text can't be replaced here.");
+    return false;
+  }
+  // Found again; the current match is the one after the replaced text.
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  size_t seen = 0;
+  for (size_t i = 0; i < matches_.size(); ++i) {
+    const Match& m = matches_[i];
+    const bool same = m.slide == cur.slide && m.notes == cur.notes;
+    if ((same && seen++ == rank) || m.slide > cur.slide || (m.slide == cur.slide && m.notes && !cur.notes)) {
+      match_ = static_cast<int>(i);
+      ShowMatch();
+      return true;
+    }
+  }
+  match_ = matches_.empty() ? -1 : 0;
+  ShowMatch();
+  return true;
+}
+
+int PresentationView::ReplaceAll(const std::wstring& with) {
+  TextModel* model = text_->Model();
+  if (!model || search_.query.empty()) return 0;
+  const int n = fw::slide::view::ReplaceAll(*model, fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords), with);
+  const auto search = search_;
+  StartSearch(search.query, search.matchCase, search.wholeWords);
+  return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,17 +638,22 @@ void PresentationView::FollowLink(const SlideLink& link) {
 // ---------------------------------------------------------------------------
 // The slide show and the banner
 
-void PresentationView::StartShow(bool fromCurrent) {
+void PresentationView::StartShow(bool fromCurrent, bool presenterWindowed) {
   if (!Ready() || SlideCount() == 0 || fw::slide::show::Running()) return;
   Presentation* model = deck_->Model();
   if (!model) return;
-  // p1-show's renderer for the show: slides drawn by p1-render's SlideRender.
-  if (!showRenderer_) showRenderer_ = fw::slide::show::MakeRenderer(*model);
+  // p1-show's renderer for the show: slides drawn by p1-render's SlideRender. A new one for every show
+  // (P3): it keeps prepared slides, which point into slides an edit since may have replaced.
+  showRenderer_ = fw::slide::show::MakeRenderer(*model);
   fw::slide::show::ShowOptions o;
   o.first = fromCurrent ? current_ : 0;
   o.owner = host_.ViewHwnd();
   o.monitor = showMonitor_ < static_cast<int>(fw::slide::show::Monitors().size()) ? showMonitor_ : -1;
   o.deckPath = path_;
+  // Alt+F5 (P3): the show and the presenter view, each in a window, as PowerPoint does on one monitor.
+  // F5 with Use Presenter View on: the presenter view on another monitor, when there is one.
+  o.windowed = presenterWindowed;
+  o.presenter = presenterWindowed || usePresenter_;
   // The show ends on a slide: the tab shows it, as PowerPoint's normal view does.
   o.ended = [this](size_t slide) {
     showing_ = false;
@@ -593,12 +666,18 @@ void PresentationView::StartShow(bool fromCurrent) {
 }
 
 void PresentationView::ReadOnlyBanner() {
-  if (deck_ && deck_->HasMacros()) {
-    host_.ViewMessage(BannerKind::Info, L"This presentation is read-only, and its macros are kept but never run.");
+  // P2: only a deck the edit layer can't change says it's read-only, with the reason.
+  edit::Editor* ed = SlideEditor();
+  std::u16string why;
+  const bool editable = ed && ed->CanEdit(&why);
+  const bool macros = deck_ && deck_->HasMacros();
+  if (editable) {
+    if (macros) host_.ViewMessage(BannerKind::Info, L"This presentation's macros are kept but never run.");
     return;
   }
-  host_.ViewMessage(BannerKind::Info, L"This presentation is read-only: Featherweight shows and presents decks, "
-                                      L"and editing comes in a later version.");
+  std::wstring text = why.empty() ? std::wstring(L"This presentation is read-only.") : std::wstring(why.begin(), why.end());
+  if (macros) text += L" Its macros are kept but never run.";
+  host_.ViewMessage(BannerKind::Info, text);
 }
 
 }  // namespace fw::slide::view

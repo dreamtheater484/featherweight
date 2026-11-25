@@ -63,7 +63,7 @@ void PagedView::RecomputeScale() {
   if (s > 0) scale_ = s;
 }
 
-void PagedView::Relayout(const Anchor* anchor) {
+void PagedView::Relayout(const Anchor* anchor, bool repaint) {
   const auto* pages = Pages();
   if (!pages) return;
   fw::LayoutInput in;
@@ -83,7 +83,7 @@ void PagedView::Relayout(const Anchor* anchor) {
   tsx_ = sx_;
   tsy_ = sy_;
   UpdateCurrentPage();
-  host_.ViewInvalidate();
+  if (repaint) host_.ViewInvalidate();
 }
 
 int PagedView::DocHeight() const {

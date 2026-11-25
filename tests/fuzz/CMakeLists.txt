@@ -6,7 +6,8 @@ set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
 set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf
   fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt fuzz_cfb fuzz_chart fuzz_doc fuzz_odt fuzz_xlsx fuzz_numfmt fuzz_csv
-  fuzz_condfmt fuzz_ods fuzz_xls fuzz_pivot fuzz_pptx fuzz_timing)
+  fuzz_condfmt fuzz_ods fuzz_xls fuzz_pivot fuzz_pptx fuzz_timing fuzz_ppt)
+list(APPEND _fw_fuzz_targets fuzz_odp)  # P3, p3-files
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
@@ -15,6 +16,7 @@ if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   foreach(lib fwcore fwpkg fwdoc fwsheet fwsheetobjects fwdraw fwchart fwtext fwdoclayout fwpictures fwslide fwslideshow miniz pugixml)
     target_compile_options(${lib} PRIVATE ${_fw_instrument})
   endforeach()
+  target_compile_options(fwslideodp PRIVATE ${_fw_instrument})  # P3, p3-files
 endif()
 
 foreach(target ${_fw_fuzz_targets})
@@ -53,6 +55,8 @@ target_link_libraries(fuzz_ods PRIVATE fwsheet)
 target_link_libraries(fuzz_xls PRIVATE fwsheet)
 target_link_libraries(fuzz_pivot PRIVATE fwsheet)
 target_link_libraries(fuzz_timing PRIVATE fwslideshow)
+target_link_libraries(fuzz_odp PRIVATE fwslide fwslideodp)
+target_link_libraries(fuzz_ppt PRIVATE fwslide)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -90,4 +94,6 @@ add_test(NAME fuzz_timing_replay COMMAND fuzz_timing ${_fw_runs} "${_fw_seeds}/t
 
 # Every fuzz target, so CI builds new ones without its own list.
 add_custom_target(fuzz_all DEPENDS ${_fw_fuzz_targets})
+add_test(NAME fuzz_odp_replay COMMAND fuzz_odp ${_fw_runs} "${_fw_seeds}/odp" "${_fw_regressions}/odp")
 add_test(NAME fuzz_xls_replay COMMAND fuzz_xls ${_fw_runs} "${_fw_seeds}/xls" "${_fw_regressions}/xls")
+add_test(NAME fuzz_ppt_replay COMMAND fuzz_ppt ${_fw_runs} "${_fw_seeds}/ppt" "${_fw_regressions}/ppt")

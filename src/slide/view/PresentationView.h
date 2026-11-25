@@ -5,13 +5,18 @@
 #include <d2d1_1.h>
 #include <wrl/client.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "TabContent.h"
+#include "pkg/Snapshot.h"
 #include "slide/view/Deck.h"
 #include "slide/view/SlideLayout.h"
+#include "slide/view/SlideDesign.h"
+#include "slide/view/SlideHeaderFooter.h"
+#include "slide/view/SlideOrder.h"
 
 namespace fw::text {
 class Fonts;
@@ -19,8 +24,23 @@ class Fonts;
 namespace fw::slide::show {
 class SlideRenderer;
 }
+namespace fw::slide::edit {
+class Editor;
+struct Changes;
+struct Result;
+}
+class PresentationFile;
+class PasswordCard;
+struct ToolItem;
+namespace fw::pkg::crypto {
+struct Key;
+}
 
 namespace fw::slide::view {
+
+class TextEditing;
+class ObjectTool;
+class NotesEdit;
 
 // A presentation in a tab (milestone P1, plan §5.4 and §8): the thumbnails pane on the left, the
 // slide fitted to the window (or zoomed) in the middle, the speaker notes below it, and "Slide n
@@ -29,21 +49,33 @@ namespace fw::slide::view {
 // Shift+F5 start the slide show (p1-show), and a .ppsx starts in it.
 //
 // Printing and Export PDF lay out slides, handouts (1, 2, 3, 4, 6 or 9 per page) or notes pages,
-// as chosen in the toolbar's Print layout menu, through the shared print dialog and PrintJob.
+// as chosen in File › Print's settings, through the shared print dialog and PrintJob.
 class PresentationView : public TabContent {
  public:
   PresentationView(ViewHost& host, std::wstring path);
   // A view of a deck that's already open (tests).
   PresentationView(ViewHost& host, std::wstring path, std::unique_ptr<Deck> deck);
   ~PresentationView() override;
+  // A new, untitled presentation ("Presentation1"): PowerPoint's blank 16:9 deck (P2).
+  static std::unique_ptr<PresentationView> NewPresentation(ViewHost& host, int number);
+  // A template (.potx, .potm) opens as a new presentation, "Presentation<number>", as PowerPoint
+  // opens one (P3).
+  static bool IsTemplate(const std::wstring& path);
+  void OpenAsNew(int number) { newNumber_ = number; }
+  // A presentation from memory: a recovered one (`unsaved`), titled `title`, Save As starting at
+  // `suggested` (P2, p2-model).
+  static std::unique_ptr<PresentationView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                                     std::wstring suggested, bool unsaved);
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Presentation; }
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
   bool Ready() const override { return deck_ != nullptr; }
+  bool NeedsPassword() const override { return needPassword_; }  // p3-review
+  TextBox* PasswordBox() override;
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override;
 
   void SetViewport(const RECT& rc, float ui) override;
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
@@ -61,15 +93,17 @@ class PresentationView : public TabContent {
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
-  bool Dragging() const override { return drag_ != Drag::None; }
-  bool HasKeyFocus() const override { return false; }
+  bool Dragging() const override;
+  bool HasKeyFocus() const override;
+  std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
-  void FillMenu(int which, HMENU menu) override;
+  // PowerPoint's ribbon (R1, r1-slide: PresentationRibbon.cpp).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
   bool HasStatusBar() const override { return Ready(); }
   void BuildStatusBar(StatusBarModel& m) override;
@@ -81,10 +115,22 @@ class PresentationView : public TabContent {
   int SearchCurrent() const override { return match_; }
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
+  // Replace (p2-text): in the text of slides and notes, through the edit layer.
+  bool CanReplace() const override;
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
 
-  // Read-only in P1: Save As writes a copy of the file as it was opened.
+  // Saving (P2, p2-model: PresentationSave.cpp, through PresentationFile): Ctrl+S and Save As write
+  // on a worker thread; closing saves at once.
   bool Save(const std::wstring& path, std::wstring& error) override;
+  SaveStart StartSave(const std::wstring& path, std::wstring& error) override;
+  void SaveDone() override;
   SaveFormat SaveAsFormat() const override;
+  std::vector<SaveFormat> OtherSaveFormats() const override;
+  std::wstring SuggestedSavePath() const override;
+  void Autosave() override;
+  bool ReplayEdits(std::string_view records, std::wstring& error) override;
+  FileChange CheckFileOnDisk() override;
   bool CanPrint() const override { return Ready() && deck_->SlideCount() > 0; }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   bool CanExportPdf() const override { return CanPrint(); }
@@ -92,6 +138,8 @@ class PresentationView : public TabContent {
   FileState State() const override;
   void ApplyState(const FileState& s) override;
   bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
+  bool TakesPictures(const std::vector<std::wstring>& files) const override;
+  void DropPictures(const std::vector<std::wstring>& files, int x, int y) override;
 
   // ---- The deck ----
   size_t SlideCount() const { return deck_ ? deck_->SlideCount() : 0; }
@@ -107,10 +155,18 @@ class PresentationView : public TabContent {
   // The pages as they print and export, each a PNG (page-1.png...) in `dir` at `dpi`; how many were
   // written. A page that fails is reported on stderr, counted in `failed` and skipped.
   int RenderPagesForTesting(const std::wstring& dir, float dpi, int* failed = nullptr);
+  // P3 (p3-files, PictureExport.cpp): the current slide (`all` false: to `path`) or every slide (in
+  // the folder `path` names, Slide1.png...) as PNG pictures `width` pixels across. The pictures
+  // written; `message` says what happened.
+  int ExportSlidePictures(const std::wstring& path, bool all, unsigned width, std::wstring& message);
   // The slide fitted in the view, client pixels (for tests and the snapshot scripts).
   D2D1_RECT_F SlideRectForTesting() const { return SlideRect(); }
 
  private:
+  // Text being edited (p2-text): TextEditing takes clicks, keys and commands first while it edits.
+  TextEditing* Text() { return text_.get(); }
+  draw::Point SlidePoint(int x, int y) const;  // client pixels -> slide points
+
   // ---- Layout (device pixels in the client area)
   void LayoutParts();
   D2D1_RECT_F SlideRect() const;          // the slide on screen at the zoom and scroll
@@ -128,10 +184,19 @@ class PresentationView : public TabContent {
   void DrawNotes(gfx::Canvas& c);
   ID2D1Bitmap* ThumbBitmap(ID2D1DeviceContext* dc, size_t slide, bool make);
   // The slide drawn into a bitmap `w` x `h` pixels (null when it couldn't be).
-  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h);
+  // `editing`: as the editor shows it (the text being typed left out, empty placeholders' prompts).
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmap(ID2D1DeviceContext* dc, size_t slide, UINT w, UINT h, bool editing = false);
+  // Anything drawn in slide points into such a bitmap (P2: the layout gallery's pictures).
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> RenderBitmapWith(ID2D1DeviceContext* dc, UINT w, UINT h,
+                                                        const std::function<void(draw::Painter&)>& paint);
+
+  // ---- The ribbon (PresentationRibbon.cpp): a command's control (`glyph` when not 0), and the
+  // state of the ribbon's menu buttons (enabled while a command in the menu is).
+  ToolItem RibbonTool(int cmd, wchar_t glyph);
+  bool RibbonMenuState(int cmd, CommandState& s);
 
   // ---- Commands (PresentationCommands.cpp)
-  void StartShow(bool fromCurrent);
+  void StartShow(bool fromCurrent, bool presenterWindowed = false);
   void CopySlide(bool text, bool picture);
   void CopyNotes();
   void FollowLink(const SlideLink& link);
@@ -139,6 +204,132 @@ class PresentationView : public TabContent {
   std::wstring SlideText(size_t slide) const;
   void ShowMatch();
   void ReadOnlyBanner();
+
+  // ---- Objects on the slide (P2, p2-objects: ObjectTool)
+  ObjectTool& Objects() const;
+  // Whether the objects get a command: not the clipboard or select all while the keys are in the thumbnails.
+  bool ObjectsTake(int cmd) const;
+  // ---- Slides (P2, p2-slides: PresentationSlides.cpp): the thumbnails as an editor
+  // A click on thumbnail `t` with the modifier keys; true when it was handled.
+  void ThumbsMouseDown(int t, UINT mods, int x, int y);
+  void ThumbsDragMove(int x, int y);
+  void ThumbsDragEnd(bool drop);
+  bool ThumbsKeyDown(UINT vk, UINT mods);
+  bool SlideScriptOp(const std::wstring& op, const std::wstring& arg);
+  // P3, p3-files (PictureExport.cpp): Export's PNG commands, queried (`state`) or run; their script ops.
+  bool PictureCommand(int cmd, CommandState* state);
+  bool PictureScriptOp(const std::wstring& op, const std::wstring& arg);
+  unsigned pictureWidth_ = 1920;  // the width last chosen for exported pictures
+  void DrawThumbSelection(gfx::Canvas& c, const std::vector<ThumbRow>& rows, size_t i);
+  void DrawDropMarker(gfx::Canvas& c);
+  int SlideShortcut(UINT vk, UINT mods) const;
+  bool SlideCommandState(int cmd, CommandState& s);
+  bool SlideCommand(int cmd);
+  void SlideContextMenu(HMENU menu, int thumb);
+  std::vector<size_t> SelectedSlides() const;
+  // Edits through the edit layer (each one undo step). False, with a banner saying why, when the
+  // deck can't be edited.
+  bool CanEditSlides() const;
+  // The deck's editor, which the tab listens to from the first time it's asked for (null: none).
+  edit::Editor* SlideEditor() const;
+  // Right after the tab first gets the deck's Editor (at load), before any edit: p2-model's
+  // PresentationFile hooks the recovery journal in here (SetJournal).
+  void OnEditorMade(edit::Editor& ed);
+  void OnSlideEdits(const edit::Changes& c);
+  bool Done(const edit::Result& r) const;  // a banner saying why when it was refused
+  void SelectSlides(const std::vector<size_t>& slides, size_t current);
+  int NewSlideLayout() const;  // Ctrl+M's layout: the current slide's (after a title slide, the next one)
+  // Notes typed in the notes pane (plain text, NotesEdit): a click there starts it; leaving the
+  // pane, Esc, another slide or another tab ends it, and the text goes to the slide's notes.
+  bool NotesMouseDown();
+  void EndNotesEdit();
+  // The notes being typed go to the slide now, the box staying open (before a save or autosave).
+  void CommitNotes();
+  void PlaceNotesEdit(const D2D1_RECT_F& box);
+  std::unique_ptr<NotesEdit> notesEdit_;
+  size_t notesSlide_ = 0;
+  mutable bool editListening_ = false;
+  mutable std::vector<uint32_t> editIds_;  // the slides' ids as the last change left them
+  bool InsertSlide(size_t at, int layout);
+  bool DuplicateSlides(const std::vector<size_t>& slides);
+  bool DeleteSlides(const std::vector<size_t>& slides);
+  bool MoveSlides(const std::vector<size_t>& slides, size_t gap);
+  bool HideSlides(const std::vector<size_t>& slides, bool hide);
+  bool SetSlidesLayout(const std::vector<size_t>& slides, int layout);
+  // Copying slides between presentation tabs: the selected slides to the clipboard (cut: then
+  // deleted), and the slides copied pasted after the current slide, in this deck's design or
+  // keeping their own.
+  bool CopySlides(bool cut);
+  bool PasteSlides(bool keepSource);
+  bool SlidesOnClipboard() const;  // slides copied here are still what the clipboard holds
+  // Design (PresentationDesign.cpp): a built-in theme or theme colors on the masters of `slides`
+  // (every master when empty), a background on `slides` (every slide with `all`), slide numbers,
+  // footer and date, the slide size, the notes.
+  bool ApplyTheme(int theme, const std::vector<size_t>& slides);
+  bool ApplyColors(int scheme, const std::vector<size_t>& slides);
+  bool SetBackground(const std::vector<size_t>& slides, const Background& bg, const std::wstring& picture);
+  bool ResetBackground(const std::vector<size_t>& slides);
+  bool ApplyHeaderFooter(const HeaderFooterSettings& s, const std::vector<size_t>& slides);
+  bool SetSlideSize(int choice, int scale);
+  bool SetNotes(size_t slide, const std::wstring& text);
+  // The Design and Header & footer panels (PresentationPanels.h).
+  class DesignPanel;
+  class HeaderFooterPanel;
+  std::unique_ptr<DesignPanel> designPanel_;
+  std::unique_ptr<HeaderFooterPanel> hfPanel_;
+  void OpenDesign(int tab);
+  void OpenHeaderFooter();
+  bool DesignCommandState(int cmd, CommandState& s);
+  bool DesignCommand(int cmd);
+  void DesignChanged();  // after an edit or an undo: open panels show the deck as it is now
+  // Comments (P3, p3-review: PresentationComments.h): the pane, the markers, Review > Comments.
+  class CommentsPanel;
+  std::unique_ptr<CommentsPanel> commentsPanel_;
+  CommentsPanel& Comments();
+  // Password protection (P3, p3-review: PresentationProtect.cpp): an encrypted file (or a recovered
+  // one) waits behind the password card until it is decrypted; Encrypt with Password sets or removes
+  // the password the file is saved with.
+  class PasswordPanel;
+  std::unique_ptr<PasswordPanel> passwordPanel_;
+  std::unique_ptr<PasswordCard> card_;
+  bool needPassword_ = false;
+  std::vector<uint8_t> protected_;  // the encrypted file as read, until its password opens it
+  fw::pkg::Snapshot::Stamp protectedStamp_;
+  bool TakeProtected();  // the file (or the recovered bytes) is encrypted: read into protected_
+  OpenResult Unlock(const std::wstring& password, std::vector<uint8_t>& plain, fw::pkg::crypto::Key& key,
+                    std::wstring& error);
+  void SubmitPassword(const std::wstring& password);
+  PasswordCard& Card();
+  bool ProtectCommandState(int cmd, CommandState& s);
+  bool ProtectCommand(int cmd);
+  bool SetFilePassword(const std::wstring& password);  // empty: none (script op password:<text>)
+  // After an edit or an undo: the caches follow the slides (by id), the edited ones redrawn.
+  // p3-anim (PresentationAnim.cpp): the Transitions and Animations tabs, the Animation Pane, Preview.
+  class AnimationPane;
+  struct AnimPreview;
+  std::unique_ptr<AnimationPane> animPane_;
+  std::unique_ptr<AnimPreview> preview_;
+  struct AnimCache;
+  std::unique_ptr<AnimCache> animCache_;
+  uint64_t animEdits_ = 0;  // edit notices seen (OnSlideEdits): the cache reads again after each
+  const AnimCache& AnimNow();  // the current slide's sequence and transition, read once per edit
+  std::vector<size_t> animPicked_;  // effects picked in the pane (main-sequence indexes on the current slide)
+  size_t animPickedSlide_ = SIZE_MAX;
+  std::vector<uint32_t> animPickedShapes_;  // the shapes selected then: clicking others drops the pick
+  void ApplyAnim(int galleryIndex, bool add);  // 0: None (removes), else kAnimGallery[index - 1]
+  bool AnimScriptOp(const std::wstring& op, const std::wstring& arg);  // transition:, anim:, animpane, animdump
+  void PickAnims(const std::vector<size_t>& effects);
+  void BuildAnimTabs(RibbonModel& m);
+  bool AnimCommandState(int cmd, CommandState& s);
+  bool AnimCommand(int cmd);
+  std::vector<int> AnimCommands() const;
+  std::vector<size_t> AnimTargets();  // the effects the Animations tab's controls change
+  void AnimChanged();                 // after an edit or another slide: the pane follows
+  void StartPreview(bool transition, size_t fromEffect = 0);
+  void StopPreview();
+  bool DrawPreview(gfx::Canvas& c, ID2D1DeviceContext* dc);  // false when no preview runs
+  void SlidesChanged(const std::vector<uint32_t>& idsBefore, const std::vector<size_t>& touched, bool all);
+  std::vector<uint32_t> SlideIds() const;
 
   // ---- Printing (PresentationPrint.cpp)
   std::vector<size_t> PrintedSlides() const;
@@ -149,11 +340,16 @@ class PresentationView : public TabContent {
 
   ViewHost& host_;
   std::wstring path_;
+  std::wstring untitled_;  // a new presentation's name, until it's saved (P2)
+  std::wstring imported_;  // a .ppt's or .odp's file name: the tab is its copy (P3, p3-ppt and p3-files)
+  bool newDeck_ = false;
+  int newNumber_ = 0;  // OpenAsNew: the file is a template, and the tab a new presentation
   std::unique_ptr<Deck> deck_;
   // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
   // show this tab started is running (the tab outlives it, or stops it when closed).
   std::unique_ptr<fw::slide::show::SlideRenderer> showRenderer_;
   int showMonitor_ = -1;
+  bool usePresenter_ = true;  // P3: Slide Show > Use Presenter View
   bool showing_ = false;
   std::unique_ptr<text::Fonts> fonts_;  // printing's and Export PDF's text (page numbers, notes)
   size_t current_ = 0;
@@ -183,8 +379,24 @@ class PresentationView : public TabContent {
   size_t slideBitmapOf_ = SIZE_MAX;
   UINT slideBitmapW_ = 0, slideBitmapH_ = 0;
 
+  // The selected slides (P2): the thumbnails' selection, the current slide always in it.
+  SlideSelection selection_;
+  // A drag of the selected thumbnails: armed on the press, moving once the pointer has gone a few
+  // pixels; `dropGap_` is the gap it would drop into (SIZE_MAX: none shown).
+  bool thumbPress_ = false;
+  size_t dropGap_ = SIZE_MAX;
+  float dragY_ = 0;
+  int pendingCollapse_ = -1;  // a plain click on a slide of a multi-selection: it alone, unless it drags
+  // The ribbon's New Slide and Layout galleries: the current slide's master's layouts, and their
+  // pictures as P1's renderer draws them (made when a gallery opens, kept while the deck and the
+  // picture size stay).
+  std::vector<Deck::LayoutChoice> galleryLayouts_;
+  std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> layoutPictures_;  // by the presentation's layout index
+  UINT layoutPictureW_ = 0;
+  void PaintLayoutPicture(gfx::Canvas& c, size_t layout, const D2D1_RECT_F& r);
+
   // Mouse.
-  enum class Drag { None, Splitter, ThumbBar, Pan };
+  enum class Drag { None, Splitter, ThumbBar, Pan, Text, Slides };
   Drag drag_ = Drag::None;
   int downX_ = 0, downY_ = 0;
   float downValue_ = 0, downValue2_ = 0;
@@ -206,6 +418,28 @@ class PresentationView : public TabContent {
   mutable size_t linksOf_ = SIZE_MAX;
 
   PrintSettings print_;
+  std::unique_ptr<TextEditing> text_;  // p2-text
+  struct {
+    std::wstring query;
+    bool matchCase = false, wholeWords = false;
+  } search_;  // what StartSearch looked for, for Replace
+
+  mutable std::unique_ptr<ObjectTool> objects_;  // made on first use
+
+  // ---- The file (P2, p2-model: PresentationSave.cpp)
+  PresentationFile& File();
+  // After the deck opened: what the tab is to its file (opened, new, recovered), the in-use banner.
+  void FileOpened();
+  // The deck's Editor records into the file's recovery journal and tells it each change (before
+  // any edit; once).
+  void AttachFile(edit::Editor& ed);
+  bool ReadyToSave(std::wstring& error);
+  void SavedTo();
+  std::vector<uint8_t> bytes_;  // FromBytes: the deck, until it's loaded
+  bool fromBytes_ = false;
+  bool fileAttached_ = false;
+  // Last, so it goes first: a save still writing finishes before the deck and its Editor go.
+  std::unique_ptr<PresentationFile> file_;
 };
 
 }  // namespace fw::slide::view

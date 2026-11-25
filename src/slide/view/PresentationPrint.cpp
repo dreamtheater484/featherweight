@@ -18,6 +18,9 @@
 #include "draw/D2DPainter.h"
 #include "draw/Pdf.h"
 #include "draw/PrintJob.h"
+#include "slide/view/PresentationText.h"
+#include "slide/view/ObjectTool.h"
+#include "slide/view/PresentationComments.h"
 #include "slide/view/PresentationView.h"
 #include "slide/view/SlidePages.h"
 #include "text/Fonts.h"
@@ -321,35 +324,6 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
 // ---------------------------------------------------------------------------
 // File
 
-SaveFormat PresentationView::SaveAsFormat() const {
-  static const SaveFormat kinds[] = {
-      {L"PowerPoint presentation", L"*.pptx", L"pptx"},
-      {L"PowerPoint macro-enabled presentation", L"*.pptm", L"pptm"},
-      {L"PowerPoint template", L"*.potx", L"potx"},
-      {L"PowerPoint macro-enabled template", L"*.potm", L"potm"},
-      {L"PowerPoint slide show", L"*.ppsx", L"ppsx"},
-  };
-  for (const SaveFormat& f : kinds)
-    if (EndsWithNoCase(path_, std::wstring(L".") + f.ext)) return f;
-  return kinds[0];
-}
-
-bool PresentationView::Save(const std::wstring& path, std::wstring& error) {
-  // Read-only until P2: Save As writes the file exactly as it was opened, and only as its own type.
-  if (!Ready()) return false;
-  if (EqualsNoCase(util::FullPath(path), util::FullPath(path_))) return true;
-  if (!EndsWithNoCase(path, std::wstring(L".") + SaveAsFormat().ext)) {
-    error = L"Presentations can only be saved as a copy of the file for now. Export PDF works for other formats.";
-    return false;
-  }
-  std::string bytes;
-  if (!util::ReadFileBytes(path_, bytes, size_t{1} << 30) || !util::WriteFileAtomic(path, bytes)) {
-    error = L"The copy couldn't be saved.";
-    return false;
-  }
-  return true;
-}
-
 FileState PresentationView::State() const {
   FileState s;
   s.page = static_cast<int>(current_);
@@ -367,6 +341,16 @@ void PresentationView::ApplyState(const FileState& s) {
 }
 
 bool PresentationView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (Ready() && Comments().ScriptOp(op, arg)) return true;  // p3-review: comment:new|text...
+  if (op == L"password") {  // p3-review: the password the next save writes (empty: none)
+    if (!SetFilePassword(arg)) std::fwprintf(stderr, L"password: this presentation can't be protected\n");
+    return true;
+  }
+  if (SlideScriptOp(op, arg)) return true;  // P2: the slides' ops (PresentationSlides.cpp)
+  if (PictureScriptOp(op, arg)) return true;  // P3, p3-files: slidepng:, slidepngs:
+  if (text_->ScriptOp(op, arg, current_)) return true;  // p2-text: edit:, fontsize:, fontcolor:
+  if (Ready() && Objects().ScriptOp(op, arg)) return true;  // p2-objects: insert:, shapefill:
+  if (AnimScriptOp(op, arg)) return true;  // p3-anim: transition:, anim:, animadd:, animpane, animpick:, animdump
   // slide:N (1-based) goes to a slide; printlayout:slides|notes|handouts6 chooses what prints and
   // exports; printhidden:1 prints hidden slides too; notes:0 hides the notes pane.
   if (op == L"slide") {

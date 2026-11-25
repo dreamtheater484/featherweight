@@ -6,9 +6,19 @@
 #include <vector>
 
 #include "draw/Painter.h"
+namespace fw::slide::edit {
+class Editor;
+}
 
 namespace fw::slide {
 class Presentation;
+}
+namespace fw::slide::render {
+class SlideRender;
+class DrawFilter;
+}
+namespace fw::text {
+class Fonts;
 }
 
 // What the presentation tab reads from a deck (P1, plan §8): the slides' sizes, text, notes and
@@ -66,8 +76,38 @@ class Deck {
   }
   // p1-model's presentation behind the deck, for the slide show; null for a deck without one (tests).
   virtual Presentation* Model() { return nullptr; }
+  // The deck's editor (P2, src/slide/edit), made on first use; null for a deck without a model.
+  virtual edit::Editor* Editor() { return nullptr; }
   // Bytes the deck keeps (model, caches), for the memory budget.
   virtual size_t MemoryUse() const { return 0; }
+
+  // ---- Editing (P2) ----
+  // The slide prepared for drawing (null for a deck without a renderer), and the fonts its text is
+  // laid out with.
+  virtual render::SlideRender* Rendered(size_t /*slide*/) { return nullptr; }
+  virtual text::Fonts* LayoutFonts() { return nullptr; }
+  // The model changed on this slide (or its notes): what was prepared from it goes.
+  virtual void Invalidate(size_t /*slide*/) {}
+  // Paint, leaving out what the filter turns down (the text being typed, drawn live over it).
+  virtual void PaintFiltered(size_t slide, draw::Painter& p, render::DrawFilter* /*filter*/) { Paint(slide, p); }
+  // The editor's prompts in empty placeholders (not for the show, printing or PDF); `skip`: the one
+  // being typed in.
+  virtual void PaintPrompts(size_t /*slide*/, draw::Painter& /*p*/, uint32_t /*skip*/) {}
+  // ---- Layouts (P2, p2-slides: new slide, change layout) ----
+  struct LayoutChoice {
+    size_t index = 0;      // into the presentation's layouts
+    std::wstring name;     // as the deck names it ("Title and Content")
+  };
+  // The layouts slide `slide` can use: its master's, in the master's order. Empty without layouts.
+  virtual std::vector<LayoutChoice> LayoutsFor(size_t /*slide*/) const { return {}; }
+  // The layout slide `slide` uses (an index into the presentation's layouts), or -1.
+  virtual int LayoutOf(size_t /*slide*/) const { return -1; }
+  // Draws layout `layout` as the layout gallery shows it, in slide points: its background, its own
+  // and its master's shapes and its placeholders' prompts, without the date, footer and number.
+  virtual void PaintLayout(size_t /*layout*/, draw::Painter& /*p*/) {}
+  // Slides were added, removed or moved (P2, p2-slides): what was prepared for each slide follows
+  // it. Slide i now was slide oldIndexes[i] (-1: new).
+  virtual void Reorder(const std::vector<int>& /*oldIndexes*/) {}
 };
 
 }  // namespace fw::slide::view

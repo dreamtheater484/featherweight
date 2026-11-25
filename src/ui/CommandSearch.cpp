@@ -237,6 +237,12 @@ void CommandSearch::Draw(Canvas& c, bool caretVisible) {
     if (e.checked) c.Icon(icon::CheckMark, RectF(hr.left + 8 * u, r.top, hr.left + 28 * u, r.bottom), fg, 12 * u);
     float keysW = e.shortcut.empty() ? 0 : std::ceil(c.MeasureText(e.shortcut, 12 * u));
     c.Text(e.label, RectF(hr.left + 32 * u, r.top, hr.right - 24 * u - keysW, r.bottom), fg, 13 * u);
+    if (!e.where.empty()) {  // where it is on the ribbon, after the name
+      const float labelW = std::ceil(c.MeasureText(e.label, 13 * u));
+      const float x = hr.left + 32 * u + labelW + 12 * u;
+      if (x < hr.right - 24 * u - keysW - 40 * u)
+        c.Text(e.where, RectF(x, r.top, hr.right - 24 * u - keysW, r.bottom), p.textSecondary, 12 * u);
+    }
     if (keysW > 0) {
       c.Text(e.shortcut, RectF(hr.right - 12 * u - keysW - 2, r.top, hr.right - 12 * u, r.bottom),
              e.enabled ? p.textSecondary : p.textDisabled, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);

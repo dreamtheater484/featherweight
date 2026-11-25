@@ -51,6 +51,10 @@ class WidgetGallery : public TabContent {
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
+  // A ribbon with one of each of its kinds of item (R1), once a script turns it on
+  // (galleryribbon:on, galleryribbon:table for the contextual tab too).
+  void BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) override;
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   void FillContextMenu(HMENU, int, int) override {}
   bool HasStatusBar() const override { return true; }
   void BuildStatusBar(StatusBarModel& m) override;
@@ -159,6 +163,10 @@ class WidgetGallery : public TabContent {
   D2D1_COLOR_F tbFontColor_ = gfx::Rgb(0xC00000), tbHighlight_ = gfx::Rgb(0xFFFF00);
   bool tbNoHighlight_ = false;
   double tbAfter_ = 8;
+  bool ribbon_ = false, tableTools_ = false;
+  bool icons_ = false;  // galleryicons:on: the drawn icons (ui/Icons.cpp) instead of the cards
+  void DrawIconSheet(gfx::Canvas& c);
+  int tableStyle_ = 0;
   int tbBullet_ = 0;
   double zoom_ = 1;  // what the status bar's zoom shows
 };

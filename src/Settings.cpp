@@ -59,7 +59,9 @@ void Settings::LoadFrom(const std::wstring& path) {
   spelling = ini_.GetBool(kGeneral, L"CheckSpelling", true);
   autoCorrect = ini_.GetBool(kGeneral, L"AutoCorrect", true);
   ruler = ini_.GetBool(kGeneral, L"Ruler", false);
+  developerTab = ini_.GetBool(kGeneral, L"DeveloperTab", false);
   reviewer = ini_.Get(kGeneral, L"Reviewer");
+  ribbon = ini_.GetInt(kGeneral, L"Ribbon", -1);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
@@ -91,9 +93,11 @@ void Settings::LoadFrom(const std::wstring& path) {
     RecentFile r;
     r.path = fields[0];
     if (fields.size() > 1) r.lastOpened = _wtoi64(fields[1].c_str());
+    r.pinned = fields.size() > 2 && fields[2] == L"pinned";
     recent.push_back(r);
   }
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
+  showRecent = ini_.GetBool(kGeneral, L"ShowRecentFiles", true);
 }
 
 bool Settings::Save() {
@@ -107,7 +111,9 @@ bool Settings::Save() {
   if (!spelling || ini_.Has(kGeneral, L"CheckSpelling")) ini_.SetBool(kGeneral, L"CheckSpelling", spelling);
   if (!autoCorrect || ini_.Has(kGeneral, L"AutoCorrect")) ini_.SetBool(kGeneral, L"AutoCorrect", autoCorrect);
   if (ruler || ini_.Has(kGeneral, L"Ruler")) ini_.SetBool(kGeneral, L"Ruler", ruler);
+  if (developerTab || ini_.Has(kGeneral, L"DeveloperTab")) ini_.SetBool(kGeneral, L"DeveloperTab", developerTab);
   if (!reviewer.empty() || ini_.Has(kGeneral, L"Reviewer")) ini_.Set(kGeneral, L"Reviewer", reviewer);
+  if (ribbon >= 0) ini_.SetInt(kGeneral, L"Ribbon", ribbon);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);
@@ -124,9 +130,12 @@ bool Settings::Save() {
   }
   ini_.SetBool(kGeneral, L"Maximized", maximized);
 
+  // Written once turned off (files from before don't have it).
+  if (!showRecent || ini_.Has(kGeneral, L"ShowRecentFiles")) ini_.SetBool(kGeneral, L"ShowRecentFiles", showRecent);
   std::vector<fw::Ini::Entry> entries;
   for (size_t i = 0; i < recent.size(); ++i)
-    entries.emplace_back(std::to_wstring(i + 1), recent[i].path + L"|" + std::to_wstring(recent[i].lastOpened));
+    entries.emplace_back(std::to_wstring(i + 1), recent[i].path + L"|" + std::to_wstring(recent[i].lastOpened) +
+                                                     (recent[i].pinned ? L"|pinned" : L""));
   ini_.ReplaceSection(kRecent, entries);
 
   // Keep only the most recently used file states.
@@ -146,9 +155,20 @@ bool Settings::Save() {
 }
 
 void Settings::AddRecent(const std::wstring& path) {
+  bool pinned = false;
+  for (const RecentFile& r : recent)
+    if (fw::EqualsNoCase(r.path, path)) pinned = r.pinned;
   RemoveRecent(path);
-  recent.insert(recent.begin(), RecentFile{path, util::UnixNow()});
+  recent.insert(recent.begin(), RecentFile{path, util::UnixNow(), pinned});
+  // A full list lets go of the oldest file that isn't pinned.
+  for (size_t i = recent.size(); recent.size() > kMaxRecent && i-- > 0;)
+    if (!recent[i].pinned) recent.erase(recent.begin() + i);
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
+}
+
+void Settings::PinRecent(const std::wstring& path, bool pinned) {
+  for (RecentFile& r : recent)
+    if (fw::EqualsNoCase(r.path, path)) r.pinned = pinned;
 }
 
 void Settings::RemoveRecent(const std::wstring& path) {
@@ -157,7 +177,9 @@ void Settings::RemoveRecent(const std::wstring& path) {
                recent.end());
 }
 
-void Settings::ClearRecent() { recent.clear(); }
+void Settings::ClearRecent() {
+  recent.erase(std::remove_if(recent.begin(), recent.end(), [](const RecentFile& r) { return !r.pinned; }), recent.end());
+}
 
 std::wstring Settings::StateKey(const std::wstring& path) { return fw::Hex64(fw::Fnv1a64(fw::ToLower(path))); }
 

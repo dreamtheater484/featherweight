@@ -35,7 +35,7 @@ using Microsoft::WRL::ComPtr;
 namespace fwtool {
 namespace {
 
-constexpr double kMinSsim = 0.95;
+constexpr double kDefaultMinSsim = 0.95;
 constexpr double kDpi = 100;
 
 struct Image {
@@ -212,6 +212,8 @@ void WriteDifference(const std::filesystem::path& file, const Image& a, const Im
 }  // namespace
 
 int RunPdfCompare(const Options& options) {
+  // --min-ssim: another bar (P2's save without edits: 0.99).
+  const double kMinSsim = options.minSsim > 0 ? options.minSsim : kDefaultMinSsim;
   const bool pngs = !options.pngs.empty();
   if (options.inputs.size() != (pngs ? 1u : 2u)) {
     std::fprintf(stderr, pngs ? "pdf-compare --pngs DIR takes one PDF: the reference (PowerPoint's export)\n"

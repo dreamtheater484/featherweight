@@ -88,12 +88,46 @@ struct SlideRender::Impl {
     std::unique_ptr<draw::DrawingResources> resources;
     std::unique_ptr<draw::Drawing> drawing;
     std::vector<TextBlock> texts;  // one per drawing text box
+    std::vector<const fw::slide::TextBody*> bodies;  // what each was laid out from (null: none)
     std::unique_ptr<TableRender> table;
     bool backgroundFill = false;  // p:sp useBgFill
     draw::Rect frame;  // a table's graphic frame, slide points
   };
   std::vector<Item> items;
+  // Empty placeholders, for the editor's prompts: laid out on first use.
+  struct Prompt {
+    size_t item = 0, box = 0;
+    uint32_t id = 0;
+    std::unique_ptr<fw::slide::TextBody> body;
+    std::unique_ptr<TextBlock> block;
+  };
+  std::vector<Prompt> prompts;
+  TextExtras extras;
 };
+
+namespace {
+
+// What an empty placeholder says in the editor, by its type (PowerPoint's words).
+std::wstring PromptText(fw::slide::PlaceholderType t, bool notes) {
+  using T = fw::slide::PlaceholderType;
+  if (notes) return t == T::Body ? L"Click to add notes" : L"";
+  switch (t) {
+    case T::Title:
+    case T::CenteredTitle: return L"Click to add title";
+    case T::Subtitle: return L"Click to add subtitle";
+    case T::Body:
+    case T::Object: return L"Click to add text";
+    case T::Picture: return L"Click icon to add picture";
+    case T::Table: return L"Click icon to add table";
+    case T::Chart: return L"Click icon to add chart";
+    case T::Media: return L"Click icon to add media";
+    case T::Diagram:
+    case T::ClipArt: return L"Click icon to add a graphic";
+    default: return L"";
+  }
+}
+
+}  // namespace
 
 class Hooks : public draw::DrawHooks {
  public:
@@ -150,6 +184,7 @@ struct Builder {
     }
     for (const fw::slide::DrawItem& di : deck.DrawList(slide)) Shape(di);
     Finish();
+    impl.extras = extras;
   }
 
   void Shape(const fw::slide::DrawItem& di) {
@@ -179,9 +214,36 @@ struct Builder {
       // The model's shapes' text, and SmartArt's (a text box's, with its style's font reference).
       const fw::slide::TextBody* body = box.content ? deck.TextOf(box.content, *di.owner, slide) : nullptr;
       TextBlock& block = item.texts.emplace_back();
+      item.bodies.push_back(body);
       if (body && !body->Empty()) block.Build(fonts, box, *body, extras);
+      else if (body && !item.inherited && s.placeholder && box.content == s.textNode) Prompt(s, *body, item.texts.size() - 1);
     }
     impl.items.push_back(std::move(item));
+  }
+
+  // An empty placeholder's prompt, in the look its text would have: the layout's own words when it
+  // has a custom prompt, else PowerPoint's for its type.
+  void Prompt(const fw::slide::Shape& s, const fw::slide::TextBody& body, size_t box) {
+    const bool notes = slide.kind == fw::slide::PartKind::Notes;
+    auto prompt = std::make_unique<fw::slide::TextBody>();
+    prompt->body = body.body;
+    const fw::slide::Shape* custom = s.inherits;
+    while (custom && !custom->placeholder.customPrompt) custom = custom->inherits;
+    const fw::slide::TextBody* own = custom ? deck.Text(*custom, slide) : nullptr;
+    if (own && !own->Empty()) {
+      prompt->paragraphs = own->paragraphs;
+    } else {
+      const std::wstring words = PromptText(s.placeholder.type, notes);
+      if (words.empty()) return;
+      fw::slide::Paragraph p = body.paragraphs.empty() ? fw::slide::Paragraph{} : body.paragraphs.front();
+      fw::slide::TextRun run;
+      run.props = p.endProps;
+      run.text = words;
+      p.runs = {run};
+      p.number = 1;
+      prompt->paragraphs.push_back(std::move(p));
+    }
+    impl.prompts.push_back({impl.items.size(), box, s.id, std::move(prompt), nullptr});
   }
 
   void Finish() {
@@ -289,6 +351,102 @@ void SlideRender::Draw(draw::Painter& p, const draw::Rect& frame, DrawFilter* fi
     }
     Hooks hooks(item, filter);
     item.drawing->Draw(p, item.drawing->Bounds(), hooks);
+  }
+  p.Restore();
+}
+
+bool SlideRender::FindText(uint32_t shape, int row, int column, TextFrame& out) const {
+  if (shape == 0) return false;
+  for (const Impl::Item& item : impl_->items) {
+    if (item.inherited || item.background) continue;
+    if (item.table) {
+      if (item.id != shape || row < 0) continue;
+      out.toSlide = draw::Matrix::Translate(item.frame.left, item.frame.top);
+      return item.table->CellFrame(row, column, out.box, out.firstParagraph, out.paragraphs, out.contentHeight);
+    }
+    if (row >= 0) continue;
+    const std::vector<draw::TextBox>& boxes = item.drawing->TextBoxes();
+    const draw::Rect b = item.drawing->Bounds();
+    for (size_t t = 0; t < boxes.size() && t < item.texts.size(); ++t) {
+      const uint32_t id = boxes[t].shape ? boxes[t].shape : item.id;
+      if (id != shape) continue;
+      out.box = boxes[t];
+      out.toSlide = boxes[t].transform * draw::Matrix::Translate(b.left, b.top);
+      out.firstParagraph = 0;
+      out.paragraphs = static_cast<int>(item.texts[t].ParagraphCount());
+      out.contentHeight = item.texts[t].ContentHeight();
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<SlideRender::TextOnSlide> SlideRender::Texts() const {
+  std::vector<TextOnSlide> out;
+  for (const Impl::Item& item : impl_->items) {
+    if (item.inherited || item.background || item.table || !item.drawing) continue;
+    const std::vector<draw::TextBox>& boxes = item.drawing->TextBoxes();
+    const draw::Rect b = item.drawing->Bounds();
+    for (size_t t = 0; t < boxes.size() && t < item.texts.size() && t < item.bodies.size(); ++t) {
+      if (!item.bodies[t] || item.bodies[t]->Empty()) continue;
+      TextOnSlide x;
+      x.shape = boxes[t].shape ? boxes[t].shape : item.id;
+      x.block = &item.texts[t];
+      x.body = item.bodies[t];
+      x.toSlide = item.texts[t].ToSlide(boxes[t].transform * draw::Matrix::Translate(b.left, b.top));
+      out.push_back(x);
+    }
+  }
+  return out;
+}
+
+bool SlideRender::CellAt(uint32_t shape, draw::Point at, int& row, int& column) const {
+  for (const Impl::Item& item : impl_->items)
+    if (item.table && !item.inherited && item.id == shape)
+      return item.table->CellAt({at.x - item.frame.left, at.y - item.frame.top}, row, column);
+  return false;
+}
+
+bool SlideRender::IsEmptyPlaceholder(uint32_t shape) const {
+  for (const Impl::Prompt& p : impl_->prompts)
+    if (p.id == shape) return true;
+  return false;
+}
+
+void SlideRender::DrawPrompts(draw::Painter& p, const draw::Rect& frame, text::Fonts& fonts, uint32_t skip) {
+  if (impl_->prompts.empty() || size_.width <= 0 || size_.height <= 0) return;
+  p.Save();
+  p.Transform(draw::Matrix::Scale(frame.Width() / size_.width, frame.Height() / size_.height) *
+              draw::Matrix::Translate(frame.left, frame.top));
+  for (Impl::Prompt& pr : impl_->prompts) {
+    if (pr.id == skip || pr.item >= impl_->items.size()) continue;
+    const Impl::Item& item = impl_->items[pr.item];
+    const std::vector<draw::TextBox>& boxes = item.drawing->TextBoxes();
+    if (pr.box >= boxes.size()) continue;
+    if (!pr.block) {
+      pr.block = std::make_unique<TextBlock>();
+      pr.block->Build(fonts, boxes[pr.box], *pr.body, impl_->extras);
+    }
+    const draw::Rect b = item.drawing->Bounds();
+    p.Save();
+    p.Transform(boxes[pr.box].transform * draw::Matrix::Translate(b.left, b.top));
+    // The placeholder's outline, dashed, as the editor marks an empty one.
+    const draw::Rect r{boxes[pr.box].rect.left - boxes[pr.box].insets.left, boxes[pr.box].rect.top - boxes[pr.box].insets.top,
+                       boxes[pr.box].rect.right + boxes[pr.box].insets.right,
+                       boxes[pr.box].rect.bottom + boxes[pr.box].insets.bottom};
+    draw::Path outline;
+    outline.MoveTo({r.left, r.top});
+    outline.LineTo({r.right, r.top});
+    outline.LineTo({r.right, r.bottom});
+    outline.LineTo({r.left, r.bottom});
+    outline.Close();
+    draw::Pen pen;
+    pen.brush = draw::Brush::Solid({0.55f, 0.55f, 0.55f, 1});
+    pen.width = 0.75f;
+    pen.dashes = {4, 3};
+    p.StrokePath(outline, pen);
+    pr.block->Draw(p, nullptr, pr.id);
+    p.Restore();
   }
   p.Restore();
 }

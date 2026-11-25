@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "draw/Painter.h"
@@ -173,5 +174,9 @@ struct TextBody {
   pugi::xml_node node;      // the txBody as written
   bool Empty() const;       // no text at all (an empty placeholder: drawn without text)
 };
+
+// A date and time field's text now (type "datetime1".."datetime13"), in language `lang` (empty:
+// the user's), as slides show it. Empty for other types. (P2: the header and footer dialog.)
+std::wstring DateFieldText(std::string_view type, const std::string& lang);
 
 }  // namespace fw::slide

@@ -552,16 +552,8 @@ class DocPage::ParaPanel : public RowsPanel {
   }
 
   void Format(const edit::ParaFormat& f) {
-    if (Paragraphs().empty()) return;
-    std::u16string why;
-    if (p_.editor_.CanEdit(&why)) {
-      const edit::Range r = Selection();
-      edit::TreeEdit te(p_.editor_, r.from);
-      edit::FormatParagraphs(te, r, f);
-      why = te.Refused();
-    }
     shown_ = {};  // what the paragraphs have now, also after a refusal
-    p_.host_.formatted(std::wstring(why.begin(), why.end()));
+    p_.FormatParas(f);
   }
 
   void Refresh() override {
@@ -638,7 +630,9 @@ bool DocPage::ShowsIn(const PanelContent* shown) const {
   return shown && (shown == panel_.get() || shown == paraPanel_.get());
 }
 
-bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdParagraph; }
+bool DocPage::Owns(int cmd) {
+  return (cmd >= CmdPageSetup && cmd <= CmdParagraph) || (cmd >= CmdIndentLeftBox && cmd <= CmdSpaceAfterBox);
+}
 
 std::vector<int> DocPage::CommandIds() {
   std::vector<int> ids;
@@ -654,12 +648,6 @@ int DocPage::Shortcut(UINT vk, UINT mods) {
   // Word's hyphens: Ctrl+- (the key by 0; Ctrl+numpad minus still zooms out) and Ctrl+Shift+-.
   if (vk == VK_OEM_MINUS) return shift ? CmdNonBreakingHyphen : CmdOptionalHyphen;
   return 0;
-}
-
-const std::vector<int>& DocPage::InsertCommands() {
-  static const std::vector<int> ids = {CmdPageBreak,         CmdColumnBreak,    CmdSectionNextPage,
-                                       CmdSectionContinuous, CmdSectionEvenPage, CmdSectionOddPage};
-  return ids;
 }
 
 std::pair<uint32_t, uint32_t> DocPage::Sections() const {
@@ -680,6 +668,12 @@ CommandState DocPage::Query(int cmd) {
     s.shortcut = n->keys;
   }
   const bool can = editor_.CanEdit();
+  if (cmd >= CmdIndentLeftBox && cmd <= CmdSpaceAfterBox) {
+    static constexpr const wchar_t* kBoxes[] = {L"Indent left", L"Indent right", L"Spacing before", L"Spacing after"};
+    s.label = kBoxes[cmd - CmdIndentLeftBox];
+    s.enabled = can;
+    return s;
+  }
   const auto [first, last] = Sections();
   const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
   // Breaks go into the main text, where the caret is (not in a header or footer).
@@ -734,6 +728,10 @@ void DocPage::Execute(int cmd) {
       host_.showPanel(panel_.get(), true);
       return;
     case CmdParagraph:
+    case CmdIndentLeftBox:  // a box's KeyTip or command search: the panel with all of them
+    case CmdIndentRightBox:
+    case CmdSpaceBeforeBox:
+    case CmdSpaceAfterBox:
       paraPanel_->Open();
       host_.showPanel(paraPanel_.get(), true);
       return;
@@ -834,46 +832,75 @@ void DocPage::SectionBreak(SectionStart start) {
   host_.apply(r);
 }
 
-void DocPage::AddToolbar(ToolbarModel& m) {
-  // Orientation, margins, then the paper sizes (as Word's Size menu: one click fewer than the
-  // Page setup panel, the friction review), columns, hyphenation and Page setup.
-  static constexpr int kMenu[] = {CmdPortrait,   CmdLandscape,  CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate,
-                                  CmdMarginsWide, CmdColumnsOne, CmdColumnsTwo,    CmdColumnsThree,  CmdHyphenation,
-                                  CmdPageSetup};
-  constexpr int kSizesAt = 6, kSizes = static_cast<int>(std::size(kPapers));
+ToolItem DocPage::SizeMenu() {
   ToolItem t;
-  t.kind = ToolKind::Dropdown;
   t.cmd = CmdLayoutBox;
-  t.width = 52;
-  t.priority = 2;
-  t.glyph = icon::Page;
-  t.tooltip = L"Layout: orientation, margins, paper size, columns and page setup";
+  t.dropdown = true;
+  t.tooltip = L"Size: the paper size";
   t.enabled = editor_.CanEdit();
-  t.sepBefore = true;
-  t.maxRows = static_cast<int>(std::size(kMenu)) + kSizes;
   const auto [first, last] = Sections();
   const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
-  for (int i = 0; i < static_cast<int>(std::size(kMenu)); ++i) {
-    if (i == kSizesAt)
-      for (const Paper& paper : kPapers) {
-        const int32_t w = p ? std::min(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
-        const int32_t h = p ? std::max(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
-        const bool on = p && Near(w, paper.width) && Near(h, paper.height);
-        t.choices.push_back(std::wstring(on ? L"✓ " : L"") + L"Size: " + PaperLabel(paper));
-      }
-    const CommandState q = Query(kMenu[i]);
-    t.choices.push_back(q.checked ? L"✓ " + q.label : q.label);
-  }
+  const int32_t w = p ? std::min(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
+  const int32_t h = p ? std::max(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
+  for (const Paper& paper : kPapers)
+    t.choices.push_back(std::wstring(p && Near(w, paper.width) && Near(h, paper.height) ? L"✓ " : L"") + PaperLabel(paper));
+  t.choices.push_back(L"More paper sizes…");
   t.onChange = [this](const ToolValue& v) {
-    const int i = v.index;
-    if (i >= kSizesAt && i < kSizesAt + kSizes) {
-      PaperSize(static_cast<size_t>(i - kSizesAt));
-      return;
-    }
-    const int cmd = i < kSizesAt ? i : i - kSizes;
-    if (cmd >= 0 && cmd < static_cast<int>(std::size(kMenu))) Execute(kMenu[cmd]);
+    if (v.index >= 0 && v.index < static_cast<int>(std::size(kPapers))) PaperSize(static_cast<size_t>(v.index));
+    else if (v.index == static_cast<int>(std::size(kPapers))) Execute(CmdPageSetup);
   };
-  m.left.push_back(t);
+  return t;
+}
+
+ToolItem DocPage::ParaSpin(int cmd) {
+  ToolItem t;
+  t.kind = ToolKind::SpinBox;
+  t.cmd = cmd;
+  t.width = 100;  // "15,24 cm" beside the spin arrows
+  const CommandState q = Query(cmd);
+  t.tooltip = q.label;
+  const bool indent = cmd == CmdIndentLeftBox || cmd == CmdIndentRightBox;
+  const double longest = FromTwips(kLongest);
+  t.minValue = indent ? -longest : 0;
+  t.maxValue = indent ? longest : 1584;
+  t.step = indent ? (Metric() ? 0.1 : 0.05) : 6;
+  t.decimals = indent ? 2 : 1;
+  t.unit = indent ? Unit() : L" pt";
+  auto [a, f] = host_.selection();
+  if (Before(f, a)) std::swap(a, f);
+  const std::vector<uint32_t> paras =
+      a.para < Doc().Paragraphs().size() && f.para < Doc().Paragraphs().size() ? edit::ParagraphsOf(Doc(), {a, f}) : std::vector<uint32_t>{};
+  t.enabled = q.enabled && !paras.empty();
+  if (!paras.empty()) {
+    const fw::doc::ParaProps first = Doc().ResolvedPara(paras.front());
+    t.value = cmd == CmdIndentLeftBox    ? FromTwips(first.indStart.Value())
+              : cmd == CmdIndentRightBox ? FromTwips(first.indEnd.Value())
+              : cmd == CmdSpaceBeforeBox ? first.spaceBefore.Value() / 20.0
+                                         : first.spaceAfter.Value() / 20.0;
+  }
+  t.onChange = [this, cmd, indent](const ToolValue& v) {
+    edit::ParaFormat pf;
+    const Twips tw(indent ? ToTwips(v.number) : static_cast<int32_t>(std::lround(v.number * 20)));
+    (cmd == CmdIndentLeftBox ? pf.indStart : cmd == CmdIndentRightBox ? pf.indEnd : cmd == CmdSpaceBeforeBox ? pf.spaceBefore : pf.spaceAfter) = tw;
+    FormatParas(pf);
+  };
+  return t;
+}
+
+void DocPage::FormatParas(const edit::ParaFormat& f) {
+  auto [a, b] = host_.selection();
+  if (Before(b, a)) std::swap(a, b);
+  const size_t n = Doc().Paragraphs().size();
+  if (a.para >= n || b.para >= n) return;
+  const edit::Range r{a, b};
+  if (edit::ParagraphsOf(Doc(), r).empty()) return;
+  std::u16string why;
+  if (editor_.CanEdit(&why)) {
+    edit::TreeEdit te(editor_, r.from);
+    edit::FormatParagraphs(te, r, f);
+    why = te.Refused();
+  }
+  host_.formatted(std::wstring(why.begin(), why.end()));
 }
 
 void DocPage::PaperSize(size_t i) {

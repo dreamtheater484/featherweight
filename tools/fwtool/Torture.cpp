@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "Common.h"
+#include "DeckTorture.h"
 #include "DrawingPlaces.h"
 #include "SheetTorture.h"
 #include "Torture.h"
@@ -3016,11 +3017,25 @@ int RunTorture(const Options& options) {
   set.seed = options.seed ? options.seed : 1;
   set.edits = static_cast<uint32_t>(options.edits);
   set.rounds = options.rounds;
-  if (options.replay)
+  if (options.replay) {
+    if (IsDeckReproducer(options.inputs.front())) return ReplayDeck(options.inputs.front(), options.outDir);
     return IsSheetReproducer(options.inputs.front()) ? ReplaySheet(options.inputs.front(), options.outDir)
                                                      : Replay(options.inputs.front(), options.outDir);
+  }
   set.out = options.outDir.empty() ? fs::path("build") / "torture" : options.outDir;
 
+  // Decks (P2, DeckTorture.cpp) only with --decks, and then only them: the document and workbook
+  // runs (scripts\torture.ps1, sheet-torture.ps1) stay as they were; scripts\deck-torture.ps1 has its own.
+  if (options.decks) {
+    std::vector<fs::path> decks;
+    for (const auto& f : CollectFiles(options.inputs))
+      if (IsDeckFile(f)) decks.push_back(f);
+    if (decks.empty()) {
+      std::fprintf(stderr, "No decks found.\n");
+      return 1;
+    }
+    return RunDeckTorture(options, decks, false);
+  }
   std::vector<fs::path> files, workbooks;  // workbooks: SheetTorture.cpp (S2)
   for (const auto& f : CollectFiles(options.inputs)) {
     if (IsWordFile(f)) {
@@ -3043,7 +3058,7 @@ int RunTorture(const Options& options) {
   }
   if (files.empty()) {
     if (!workbooks.empty()) return RunSheetTorture(options, workbooks, false);
-    std::fprintf(stderr, "No Word documents or workbooks found.\n");
+    std::fprintf(stderr, "No Word documents or workbooks found (decks: --decks).\n");
     return 1;
   }
   std::error_code ec;

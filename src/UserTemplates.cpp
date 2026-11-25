@@ -39,7 +39,7 @@ std::vector<std::wstring> Folders() {
       if (fw::EqualsNoCase(o, f)) return;
     out.push_back(std::move(f));
   };
-  for (const wchar_t* app : {L"Word", L"Excel"})
+  for (const wchar_t* app : {L"Word", L"Excel", L"PowerPoint"})
     if (std::wstring f = OfficeOption(app); !f.empty() && IsFolder(f)) add(f);
   PWSTR docs = nullptr;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {
@@ -57,6 +57,8 @@ std::vector<std::wstring> List(size_t max, const std::vector<std::wstring>& fold
     for (const wchar_t* e : {L".dotx", L".dotm", L".ott"}) exts.push_back(e);
   if (fw::EditorShipped(fw::FileKind::Workbook))
     for (const wchar_t* e : {L".xltx", L".xltm", L".ots"}) exts.push_back(e);
+  if (fw::EditorShipped(fw::FileKind::Presentation))
+    for (const wchar_t* e : {L".potx", L".potm", L".otp"}) exts.push_back(e);
   std::vector<std::wstring> out;
   if (exts.empty()) return out;
   for (const std::wstring& folder : folders) {

@@ -911,6 +911,46 @@ void Checker::CheckPresentation() {
   }
   if (masters.empty() && !slides.empty()) Error(main, "the deck has slides but lists no slide master (sldMasterIdLst)");
 
+  // Sections (p14:sectionLst in presentation.xml's extension list, P2: slide operations keep them).
+  // A section naming a slide id that isn't there is the registry's (an error, though PowerPoint opens
+  // it without a repair). PowerPoint 2021's verdicts (scripts\powerpoint-open-check-proof.ps1, the
+  // section variants, 2026-11-22): it repairs a slide in two sections and two sections with one id
+  // (errors); it opens a slide in no section while the deck has sections as it is (a warning).
+  {
+    std::vector<std::string> slideIds;
+    pugi::xml_node sectionLst;
+    for (pugi::xml_node list : pres->dom.Root().children()) {
+      if (IsPresentationElement(list, "sldIdLst")) {
+        for (pugi::xml_node n : list.children())
+          if (IsPresentationElement(n, "sldId")) slideIds.emplace_back(n.attribute("id").value());
+      } else if (IsPresentationElement(list, "extLst")) {
+        for (pugi::xml_node ext : list.children())
+          for (pugi::xml_node c : ext.children())
+            if (c.type() == pugi::node_element && LocalNameOf(c) == "sectionLst") sectionLst = c;
+      }
+    }
+    if (sectionLst) {
+      std::map<std::string, std::string> sectionOf;  // slide id -> its section's name
+      std::set<std::string> sectionIds;
+      for (pugi::xml_node section : sectionLst.children()) {
+        if (section.type() != pugi::node_element || LocalNameOf(section) != "section") continue;
+        const std::string name = section.attribute("name").value();
+        if (!sectionIds.insert(section.attribute("id").value()).second)
+          Error(main, "section " + Quote(name) + " has the id of another section");
+        for (pugi::xml_node list : section.children()) {
+          if (list.type() != pugi::node_element || LocalNameOf(list) != "sldIdLst") continue;
+          for (pugi::xml_node s : list.children()) {
+            if (s.type() != pugi::node_element || LocalNameOf(s) != "sldId") continue;
+            auto [it, fresh] = sectionOf.emplace(s.attribute("id").value(), name);
+            if (!fresh) Error(main, "slide id " + it->first + " is in two sections, " + Quote(it->second) + " and " + Quote(name));
+          }
+        }
+      }
+      for (const std::string& id : slideIds)
+        if (!sectionOf.contains(id)) Warn(main, "slide id " + id + " is in no section, though the deck has sections");
+    }
+  }
+
   // Each master's layouts, from its sldLayoutIdLst.
   std::map<std::string, std::set<std::string>> layoutsOf;  // master -> layouts
   for (auto& p : parts_) {
@@ -938,6 +978,40 @@ void Checker::CheckPresentation() {
           if (!r.external && TypeIs(r.type, type) && pkg_.FindPart(r.targetPart)) out.push_back(&r);
       return out;
     };
+    // A link to another slide (ppaction://hlinksldjump) names that slide by a relationship. Without
+    // one, or with r:id="", PowerPoint 2021 repairs the deck (the proof's slide-jump variants,
+    // 2026-11-22); a dangling id is the registry's to report.
+    {
+      std::vector<pugi::xml_node> stack{p->dom.Root()};
+      size_t found = 0;
+      while (!stack.empty()) {
+        pugi::xml_node n = stack.back();
+        stack.pop_back();
+        for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling())
+          if (c.type() == pugi::node_element) stack.push_back(c);
+        const std::string_view local = LocalNameOf(n);
+        if ((local == "hlinkClick" || local == "hlinkHover") &&
+            std::string_view(n.attribute("action").value()).starts_with("ppaction://hlinksldjump") && RelIdOf(n).empty())
+          ++found;
+      }
+      if (found)
+        Error(p->name, std::to_string(found) + (found == 1 ? " link" : " links") +
+                           " to another slide without the slide's relationship (r:id): PowerPoint repairs the deck");
+    }
+    // The outline view's slide list (viewProps.xml, p:outlineViewPr/p:sldLst) names each slide by a
+    // relationship too: an entry with r:id="" makes PowerPoint 2021 repair the deck (a deleted slide's
+    // entry left behind, the TUM lecture deck, 2026-11-22).
+    if (kind == "viewProps") {
+      size_t found = 0;
+      for (pugi::xml_node view : p->dom.Root().children())
+        for (pugi::xml_node list : view.children())
+          if (IsPresentationElement(list, "sldLst"))
+            for (pugi::xml_node n : list.children())
+              if (IsPresentationElement(n, "sld") && RelIdOf(n).empty()) ++found;
+      if (found)
+        Error(p->name, std::to_string(found) + (found == 1 ? " slide" : " slides") +
+                           " in the outline view's list without the slide's relationship (r:id): PowerPoint repairs the deck");
+    }
     if (kind == "slide") {
       auto layouts = targets("slideLayout");
       if (layouts.empty()) Error(p->name, "a slide with no layout");

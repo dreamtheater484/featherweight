@@ -16,6 +16,12 @@
   last entry in the ledger. It fails when a time is more than 10 % slower or memory 10 % more,
   when memory after launch or launch time is over its budget, or when anything runs while idle.
   -TrackTimings measures and reports without failing: CI's runners are too noisy to gate on.
+  With the timings, P2's editing budgets on the 50-slide deck (fwtool bench --decks, through the edit
+  API, each to the slide drawn again): a keystroke in a text box under 16 ms typical and 50 ms worst, new,
+  duplicate, delete and move slide under 50 ms, undo under 50 ms; the ledger's deckEditing entries are
+  their baseline. A build without the deck edit API skips them with a note. P3's: nothing runs while
+  a deck with a 1080p video on its first slide is open in the editor (deck-video.pptx, made where
+  ffmpeg is on the PATH).
 
   Large files, with -Large: the very large files of plan section 11, which
   tests\office\make_budget_files.py makes in build\budgets: the 1-million-cell workbook ready in
@@ -43,6 +49,8 @@ param(
   [string]$Record,
   [string]$Json,
   [string]$Fwtool,
+  # The Python with python-pptx that makes the timed decks (another worktree's venv will do).
+  [string]$VenvPython,
   # With -Record: sizes measured elsewhere, such as on CI, whose log prints the command.
   [string]$Toolset, [long]$ExeBytes, [long]$DownloadBytes
 )
@@ -57,7 +65,8 @@ $sizeStep = 50KB           # an increase over this needs a reason in the ledger
 # Featherweight.exe: the budget of the release being built (decision 22).
 # $exeBudget = 4MB         # until 1.1 (history)
 # $exeBudget = 7MB         # 2.0, which D2 to D5 aimed at (history)
-$exeBudget = 11MB          # 3.0: from S2 on, main carries spreadsheet editing (decision 24)
+# $exeBudget = 11MB        # 3.0 and 3.1: from S2 on, main carries spreadsheet editing (decision 24)
+$exeBudget = 15MB          # 4.0: from P2 on, main carries presentation editing (§9: P2, R1, P3)
 $downloadBudget = 25MB     # the installer or zip, with PDFium
 $launchMemoryBudget = 40   # MB, the private working set right after launch
 $launchBudget = 300        # ms, launch to the window drawn
@@ -85,12 +94,16 @@ $deckMemoryBudget = 150    # MB, the private working set with deck-typical.pptx 
 # and Backspaces, and the worst of every key, Enter included.
 $typingBudget = 16; $typingWorstBudget = 50  # ms
 $typingFloorMs = 1         # a typing change smaller than this is noise
+# Editing a deck (P2, fwtool bench --decks on deck-50.pptx), each from the edit to the slide drawn
+# again: a keystroke in a text box, a slide operation (new, duplicate, delete, move) and its undo.
+$deckTypingBudget = 16; $deckTypingWorstBudget = 50; $deckOpBudget = 50; $deckUndoBudget = 50  # ms
 
 $ledgerPath = Join-Path $root "tests\budgets\ledger.json"
 $ledger = Get-Content $ledgerPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $sizes = @($ledger.sizes | Where-Object { $_ })
 $timingEntries = @($ledger.timings | Where-Object { $_ })
 $typingEntries = @($ledger.typing | Where-Object { $_ })
+$deckEditEntries = @($ledger.deckEditing | Where-Object { $_ })
 $failures = New-Object Collections.Generic.List[string]
 
 function Format-Bytes([long]$n) { "{0:N0}" -f $n }
@@ -154,7 +167,8 @@ function Write-Ledger([string]$path) {
           "  `"about`": " + (& $line $ledger.about) + ",`n" +
           "  `"sizes`": " + (& $list $sizes) + ",`n" +
           "  `"timings`": " + (& $list $timingEntries) + ",`n" +
-          "  `"typing`": " + (& $list $typingEntries) + "`n}`n"
+          "  `"typing`": " + (& $list $typingEntries) +
+          $(if ($deckEditEntries.Count) { ",`n  `"deckEditing`": " + (& $list $deckEditEntries) } else { "" }) + "`n}`n"
   [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
 }
 
@@ -226,11 +240,13 @@ if (($Timings -or $TrackTimings) -and $exe) {
     & python tests\office\make_long_docs.py $longDir 300 | Out-Null
     if (Test-Path (Join-Path $longDir $longDoc)) { $files += (Join-Path $longDir $longDoc) }
   }
-  $venvPython = Join-Path $root ".venv\Scripts\python.exe"
+  $venvPython = if ($VenvPython) { $VenvPython } else { Join-Path $root ".venv\Scripts\python.exe" }
   if (Test-Path $venvPython) {
     New-Item -ItemType Directory -Force $longDir | Out-Null
     & $venvPython -I tests\office\make_budget_files.py --decks $longDir | Out-Null
-    foreach ($d in "deck-50.pptx", "deck-typical.pptx") { if (Test-Path (Join-Path $longDir $d)) { $files += (Join-Path $longDir $d) } }
+    # deck-video.pptx (P3): nothing may run while a deck with a video on its first slide is open, and
+    # Media Foundation isn't loaded until a video plays. It's made only where ffmpeg is on the PATH.
+    foreach ($d in "deck-50.pptx", "deck-typical.pptx", "deck-video.pptx") { if (Test-Path (Join-Path $longDir $d)) { $files += (Join-Path $longDir $d) } }
   }
   ""
   & $Fwtool bench-app --runs $Runs --json $benchJson $exe @files | Out-Host
@@ -249,6 +265,26 @@ if (($Timings -or $TrackTimings) -and $exe) {
                             worstMs = $typingFile.worstMs; places = @($typingFile.places) }
     }
     Remove-Item $typingJson -ErrorAction SilentlyContinue
+  }
+  # Editing the 50-slide deck (P2): through the edit API, so only once the build has it.
+  $deckEdit = $null; $deckEditTried = $false; $deckEditNote = $null
+  $deckPath = Join-Path $longDir "deck-50.pptx"
+  if (Test-Path $deckPath) {
+    $deckJson = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-deck-edits-$PID.json"
+    ""
+    & $Fwtool bench --decks --runs $Runs --json $deckJson $deckPath | Out-Host
+    $deckFile = if (Test-Path $deckJson) { (Get-Content $deckJson -Raw | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
+    if ($deckFile -and @($deckFile.failures | Where-Object { $_ -match '\(edits through: none:' }).Count) {
+      $deckEditNote = "Deck editing not measured: this build has no edit API for decks yet."
+    } else {
+      $deckEditTried = $true
+      if ($deckFile -and $deckFile.typing.keys -gt 0) {
+        $deckEdit = [ordered]@{ deck = "deck-50.pptx"; slides = $deckFile.slides; typingMs = $deckFile.typing.typicalMs
+                                typingWorstMs = $deckFile.typing.worstMs; ops = $deckFile.ops; undoWorstMs = $deckFile.undo.worstMs
+                                saveMs = $deckFile.saveMs }
+      }
+    }
+    Remove-Item $deckJson -ErrorAction SilentlyContinue
   }
   Remove-Item $longDir -Recurse -ErrorAction SilentlyContinue
   $bench = if (Test-Path $benchJson) { Get-Content $benchJson -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
@@ -316,7 +352,32 @@ if (($Timings -or $TrackTimings) -and $exe) {
       }
     }
   }
-  $report.timings = [ordered]@{ machine = $machine; runs = $Runs; bench = $bench; typing = $typing; failures = @($timingFailures) }
+  if ($deckEditNote) { Write-Host $deckEditNote -ForegroundColor Yellow }
+  if ($deckEditTried) {
+    if (-not $deckEdit) {
+      $timingFailures.Add("fwtool bench --decks didn't measure editing the 50-slide deck.")
+    } else {
+      $deckThen = $deckEditEntries | Where-Object { $_.machine -eq $machine } | Select-Object -Last 1
+      $measures = @(@{ label = "deck typing"; now = [double]$deckEdit.typingMs; was = $deckThen.typingMs; budget = $deckTypingBudget; what = "a keystroke in a text box (typical)" },
+                    @{ label = "deck worst key"; now = [double]$deckEdit.typingWorstMs; was = $deckThen.typingWorstMs; budget = $deckTypingWorstBudget; what = "the worst keystroke in a text box" },
+                    @{ label = "deck undo"; now = [double]$deckEdit.undoWorstMs; was = $deckThen.undoWorstMs; budget = $deckUndoBudget; what = "undo of a slide operation (worst)" })
+      foreach ($op in $deckEdit.ops.PSObject.Properties) {
+        $measures += @{ label = "deck $($op.Name)"; now = [double]$op.Value.worstMs; was = $(if ($deckThen) { $deckThen.ops.($op.Name).worstMs } else { $null })
+                        budget = $deckOpBudget; what = "$($op.Name) slide on a 50-slide deck (worst)" }
+      }
+      foreach ($m in $measures) {
+        $was = if ($null -ne $m.was) { [double]$m.was } else { $null }
+        "{0,-20} {1,-14} {2,10} {3,10} {4,22}" -f "deck-50.pptx", $m.label, ("{0:N2}" -f $m.now), $(if ($null -ne $was) { "{0:N2}" -f $was } else { "-" }),
+          $(if ($null -ne $was) { Format-Change $m.now $was "ms" } else { "" })
+        if ($m.now -ge $m.budget) { $timingFailures.Add(("Editing a deck: {0} took {1:N1} ms, over its budget of {2} ms." -f $m.what, $m.now, $m.budget)) }
+        if ($null -ne $was -and $m.now -gt $was * (1 + $slower) -and $m.now - $was -gt $typingFloorMs) {
+          $timingFailures.Add(("Editing a deck: {0} went from {1:N2} to {2:N2} ms, more than {3} % worse, and the ledger doesn't say why." -f
+                               $m.what, $was, $m.now, ($slower * 100)))
+        }
+      }
+    }
+  }
+  $report.timings = [ordered]@{ machine = $machine; runs = $Runs; bench = $bench; typing = $typing; deckEditing = $deckEdit; failures = @($timingFailures) }
   if ($TrackTimings) {
     foreach ($f in $timingFailures) { Write-Host "Tracked, not gated: $f" -ForegroundColor Yellow }
   } else {
@@ -379,6 +440,13 @@ if ($Record) {
       date = $today; machine = $env:COMPUTERNAME; version = $version; commit = $commit; toolset = $tool.name; runs = $Runs
       document = $typing.document; pages = $typing.pages; typicalMs = $typing.typicalMs; worstMs = $typing.worstMs
       places = $typing.places; reason = $Record
+    }
+  }
+  if ($deckEdit) {
+    $deckEditEntries += [pscustomobject][ordered]@{
+      date = $today; machine = $env:COMPUTERNAME; version = $version; commit = $commit; toolset = $tool.name; runs = $Runs
+      deck = $deckEdit.deck; slides = $deckEdit.slides; typingMs = $deckEdit.typingMs; typingWorstMs = $deckEdit.typingWorstMs
+      ops = $deckEdit.ops; undoWorstMs = $deckEdit.undoWorstMs; saveMs = $deckEdit.saveMs; reason = $Record
     }
   }
   Write-Ledger $ledgerPath

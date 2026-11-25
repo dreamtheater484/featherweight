@@ -277,7 +277,7 @@ foreach ($f in @($files)) {
   $r = $null
   while (-not $p.WaitForExit(250)) {
     if ((Get-Date) -gt $deadline) { break }
-    try { $r = Get-Content $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { continue }
+    try { $r = Get-Content $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } catch { continue }
     if (-not $r.opening) { continue }
     foreach ($h in [FwWindows]::TopLevel([int[]]@($r.pid))) {
       $class = [FwWindows]::ClassOf($h)
@@ -295,7 +295,7 @@ foreach ($f in @($files)) {
   }
   $finished = $p.HasExited
   if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  try { $r = Get-Content $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+  try { $r = Get-Content $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } catch {}
   # The child ends the Word it started; if it hung or died, that's done here.
   if ($r) { Stop-Started @($r.pid) $(if ($finished) { 15000 } else { 0 }) }
   if ($r -and $r.error) { $entry.error = $r.error }

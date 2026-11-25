@@ -51,12 +51,13 @@ TEST(FileKinds_KindOfPath) {
   CHECK(KindOfPath(L"") == FileKind::Unknown);
 }
 
-TEST(FileKinds_ThePdfReaderTheEditorsAndThePresentationViewerHaveShipped) {
+TEST(FileKinds_ThePdfReaderAndTheThreeEditorsHaveShipped) {
   // Update this when a viewer or an editor ships: file associations and the start screen follow.
   CHECK(ShippedViewers() ==
         (std::vector<FileKind>{FileKind::Pdf, FileKind::Document, FileKind::Workbook, FileKind::Presentation}));
   CHECK(EditorShipped(FileKind::Document) && AnyEditorShipped());
-  CHECK(EditorShipped(FileKind::Workbook) && !EditorShipped(FileKind::Presentation));  // 3.0 (S4)
+  CHECK(EditorShipped(FileKind::Workbook));      // 3.0 (S4)
+  CHECK(EditorShipped(FileKind::Presentation));  // 4.0 (P2, P3)
   CHECK(ViewerShipped(FileKind::Pdf));
   CHECK(ViewerShipped(FileKind::Document));
   CHECK(ViewerShipped(FileKind::Workbook));  // S1
@@ -71,7 +72,9 @@ TEST(FileKinds_ThePdfReaderTheEditorsAndThePresentationViewerHaveShipped) {
   CHECK(Opens(L"old.XLS"));  // .xls is imported (S4)
   CHECK(Opens(L"sheet.ods") && Opens(L"Form.OTS"));  // .ods is imported (S4)
   CHECK(Opens(L"Deck.pptx") && Opens(L"Show.PPSX") && Opens(L"Macros.pptm") && Opens(L"Theme.potx"));  // P1
-  CHECK(!Opens(L"old.ppt") && !Opens(L"slides.odp") && !Opens(L"photo.png"));  // .ppt and .odp come in P3
+  CHECK(Opens(L"old.ppt") && Opens(L"Show.PPS") && Opens(L"Design.pot"));  // .ppt is imported (P3)
+  CHECK(Opens(L"slides.odp") && Opens(L"Theme.OTP"));  // .odp is imported (P3)
+  CHECK(!Opens(L"photo.png"));
 }
 
 TEST(FileKinds_EditorsForTesting) {
@@ -83,7 +86,7 @@ TEST(FileKinds_EditorsForTesting) {
   SetEditorShippedForTesting(FileKind::Pdf, true);  // PDFs are read, not created
   CHECK(!EditorShipped(FileKind::Pdf));
   SetEditorShippedForTesting(FileKind::Presentation, false);
-  CHECK(!EditorShipped(FileKind::Presentation));
+  CHECK(EditorShipped(FileKind::Presentation));  // shipped in 4.0, not only for testing
   CHECK(EditorShipped(FileKind::Workbook));  // shipped in 3.0 (S4), not only for testing
   CHECK(EditorShipped(FileKind::Document));  // shipped, not only for testing
 }

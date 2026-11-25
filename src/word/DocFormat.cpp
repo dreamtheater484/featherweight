@@ -14,6 +14,7 @@
 #include "doc/edit/TreeEdit.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
+#include "ui/Theme.h"
 
 namespace edit = fw::doc::edit;
 using fw::doc::Justification;
@@ -219,17 +220,6 @@ uint32_t RgbOf(D2D1_COLOR_F c) {
 
 bool SameRange(const edit::Range& a, const edit::Range& b) { return a.from == b.from && a.to == b.to; }
 
-wchar_t AlignGlyph(std::optional<Justification> jc) {
-  if (!jc) return icon::AlignLeft;
-  switch (*jc) {
-    case Justification::Center: return icon::AlignCenter;
-    case Justification::End: return icon::AlignRight;
-    case Justification::Both:
-    case Justification::Distribute: return icon::AlignJustify;
-    default: return icon::AlignLeft;
-  }
-}
-
 }  // namespace
 
 DocFormat::DocFormat(edit::Editor& editor, std::function<Target()> target, std::function<void(const Done&)> done)
@@ -321,6 +311,12 @@ CommandState DocFormat::Query(int cmd) {
     s.label = n->label;
     s.shortcut = n->keys;
   }
+  // The boxes and menus (the ribbon's tooltips and checks); command search doesn't list them.
+  static constexpr std::pair<int, const wchar_t*> kBoxes[] = {{CmdStyleBox, L"Styles"},    {CmdFontBox, L"Font"},
+                                                               {CmdSizeBox, L"Font size"}, {CmdCaseBox, L"Change case"},
+                                                               {CmdAlignBox, L"Line and paragraph spacing"}, {CmdInsertBox, L"Insert"}};
+  for (const auto& [id, label] : kBoxes)
+    if (id == cmd) s.label = label;
   const bool on = target_().any && Editable();
   s.enabled = on;
   switch (cmd) {
@@ -704,39 +700,13 @@ void DocFormat::InsertDateTime(size_t index) {
   done_(d);
 }
 
-void DocFormat::AddToolbar(ToolbarModel& m) {
-  const bool on = target_().any && Editable();
+ToolItem DocFormat::StyleBox() {
   const edit::FormatState& st = State();
-  auto button = [&](int cmd, wchar_t glyph) {
-    CommandState q = Query(cmd);
-    ToolItem t;
-    t.cmd = cmd;
-    t.glyph = glyph;
-    t.tooltip = q.Tooltip();
-    t.enabled = q.enabled;
-    t.checked = q.checked;
-    return t;
-  };
-  auto toggleButton = [&](int cmd, wchar_t glyph) {
-    ToolItem t = button(cmd, glyph);
-    t.toggle = true;
-    return t;
-  };
-
-  // Priorities: what goes first when the window is narrow (Toolbar.h). Bold, italic and underline stay.
-  auto with = [](ToolItem t, int priority) {
-    t.priority = priority;
-    return t;
-  };
-  // Styles, font and size.
   ToolItem style;
   style.kind = ToolKind::Dropdown;
   style.cmd = CmdStyleBox;
-  style.width = 116;
-  style.priority = 6;
   style.tooltip = L"Styles";
-  style.enabled = on;
-  style.sepBefore = true;
+  style.enabled = target_().any && Editable();
   const auto& gallery = Gallery();
   for (size_t i = 0; i < gallery.size(); ++i) {
     style.choices.push_back(W(std::string_view(gallery[i].name)));
@@ -744,37 +714,36 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   }
   if (style.choice < 0 && st.paraStyle)
     if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = W(std::string_view(edit::DisplayName(s->name)));
-  for (const auto& [label, run] : styleMore) style.choices.push_back(label);
   style.onChange = [this](const ToolValue& v) {
     const auto& g = Gallery();
     const int n = static_cast<int>(g.size());
     if (v.index >= 0 && v.index < n)
       ApplyStyle(W(std::string_view(g[v.index].id.empty() ? g[v.index].name : g[v.index].id)));
-    else if (v.index >= n && v.index < n + static_cast<int>(styleMore.size()))
-      styleMore[static_cast<size_t>(v.index - n)].second();
   };
-  m.left.push_back(style);
+  return style;
+}
 
+ToolItem DocFormat::FontBox() {
+  const edit::FormatState& st = State();
   ToolItem font;
   font.kind = ToolKind::ComboBox;
   font.cmd = CmdFontBox;
-  font.width = 116;
-  font.priority = 6;
   font.tooltip = L"Font";
-  font.enabled = on;
+  font.enabled = target_().any && Editable();
   font.choices = ThemeFontChoices(Doc());
   font.choices.insert(font.choices.end(), Families().begin(), Families().end());
   font.text = st.font ? W(std::string_view(*st.font)) : std::wstring();
   font.onChange = [this](const ToolValue& v) { ApplyFont(v.text); };
-  m.left.push_back(font);
+  return font;
+}
 
+ToolItem DocFormat::SizeBox() {
+  const edit::FormatState& st = State();
   ToolItem size;
   size.kind = ToolKind::ComboBox;
   size.cmd = CmdSizeBox;
-  size.width = 56;
-  size.priority = 6;
   size.tooltip = L"Font size";
-  size.enabled = on;
+  size.enabled = target_().any && Editable();
   size.choices = Sizes();
   size.text = st.size ? PointsText(*st.size) : std::wstring();
   size.validate = [](std::wstring& text) {
@@ -785,107 +754,68 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     return true;
   };
   size.onChange = [this](const ToolValue& v) { ApplySize(std::wcstod(v.text.c_str(), nullptr)); };
-  m.left.push_back(size);
+  return size;
+}
 
-  m.left.push_back(toggleButton(CmdBold, icon::Bold));
-  m.left.push_back(toggleButton(CmdItalic, icon::Italic));
-  m.left.push_back(toggleButton(CmdUnderline, icon::Underline));
-
-  auto colorButton = [&](int cmd, wchar_t glyph, D2D1_COLOR_F color, const wchar_t* automaticLabel, bool highlight) {
-    ToolItem t = button(cmd, glyph);
-    t.kind = ToolKind::SplitButton;
-    t.width = 52;
-    t.colors = true;
-    t.color = color;
-    t.automaticLabel = automaticLabel;
-    t.onChange = [this, highlight](const ToolValue& v) {
-      if (!v.automatic) (highlight ? highlight_ : fontColor_) = v.color;
-      ApplyColor(v.color, v.automatic, highlight);
-    };
-    return t;
-  };
-  if (!themeRead_) {
-    themeColors_ = ThemeColors(Doc());
-    themeRead_ = true;
+ToolItem DocFormat::ColorButton(bool highlight) {
+  const int cmd = highlight ? CmdHighlightColor : CmdFontColor;
+  const CommandState q = Query(cmd);
+  ToolItem t;
+  t.cmd = cmd;
+  t.glyph = highlight ? icon::Highlight : icon::FontColor;
+  t.tooltip = q.Tooltip();
+  t.enabled = q.enabled;
+  t.kind = ToolKind::SplitButton;
+  t.width = 52;
+  t.colors = true;
+  t.color = highlight ? highlight_ : fontColor_;
+  t.automaticLabel = highlight ? L"No color" : L"Automatic";
+  if (!highlight) {
+    if (!themeRead_) {
+      themeColors_ = ThemeColors(Doc());
+      themeRead_ = true;
+    }
+    t.theme = themeColors_;
   }
-  ToolItem fontColor = with(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false), 5);
-  fontColor.theme = themeColors_;
-  m.left.push_back(fontColor);
-  m.left.push_back(with(colorButton(CmdHighlightColor, icon::Highlight, highlight_, L"No color", true), 4));
-  ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
-  painter.enabled = on;
-  m.left.push_back(painter);
-  ToolItem caseBox;
-  caseBox.kind = ToolKind::Dropdown;
-  caseBox.cmd = CmdCaseBox;
-  caseBox.width = 44;
-  caseBox.priority = 2;
-  caseBox.text = L"Aa";
-  caseBox.tooltip = L"Change case (Shift+F3)";
-  caseBox.enabled = on;
-  for (int c = CmdCaseSentence; c <= CmdCaseToggle; ++c) caseBox.choices.push_back(NameOf(c)->label);
-  caseBox.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index <= CmdCaseToggle - CmdCaseSentence) Execute(CmdCaseSentence + v.index);
+  t.onChange = [this, highlight](const ToolValue& v) {
+    if (!v.automatic) (highlight ? highlight_ : fontColor_) = v.color;
+    ApplyColor(v.color, v.automatic, highlight);
   };
-  m.left.push_back(caseBox);
+  return t;
+}
 
-  // Paragraphs and lists.
-  ToolItem alignBox;
-  alignBox.kind = ToolKind::Dropdown;
-  alignBox.cmd = CmdAlignBox;
-  alignBox.width = 52;
-  alignBox.priority = 5;
-  alignBox.glyph = AlignGlyph(st.jc);
-  alignBox.tooltip = L"Paragraph: alignment, line spacing, borders and shading";
-  alignBox.enabled = on;
-  alignBox.sepBefore = true;
-  static constexpr int kParagraph[] = {CmdAlignLeft,  CmdAlignCenter,  CmdAlignRight, CmdAlignJustify, CmdSpacing1,
-                                       CmdSpacing115, CmdSpacing15,    CmdSpacing2,   CmdBorderBox,    CmdBorderBottom,
-                                       CmdBorderNone, CmdShading,      CmdShadingNone};
-  for (int cmd : kParagraph) {
-    const Named* n = NameOf(cmd);
-    alignBox.choices.push_back(*n->keys ? std::wstring(n->label) + L" (" + n->keys + L")" : std::wstring(n->label));
-  }
-  alignBox.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kParagraph))) Execute(kParagraph[v.index]);
-  };
-  m.left.push_back(alignBox);
-  m.left.push_back(with(toggleButton(CmdBullets, icon::BulletedList), 7));
-  ToolItem numbering = with(button(CmdNumbering, icon::NumberedList), 6);
-  numbering.kind = ToolKind::SplitButton;
-  numbering.width = 52;
-  numbering.choices = {L"Numbering 1. a. i.", L"Multilevel list 1. 1.1. 1.1.1.", L"Restart numbering at 1", L"Continue numbering"};
-  numbering.onChange = [this](const ToolValue& v) {
-    static constexpr int kCmds[] = {CmdNumbering, CmdMultilevel, CmdRestartNumbering, CmdContinueNumbering};
-    if (v.index >= 0 && v.index < 4) Execute(kCmds[v.index]);
-  };
-  m.left.push_back(numbering);
-  m.left.push_back(with(button(CmdOutdent, icon::DecreaseIndent), 2));
-  m.left.push_back(with(button(CmdIndent, icon::IncreaseIndent), 2));
-
-  // Insert: date and time, for now.
-  ToolItem insert;
-  insert.kind = ToolKind::Dropdown;
-  insert.cmd = CmdInsertBox;
-  insert.width = 104;
-  insert.priority = 4;  // after change case, the indents, ¶, the painter and Highlight (friction review)
-  insert.maxRows = 24;
-  insert.glyph = icon::Add;
-  insert.text = insert.menuLabel = L"Insert";
-  insert.tooltip = L"Insert a picture, a break, the date or the time";
-  insert.enabled = on;
-  insert.sepBefore = true;
+ToolItem DocFormat::DateBox() {
+  ToolItem t;
+  t.cmd = CmdInsertDate;
+  t.glyph = icon::Calendar;
+  t.dropdown = true;
+  t.tooltip = L"Date and time";
+  t.enabled = target_().any && Editable();
   std::vector<std::wstring> pictures;
-  insert.choices = {L"Picture…"};
-  for (const auto& [label, run] : insertMore) insert.choices.push_back(label);
-  std::vector<std::wstring> dates;
-  DateFormats(pictures, dates);
-  insert.choices.insert(insert.choices.end(), dates.begin(), dates.end());
-  insert.onChange = [this](const ToolValue& v) {
-    const int more = static_cast<int>(insertMore.size());
-    if (v.index == 0 && insertPicture) insertPicture();
-    else if (v.index > 0 && v.index <= more) insertMore[static_cast<size_t>(v.index - 1)].second();
-    else if (v.index > more) InsertDateTime(static_cast<size_t>(v.index - 1 - more));
+  DateFormats(pictures, t.choices);
+  t.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0) InsertDateTime(static_cast<size_t>(v.index));
   };
-  m.left.push_back(insert);
+  return t;
+}
+
+void DocFormat::StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, float ui) {
+  const auto& g = Gallery();
+  if (index < 0 || index >= static_cast<int>(g.size())) return;
+  const fw::doc::RunProps run = Doc().StyleChainRun(g[static_cast<size_t>(index)].id);
+  const Palette& p = theme::P();
+  D2D1_COLOR_F color = p.text;
+  if (!run.color.automatic) {
+    const uint32_t v = run.color.rgb;
+    color = D2D1::ColorF(((v >> 16) & 0xFF) / 255.f, ((v >> 8) & 0xFF) / 255.f, (v & 0xFF) / 255.f);
+  }
+  // Word's sizes, as far as the box allows: Normal at 11 pt, a title at 28 pt shown at 18.
+  const float px = std::clamp(run.size.Value() / 2.0f, 9.0f, 18.0f) * 1.2f * ui;
+  const float nameH = 18 * ui;
+  c.PushClip(r);
+  c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
+         run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  c.Text(W(std::string_view(g[static_cast<size_t>(index)].name)), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
+         p.textSecondary, 11 * ui, DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  c.PopClip();
 }

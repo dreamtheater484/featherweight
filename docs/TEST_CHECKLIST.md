@@ -489,9 +489,286 @@ Roy passed these checks on 2026-11-24, with the gate build (`ea3fe681` plus the 
 
 Measured on the gate code, p1-int `ea3fe681` (later P1 commits are docs and the ledger), on 2026-11-24.
 
-- [x] Slides against PowerPoint's (`scripts\slide-pages.ps1`): the real-world corpus (`-Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders pptx`) 2,369 of 2,516 slides, 94.16 % (target ≥ 90 %); the public set (`-Reference tests\office\reference -Folders presentations`) 92 of 97 slides, 94.85 %.
+- [x] Slides against PowerPoint's (`scripts\slide-pages.ps1`): the real-world corpus (`-Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders pptx`) 2,370 of 2,516 slides, 94.20 % (target ≥ 90 %). That's on 4.0's final head (6fe39e23, 2026-11-24); P1's build gave 2,369, 94.16 %. The public set (`-Reference tests\office\reference -Folders presentations`): 92 of 97 slides, 94.85 %, the same on 6fe39e23.
 - [x] `fwtool check` and the Open XML SDK validator (`build\validate\fwvalidate.exe`) on every corpus and public deck: `fwtool check` 0 failed on all 170 (152 corpus, 18 public); the validator 0 errors on the 18 public decks and on 141 of the 152 corpus decks (target 0). The other 11 have 71 schema errors in their downloaded originals (P1 never saves a deck). By the coordinator's decision of 2026-11-24 in p1-plan, they're P2's baseline, not P1 failures: P2's check is that a saved deck adds no errors to its original's (`fwvalidate --compare`).
 - [x] `fuzz_pptx` and the animation timing fuzzer (`fuzz_timing`), 60 s each: no findings (CI on p1-int `9797b268`: 1,929 and 243,759 runs, "All fuzz targets ran without findings").
 - [x] On a quiet PC with no Featherweight open: a 50-slide `.pptx` to its first slide in 273 ms, on screen at 107 ms (target < 500 ms); memory with a typical deck 30.3 MB (target < 150 MB); nothing runs when idle (0 % CPU, no timers) with a deck open: 0 ms of idle CPU and no wake-ups with each deck; the slide show at 240 fps on a 240 Hz display, 0 dropped frames during transitions 2–50 (target: the display's rate, none dropped). From `scripts\budgets.ps1 -Timings` at the console (5120×1440), 2026-11-24 09:29 (ledger `c7db3b25`), and p1-plan's frame-bench decision of 2026-11-24: 50 transitions, 12,085 frames, worst frame interval 7.28 ms (under 2 refreshes), CPU per frame p99 0.48 ms. Slide 1's 3–4 counted misses are the bench's queue model, not frames; a second run had one 23 ms present stall from outside (other sessions' builds winding down).
 - [x] The shipped exe (`scripts\budgets.ps1` on `build-release`): 10.63 MB, 11,149,824 bytes (target ≤ 11.05 MB: 10.05 MB after S4 plus ≤ 1.0 MB in P1), 597 KB over S4.
 - [x] Opening a PDF, a document and a workbook is no slower than at S4 (`scripts\budgets.ps1 -Timings` against S4's numbers): PDF 102.7 ms, document 125.9 ms, workbook 598 ms (`text.pdf`, `report.docx` and `million-cells.xlsx` ready), against 101.8, 128.9 and 594 ms for S4 final's exe (`e00f6ec`) in the same quiet window; the other PDFs, `long-300.docx`, `100mb.csv` and `fifty-mb.xlsx` are within 2 % either way, and memory is the same.
+
+## Editing presentations (P2)
+
+*Roy, 2026-11-25, with the 4.0 check folder (`Featherweight-4.0-check`, exe `57930657`) ready for P2, R1 and P3: "Ship it". Released as the 4.0 beta.*
+
+Check next to PowerPoint, on copies (never on a deck you need). Decks to edit: the public set in `tests\office\presentations`, `tests\office\show\bench50.pptx` (50 slides), and a few of your own and of the real-world corpus (`FeatherweightCorpus\pptx\<kind>\`). After each part, save, open the copy in PowerPoint: no repair prompt, and it looks as Featherweight shows it.
+
+### Slides
+
+- [ ] Ctrl+M adds a slide after the current one with its layout (Title and Content after a title slide), and the layout list picks another; Ctrl+D duplicates the current slide (or the selected thumbnails); Delete in the thumbnails deletes them; each is one undo step (Ctrl+Z, Ctrl+Y).
+- [ ] Drag thumbnails to move slides (one, or several selected with Ctrl and Shift); the slide numbers follow. Hide a slide: its thumbnail is dimmed and the show skips it; unhide it.
+- [ ] Change a slide's layout: its text stays, moved into the new layout's placeholders; a picture or table moves with its placeholder.
+- [ ] Slide size: 16:9 to 4:3 and back; the slides' contents scale to fit, as PowerPoint's "Ensure fit".
+- [ ] `sections-custom-shows.pptx`: delete, move and duplicate slides inside and across sections; the sections keep their slides; the custom show still plays the right slides (slides that went are left out of it). `hyperlinks.pptx`: move the slides links point to; the links still jump to them in the show.
+- [ ] `bench50.pptx`: new, duplicate, delete and move a slide feel instant (no visible pause); undo too.
+
+### Design, numbers and notes
+
+- [ ] Design: each built-in theme changes the fonts, colors and backgrounds of every slide; theme colors change only the colors; a background (a color, a gradient, a picture) on one slide or Apply to All. Undo puts each back.
+- [ ] Header & Footer: slide numbers, a footer and the date (fixed, or updated) on every slide, Don't show on title slide; the numbers follow when slides are moved or deleted.
+- [ ] Notes: click into the notes pane and type, format, add lines; the notes print on the notes pages and show in the presenter's printouts; PowerPoint shows them.
+- [ ] Copy slides between decks (copy the thumbnails, paste into another deck's thumbnails): with the destination's design (the default) and with the source design (the paste option); pictures, charts, tables and notes come along; links to slides that didn't come along stop being links.
+
+### Text
+
+- [ ] Click into a placeholder (its prompt text goes), a text box, a shape and a table cell, and type: Enter, Backspace, Delete, arrows, Home/End, Shift to select, double-click a word, Ctrl+A; Tab and Shift+Tab move a bullet a level down and up (in a table cell, Tab goes to the next cell).
+- [ ] Format: bold, italic, underline (Ctrl+B, I, U), font, size (Ctrl+] and Ctrl+[), color, highlight, alignment, line spacing, bullets and numbering; each one undo step.
+- [ ] Autofit: type into a body placeholder until it overflows: the text shrinks to fit as you type, as PowerPoint does; delete text and it grows back. Saved, PowerPoint shows it at the same size.
+- [ ] Find and replace (Ctrl+F, Ctrl+H) across the slides and the notes: Replace and Replace all, Match case and Whole words; one undo step for Replace all.
+- [ ] Spelling as you type: misspelled words get the red line in placeholders, text boxes and notes; right-click offers suggestions, Ignore and Add to dictionary.
+- [ ] Hyperlinks (Ctrl+K): to a web address, to another slide, to an email address; edit and remove them; Ctrl+click follows one in the editor; they work in the show.
+- [ ] Typing in a big deck (`bench50.pptx`, a long text box) keeps up with fast typing.
+
+### Objects
+
+- [ ] Insert pictures (a file, a paste, a drag from Explorer), shapes (rectangle, oval, arrow, line and the others in the list), text boxes, tables (rows × columns) and charts (column, bar, line, pie with sample data); each goes where PowerPoint puts it.
+- [ ] Move (drag, arrow keys nudge), resize (handles; Shift keeps the proportions), rotate (the rotation handle; Shift in 15° steps); smart guides show when edges and centres line up with other objects and the slide, and objects snap to them.
+- [ ] Align (left, centre, right, top, middle, bottom) and distribute; group (Ctrl+G) and ungroup (Ctrl+Shift+G); bring forward, bring to front, send backward, send to back.
+- [ ] Fill, outline (color, weight, dashes) and shadow on shapes and pictures; crop a picture (drag the crop handles), and reset it.
+- [ ] Cut, copy, paste and delete objects; paste into another slide and another deck.
+
+### Saving
+
+- [ ] Ctrl+S saves (the dot on the tab goes); the first save of a deck keeps a backup (§13); Save As `.pptx`. A `.potx` opens as a new deck (Save asks where). A `.pptm` keeps its macros (PowerPoint still runs them, Featherweight never does). A `.ppsx` saves as `.ppsx`.
+- [ ] Saving a big deck (`deck-typical.pptx` from `make_budget_files.py`, or a 100 MB deck of yours) doesn't freeze the window: you can keep scrolling while it saves.
+- [ ] Crash recovery: edit a deck, end Featherweight in Task Manager, start it again: it offers the recovered deck with the edits.
+- [ ] Change the file in PowerPoint while it's open in Featherweight: the banner says another program changed it, and Save asks before overwriting.
+- [ ] Open a deck and save it without changing anything: PowerPoint shows the same deck (the file isn't rewritten).
+
+## P2's gate (record the numbers)
+
+- [x] `scripts\powerpoint-open-check-proof.ps1` (while you're signed in, PowerPoint closed): every broken deck is caught, the clean one opens. *P2 (p2-corpus), and again on 4.0's final code, 2026-11-24 (P3's gate).*
+- [x] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` over the 27 public decks and the 152 real-world decks, 3 rounds of 40 random edits each (slides, layouts, typing, notes, shapes, groups, formats, themes, header and footer, undo, redo, saves), while you're signed in with PowerPoint closed (the PowerPoint part takes about half an hour): 0 failures, 0 new validator errors, 0 PowerPoint repairs (target 0 each); saved without edits: 0 PowerPoint repairs (target 0) and 2,741 of 2,741 slides at SSIM ≥ 0.99 against the original's PDF (target all).
+  - *P2 (p2-int 40b1ef35 and 16a9ce9a; the evidence table below):* PowerPoint opens 178 of 179 edited copies cleanly. The other, tdf148478-transitionmusic, is repaired the same way as its original.
+  - *Again on 4.0's final code with P3's edits too (P3's gate):* 19,871 edits, with the same results.
+- [x] `scripts\build-deck.ps1 -Featherweight build\Release\Featherweight.exe`: the 10-slide deck is built from a blank presentation, fwtool check and the validator find nothing, PowerPoint opens it without a repair, and 10 of 10 slides are at SSIM ≥ 0.95 (*P2 on p2-int 764d24c3, and on 4.0's final code: slide 5 at 0.961*) against PowerPoint's PDF (target 10; slide 5, the chart, is the closest: 0.960 since p1-render's d8b1129a gave chart labels the font's ascent, 0.919 before). Open `build\build-deck\deck.pptx` in PowerPoint and look: the title slide, bullets, picture, table, chart, shapes, theme, notes and slide numbers are all there.
+- [x] `fwtool bench --decks --runs 12 build\budgets\deck-50.pptx` (also in `scripts\budgets.ps1 -Timings`): typing in a text box 10.27 ms typical, 11.59 ms worst (target < 16 and < 50); new 2.41, duplicate 11.35, delete 13.84, move 13.15 ms (target < 50 each); undo 11.59 ms (target < 50). Worst times, from the 4.0 timing run on the final head 57930657 (`build\v40-timings-2\budgets-attempt1.log`, the ledger's deckEditing, 2026-11-25). P2's own run at the console (2bcf8ace): 10.35 / 12.88 ms; new 2.76, duplicate 11.11, delete 14.59, move 14.22, undo 13.57.
+- [x] `fuzz_pptx` with edits (random operations, save, reread, check, the recovery journal, undo and redo), 60 s, and replayed once over the 152 real-world decks: no findings. The findings reported and not fixed yet are listed at the top of `tests\fuzz\fuzz_pptx.cpp` (`FUZZ_PPTX_OPEN=1` checks them): none should be left. *None is open. P2: the 4 reported were fixed. On 4.0's final code: 60 s and the corpus replay, no findings (P3's gate).*
+- [x] The shipped exe (`scripts\budgets.ps1` on `build-release`): 12.19 MB, 12,188,160 bytes, +1.04 MB over P1's 11,149,824 (target: at most 1.4 MB more than P1's, about 12.4 MB). On a quiet PC (`FeatherweightNotes\p2\p2-quiet-timings.ps1` waits for one and runs `budgets.ps1 -Timings -Record`, then P1's and P2's exes side by side): memory with a typical deck 30.6 MB (target < 150 MB), nothing runs when idle, a 50-slide deck to its first slide in 155.3 ms (P1's timing run: 272.7 ms). *P2's own run at the console, 2bcf8ace, 2026-11-24 (ledger: "P2 timings (console)").*
+- [x] P1's part above still passes (P1 and P2 are checked together before the release). *On 4.0's final code: see P3's gate, "P1's and P2's parts above still pass".*
+
+### P2's exit criteria: the evidence (p2-corpus, 2026-11-22 to 24, on p2-int 40b1ef35 unless said)
+
+| Criterion (docs\p2-plan.md) | Evidence | State |
+|---|---|---|
+| Build from scratch | `scripts\build-deck.ps1` (full run, the app's script ops from a blank deck): fwtool check and the validator clean; PowerPoint 2021 opens it without a repair; on p2-int 764d24c3 all 10 slides at SSIM ≥ 0.95 (0.984-0.998; slide 5, the chart, 0.960 after p1-render's d8b1129a, 0.919 before) | met |
+| Never damage: no new validator errors, passes fwtool check, untouched parts kept | `fwtool torture --decks` over 179 decks (27 public + 152 real-world), 3 rounds of 40 random edits each, all edit kinds incl. objects (38acb0ee): 20,683 edits done, 797 refused, 0 failures, 0 new validator errors, every deck passes fwtool check, untouched parts byte for byte; the journal replays to the same deck; undo all gives the deck as read | met |
+| Never damage: opens in PowerPoint without a repair | Edited copies: public 25 of 27 then the slide-jump fix (p2-model 2b9f26eb; show/links recheck opens); corpus 176 of 179: show/links .ppsx/.pptx (slide jump, fixed) and the TUM lecture deck (a deleted slide's `r:id=""` left in viewProps.xml's outline list; 1-edit reproducer `FeatherweightNotes\p2\repro\tum-viewprops-delete-slide.edits.txt`; `fwtool check` catches it since 4a901546). On p2-int 16a9ce9a (p2-model's viewProps fix 2469549c): the TUM replays (1 and 40 edits) and show/links open without a repair; a fresh round (seed 2, 179 decks, 20,685 edits done, 795 refused, 0 failures, 0 new validator errors): 178 of 179 edited copies open cleanly, the other (libreoffice-test-deck-tdf148478-transitionmusic) is repaired the same way as its original | met |
+| Saving without edits: PowerPoint opens it unchanged, SSIM ≥ 0.99 | PowerPoint: unchanged copies behave exactly like their originals (corpus: 176 open, 2 errors and 1 repair on both sides; public 27 of 27). SSIM ≥ 0.99 against the original's PDF: public 87 of 87 slides; all 179 decks 2,741 of 2,741 slides (the 2 decks PowerPoint can't open as originals either have no PDF on either side) | met |
+| Editing budgets | Quiet PC, at the console, 2026-11-24 09:39-09:46 (`FeatherweightNotes\p2\p2-quiet-timings.ps1`: `scripts\budgets.ps1 -Timings -Record` on the shipped build of p2-int 2bcf8ace, `build-release`, FW_TEST_SCREENS=OFF; recorded in `tests\budgets\ledger.json`, `deckEditing`): typing in slide 11 of deck-50.pptx 10.35 ms typical / 12.88 worst (120 keys); new 2.76, duplicate 11.11, delete 14.59, move 14.22 ms worst; undo 13.57 worst (10.59 median); all under 16 / 50. Saving runs on a worker thread (src\slide\view\PresentationFile.h, PresentationSave.cpp). The interim dev-PC run (4c8a14c) agreed: 11.5 / 13.3, ops 14.3 at worst, undo 12.6 | met |
+| Lightweight | Shipped exe (`build-release`, p2-int 2bcf8ace): 12,188,160 B, +1,159,168 B (1.11 MiB) over P1's 11,028,992 (budget 1.4 MB); download zip 18,671,002 B. Quiet PC, at the console, 2026-11-24 (same run as the row above; `fwtool bench-app --runs 5`, medians, P2's exe then P1's in the same window; `build\p2-quiet-timings\bench-app-attempt1.log`, `before-p2-attempt1.log`): memory after opening deck-typical.pptx 30.6 MB private working set, 65.2 MB private bytes (P1 29.4 / 71.9 MB; target < 150 MB); launch 20.0 MB both; idle 0.0 ms CPU over 3 s in every scenario on both exes, 0-3 wakeups without CPU (P1 0-2); opening deck-50.pptx to ready 154.5 ms (P1 279.1), on screen 81.9 (P1 101.6); deck-typical.pptx 140.2 ms (P1 263.3); launch, PDFs and documents within 3 ms of P1 or faster. The 300-page document's mid-document Enter, 213 ms, misses the Word typing budget as on every build since D5 (P1 180, S4 178 ms; the ledger's S1 note): not P2's. The interim dev-PC run (`build\p2-interim-timings`) agreed: 32.6 / 33.0 MB, decks 186.6-190.8 ms against P1's 273.7-279.0 | met |
+| Fuzzed | `fuzz_pptx` with edits (random operations, save, reread, check, journal, undo/redo); 60 s per target in CI (build.yml `fuzz`); 38 seeds and the 152 corpus decks replayed: no findings, no open ones (all 4 reported were fixed by p2-model and p2-slides) | met |
+| Checklist | This P2 part | met |
+| Release | P1 and P2 checked together by Roy | Roy |
+
+## The ribbon (R1)
+
+The ribbon replaces the editors' toolbar and its ⋯ menu (decision 27, docs\r1-plan.md). A PDF keeps its own toolbar.
+
+Check next to Word, Excel and PowerPoint (365 or 2021, the classic ribbon), on copies. Use `tests\office\generated\simple.docx`, `.xlsx` and `.pptx`, the decks and workbooks from the parts above, and a few files of your own. Use a window about 1366 px wide unless an item says otherwise.
+
+### Tabs, groups and buttons
+
+- [ ] **The tabs are placed as in Office.**
+  - Word: File, Home, Insert, Design, Layout, References, Review, View. Developer appears after File › Options › Show Developer tab.
+  - Excel: File, Home, Insert, Page Layout, Formulas, Data, Review, View.
+  - PowerPoint: File, Home, Insert, Design, Transitions, Animations, Slide Show, Review, View.
+
+  In each tab, the groups and the buttons in them come in Office's order and at Office's sizes. A button is there only for what Featherweight does: nothing is greyed out for a missing feature.
+- [ ] **Each button does what its name says.** Its tooltip names it, with its shortcut. A button that can't act now is greyed, as in Office: for example Paste with nothing to paste, or Accept with no tracked changes.
+- [ ] **Contextual tabs** appear while their object is selected, and go when it isn't:
+  - Word: Table Design and Table Layout (the caret in a table), Picture Format, Shape Format, Header & Footer (while editing a header or footer).
+  - Excel: Table Design, Chart Design (a chart or a chart sheet), Picture Format, Shape Format, PivotTable Analyze, Print Preview (Ctrl+F2).
+  - PowerPoint: Shape Format, Picture Format, Video Format and Playback, Table Layout.
+
+  Inserting a picture or a shape opens its tab by itself, as in Office, and so does creating a table in Excel. Selecting one later doesn't.
+- [ ] **Galleries:**
+  - Word's Styles: a click applies the style and typing goes on in the page; the arrows scroll; More opens the grid, with New style, Modify style and Clear all formatting under it.
+  - PowerPoint's Themes, the layouts behind New Slide's arrow and Layout, Shapes, and Colors.
+  - Excel: Format as Table's style previews.
+- [ ] **Dialog launchers** (the small arrow at a group's corner) open the panel Office's dialog would:
+  - Word: Paragraph, Page Setup, Markup (your name), and the launchers on the table, picture and shape tabs.
+  - Excel: Font, Alignment and Number (Format Cells on that page), Charts, Page Setup, Scale to Fit.
+- [ ] **Narrow windows:** at 1366, 1024 and 800 px wide, groups shrink step by step: large buttons become small, galleries show fewer columns, and then a group folds into one button that opens it. Every group in every tab, contextual tabs included, can still be reached. At full width again, everything comes back.
+- [ ] **Collapsing:** Ctrl+F1 collapses the ribbon to its tab names, and so does the ^ button at the ribbon's right edge. A click on a tab then opens it over the page, and Esc or a click elsewhere closes it again. Ctrl+F1 brings the ribbon back. Close and reopen Featherweight: the ribbon is as you left it.
+
+### Keyboard
+
+- [ ] **KeyTips:**
+  - Alt shows letters on File, the tabs and quick access.
+  - A tab's letter shows its buttons' letters. Typing a button's letters runs it, or opens its menu, which has underlined letters too.
+  - Esc goes back one level.
+  - Every control in every tab can be reached this way, including contextual tabs, folded groups and launchers. Compare a few with Office, for example Alt, H, FN (Excel's Font launcher), Alt, P, M (Word's Margins) and Alt, N, P (PowerPoint's Pictures).
+- [ ] **Alt+Q** finds the ribbon's commands. Each result has "Tab › Group" after its name, and Enter runs it.
+- [ ] **Shortcuts and right-click menus** work as before R1. For example: Ctrl+B, Ctrl+Shift+N and Ctrl+Alt+1 in documents; Ctrl+1, Alt+=, Ctrl+T, Ctrl+F2 and Alt+F1 in workbooks; Ctrl+M, Ctrl+D, Ctrl+G and F5 in presentations; Ctrl+K, Ctrl+F and Ctrl+H everywhere. The right-click menus have the same items as before.
+
+### The File page and quick access
+
+- [ ] **File** opens the File page on Info. The left column has Info, New, Open, Save, Save as, Print, Export, Close and Options, and Esc or the back arrow returns to the editor.
+  - Save, Save as and Close act at once.
+  - Print opens Windows' print dialog. A presentation first shows its print layouts (full page slides, notes pages, handouts), then Print.
+  - Export: for a document or a workbook, it exports a PDF at once (the Save box suggests `<name>.pdf`, friction review RF3). For a presentation, it lists Export PDF and the slides as PNG pictures.
+  - Info: a document's Restore original; a presentation's Protect Presentation.
+- [ ] **New** lists a blank document, workbook and presentation, the templates (Letter, CV, Report), your own templates and More templates…. **Open** lists Browse… and the recent files.
+- [ ] **Options** has:
+  - the app theme (Light, Dark, or Windows' setting);
+  - night reading and highlighting form fields;
+  - for documents: spelling and AutoCorrect as you type, the ruler, Show Developer tab and User name;
+  - updates, and About.
+
+  Each one takes effect at once and is kept after a restart.
+- [ ] **Quick access** (in the title bar, left of the tabs) has Save, Undo and Redo. The arrows beside Undo and Redo list the steps, and picking one undoes or redoes several at once. A presentation also has From Beginning. The buttons follow the active tab.
+
+### Light and dark
+
+- [ ] In light and in dark (File › Options › App theme), check the ribbon, its menus and galleries, the KeyTips, the File page and quick access: the text is readable, the icons are visible, and the selected tab and pressed buttons are clear.
+
+## R1's gate (record the numbers)
+
+- [x] **Coverage tests** (ctest, Release, with FW_TEST_SCREENS on, as by default): `ribbon_word`, `ribbon_sheet` and `ribbon_slide` all pass. *On 4.0's final code (61e45281, the code of 57930657), 2026-11-25: ctest 34 of 34.* Each checks one editor, at 1366, 1024 and 800 px and with its contextual tabs open:
+  - every ribbon item runs a named command;
+  - every group fits the window;
+  - the KeyTips are unique;
+  - every command the editor's toolbar and ⋯ menu reached before R1 (`tests\ribbon\<editor>.txt`) can be reached from the ribbon, the File page, a right-click menu or Alt+Q.
+- [x] **Snapshot tests:** `ribbon_screens` (the three editors at 1366, 1024 and 800 px, light and dark, with KeyTips, the File page, a collapsed ribbon, a gallery's grid and a contextual tab) passes. Look through the pictures in `build\screens\ribbon_screens`, `ribbon_sheet` and `ribbon_slide`: nothing is cut off or overlapping. *On 4.0's final code, 2026-11-25: the three tests pass.*
+  - *Checked (27 of the 82 pictures):* nothing is cut off or overlapping. KeyTips sit on their controls, as in Office.
+    - The 800 px ones of each editor and tab, where a cut-off is likeliest.
+    - Every contextual tab: Chart Design, Picture and Shape Format, Table Design and Layout.
+    - The Design gallery, KeyTips, the collapsed and folded ribbon, the gallery's grid, and the File page (New, Options).
+  - *Not looked at here:* the wider 1024 and 1366 px pictures.
+- [x] **ribbonbench**, on a document, a workbook and a deck (`Featherweight.exe <file> --snapshot out.png --size 1366x768 --script ribbonbench`, with a Release build with FW_TEST_SCREENS on):
+  - tab switch, worst: 1.63 / 1.61 / 1.65 ms;
+  - relayout, worst: 0.16 / 0.06 / 0.21 ms.
+
+  Target: 16 ms or less each. These are 4.0's final code (61e45281) on the development PC, 2026-11-25, simple.docx, .xlsx and .pptx. On 2026-11-24 (r1-plan): switch 1.19 / 1.15 / 1.58 ms, relayout 0.14 / 0.10 / 0.54 ms.
+- [x] **The shipped exe** (`scripts\budgets.ps1` on `build-release`): 12.35 MB, 12,352,512 bytes at 98603dec, +160.5 KB over P2's 12,188,160. Target: at most 250 KB more in R1. `tests\budgets\ledger.json` has a line for each R1 piece: r1-control, r1-word, r1-sheet and r1-slide.
+- [x] **Launch and memory:** launch to ready 78.7 ms, memory after launch 20.1 MB, both no worse than P2's. A document, a workbook and a deck open no slower than with P2's exe. The coordinator's 4.0 timing run on a quiet PC fills these in (the ledger's "R1 timings").
+  - *R1's own exe (98603dec) against P2's (cd73a549), the same PC, two interleaved rounds* (r1-word, `FeatherweightNotes\r1\r1-word-quiet`, 2026-11-24): launch to ready 78.8/78.6 against 76.9/76.3 ms, memory 20.1 against 20.0/20.1 MB. The 2 ms is within the runs' spread (one build gave 76.9 to 80.4).
+  - *Opening, at 98603dec:* report.docx 133/135 against 129/130 ms, long-300.docx 956/946 against 749/758, deck-typical.pptx 156/151 against 145/142. The ledger's "R1 timings" (over Remote Desktop) has launch 25.4 ms to the window, 82.1 to ready, 20.0 MB.
+  - *On 4.0's final head:* r1-word's 33ca96e0 opens long-300 in 680/676 ms, faster than P2. The final timing run (57930657, ledger) opens PDFs and documents 16 to 35 % faster than R1's exe, and decks 15 % faster.
+  - *Ticked by the coordinator (2026-11-25):* launch and memory are P2's within the spread; what ships is 4.0's final head, which opens documents and decks 15 to 35 % faster than R1's exe, more than R1 lost against P2. Before that: R1's own exe opened documents and the deck 3 to 27 % slower than P2's. 4.0's final head opens them faster than R1's by more than that, but no run measured it against P2's directly. A workbook isn't in these runs' scenarios. On 4.0's final code, simple.xlsx is ready in 89 ms (bench-app, 2026-11-25), with no P2 run beside it.
+- [ ] **No idle CPU:** with a document, a workbook and a deck open, Task Manager shows 0 % CPU for Featherweight, with the ribbon expanded, with it collapsed, and with the File page open.
+  - *Measured, ribbon expanded:* `fwtool bench-app` on 4.0's final code (2026-11-25) gives 0.0 ms of CPU over 3 s idle with simple.docx, simple.xlsx and simple.pptx open, as each opens, with 0 to 2 wakeups. The 4.0 timing run gives 0.0 ms with every file (PDFs, documents, decks).
+  - *Not ticked:* the collapsed ribbon and the open File page aren't in the bench. That's your look in Task Manager.
+- [x] **Friction review** (`docs\friction-review.md`, "The ribbon (R1)"): the flows from D5, S4 and P2 take no more steps than before, or the extra step is accepted there with its reason (RF1, RF2, RF4 to RF6). `tests\friction-checks.ps1` and `tests\workbook-friction-checks.ps1` pass.
+  - *r1-review's count:* of 44 flows, 2 are shorter, 35 the same, and 7 longer. All 7 are accepted (RF1, RF2, RF4). RF3 is fixed, and RF7 is accepted for 4.0 (F1).
+  - *On 4.0's final code (2026-11-25):* both scripts pass. Letter 8 (budget 9), CV 12 (12), table 15 (16); W1, W2, W4, W6 ok.
+- [x] P1's and P2's parts above still pass with the ribbon. *On 4.0's final code: see P3's gate, "P1's and P2's parts above still pass".*
+
+## Advanced presentations (P3)
+
+Check next to PowerPoint 2021, on copies. Decks: the hand-made ones in `D:\Documents\Codex\FeatherweightCorpus\made` (PowerPoint built them, `scripts\make-deck-edge-cases.ps1`: `transitions.pptx`, `animations.pptx`, `comments.pptx`, `media.pptx` with `media\clip.mp4`, and `protected\animations.pptx`, password `featherweight`), PowerPoint's `.ppt` and `.odp` copies of the real-world decks in `FeatherweightCorpus\ppt` and `\odp` (`scripts\make-deck-copies.ps1`; the encrypted ones in `ppt\protected`, password `featherweight`), and a few decks of your own. After each part, save, and open the copy in PowerPoint: no repair prompt, and it looks and plays as Featherweight shows it.
+
+### Presenter view
+
+- [ ] With two monitors: start the show (F5). The show is on one monitor, the presenter view on the other: the current slide, the next slide (or the next animation), the notes (scroll them; make them bigger and smaller), the timer (pause, reset), the clock, and a strip of slides (click one to jump to it). The show's keys (click, Space, arrows, Page Up/Down, a number and Enter, B, W, Esc) work in both windows.
+- [ ] With the app on the laptop's screen and the Monitor choice left on Automatic: F5 puts the slides on the projector and the presenter view on the laptop, as PowerPoint does. The audience must never see the notes (friction review P1). The presenter view's Swap displays puts the slides and the presenter view on each other's monitors; Black screen and End show are on its bar.
+- [ ] With one monitor: Alt+F5 opens the presenter view in a window, as PowerPoint does; the show's monitor choice puts the show and the presenter view where you say.
+- [ ] A 50-slide deck with transitions presents smoothly with the presenter view on (record the frame rate below).
+
+### Transitions and animations
+
+- [ ] The Transitions tab: pick fade, push, wipe, split, cover, uncover and zoom from the gallery; Effect Options changes the direction; Duration; advance on click and after a time; Apply To All; Preview plays it in the editor. Save, open the copy in PowerPoint: the same transitions, directions, durations and timings.
+- [ ] The Animations tab: add appear, fade, fly in, wipe, zoom, float, split, grow and shrink, and spin to shapes and to text (by paragraph); Effect Options; Add Animation puts a second effect on the same shape; Start (On Click, With Previous, After Previous), Duration and Delay; the Animation Pane lists them in order, and Move Earlier and Move Later change it; Preview plays them in the editor. Save, open the copy in PowerPoint: the same effects, order, triggers, durations and delays, and the show plays them alike.
+- [ ] `made\animations.pptx`: change one effect on slide 4 (bounce, swivel, pinwheel, the motion paths, the trigger): the other effects there, which Featherweight can't edit, stay as they were in PowerPoint.
+
+### Video and audio
+
+- [ ] Insert › Video and Insert › Audio from a file (an `.mp4` and a `.wav` or `.mp3` of yours): the video shows its first frame as the poster; the Video Format and Playback tabs appear when it's selected. In the show it plays on click, or by itself when set so, without stutters (a 1080p H.264 video too).
+- [ ] `made\media.pptx`: the embedded video plays on click, the sound plays by itself on slide 2, the linked video plays while `made\media\clip.mp4` is there (rename the file: the slide shows the poster and says the file is missing; nothing is fetched from the internet).
+- [ ] Open a deck with a video and leave it in the editor: Task Manager shows no CPU use.
+
+### Comments
+
+- [ ] `made\comments.pptx`: the comments pane shows each slide's comments with markers on the slide; slide 1's thread has its two replies. Ctrl+Alt+M adds a comment; reply, edit, delete and resolve work as in documents; the Review tab has the comment group.
+- [ ] Add comments and a reply, save, open the copy in PowerPoint: the comments and the thread are there, no repair prompt. A deck with PowerPoint's older comments (`commentAuthors.xml`) keeps them.
+- [ ] Type a comment and press Enter: the box empties. A second Enter posts nothing (it used to post the same text again as a reply).
+
+### Password-protected presentations
+
+- [ ] `made\protected\animations.pptx`: the password card asks for the password; a wrong one is refused, `featherweight` opens it. Edit and save: PowerPoint asks for the same password and opens it without a repair.
+- [ ] File › Info › Protect Presentation › Encrypt with Password sets a password on a deck of yours, and removes it again; PowerPoint asks for it (and doesn't after it's removed).
+- [ ] Set a password, type something, undo it, then Ctrl+S: the tab still saves, and PowerPoint asks for the password. (Before the fix, the undo left the tab "saved" and the file unprotected.)
+- [ ] An encrypted `.ppt` (`ppt\protected\made\animations.ppt`, `featherweight`) opens too.
+
+### Templates and pictures
+
+- [ ] A `.potx` and a `.potm` open as a new presentation ("Presentation1"); Save As writes a `.potx`; File › New and the start screen list your personal templates.
+- [ ] File › Export: the current slide and all slides as PNG, at 1920 px wide by default and at another width; the pictures look as the slides do in the view.
+
+### .ppt and .odp
+
+- [ ] Open a few `.ppt`, `.pps` and `.pot` from `FeatherweightCorpus\ppt` and `.odp` from `\odp`, next to their `.pptx` originals in PowerPoint: they open read-only as a copy with a banner, look the same, and the show plays. Save As `.pptx`: PowerPoint opens it without a repair.
+- [ ] A damaged file (rename a `.txt` to `.ppt` and to `.odp`) says it seems to be damaged, and nothing else happens.
+- [ ] `ppt\made\media.ppt` and `ppt\school\zslbw-geographie-naturgefahren-prasentation.ppt`: PowerPoint wrote them but now refuses to open them (Office's file validation). Featherweight opens them or says it can't, and never hangs or closes.
+
+### PowerPoint's own steps (for the friction review)
+
+- [ ] In PowerPoint 2021, note what the friction review (P3 part) marks *(check in PowerPoint)*:
+  - which monitor Automatic gives the slides;
+  - the quick access toolbar's buttons;
+  - the message after exporting all slides as PNG, and the PNG's size;
+  - whether File opens on Info or Home;
+  - where Edit, Reply and Resolve sit on a modern comment;
+  - whether deleting every comment in the deck asks first;
+  - the status bar's Comments button;
+  - comments on selected text;
+  - the question when saving an `.odp`.
+  Tell the coordinator where PowerPoint differs from the review.
+
+## P3's gate (record the numbers)
+
+- [x] `scripts\deck-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus` with P3's operations (transitions, animations, comments, media, the encryption round trip) over the public and real-world decks: 0 failures, 0 new validator errors, 0 PowerPoint repairs (target 0 each); saved without edits: byte-identical. Measured on 4.0's final code (2026-11-24; PowerPoint over Remote Desktop, 19:33-21:41):
+  - 179 decks (27 public, 152 real-world), 3 rounds of 40 random edits each: 19,871 edits done and 1,609 refused.
+  - PowerPoint opened 178 of 179 edited copies without a repair. The other, libreoffice-test-deck-tdf148478-transitionmusic, is repaired the same way as its original, as in P2's gate.
+  - Saved without edits: all 179 are byte for byte the original, PowerPoint repairs none, and 2,741 of 2,741 slides are at SSIM ≥ 0.99 against the original's PDF.
+  - The encryption round trip (`fwtool encrypt`, then `fwtool decrypt`, password `featherweight`): all 179 edited decks decrypt to the same bytes, and a wrong password is refused. PowerPoint opens a sample of 23 of the encrypted decks (every 8th) with the password and reads their slides (`build\encrypt\readback`).
+- [ ] PowerPoint's read-back of the torture's edited decks (`scripts\timing-readback-check.ps1 -Decks build\deck-torture\saved`): 177 of 179 decks where `fwtool timing` prints the same for Featherweight's file and PowerPoint's save of it, and PowerPoint's object model has the same transitions, effects, triggers, durations and delays (target all). Comments: PowerPoint reads the same threads, replies and authors (`scripts\powerpoint-readback.ps1`): 43 of 43 decks with comments, 55 threads. Measured 2026-11-24, PowerPoint over Remote Desktop. The other two decks:
+  - libreoffice-test-deck-tdf148478-transitionmusic can't be read back: PowerPoint repairs it, and repairs its original too.
+  - usgov-how-well-do-you-know-era-systems, slide 31, is written differently and plays the same (p3-anim's by-paragraph writer, F1). Featherweight writes one Float In on paragraphs 0-6 inside a by-paragraph build; PowerPoint keeps it as one effect per paragraph, paragraph 0 on click and 1-6 with it.
+
+  `tests\office\show\links.ppsx` is among the 177: it was read back a second time, because its `.pptx` twin's save had overwritten PowerPoint's save of it (the script is fixed, c2b15b0c).
+
+  *Not ticked (target all). Accepted (the coordinator, 2026-11-24):* tdf148478 can't be read back because PowerPoint repairs its original too. era-systems' slide 31 plays the same (F1).
+- [x] `.ppt` corpus (`scripts\slide-pages.ps1 -Reference D:\Documents\Codex\FeatherweightCorpus\reference -Folders ppt`): 2,344 of 2,577 slides at SSIM ≥ 0.95, 90.96 % (target ≥ 85 %). That's 154 decks on 4.0's final head (6fe39e23, 2026-11-24):
+  - slide-pages drew 152 of them, 2,285 of 2,517 slides;
+  - it can't open the two encrypted decks in `ppt\protected` without the password, so they were drawn with `fwtool slides --password featherweight`: 59 of 60.
+
+  `.odp` corpus (`-Folders odp -Through app`; `fwtool slides` doesn't read `.odp`): 2,059 of 2,547, 80.84 % (target ≥ 80 %), all 153 decks drawn.
+
+  Their `.pptx` saves open in PowerPoint without a repair: `.ppt` 156 of 156, `.odp` 157 of 157. These saves are from `fwtool convert`, with the importers the app opens these files with, in `build\ppt-saved` and `build\odp-saved`; the validator found no errors in them.
+  - On 6fe39e23 it was 156 of 157. PowerPoint repaired the save of `odp\training\usgov-materials-to-support-learning-optional-slides.odp`, though it reads that `.odp` itself.
+  - The cause was on slide 2. Six lines in a group (the original's diagram) come from the `.odp` with zero height, and the converter mapped their `draw:text-areas` through the viewBox. That gave text rectangles of 0.6 to 2.3 billion EMU, one beyond 32 bits, which the validator accepts.
+  - p3-files' fc09006a fixed it (`src\slide\odp\OdpGeometry.cpp`: a zero side of a viewBox counts as 1, and out-of-range text rectangles are left out).
+  - On p3-int cc38f6ad, all 157 `.odp` were converted again: the validator found no errors, and only two saves changed. That deck and `school\zslbw-geographie-naturgefahren-prasentation`.
+  - PowerPoint opens both without a repair, and the app's own Save As `.pptx` of the deck too (`build\odp-recheck`). Their slides against PowerPoint's are as before (5 of 16 and 29 of 50), so the 80.84 % stands.
+- [x] Picture export: 89 of 95 slides at SSIM ≥ 0.99 against the app's own PDF at the same size (target all). The coordinator restated the criterion on 2026-11-24 (p3-plan): SSIM ≥ 0.999 against P1's page renderer (`pagepngs`) at the same size. Against the PDF, the bar is ≥ 0.99, or ≥ 0.95 on slides with dense small text.
+
+  Measured with `scripts\picture-export-check.ps1` on the public set (18 decks, every slide exported as PNG), 4.0's final code, 2026-11-24:
+  - Page renderer (the criterion, and what the tick stands for): 97 of 97 slides at SSIM ≥ 0.999, hidden slides included. Every slide is at 1.000: the picture is the view's drawing.
+  - PDF: 89 of 95 at ≥ 0.99, and all 95 at ≥ 0.95. The six below 0.99 are bullets.pptx slide 3, one slide in shapes-groups.pptx (0.977), and text-autofit.pptx slides 1 to 4 (worst 0.954, its smallest text). These six have the same layout and line breaks, and differ only at glyph and pattern-fill edges, which pdfium antialiases differently from the app.
+- [x] `fuzz_ppt` and `fuzz_odp`, 60 s each in CI: no findings. Run as CI runs them (build-fuzz, RelWithDebInfo, 60 s each) on 4.0's final code: `fuzz_ppt` 14,253 runs, `fuzz_odp` 60,246 runs, no findings. `fuzz_pptx` (P2's row) also had no findings: 60 s, then replayed over the 146 real-world `.pptx` decks.
+- [x] The shipped exe (`scripts\budgets.ps1` on `build-release`): 13.17 MB, 13,167,616 bytes at the final head 57930657, +796.0 KB over R1's 12,352,512 (target: at most 1.0 MB more than R1's, about 12.35 MB; < 15 MB at 4.0); the zip 19.1 MB. Launch 25.4 ms to the window and 82.3 ms to ready (R1: 25.4 and 82.1) and memory after launch 24.2 MB (the ledger's R1 line says 20.0 MB from 23 Nov; R1's own exe measures 24.0 to 24.1 MB on the same evening, p3-start: Direct2D's committed but untouched bytes), no worse than R1's; PDFs and documents 16 to 35 % faster to ready, decks 15 %; idle with a video on a slide (`-Timings`, deck-video.pptx, which needs ffmpeg on the PATH): 0.0 ms CPU, 0 wakeups (target: at most 5 ms and 2). The quiet-PC timings and the frame bench (presenter view on: about 17 fps on Remote Desktop's 32 Hz display, which sets the pace there, drawing 0.42 ms median and 0.69 ms p99 per frame; at the console on 240 Hz: 0 dropped frames, worst 6.14 ms) run once at the end through the coordinator. *`FeatherweightNotes\coordinator\v40-quiet-timings.ps1`, 3 runs, 2026-11-25, over Remote Desktop (Roy: "Just run it on remote desktop"); the presenter view and video accepted by decision (p3-plan, p3-present's line).*
+- [x] Friction review (`docs\friction-review.md`, P3 part): presenting with the presenter view, adding transitions and animations, commenting, protecting, exporting pictures and opening a `.ppt` take no more steps than in PowerPoint 2021. On 6fe39e23, every flow passes or ties. Read from the code; PowerPoint's own steps marked *(check in PowerPoint)* are in "PowerPoint's own steps" above.
+  - Fixed: P1 to P4, P6, P8, P14 (4.0's flag: File, New, the template, 3 C against 4) and P16.
+  - By design: P5 and P15.
+  - Open: P9 and P12, a click more each inside the comment flow, which still ties. Also P10, P11 and P13, things comments can't do yet.
+- [x] P1's and P2's parts above still pass. They do on 4.0's final code (6fe39e23, 2026-11-24). The exe's size and the quiet-PC timings of both parts are in the coordinator's 4.0 timing run (the shipped exe's row above).
+  - P1:
+    - slides against PowerPoint's: 2,370 of 2,516 corpus slides, 94.20 %, and 92 of 97 public;
+    - `fwtool check` 0 failed on all 170 original decks; the validator's counts on them are unchanged, since the files are;
+    - `fuzz_pptx` and `fuzz_timing` 60 s each, no findings (`fuzz_timing` 470,868 runs).
+  - P2:
+    - `scripts\powerpoint-open-check-proof.ps1`: every broken deck is caught, and the clean one opens;
+    - the deck torture (P3's row above, which includes P2's edits): 0 failures, 0 new validator errors, 0 PowerPoint repairs; saved without edits, 0 repairs and 2,741 of 2,741 slides at SSIM ≥ 0.99;
+    - `scripts\build-deck.ps1`: fwtool check and the validator clean, PowerPoint opens it without a repair, 10 of 10 slides at SSIM ≥ 0.95 (slide 5, the chart, 0.961);
+    - `fuzz_pptx` with edits 60 s and replayed over the 146 real-world `.pptx` decks: no findings, and none open in `tests\fuzz\fuzz_pptx.cpp`.

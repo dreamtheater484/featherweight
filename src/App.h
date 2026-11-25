@@ -17,7 +17,9 @@
 #include "ui/Banner.h"
 #include "ui/CommandSearch.h"
 #include "ui/EmptyState.h"
+#include "ui/FilePage.h"
 #include "ui/Gfx.h"
+#include "ui/Ribbon.h"
 #include "ui/SearchPanel.h"
 #include "ui/SidePanel.h"
 #include "ui/StatusBar.h"
@@ -49,7 +51,8 @@ struct AppOptions {
   bool sandbox = false;
   // --show <deck> [--show-bench <report.json>]: the deck straight into a slide show, without the
   // app's window (trying the show, and the frame-rate bench).
-  std::wstring showPath, showBench, showCapture;
+  std::wstring showPath, showBench, showCapture, showMediaReport;  // --show-media-report (P3)
+  bool showWindowed = false, showPresenter = false;  // --show-windowed, --show-presenter (P3)
 };
 
 class App : public PdfHost, public DropHost {
@@ -78,6 +81,7 @@ class App : public PdfHost, public DropHost {
   bool ViewSpelling() override { return settings_.spelling; }
   bool ViewAutoCorrect() override { return settings_.autoCorrect; }
   bool ViewRuler() override { return settings_.ruler; }
+  bool ViewDeveloperTab() override { return settings_.developerTab; }
   std::wstring ViewReviewer() override { return settings_.reviewer; }
   void ViewSetReviewer(const std::wstring& name) override {
     settings_.reviewer = name;
@@ -97,7 +101,8 @@ class App : public PdfHost, public DropHost {
   void OnDropPictures(const std::vector<std::wstring>& files, POINT pt) override;
 
  private:
-  enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc, Panel, Status, Commands };
+  // Toolbar is the editors' ribbon too (R1); FilePage covers everything under the title bar.
+  enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc, Panel, Status, Commands, FilePage };
   // Where the keyboard is, for F6 and for going back after the side panel or command search.
   enum class KeyArea { Doc, Panel, Status };
 
@@ -139,6 +144,8 @@ class App : public PdfHost, public DropHost {
   static int AppShortcut(UINT vk, UINT mods);
   void Execute(int cmd);
   void ShowMenu(int cmd);
+  // Fills the menu ShowMenu shows for `cmd` (the ⋯ menu, New, zoom); true when it opens right-aligned.
+  bool FillWindowMenu(int cmd, HMENU menu);
   void ShowContextMenu(int screenX, int screenY);
   int TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight);
 
@@ -152,6 +159,11 @@ class App : public PdfHost, public DropHost {
   void OpenDialog(bool templates = false);  // templates: in the personal templates folder (S4)
   // A click, key or UI Automation action on the start screen.
   void OnStartScreen(EmptyState::Result res);
+  // The start page (p3-start): its filter's keys, a recent file's menu (Pin, Remove, Open file
+  // location) and what it does.
+  void InitStartPage();
+  void ShowRecentMenu(int index, POINT at);
+  void RecentAction(int cmd, int index);
   // `copies`: more types to offer after `format`; `chosen` gets the type picked (0 for `format`,
   // 1 for the first copy type).
   std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format,
@@ -188,11 +200,15 @@ class App : public PdfHost, public DropHost {
   void InitFiles(bool userFolders);
   void NewDocument(int kind = 0);  // fw::doc::docx::Template
   void NewWorkbook();               // "Book1"
+  void NewPresentation();           // "Presentation1" (P2)
   // At startup: documents a crash left unsaved, offered in a banner.
   void OfferRecovery();
   void RecoverDocuments(bool open);  // Recover, or Discard
   // The window or a tab was activated: did the file change on disk?
   void CheckActiveFile();
+  // "Changed by another program" belongs to its tab (p3-start): it goes when another tab or the
+  // start page shows, and comes back with its tab until it's answered.
+  void ShowFileNotice(TabContent* v, FileChange change);
   void ReloadActive();
   std::wstring LatestBackup() const;  // of the active document, or empty
   void RestoreOriginal();
@@ -257,6 +273,30 @@ class App : public PdfHost, public DropHost {
   std::wstring ShellTooltip(Region r, int x, int y) const;
   void DescribeShell(uia::Tree& t);
 
+  // The ribbon (AppRibbon.cpp, R1): the editors' ribbon in place of their toolbar, the File page,
+  // quick access, KeyTips and Ctrl+F1, and the checks the ribbon's tests run.
+  void InitRibbon();
+  // The active editor's ribbon, without the commands this kind of tab doesn't offer; empty for
+  // the PDF reader, the start screen and an editor whose ribbon isn't done (its toolbar shows).
+  RibbonModel CurrentRibbon();
+  std::vector<TitleBar::QuickButton> QuickAccess(const RibbonModel& m);
+  // A quick access button's list (Undo's actions), from the tab's RibbonModel::quick.
+  void ShowQuickList(int index);
+  void ShowRibbonMenu(const RibbonItem& item, const D2D1_RECT_F& anchor);
+  void ToggleRibbon();
+  void OpenFilePage();
+  void CloseFilePage();
+  ui::FilePage::Model CurrentFilePage();
+  // Alt+letter: a tab's KeyTip (Alt+H) or the File page (Alt+F). True when used.
+  bool RibbonAltKey(UINT vk);
+  // Alt let go alone: KeyTips on or off.
+  void RibbonAltReleased();
+  // Every command the ribbon, the File page, the right-click menu and command search reach now.
+  std::vector<int> ReachableCommands(std::wstring* report = nullptr);
+  // What the toolbar and the ⋯ menu reached before R1 (the coverage tests' baseline).
+  std::vector<int> ToolbarCommands();
+  bool RibbonScriptOp(const std::wstring& op, const std::wstring& arg);
+
   // Snapshot / automation
   int RunSnapshot(const AppOptions& opts);
   void RunScript(const std::wstring& script);
@@ -288,6 +328,12 @@ class App : public PdfHost, public DropHost {
   int openMenu_ = 0;  // the toolbar menu being shown
   TitleBar title_;
   Toolbar toolbar_;
+  ui::Ribbon ribbon_;
+  ui::FilePage filePage_;
+  bool ribbonShown_ = false;  // the active tab's ribbon shows (its BuildRibbon filled one)
+  bool altAlone_ = false;     // Alt is down with no other key since: letting go shows KeyTips
+  bool keyTipAte_ = false;    // a KeyTip used the key: its WM_CHAR goes nowhere
+  bool fileBackup_ = false;   // the File page's Restore original has a backup to open
   SearchPanel search_;
   Banner banner_;
   Tooltip tooltip_;
@@ -316,9 +362,13 @@ class App : public PdfHost, public DropHost {
   // Files
   std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
   int newDocuments_ = 0;
+  int newPresentations_ = 0;  // Presentation1, Presentation2 (P2)
   int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)
   static constexpr int kUserTemplateCount = 16;
   std::vector<std::wstring> userTemplates_;  // as the last menu listed them (CmdUserTemplate)
+  // Tabs whose "changed by another program" notice was showing when another tab took over.
+  std::vector<std::pair<const TabContent*, FileChange>> fileNotices_;
+  FileChange fileNotice_ = FileChange::None;  // the one the banner shows (its owner is the tab)
   bool autosaveTimer_ = false;
 
   // Input state

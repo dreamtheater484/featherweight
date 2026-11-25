@@ -43,10 +43,20 @@ edit::PageText DocView::PageTexts() {
 
 std::optional<edit::TocInfo> DocView::CurrentToc() const {
   if (!doc_) return std::nullopt;
-  if (auto toc = edit::TocAt(*doc_, ToDoc(focus_))) return toc;
-  std::vector<edit::TocInfo> all = edit::TablesOfContents(*doc_);
-  if (all.empty()) return std::nullopt;
-  return all.front();
+  // The document's tables of contents, found again after an edit: walking a long document's fields
+  // takes about a millisecond, and the ribbon asks for Update Table's state in every frame.
+  if (tocsDoc_ != doc_.get() || tocsEdits_ != edits_) {
+    tocs_ = edit::TablesOfContents(*doc_);
+    tocsDoc_ = doc_.get();
+    tocsEdits_ = edits_;
+  }
+  // The one around the caret (as edit::TocAt), else the first.
+  const fw::doc::Pos at = ToDoc(focus_);
+  auto before = [](fw::doc::Pos a, fw::doc::Pos b) { return a.para != b.para ? a.para < b.para : a.offset <= b.offset; };
+  for (const edit::TocInfo& t : tocs_)
+    if (before(t.begin, at) && before(at, {t.end.para, t.end.offset + 1})) return t;
+  if (tocs_.empty()) return std::nullopt;
+  return tocs_.front();
 }
 
 std::optional<CommandState> DocView::QueryNotes(int cmd) {

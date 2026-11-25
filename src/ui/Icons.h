@@ -1,5 +1,7 @@
 #pragma once
 
+#include <d2d1.h>
+
 // Glyphs shared by Segoe Fluent Icons (Windows 11) and Segoe MDL2 Assets (Windows 10).
 namespace icon {
 constexpr wchar_t Add = 0xE710;
@@ -68,11 +70,55 @@ constexpr wchar_t Settings = 0xE713;
 constexpr wchar_t Mail = 0xE715;
 constexpr wchar_t Contact = 0xE77B;  // a person
 constexpr wchar_t Report = 0xE9F9;   // a page with a chart
+constexpr wchar_t Pin = 0xE718;      // the start page's recent files (p3-start)
+constexpr wchar_t Unpin = 0xE77A;
+constexpr wchar_t Pinned = 0xE840;
+constexpr wchar_t View = 0xE890;     // an eye: show
+constexpr wchar_t Hide = 0xED1A;     // an eye, struck through
 
-// Custom vector icons drawn by DrawButton (private-use code points).
+// Custom vector icons drawn by DrawGlyph (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;
 constexpr wchar_t ViewContinuous = 0xF8F1;
 constexpr wchar_t ViewFacing = 0xF8F2;
 constexpr wchar_t NumberedList = 0xF8F3;
 constexpr wchar_t AlignJustify = 0xF8F4;
+
+// The ribbon's icons that the icon fonts lack (R1), drawn from short vector paths in ui/Icons.cpp,
+// never copied from Office: DrawGlyph draws them wherever a glyph goes (ribbon, toolbar, controls).
+constexpr wchar_t kDrawnFirst = 0xF900;
+enum : wchar_t {
+  // Text
+  Subscript = kDrawnFirst, Superscript, Strikethrough, ClearFormatting, MultilevelList, LineSpacing,
+  Hyphenation, IndentLeft, IndentRight, SpaceBefore, SpaceAfter, WordCount, Footnote, Endnote, Replace,
+  Spelling, Zoom100, TextBox,
+  // Cells and numbers
+  FillBucket, BordersAll, BordersBottom, AlignTop, AlignMiddle, AlignBottom, WrapCell, MergeCenter,
+  Accounting, Percent, Comma, IncreaseDecimal, DecreaseDecimal, AutoSum, InsertCells, ConditionalFormat,
+  CellStyles, PivotTable,
+  // Pages and slides
+  PageBreak, Header, Footer, PageNumber, Watermark, Margins, PaperSize, Columns, Orientation, PrintArea,
+  PrintTitles, TableOfContents, Bookmark, NewSlide, SlideSize, FormatBackground, HideSlide,
+  FromCurrentSlide, FitToWindow,
+  // Objects
+  Shapes, WrapSquare, Arrange, BringForward, SendBackward, AlignObjects, Group, ShapeEffects, AltText,
+  DropDownList,
+  // Tables
+  TableInsertAbove, TableInsertBelow, TableInsertLeft, TableInsertRight, TableDelete, MergeCells,
+  SplitCells, AutoFit, DistributeColumns, DistributeRows, RepeatHeader, ConvertToText,
+  // Charts
+  ChartColumn, ChartBar, ChartLine, ChartArea, ChartPie, ChartDoughnut, ChartScatter, ChartCombo,
+  // Data and sheet views
+  SortAscending, SortDescending, RemoveDuplicates, GroupRows, UngroupRows, ViewNormal, PageBreakPreview,
+  FreezePanes,
+  kDrawnEnd
+};
+inline bool IsDrawn(wchar_t g) { return g >= kDrawnFirst && g < kDrawnEnd; }
+}  // namespace icon
+
+namespace gfx {
+class Canvas;
+}
+namespace icon {
+// Draws one of the drawn icons (IsDrawn) centered in `r`, `size` pixels square.
+void DrawDrawn(gfx::Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F color, float size);
 }  // namespace icon

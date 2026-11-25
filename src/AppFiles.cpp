@@ -12,6 +12,7 @@
 #include "pkg/Recovery.h"
 #include "sheet/view/WorkbookFile.h"
 #include "sheet/view/WorkbookView.h"
+#include "slide/view/PresentationView.h"
 #include "word/DocView.h"
 
 #include <algorithm>
@@ -98,6 +99,22 @@ void App::NewWorkbook() {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+void App::NewPresentation() {
+  // A blank 16:9 deck on the Office theme, as PowerPoint makes one (P2, p2-slides).
+  auto view = fw::slide::view::PresentationView::NewPresentation(*this, ++newPresentations_);
+  view->SetViewport(DocRect(), ui_);
+  std::wstring error;
+  if (view->Load(L"", error) == OpenResult::Failed) {
+    banner_.Show(BannerKind::Error, error, {}, 8000);
+    return;
+  }
+  view->ApplyState(FileState{});
+  tabs_.push_back(std::move(view));
+  ActivateTab(static_cast<int>(tabs_.size()) - 1);
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
 void App::OfferRecovery() {
   orphans_ = recovery::FindOrphans(DocFile::Config().recovery);
   if (orphans_.empty()) return;
@@ -130,9 +147,12 @@ void App::RecoverDocuments(bool open) {
     // A CSV file's autosave that holds a workbook (a chart, a table...): an unsaved .xlsx named after it.
     WorkbookFile::RecoveredAsWorkbook(bytes, name, suggested);
     const fw::FileKind kind = fw::KindOfPath(name);
-    const bool workbook = kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes));
+    // A presentation's journal says so (PresentationFile: "pptx"); its charts hold workbooks.
+    const bool presentation = kind == fw::FileKind::Presentation || (entry.journal && entry.meta == "pptx");
+    const bool workbook = !presentation && (kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes)));
+    if (presentation && kind != fw::FileKind::Presentation) name += L".pptx";
     if (workbook && kind != fw::FileKind::Workbook) name += L".xlsx";
-    if (!workbook && kind != fw::FileKind::Document) name += L".docx";
+    if (!workbook && !presentation && kind != fw::FileKind::Document) name += L".docx";
     if (suggested.empty()) {  // never saved: the Documents folder, as for a new document
       PWSTR docs = nullptr;
       if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {
@@ -142,7 +162,9 @@ void App::RecoverDocuments(bool open) {
       suggested += name;
     }
     std::unique_ptr<TabContent> view;
-    if (workbook)
+    if (presentation)
+      view = fw::slide::view::PresentationView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
+    else if (workbook)
       view = fw::sheet::view::WorkbookView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
     else
       view = DocView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
@@ -167,7 +189,7 @@ void App::RecoverDocuments(bool open) {
                                                   std::to_wstring(failed) + L" documents couldn’t be recovered.",
                  {}, 8000);
   else if (partial)
-    banner_.Show(BannerKind::Warning, L"The last changes to a recovered workbook couldn’t all be made again. Check it before you save.",
+    banner_.Show(BannerKind::Warning, L"The last changes to a recovered file couldn’t all be made again. Check it before you save.",
                  {}, 8000);
   UpdateAutosaveTimer();
   Layout();
@@ -177,19 +199,22 @@ void App::RecoverDocuments(bool open) {
 void App::CheckActiveFile() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
-  switch (v->CheckFileOnDisk()) {
-    case FileChange::None: return;
-    case FileChange::Changed:
-      banner_.Show(BannerKind::Warning,
-                   v->Title() + L" was changed by another program." +
-                       (v->Modified() ? L" Reloading it discards your changes here." : L""),
-                   {{kActReload, L"Reload", true}, {kActNotNow, L"Keep this version"}});
-      break;
-    case FileChange::Missing:
-      banner_.Show(BannerKind::Warning, v->Title() + L" was moved or deleted. Save it again to keep it.");
-      break;
-  }
+  const FileChange change = v->CheckFileOnDisk();
+  if (change == FileChange::None) return;
+  ShowFileNotice(v, change);
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ShowFileNotice(TabContent* v, FileChange change) {
+  // The tab owns the notice: ActivateTab and CloseTab put it away and bring it back.
+  fileNotice_ = change;
+  if (change == FileChange::Changed)
+    banner_.Show(BannerKind::Warning,
+                 v->Title() + L" was changed by another program." +
+                     (v->Modified() ? L" Reloading it discards your changes here." : L""),
+                 {{kActReload, L"Reload", true}, {kActNotNow, L"Keep this version"}}, 0, v);
+  else if (change == FileChange::Missing)
+    banner_.Show(BannerKind::Warning, v->Title() + L" was moved or deleted. Save it again to keep it.", {}, 0, v);
 }
 
 void App::ReloadActive() {
@@ -204,9 +229,11 @@ void App::ReloadActive() {
     return;
   }
   view->ApplyState(v->State());
+  std::erase_if(fileNotices_, [v](const auto& n) { return n.first == v; });  // the old view goes
   if (search_.IsOpen()) CloseSearch();
   panel_.Show(nullptr, false);
   toolbar_.Forget();  // the old view's own toolbar controls go with it
+  ribbon_.Forget();
   tabs_[index] = std::move(view);  // the banner said changes here are discarded
   active_ = -1;
   ActivateTab(index);
