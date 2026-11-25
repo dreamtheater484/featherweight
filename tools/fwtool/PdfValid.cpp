@@ -288,7 +288,13 @@ std::map<std::string, std::string_view> ReadSection(std::string_view s, long lon
   lx.SkipWs();
   size_t dictAt = lx.pos;
   auto dict = ReadDict(s, dictAt);
-  if (dict["Type"] != "/XRef") { st.errors.push_back("the object at a cross-reference offset isn't /Type /XRef"); return {}; }
+  const auto type = dict.find("Type");
+  if (type == dict.end() || type->second != "/XRef") {
+    // PDFium's incremental save onto a file with a cross-reference stream writes one without /Type: an
+    // error (ISO 32000-1 table 17 requires it), but readable, so it's read on.
+    if (type != dict.end() || !dict.count("W")) { st.errors.push_back("the object at a cross-reference offset isn't /Type /XRef"); return {}; }
+    st.errors.push_back("a cross-reference stream without /Type /XRef (object " + std::to_string(num) + ")");
+  }
   long long length = -1;
   if (!AsInt(dict["Length"], length)) { st.errors.push_back("a cross-reference stream's /Length isn't a direct integer"); return dict; }
   std::string why;
@@ -465,8 +471,18 @@ Result Check(const std::filesystem::path& file, const std::wstring& password, bo
   if (data.empty()) { r.errors.push_back("empty or unreadable"); return r; }
   r.st = CheckStructure(data);
   for (const auto& e : r.st.errors) r.errors.push_back("structure: " + e);
-  const std::string pw = fw::WideToUtf8(password);
-  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(data.data(), data.size(), pw.empty() ? nullptr : pw.c_str());
+  // No password first, then each of --password's, comma-separated.
+  std::vector<std::string> tries{""};
+  for (size_t a = 0, s = 0; a <= password.size(); ++a)
+    if (a == password.size() || password[a] == L',') {
+      if (a > s) tries.push_back(fw::WideToUtf8(password.substr(s, a - s)));
+      s = a + 1;
+    }
+  FPDF_DOCUMENT doc = nullptr;
+  for (const auto& pw : tries) {
+    doc = FPDF_LoadMemDocument64(data.data(), data.size(), pw.empty() ? nullptr : pw.c_str());
+    if (doc || FPDF_GetLastError() != FPDF_ERR_PASSWORD) break;
+  }
   if (!doc) {
     r.errors.push_back(std::string("PDFium: ") + LoadError(FPDF_GetLastError()));
     return r;
@@ -540,6 +556,8 @@ std::string JsonList(const std::set<std::string>& v) {
 }
 
 }  // namespace
+
+std::vector<std::string> PdfStructureErrors(std::string_view data) { return CheckStructure(data).errors; }
 
 int RunPdfValid(const Options& options) {
   std::string error;

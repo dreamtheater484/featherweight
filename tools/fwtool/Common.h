@@ -119,6 +119,9 @@ int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
 int RunPdfValid(const Options& options);  // pdf-valid: any PDF's structure, PDFium, fonts, signatures (F1)
+// pdf-valid's structure check alone (no PDFium): what's wrong with a PDF's bytes, empty when nothing is.
+std::vector<std::string> PdfStructureErrors(std::string_view data);
+int RunPdfTorture(const Options& options);  // pdf-torture: random page operations, saved and checked (F1)
 // FW_FILE_LOG_DIR: logs every file this process opens or looks for (FileLog.cpp, F1's legal row).
 void InstallFileLog();
 int RunSlides(const Options& options);

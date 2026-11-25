@@ -126,6 +126,12 @@ constexpr const char* kUsage =
     "      loads with a size and text, and renders), the fonts it embeds, and each signature's byte\n"
     "      range and whether it covers the whole file. LIST names more PDFs, one per line. --out\n"
     "      writes each PDF's text, as PDFium reads it, to DIR\\<name>.txt (pages split by form feeds).\n"
+    "  fwtool pdf-torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] [--password P,Q]\n"
+    "                     [--samples LIST] <pdf or folder>...\n"
+    "      The page tools' never-damage test (F1, f1-gate): R rounds of N seeded random operations per PDF\n"
+    "      (rotate, delete, move, insert pages of another input, a drawn stamp, extract and split into new\n"
+    "      files), saved whole or incrementally, opened again and checked page by page (text, size,\n"
+    "      rotation, annotations) and by pdf-valid's structure check. DIR/saved, DIR/extracted, DIR/repro.\n"
     "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
     "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
@@ -420,7 +426,7 @@ int wmain(int argc, wchar_t** argv) {
       return 2;
     } else options.inputs.emplace_back(arg);
   }
-  if (options.inputs.empty() && !(command == L"pdf-valid" && !options.samples.empty())) {
+  if (options.inputs.empty() && !((command == L"pdf-valid" || command == L"pdf-torture") && !options.samples.empty())) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
   }
@@ -448,6 +454,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   if (command == L"pdf-valid") return fwtool::RunPdfValid(options);
+  if (command == L"pdf-torture") return fwtool::RunPdfTorture(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   if (command == L"slides") return fwtool::RunSlides(options);
   if (command == L"timing") return fwtool::RunTiming(options);
