@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 
 from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.sign.validation import validate_pdf_signature
@@ -81,6 +82,10 @@ def main():
                 ok, why = judge(expect, sigs)
             except Exception as e:  # a file pyHanko can't read fails
                 sigs, ok, why = [], False, "pyHanko: %s: %s" % (type(e).__name__, e)
+                # Where in pyHanko, for whoever fixes the file: the last frames.
+                trace = [ "%s:%d %s" % (os.path.basename(fr.filename), fr.lineno, fr.name)
+                          for fr in traceback.extract_tb(e.__traceback__)[-6:] ]
+                why += " (at " + " < ".join(reversed(trace)) + ")"
             bad += 0 if ok else 1
             rows.append({"file": path, "expect": expect, "ok": ok, "why": why, "signatures": sigs})
             print("[%s] %s (%s)%s" % ("OK" if ok else "FAIL", path, expect, "" if ok else ": " + why))
