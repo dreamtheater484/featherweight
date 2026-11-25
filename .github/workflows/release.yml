@@ -54,6 +54,14 @@ jobs:
         run: cmake --build build-release --config Release
       - name: Unit tests
         run: ctest --test-dir build-release -C Release --output-on-failure
+      - name: Smoke test with the standard PDFium (no V8)
+        shell: pwsh
+        run: |
+          foreach ($f in 'tests\pdfs\text.pdf', 'tests\pdfs\form.pdf', 'tests\office\layout\report.docx') {
+            Remove-Item smoke.png -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath build-release\Release\Featherweight.exe -ArgumentList '--snapshot','smoke.png',$f -PassThru -Wait
+            if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.png)) { throw "snapshot of $f failed ($($p.ExitCode))" }
+          }
       - name: Stage the program files
         shell: pwsh
         run: |

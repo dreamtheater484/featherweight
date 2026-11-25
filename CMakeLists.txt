@@ -64,7 +64,9 @@ set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
-target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_WITH_V8}>:FW_WITH_V8=1;PDF_ENABLE_V8;PDF_ENABLE_XFA>")
+# PDFium's full API (with V8 and XFA) in every build: the program runs with either PDFium build, and looks up the
+# few functions only the script engine has (f1-ship). FW_WITH_V8 picks the build linked and copied beside it.
+target_compile_definitions(Featherweight PRIVATE PDF_ENABLE_V8 PDF_ENABLE_XFA "$<$<BOOL:${FW_WITH_V8}>:FW_WITH_V8=1>")
 target_link_libraries(Featherweight PRIVATE
   fwcore pdfium
   d2d1 d3d11 dxgi dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32

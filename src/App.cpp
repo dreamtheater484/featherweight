@@ -1515,6 +1515,8 @@ void App::Execute(int cmd) {
         }
         break;
       case kActDownload: util::OpenExternalLink(bannerUpdateUrl_); break;
+      case kActScriptEngine: GetScriptEngine(); break;  // f1-ship
+      case kActScriptEngineLater: break;
       case kActSkip:
         settings_.skippedVersion = bannerUpdateVersion_;
         settings_.Save();
@@ -1647,6 +1649,7 @@ void App::Execute(int cmd) {
       settings_.Save();
       break;
     case CmdRollBackUpdate: RollBackUpdate(); break;
+    case CmdScriptEngine: GetScriptEngine(); break;
     case CmdToggleSpelling:
       settings_.spelling = !settings_.spelling;
       settings_.Save();
@@ -2457,6 +2460,7 @@ void App::ViewInvalidate() {
 
 void App::ViewStateChanged() {
   UpdateAutosaveTimer();
+  MaybeOfferScriptEngine();
   if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -2625,6 +2629,16 @@ void App::MaybeCheckForUpdates(bool manual) {
 
 void App::OnUpdaterDone() {
   Updater::Result r = updater_.Get();
+  if (r.component) {  // f1-ship: the script engine's download
+    if (r.status == Updater::Status::Installed) {
+      scriptEngineOffered_ = false;
+      banner_.Show(BannerKind::Success, L"The script engine is installed. Restart Featherweight to run the forms’ scripts.", {}, 8000);
+    } else {
+      banner_.Show(BannerKind::Error, L"The script engine wasn’t installed: " + r.error, {}, 8000);
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
   bannerUpdateUrl_ = r.pageUrl;
   bannerUpdateVersion_ = r.version;
   switch (r.status) {
@@ -2697,6 +2711,28 @@ void App::UpdateCommandState(int cmd, CommandState& s) {
       break;
   }
   if (s.visible && !s.enabled) s.label += L" (set by your organization)";
+}
+
+void App::MaybeOfferScriptEngine() {
+  if (scriptEngineAsked_ || snapshot_ || sandbox_) return;
+  PdfView* pdf = ActivePdf();
+  if (!pdf || !pdf->Ready() || !pdf->Doc() || !pdf->Doc()->NeedsScriptEngine()) return;
+  scriptEngineAsked_ = true;
+  // Nothing goes to the network unless the user agrees, and not at all where updates are off or managed.
+  if (!updater::Allowed(policy::Get(), Updater::InPackage()) || !Updater::CanSelfUpdate()) return;
+  scriptEngineOffered_ = true;
+  banner_.Show(BannerKind::Info,
+               L"This PDF’s form has scripts (calculations and checks) that need Featherweight’s optional script engine, "
+               L"a 30 MB download from GitHub.",
+               {{kActScriptEngine, L"Get the script engine", true}, {kActScriptEngineLater, L"Not now"}});
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::GetScriptEngine() {
+  if (updater_.Busy()) return;
+  banner_.Show(BannerKind::Info, L"Downloading the script engine…");
+  updater_.StartScriptEngine(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::RollBackUpdate() {

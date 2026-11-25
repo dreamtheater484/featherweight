@@ -54,6 +54,7 @@ class Updater {
     std::wstring version;  // e.g. "1.1.0"
     std::wstring pageUrl;  // release page
     std::wstring error;
+    bool component = false;  // the script engine's download (StartScriptEngine), not an update
   };
 
   static constexpr UINT kDoneMessage = WM_APP + 20;
@@ -79,6 +80,12 @@ class Updater {
   // Inside an MSIX package the Store updates the app, so the updater stays off.
   static bool InPackage();
 
+  // The optional form script engine (f1-ship): PDFium with V8 (form JavaScript) and XFA. The default download has
+  // PDFium without them; a PDF with form scripts offers this, and only after the user agrees does it download this
+  // version's pdfium-v8 build from its own release, checked like an update, to replace pdfium.dll from the next start.
+  void StartScriptEngine(HWND notify);
+  static bool ScriptEngineInstalled();
+
   // One rollback: an update keeps the files it replaced in previous\, with the version they were.
   static std::wstring PreviousVersion();  // "" when there's nothing to go back to
   // Puts the previous version's files back; it runs from the next start. previous\ is emptied.
@@ -90,6 +97,7 @@ class Updater {
   static void SetInstallDirForTesting(const std::wstring& dir);
   static void SetRunningSignatureForTesting(const updater::Signature* signature);
   static Result RunForTesting(const Options& options);  // synchronous
+  static Result ScriptEngineForTesting();                // synchronous; the release is <test URL>\tag.json
 
  private:
   struct Shared {
@@ -99,6 +107,7 @@ class Updater {
     bool swapping = false;
   };
   static void Run(std::shared_ptr<Shared> shared, HWND notify, Options options);
+  static void RunScriptEngine(std::shared_ptr<Shared> shared, HWND notify);
 
   // Shared with the worker thread, which may outlive this object while a download finishes.
   std::shared_ptr<Shared> shared_;

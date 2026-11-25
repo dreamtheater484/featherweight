@@ -23,6 +23,7 @@ namespace {
 
 constexpr wchar_t kLatestUrl[] = L"https://api.github.com/repos/dreamtheater484/featherweight/releases/latest";
 constexpr wchar_t kReleasesUrl[] = L"https://api.github.com/repos/dreamtheater484/featherweight/releases?per_page=30";
+constexpr wchar_t kTagUrl[] = L"https://api.github.com/repos/dreamtheater484/featherweight/releases/tags/";
 std::wstring g_testUrl, g_testInstallDir;
 const updater::Signature* g_testRunning = nullptr;
 // The files an install holds and the updater replaces.
@@ -351,6 +352,32 @@ bool IsScriptEngine(const std::wstring& pdfiumPath) {
 
 }  // namespace updater
 
+namespace {
+
+// One release asset downloaded to `fresh` and checked: its SHA-256 against SHA256SUMS.txt, then the trust rule
+// (signed by the running exe's publisher, for `product`). Returns "" when it passed; else why not, and `fresh` is
+// gone.
+std::wstring FetchChecked(const std::wstring& url, const std::string& sha256, const std::wstring& fresh,
+                          const wchar_t* product, const updater::Signature& running, updater::Signature* signature) {
+  std::string data;
+  if (Fetch(url, data, 256u << 20) != 200 || util::Sha256(data.data(), data.size()) != sha256)
+    return L"The download didn’t pass verification.";
+  if (!WriteBytes(fresh, data)) {
+    DeleteFileW(fresh.c_str());
+    return L"Couldn’t write the update.";
+  }
+  updater::Signature sig = updater::ReadSignature(fresh);
+  updater::Verdict verdict = updater::CheckFile(running, sig, product);
+  if (verdict != updater::Verdict::Accepted) {
+    DeleteFileW(fresh.c_str());
+    return std::wstring(L"The update was refused: ") + updater::VerdictText(verdict) + L".";
+  }
+  if (signature) *signature = sig;
+  return {};
+}
+
+}  // namespace
+
 Updater::Updater() : shared_(std::make_shared<Shared>()) {}
 
 Updater::~Updater() { WaitForSwap(); }
@@ -532,21 +559,13 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
     if (sum == sums.end() || assetUrl == assets.end()) continue;
     std::wstring target = dir + L"\\" + w.file;
     if (util::Sha256File(target) == sum->second) continue;  // unchanged
-    std::string data;
-    if (Fetch(assetUrl->second, data, 256u << 20) != 200 || util::Sha256(data.data(), data.size()) != sum->second)
-      return fail(L"The download didn’t pass verification.");
-    Planned p{w.file, target, target + L".new"};
-    if (!WriteBytes(p.fresh, data)) {
-      DeleteFileW(p.fresh.c_str());
-      return fail(L"Couldn’t write the update.");
-    }
-    plan.push_back(p);
     // The trust rule: once this copy is signed, the same publisher must have signed every file, for this
     // product, and the program must be the release's version (no older signed copy passed off as new).
-    updater::Signature sig = updater::ReadSignature(p.fresh);
-    updater::Verdict verdict = updater::CheckFile(running, sig, w.product);
-    if (verdict != updater::Verdict::Accepted)
-      return fail(std::wstring(L"The update was refused: ") + updater::VerdictText(verdict) + L".");
+    Planned p{w.file, target, target + L".new"};
+    updater::Signature sig;
+    if (std::wstring why = FetchChecked(assetUrl->second, sum->second, p.fresh, w.product, running, &sig); !why.empty())
+      return fail(why);
+    plan.push_back(p);
     if (running.state == updater::Signature::State::Trusted && w.product == std::wstring(L"Featherweight")) {
       auto fileVersion = fw::ParseSemVer(fw::WideToUtf8(sig.fileVersion));
       if (!fileVersion || fw::CompareSemVer(*fileVersion, *latest) != 0)
@@ -593,4 +612,96 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, Options options) 
   if (keep) util::WriteFileAtomic(prev + L"\\version.txt", FW_VERSION_STRING);
   r.status = Status::Installed;
   finish(r);
+}
+
+void Updater::StartScriptEngine(HWND notify) {
+  {
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    if (shared_->busy) return;
+    shared_->busy = true;
+    shared_->result = Result{Status::Checking};
+    shared_->result.component = true;
+  }
+  std::thread([s = shared_, notify] { RunScriptEngine(s, notify); }).detach();
+}
+
+Updater::Result Updater::ScriptEngineForTesting() {
+  auto shared = std::make_shared<Shared>();
+  shared->busy = true;
+  RunScriptEngine(shared, nullptr);
+  return shared->result;
+}
+
+bool Updater::ScriptEngineInstalled() { return updater::IsScriptEngine(InstallDir() + L"\\pdfium.dll"); }
+
+// The form script engine (f1-ship): this version's PDFium with V8 and XFA, from this version's own release, checked
+// like an update, in place of pdfium.dll from the next start. Only after the user asks for it.
+void Updater::RunScriptEngine(std::shared_ptr<Shared> shared, HWND notify) {
+  Result r;
+  r.component = true;
+  r.version = FW_VERSION_WSTRING;
+  auto finish = [&](Status status, const std::wstring& error = {}) {
+    r.status = status;
+    r.error = error;
+    {
+      std::lock_guard<std::mutex> lock(shared->mutex);
+      shared->result = r;
+      shared->busy = false;
+      shared->swapping = false;
+    }
+    if (notify) PostMessageW(notify, kDoneMessage, 0, 0);
+  };
+  const std::wstring dir = InstallDir(), target = dir + L"\\pdfium.dll", fresh = target + L".new";
+  if (updater::IsScriptEngine(target)) return finish(Status::Installed);
+  if (!CanSelfUpdate()) return finish(Status::Failed, L"Featherweight can’t change its own folder.");
+
+  std::wstring url = std::wstring(kTagUrl) + L"v" + FW_VERSION_WSTRING;
+  if (!g_testUrl.empty()) url = IsFileUrl(g_testUrl) ? g_testUrl + L"\\tag.json" : g_testUrl;
+  std::string body;
+  int status = Fetch(url, body, 4u << 20);
+  if (status != 200) return finish(Status::Failed, L"Couldn’t reach GitHub.");
+  auto json = fw::ParseJson(body);
+  if (!json || json->type != fw::JsonValue::Type::Object) return finish(Status::Failed, L"Unexpected response from GitHub.");
+  r.pageUrl = fw::Utf8ToWide(json->StringOr("html_url", "https://github.com/dreamtheater484/featherweight/releases"));
+  auto tagVersion = fw::ParseSemVer(json->StringOr("tag_name"));
+  auto current = fw::ParseSemVer(FW_VERSION_STRING);
+  if (!tagVersion || !current || fw::CompareSemVer(*tagVersion, *current) != 0)
+    return finish(Status::Failed, L"This version’s release wasn’t found.");
+  std::map<std::wstring, std::wstring> assets;
+  if (const fw::JsonValue* list = json->Find("assets"); list && list->type == fw::JsonValue::Type::Array) {
+    for (const auto& a : list->array)
+      assets[fw::ToLower(fw::Utf8ToWide(a.StringOr("name")))] = fw::Utf8ToWide(a.StringOr("browser_download_url"));
+  }
+  const std::wstring asset = fw::ToLower(std::wstring(L"pdfium-v8") + kArch + L".dll");
+  auto sumsUrl = assets.find(L"sha256sums.txt");
+  auto assetUrl = assets.find(asset);
+  if (sumsUrl == assets.end() || assetUrl == assets.end())
+    return finish(Status::Failed, L"This version’s release has no script engine.");
+  std::string sumsText;
+  if (Fetch(sumsUrl->second, sumsText, 1u << 20) != 200) return finish(Status::Failed, L"Download failed.");
+  auto sums = ParseSums(sumsText);
+  auto sum = sums.find(asset);
+  if (sum == sums.end()) return finish(Status::Failed, L"The download didn’t pass verification.");
+
+  const updater::Signature& running = g_testRunning ? *g_testRunning : updater::RunningSignature();
+  if (std::wstring why = FetchChecked(assetUrl->second, sum->second, fresh, L"pdfium", running, nullptr); !why.empty())
+    return finish(Status::Failed, why);
+  if (!updater::IsScriptEngine(fresh)) {
+    DeleteFileW(fresh.c_str());
+    return finish(Status::Failed, L"The download isn’t the script engine.");
+  }
+  // pdfium.dll may be loaded: it's renamed, not replaced, and removed at the next start.
+  {
+    std::lock_guard<std::mutex> lock(shared->mutex);
+    shared->swapping = true;
+  }
+  const std::wstring old = target + L".old";
+  DeleteFileW(old.c_str());
+  bool moved = MoveFileExW(target.c_str(), old.c_str(), 0) != FALSE;
+  if (!moved || !MoveFileExW(fresh.c_str(), target.c_str(), 0)) {
+    if (moved && !util::FileExists(target)) MoveFileExW(old.c_str(), target.c_str(), 0);
+    DeleteFileW(fresh.c_str());
+    return finish(Status::Failed, L"The script engine couldn’t be installed.");
+  }
+  finish(Status::Installed);
 }

@@ -79,6 +79,9 @@ class Document {
   FPDF_FORMHANDLE Form() const { return form_; }
   bool HasForm() const { return hasForm_; }
   bool IsXfa() const { return isXfa_; }
+  // f1-ship: the PDF has form scripts or XFA, which only the optional script engine runs, and it isn't loaded.
+  bool NeedsScriptEngine() const { return scriptsWanted_ && !ScriptEngineLoaded(); }
+  static bool ScriptEngineLoaded();  // the pdfium.dll in use is the build with V8 and XFA
   int PageCount() const { return static_cast<int>(sizes_.size()); }
   const std::vector<fw::PageSizePt>& PageSizes() const { return sizes_; }
   void RefreshPageSizes();
@@ -141,6 +144,7 @@ class Document {
   std::unique_ptr<FormEnv> env_;
   bool hasForm_ = false;
   bool isXfa_ = false;
+  bool scriptsWanted_ = false;  // f1-ship
   bool modified_ = false;
   std::vector<fw::PageSizePt> sizes_;
   std::vector<FPDF_PAGE> pages_;

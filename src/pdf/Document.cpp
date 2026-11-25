@@ -3,6 +3,7 @@
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
+#include <fpdf_javascript.h>
 #include <fpdf_save.h>
 
 #include <algorithm>
@@ -119,6 +120,11 @@ void Document::InitLibrary() {
   config.m_v8EmbedderSlot = 0;
   FPDF_InitLibraryWithConfig(&config);
   g_libraryReady = true;
+}
+
+bool Document::ScriptEngineLoaded() {
+  HMODULE pdfium = GetModuleHandleW(L"pdfium.dll");
+  return pdfium && GetProcAddress(pdfium, "FPDF_LoadXFA") != nullptr;
 }
 
 bool Document::LibraryAvailable() {
@@ -246,9 +252,14 @@ void Document::AttachHost(DocumentHost* host, bool highlightFields) {
   form_ = FPDFDOC_InitFormFillEnvironment(doc_, env_.get());
   int type = FPDF_GetFormType(doc_);
   hasForm_ = type != FORMTYPE_NONE;
+  // f1-ship: form scripts and XFA need the optional script engine (PDFium with V8); NeedsScriptEngine says so.
+  scriptsWanted_ = type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND || FPDFDoc_GetJavaScriptActionCount(doc_) > 0;
 #ifdef PDF_ENABLE_XFA
   if (type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND) {
-    isXfa_ = FPDF_LoadXFA(doc_) != FALSE;
+    // Only the script engine's PDFium has FPDF_LoadXFA: looked up, so the program runs with either build.
+    using LoadXfa = FPDF_BOOL(FPDF_CALLCONV*)(FPDF_DOCUMENT);
+    static const auto loadXfa = reinterpret_cast<LoadXfa>(GetProcAddress(GetModuleHandleW(L"pdfium.dll"), "FPDF_LoadXFA"));
+    isXfa_ = loadXfa && loadXfa(doc_) != FALSE;
     if (isXfa_) RefreshPageSizes();
   }
 #endif

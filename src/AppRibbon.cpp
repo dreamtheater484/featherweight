@@ -367,6 +367,7 @@ ui::FilePage::Model App::CurrentFilePage() {
     if (QueryCommand(CmdRollBackUpdate).visible) opt.push_back(command(CmdRollBackUpdate, icon::Undo));
   }
   opt.push_back(heading(L"Featherweight"));
+  if (QueryCommand(CmdScriptEngine).visible) opt.push_back(command(CmdScriptEngine, icon::Download));  // f1-ship
   if (QueryCommand(CmdMakeDefault).visible) opt.push_back(command(CmdMakeDefault, icon::PDF));
   if (fw::pkg::backups::Any(DocFile::Config().backups))
     opt.push_back(entry(CmdDeleteBackups, L"Delete backups", icon::Delete, L"The originals kept for Restore original, in every folder"));

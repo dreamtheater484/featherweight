@@ -498,3 +498,48 @@ TEST(PolicyUpdatesOff) {
   CHECK(!updater::Allowed(none, true));  // the Store updates a packaged copy
   CHECK(updater::Allowed(beta, false));
 }
+
+TEST(UpdaterScriptEngine) {
+#if defined(_M_ARM64)
+  const std::wstring asset = L"pdfium-v8-arm64.dll";
+#else
+  const std::wstring asset = L"pdfium-v8.dll";
+#endif
+  Sandbox box;
+  const Signature unsignedRunning;
+  Updater::SetRunningSignatureForTesting(&unsignedRunning);
+  Updater::SetInstallDirForTesting(box.Install());
+  TempCopy standard(L"pdfium-standard");  // stands in for the standard build: a PE file without FPDF_LoadXFA
+  CopyFileW(standard.Path().c_str(), (box.Install() + L"\\pdfium.dll").c_str(), FALSE);
+  // This version's release, with the PDFium this test was built with as its pdfium-v8 asset.
+  CopyFileW(FW_PDFIUM_DLL, (box.Release() + L"\\" + asset).c_str(), FALSE);
+  util::WriteFileAtomic(box.Release() + L"\\SHA256SUMS.txt",
+                        util::Sha256File(box.Release() + L"\\" + asset) + "  " + fw::WideToUtf8(asset) + "\n");
+  std::string base = fw::WideToUtf8(box.Release());
+  for (char& c : base) c = c == '\\' ? '/' : c;
+  auto tagJson = [&](const char* version) {
+    return std::string("{\"tag_name\":\"v") + version + "\",\"assets\":[{\"name\":\"" + fw::WideToUtf8(asset) +
+           "\",\"browser_download_url\":\"file:///" + base + "/" + fw::WideToUtf8(asset) +
+           "\"},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"file:///" + base + "/SHA256SUMS.txt\"}]}";
+  };
+  Updater::SetReleaseUrlForTesting(L"file:///" + box.Release());
+  const std::string before = util::Sha256File(box.Install() + L"\\pdfium.dll");
+
+  util::WriteFileAtomic(box.Release() + L"\\tag.json", tagJson("9.9.9"));  // another version's release: not used
+  CHECK(Updater::ScriptEngineForTesting().status == Updater::Status::Failed);
+  CHECK(util::Sha256File(box.Install() + L"\\pdfium.dll") == before);
+
+  util::WriteFileAtomic(box.Release() + L"\\tag.json", tagJson(FW_VERSION_STRING));
+  Updater::Result r = Updater::ScriptEngineForTesting();
+  CHECK(r.component);
+  if (FW_PDFIUM_IS_V8) {  // the V8 build: installed in place of pdfium.dll, the old one renamed
+    CHECK(r.status == Updater::Status::Installed);
+    CHECK(Updater::ScriptEngineInstalled());
+    CHECK(util::FileExists(box.Install() + L"\\pdfium.dll.old"));
+    CHECK(Updater::ScriptEngineForTesting().status == Updater::Status::Installed);  // already there: nothing to do
+  } else {  // built with the standard PDFium: the "engine" isn't one, so it's refused
+    CHECK(r.status == Updater::Status::Failed && r.error.find(L"isn’t the script engine") != std::wstring::npos);
+    CHECK(util::Sha256File(box.Install() + L"\\pdfium.dll") == before);
+  }
+  CHECK(!util::FileExists(box.Install() + L"\\pdfium.dll.new"));
+}

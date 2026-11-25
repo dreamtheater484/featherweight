@@ -230,6 +230,8 @@ class App : public PdfHost, public DropHost {
   void UpdateCommandState(int cmd, CommandState& s);
   void RollBackUpdate();
   const std::wstring& PreviousVersion();
+  void MaybeOfferScriptEngine();  // f1-ship: a PDF with form scripts offers the optional script engine, once
+  void GetScriptEngine();
   void ShowAbout();
 
   // Keyboard focus and UI Automation
@@ -361,9 +363,11 @@ class App : public PdfHost, public DropHost {
   std::wstring previousVersion_;  // f1-ship: the version previous\ holds ("" none), read once and after changes
   bool previousVersionRead_ = false;
   bool scriptEngineOffered_ = false;  // f1-ship: a PDF with scripts is open and the engine isn't installed
+  bool scriptEngineAsked_ = false;    // the banner was shown this session
   enum BannerActions {
     kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
-    kActKeepFormat, kActMakeDefault = 20
+    kActKeepFormat, kActMakeDefault = 20,
+    kActScriptEngine = 30, kActScriptEngineLater  // f1-ship
   };
   std::wstring keepFormatPath_;  // the save the "Keep CSV" banner waits on
   // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
