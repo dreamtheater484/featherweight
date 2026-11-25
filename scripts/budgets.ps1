@@ -214,7 +214,9 @@ foreach ($item in @(@{ name = "Featherweight.exe"; now = $exeSize; key = "exe"; 
   "{0,-20} {1,14} {2,14} {3,24} {4,10}" -f $item.name, (Format-Bytes $item.now), $(if ($base) { Format-Bytes $then } else { "-" }),
     $change, ("< {0} MB" -f ($item.budget / 1MB))
   if ($item.now -ge $item.budget) { $failures.Add("$($item.name) is over its budget of $($item.budget / 1MB) MB.") }
-  if ($base -and $item.now - $then -gt $sizeStep) {
+  # A baseline of 0 wasn't measured with this toolset (the ledger says so, as for the download since F1,
+  # measured by release.yml): nothing to grow from.
+  if ($base -and $then -gt 0 -and $item.now - $then -gt $sizeStep) {
     $failures.Add((("{0} grew {1:N1} KB over the baseline, more than {2} KB, and the ledger doesn't say why. " +
                     "If it's worth it, record the reason: scripts\budgets.ps1 -Record `"why`"") -f $item.name, (($item.now - $then) / 1KB), ($sizeStep / 1KB)))
   }

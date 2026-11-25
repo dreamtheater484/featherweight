@@ -1,0 +1,30 @@
+{
+    "_measured":  "2026-11-25T08:54:27 with D:\\Documents\\Codex\\Featherweight\\.claude\\worktrees\\v40-final\\build-release\\Release\\Featherweight.exe (D66E6ED8A7F00675...), by tests\\pdf\\measure-40-baselines.ps1",
+    "printPublic":  {
+                        "passing":  231,
+                        "pages":  239
+                    },
+    "printXlsx":  {
+                      "passing":  8647,
+                      "pages":  44791
+                  },
+    "printXlsOds":  {
+                        "passing":  25081,
+                        "pages":  89824
+                    },
+    "cellsXlsx":  {
+                      "percent":  99.9876,
+                      "cells":  1533619,
+                      "same":  1533429
+                  },
+    "cellsXls":  {
+                     "percent":  99.8515,
+                     "cells":  1533835,
+                     "same":  1531558
+                 },
+    "cellsOds":  {
+                     "percent":  99.9993,
+                     "cells":  1420871,
+                     "same":  1420861
+                 }
+}

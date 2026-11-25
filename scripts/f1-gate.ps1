@@ -70,6 +70,9 @@ param(
   # Check a report instead of making one: exit 0 when it's for -Commit (default HEAD) and has no failed row.
   [string]$Verify,
   [string]$Commit,
+  # A trial's CI rows read this commit's runs instead of the head's (a head that differs from it only in the
+  # gate's own files, before CI has run on it). A report made with it is never publishable.
+  [string]$CiCommit,
   # Print the rows and checks and exit.
   [switch]$List
 )
@@ -248,7 +251,7 @@ function Gh-Json([string]$path) {
 $script:runsCache = $null
 function Get-CiRuns {
   if ($null -eq $script:runsCache) {
-    $j = Gh-Json "repos/$repoSlug/actions/runs?head_sha=$($script:head)&per_page=100"
+    $j = Gh-Json "repos/$repoSlug/actions/runs?head_sha=$($script:ciHead)&per_page=100"
     $script:runsCache = @($j.workflow_runs)
   }
   $script:runsCache
@@ -392,7 +395,7 @@ function Test-Scorecard {
 }
 Check "build.ci" ci "CI on this commit: build (with arm64's ctest), fuzz, CodeQL, Scorecard" "Every workflow and job succeeded" {
   if (-not $repoSlug) { return Failed "no GitHub remote" }
-  if (-not @(Invoke-Git branch -r --contains $script:head).Count) { return Failed "this commit isn't pushed" }
+  if (-not @(Invoke-Git branch -r --contains $script:ciHead).Count) { return Failed "this commit isn't pushed" }
   $parts = [ordered]@{
     build = Test-Workflow "build.yml" @("^build", "fuzz", "arm64") "f1-ship" "the arm64 job"
     codeql = Test-Workflow "codeql.yml" @() "f1-trust" "CodeQL code scanning"
@@ -407,14 +410,19 @@ Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 o
   if (-not (Test-Path (Join-Path $root ".github\workflows\codeql.yml"))) { return NotBuilt "f1-trust" "CodeQL code scanning (.github\workflows\codeql.yml)" }
   # The branch gated: this checkout's, else the first of f1-int and main that has the commit (codeql.yml runs on
   # pushes to those). Without ref the API answers for the default branch only.
-  $pushed = @(Invoke-Git branch -r --contains $script:head | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
-  $branch = @(@((Invoke-Git rev-parse --abbrev-ref HEAD), "claude/f1-int", "main") + $pushed | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
+  $pushed = @(Invoke-Git branch -r --contains $script:ciHead | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
+  # With -CiCommit this checkout's branch only carries that commit; it was analysed where it was pushed.
+  # (A list built with +=: an if's one-item result is a string, and string + array concatenates.)
+  $tryBranches = @()
+  if (-not $CiCommit) { $tryBranches += "$(Invoke-Git rev-parse --abbrev-ref HEAD)" }
+  $tryBranches += @("claude/f1-int", "main") + $pushed
+  $branch = @($tryBranches | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
   if (-not $branch) { return Failed "this commit isn't on a pushed branch" }
   $ref = "refs/heads/$branch"
   # The alerts API answers "none open" for a branch CodeQL never analysed: the analysis of this commit (or of one
   # with only docs changed since) must be there first.
   try { $analyses = @(Gh-Json "repos/$repoSlug/code-scanning/analyses?ref=$ref&per_page=20") } catch { $analyses = @() }
-  $a = @($analyses | Where-Object { $_.commit_sha -eq $script:head }) | Select-Object -First 1
+  $a = @($analyses | Where-Object { $_.commit_sha -eq $script:ciHead }) | Select-Object -First 1
   if (-not $a) { $a = @($analyses | Where-Object { $_.commit_sha -and (Test-OnlyDocsSince $_.commit_sha) }) | Select-Object -First 1 }
   if (-not $a) {
     $last = @($analyses) | Select-Object -First 1
@@ -674,24 +682,55 @@ Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the 
   $readme = Get-Content (Join-Path $root "README.md") -Raw -Encoding UTF8
   $n = [ordered]@{}
   $n.readmeNameAndLogo = [bool]($readme -match '(?is)(MIT|licen[cs]e).{0,200}(name|logo).{0,120}(logo|name)' -and $readme -match '(?i)not|doesn.t|don.t')
-  # Feature names: a ribbon or menu label that is "Word ..."/"Excel ..."/"PowerPoint ..." as a name
+  # Feature names: a string a person reads that is "Word ..."/"Excel ..."/"PowerPoint ..." as a name
   # (not "Word documents", "Excel workbooks", "PowerPoint presentations", "Word 97-2003", "the Word format").
-  $hits = @()
-  foreach ($f in @(Get-ChildItem (Join-Path $root "src") -Recurse -File -Include *.cpp, *.h, *.rc, *.txt)) {
-    foreach ($m in [regex]::Matches((Get-Content $f.FullName -Raw), 'L"([^"]*\b(Word|Excel|PowerPoint)\b[^"]*)"')) {
-      $s = $m.Groups[1].Value
-      if ($s -match '\b(Word|Excel|PowerPoint)\s+(\d|document|documents|workbook|workbooks|presentation|presentations|file|files|format|formats|template|templates|show|show''s|97|2003|2007|binary|Macro|Add-in|XML|Open XML)' -or
-          $s -match '(as|in|like|than|from|by|of|the)\s+(Word|Excel|PowerPoint)\b' -or $s -match '^\s*$') { continue }
-      $hits += "$($f.FullName.Substring($root.Length + 1)): $s"
+  # The strings are the catalog's msgids (strings\featherweight.pot: every string a person reads, and only
+  # those; ctest strings_marked keeps it so), else the source's literals on one line each, without the
+  # lines marked "// lang: no" (data such as registry key names). Strings reviewed as descriptions are in
+  # tests\legal-names-reviewed.txt; the row lists those apart.
+  $strings = @()
+  $pot = Join-Path $root "strings\featherweight.pot"
+  if (Test-Path $pot) {
+    $n.source = "strings\featherweight.pot"
+    $cur = $null
+    foreach ($line in [IO.File]::ReadAllLines($pot, $utf8)) {
+      if ($line -match '^msgid(_plural)? "(.*)"$') { if ($null -ne $cur) { $strings += $cur }; $cur = $Matches[2] }
+      elseif ($null -ne $cur -and $line -match '^"(.*)"$') { $cur += $Matches[1] }
+      else { if ($null -ne $cur) { $strings += $cur }; $cur = $null }
+    }
+    if ($null -ne $cur) { $strings += $cur }
+    $strings = @($strings | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ where = "featherweight.pot"; text = $_ } })
+  } else {
+    $n.source = "src literals"
+    foreach ($f in @(Get-ChildItem (Join-Path $root "src") -Recurse -File -Include *.cpp, *.h, *.rc)) {
+      foreach ($line in [IO.File]::ReadAllLines($f.FullName)) {
+        if ($line -match '//\s*lang:\s*no') { continue }
+        foreach ($m in [regex]::Matches($line, 'L"([^"\r\n]*)"')) { $strings += [pscustomobject]@{ where = $f.FullName.Substring($root.Length + 1); text = $m.Groups[1].Value } }
+      }
     }
   }
+  $reviewedFile = Join-Path $root "tests\legal-names-reviewed.txt"
+  $reviewed = @{}
+  if (Test-Path $reviewedFile) {
+    foreach ($line in [IO.File]::ReadAllLines($reviewedFile, $utf8)) { if ($line -and -not $line.StartsWith("#")) { $reviewed[($line -split "`t")[0]] = $true } }
+  }
+  $hits = @(); $accepted = @()
+  foreach ($x in $strings) {
+    $s = $x.text -replace '\\n', "`n" -replace '\\"', '"' -replace '\\\\', '\'
+    if ($s -cnotmatch '\b(Word|Excel|PowerPoint)\b') { continue }  # the names, capitalized: not the English word "word"
+    if ($s -match '\b(Word|Excel|PowerPoint)\s+(\d|document|documents|workbook|workbooks|presentation|presentations|file|files|format|formats|template|templates|show|show''s|97|2003|2007|binary|Macro|Add-in|XML|Open XML)' -or
+        $s -match '(as|in|like|than|from|by|of|the)\s+(Word|Excel|PowerPoint)\b') { continue }
+    if ($reviewed.ContainsKey($x.text)) { $accepted += $x.text; continue }
+    $hits += "$($x.where): $($x.text)"
+  }
   $n.possibleNames = $hits.Count
+  $n.reviewedAsDescriptions = $accepted.Count
   if ($hits.Count) { $n.first = $hits[0] }
   $listFile = Join-Path $script:outDir "legal-names.txt"
   New-Item -ItemType Directory -Force $script:outDir | Out-Null
-  [IO.File]::WriteAllLines($listFile, [string[]]$hits, $utf8)
+  [IO.File]::WriteAllLines($listFile, [string[]](@($hits) + @("", "# reviewed as descriptions (tests\legal-names-reviewed.txt):") + @($accepted)), $utf8)
   if (-not $n.readmeNameAndLogo) { return NotBuilt "f1-trust" "the README's line that the MIT licence doesn't cover the name and logo" }
-  if ($hits.Count) { Failed "$($hits.Count) strings may use a program's name as a name (list: legal-names.txt)" $n } else { Passed "only as descriptions" $n }
+  if ($hits.Count) { Failed "$($hits.Count) strings may use a program's name as a name, not yet reviewed (list: legal-names.txt; reviewed ones go in tests\legal-names-reviewed.txt)" $n } else { Passed "only as descriptions ($($accepted.Count) reviewed)" $n }
 }
 
 # ===== Languages =====
@@ -701,7 +740,7 @@ Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeh
   if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (python tools\strings\check.py --build --json: see FeatherweightNotes\f1\gate-contract.md)" }
   $j = Join-Path $script:outDir "lang-catalog.json"
   if ($tool -like "*.ps1") { $code = Invoke-Script "lang.catalog" $tool @("-Build", (Full $Build), "-Json", $j) }
-  else { $code = Invoke-Tool "lang.catalog" "python" @("-I", (Full $tool), "--build", (Full $Build), "--json", $j) }
+  else { $code = Invoke-Tool "lang.catalog" "python" @("-I", "-B", (Full $tool), "--build", (Full $Build), "--json", $j) }
   $c = Read-Json $j
   if (-not $c) { return Failed "the catalog check wrote nothing (exit $code)" }
   $n = [ordered]@{}; $bad = @()
@@ -879,7 +918,7 @@ Check "review.scans" quick "VirusTotal and Hybrid Analysis (Roy's step 5): Defen
   if (-not (Test-Path $s)) { return NotBuilt "f1-trust" "scripts\scan-release.ps1" }
   $o = Join-Path $script:outDir "scan-release"
   Remove-Item (Join-Path $o "summary.json") -ErrorAction SilentlyContinue
-  $code = Invoke-Script "review.scans" "scripts\scan-release.ps1" @("-FromCi", "-Commit", $script:head, "-OutDir", $o)
+  $code = Invoke-Script "review.scans" "scripts\scan-release.ps1" @("-FromCi", "-Commit", $script:ciHead, "-OutDir", $o)
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "scan-release.ps1 -FromCi wrote no summary (exit $code; its log)" }
   $n = [ordered]@{ verdict = $r.verdict }
@@ -1038,6 +1077,8 @@ Check "docs.site" quick "The website (site\): help, known issues, the privacy st
 Check "docs.notes" quick "The release notes: the size and timing ledger lines, the report links" "Present; scan links wait for step 5" {
   $cm = Get-Content (Join-Path $root "CMakeLists.txt") -Raw
   $ver = if ($cm -match 'project\(Featherweight VERSION (\d+\.\d+\.\d+)') { $Matches[1] } else { "" }
+  # The tag, the file names and the manifests come from CMake's version, so it must be this gate's.
+  if (-not $ver.StartsWith("$Version.")) { return Failed "CMakeLists.txt says VERSION ${ver}; $Version needs project(Featherweight VERSION $Version.0) before the final run (the notes, the manifests and the tag follow it)" ([ordered]@{ cmakeVersion = $ver }) }
   $p = @("docs\release-notes\$ver.md", "packaging\release-notes.md", "docs\release-notes.md") | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $p) { return NotBuilt "f1-ship" "the release notes (docs\release-notes\$ver.md: see gate-contract.md)" }
   $t = Get-Content $p -Raw -Encoding UTF8
@@ -1083,6 +1124,7 @@ if ($Verify) {
   $problems = @()
   if ($rep.commit -ne $want) { $problems += "the report is for $($rep.commit), not $want" }
   if ($rep.dirty) { $problems += "the report was made on a tree with uncommitted changes" }
+  if ($rep.ciCommit -and $rep.ciCommit -ne $rep.commit) { $problems += "the report's CI rows read $($rep.ciCommit) (-CiCommit, a trial)" }
   $failed = @($rep.rows | Where-Object { $_.status -ne "passed" -and $_.status -ne "waiting" })
   if ($failed.Count) { $problems += "failed rows: " + (($failed | ForEach-Object { $_.title }) -join ", ") }
   $waiting = @($rep.rows | ForEach-Object { $_.checks } | Where-Object { $_.status -eq "waiting" })
@@ -1104,6 +1146,8 @@ if ($List) {
 # The run
 # ---------------------------------------------------------------------------------------------------
 $script:head = Invoke-Git rev-parse HEAD
+$script:ciHead = if ($CiCommit) { Invoke-Git rev-parse $CiCommit } else { $script:head }
+if (-not $script:ciHead) { throw "unknown -CiCommit $CiCommit" }
 $dirty = [bool]@(Invoke-Git status --porcelain).Count
 $branch = Invoke-Git rev-parse --abbrev-ref HEAD
 $script:outDir = Full $Out
@@ -1174,11 +1218,11 @@ if (Test-Path (Get-Exe)) { $e = Get-Item (Get-Exe); $exeInfo = [ordered]@{ bytes
 $failedRows = @($rowsOut | Where-Object status -eq "failed")
 $gate = [ordered]@{
   version = $Version; commit = $script:head; branch = $branch; dirty = $dirty; generated = (Get-Date).ToString("s"); exe = $exeInfo
-  publishable = (-not $dirty -and -not $failedRows.Count); rows = $rowsOut
+  publishable = (-not $dirty -and -not $failedRows.Count -and -not $CiCommit); ciCommit = $script:ciHead; rows = $rowsOut
 }
 $count = { param($s) @($rowsOut | ForEach-Object { $_.checks } | Where-Object { $_.status -eq $s }).Count }
 $md = @("# Gate $Version", "",
-  "Commit ``$($script:head)`` ($branch)$(if ($dirty) { ', **with uncommitted changes: counts for nothing**' }), $((Get-Date).ToString('yyyy-MM-dd HH:mm')).",
+  "Commit ``$($script:head)`` ($branch)$(if ($dirty) { ', **with uncommitted changes: counts for nothing**' })$(if ($CiCommit) { ", CI rows read ``$($script:ciHead)`` (-CiCommit: a trial, counts for nothing)" }), $((Get-Date).ToString('yyyy-MM-dd HH:mm')).",
   $(if ($exeInfo) { "Featherweight.exe ($Build): $('{0:N0}' -f $exeInfo.bytes) bytes, sha256 $($exeInfo.sha256)." } else { "No shipped build in $Build." }), "",
   "**$(if ($gate.publishable) { 'Publishable' } else { 'Not publishable' })**: rows $(@($rowsOut | Where-Object status -eq 'passed').Count) passed, $($failedRows.Count) failed, $(@($rowsOut | Where-Object status -eq 'waiting').Count) waiting; checks $(& $count 'passed') passed, $(& $count 'failed') failed, $(& $count 'not run') not run, $(& $count 'waiting') waiting for Roy's steps.", "",
   "| Row | Status | Checks |", "|---|---|---|")
