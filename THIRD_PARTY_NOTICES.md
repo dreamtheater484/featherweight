@@ -1,6 +1,10 @@
 # Third-party notices
 
-Featherweight itself is released under the MIT License (see LICENSE).
+Featherweight itself is released under the MIT License (see LICENSE). The licence covers the code. It doesn't grant rights to the name "Featherweight" or its logo, which identify the original project.
+
+Microsoft, Windows, Office, Word, Excel and PowerPoint are trademarks of the Microsoft group of companies. Adobe and Acrobat are trademarks of Adobe. Featherweight is an independent project, not affiliated with, endorsed by or sponsored by Microsoft or Adobe. It names their products only to say which files it opens.
+
+Featherweight ships no font files. It draws with the fonts installed on the PC and the fonts embedded in documents, within the embedding permissions those fonts set.
 
 Featherweight uses **PDFium** (https://pdfium.googlesource.com/pdfium/), built by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), chromium/8086. PDFium and the libraries it includes are distributed under the licenses below.
 

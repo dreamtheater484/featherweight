@@ -1,0 +1,82 @@
+name: pages
+
+# The website (site/, F1 f1-trust): help, known issues, privacy and security, built with GitHub's own
+# Jekyll action. It's published from main on GitHub Pages once Pages is set to deploy from Actions
+# (Roy's step 4); until then it's built and checked, not published. The logo and the screenshot come
+# from docs/, so they're kept in one place.
+on:
+  push:
+    branches: [main, claude/f1-trust]
+    paths: ['site/**', 'docs/logo.png', 'docs/screenshots/hero.png', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      publish: ${{ steps.pages.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Add the pictures
+        run: |
+          mkdir -p site/assets
+          cp docs/logo.png docs/screenshots/hero.png site/assets/
+
+      - name: Build the site
+        uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+        with:
+          source: ./site
+          destination: ./_site
+
+      - name: Check the pages are there
+        run: |
+          for page in index.html help/index.html shortcuts/index.html known-issues/index.html privacy/index.html security/index.html; do
+            test -s "_site/$page" || { echo "::error::_site/$page is missing"; exit 1; }
+          done
+
+      - name: Is Pages on? (Roy's step 4)
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::notice::Built from $GITHUB_REF: only main is published."
+          elif gh api "repos/$GITHUB_REPOSITORY/pages" --silent 2>/dev/null; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::GitHub Pages isn't on yet (Roy's step 4): the site is built, not published."
+          fi
+
+      - name: Keep the site for Pages
+        if: steps.pages.outputs.publish
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
