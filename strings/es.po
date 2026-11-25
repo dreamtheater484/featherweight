@@ -12716,7 +12716,7 @@ msgstr "Este comentario no se puede cambiar."
 msgid "This comment is in PowerPoint's older format, which can't mark it resolved."
 msgstr "Este comentario está en el formato antiguo de PowerPoint, que no permite marcarlo como resuelto."
 
-#: src/slide/view/PresentationComments.cpp
+#: src/slide/view/PresentationComments.cpp src/word/DocReview.cpp
 msgid "This comment is too long to edit here: reply to it instead."
 msgstr "Este comentario es demasiado largo para editarlo aquí: respóndelo en su lugar."
 

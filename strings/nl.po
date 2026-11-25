@@ -12716,7 +12716,7 @@ msgstr "Deze opmerking kan niet worden gewijzigd."
 msgid "This comment is in PowerPoint's older format, which can't mark it resolved."
 msgstr "Deze opmerking heeft de oudere indeling van PowerPoint, waarin ze niet als opgelost kan worden gemarkeerd."
 
-#: src/slide/view/PresentationComments.cpp
+#: src/slide/view/PresentationComments.cpp src/word/DocReview.cpp
 msgid "This comment is too long to edit here: reply to it instead."
 msgstr "Deze opmerking is te lang om hier te bewerken: antwoord er in plaats daarvan op."
 
