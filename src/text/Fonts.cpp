@@ -1,6 +1,6 @@
 #include "text/Fonts.h"
 
-#include "draw/CloudFonts.h"
+#include "draw/FontSubstitutes.h"
 
 #include <algorithm>
 #include <climits>
@@ -65,29 +65,6 @@ std::wstring FamilyName(IDWriteFontFamily* family) {
   ComPtr<IDWriteLocalizedStrings> names;
   return SUCCEEDED(family->GetFamilyNames(&names)) ? EnglishName(names.Get()) : std::wstring();
 }
-
-// Families Office or macOS documents name that Windows doesn't install, with the Windows families
-// closest to them in widths, best first. Aptos (Office's default since 2024) has no free
-// look-alike; its line breaks are closest with the family listed (decision 11).
-struct BuiltIn {
-  const wchar_t* family;
-  const wchar_t* substitutes[3];
-};
-constexpr BuiltIn kBuiltIn[] = {
-    {L"Aptos", {L"Segoe UI", L"Calibri", L"Arial"}},
-    {L"Aptos Display", {L"Segoe UI", L"Calibri", L"Arial"}},
-    {L"Aptos Narrow", {L"Arial Narrow", L"Segoe UI", L"Calibri"}},
-    {L"Aptos Serif", {L"Cambria", L"Georgia", L"Times New Roman"}},
-    {L"Aptos Mono", {L"Consolas", L"Courier New", nullptr}},
-    {L"Arial Narrow", {L"Arial", nullptr, nullptr}},
-    {L"Book Antiqua", {L"Palatino Linotype", nullptr, nullptr}},
-    {L"Courier", {L"Courier New", nullptr, nullptr}},
-    {L"Helvetica", {L"Arial", nullptr, nullptr}},
-    {L"Helvetica Neue", {L"Arial", nullptr, nullptr}},
-    {L"Myriad Pro", {L"Segoe UI", nullptr, nullptr}},  // PowerPoint's choice (cs-6476's PDF)
-    {L"Times", {L"Times New Roman", nullptr, nullptr}},
-    {L"Times Roman", {L"Times New Roman", nullptr, nullptr}},
-};
 
 }  // namespace
 
@@ -167,13 +144,23 @@ FontMetrics Face::Metrics(float size, bool directWrite) const {
   return m;
 }
 
+Face::Face(const Face& base, float widthScale, float height) : Face(base.face_, base.family_, base.weight_, base.style_) {
+  widthScale_ = widthScale > 0 ? widthScale : 1;
+  const float total = ascent_ + descent_ + lineGap_;
+  if (height > 0 && total > 0) {
+    const float k = height * upem_ / total;
+    ascent_ *= k, descent_ *= k, lineGap_ *= k;
+    dwAscent_ *= k, dwDescent_ *= k, dwLineGap_ *= k;
+  }
+}
+
 float Face::Advance(wchar_t c, float size) const {
   UINT32 cp = c;
   UINT16 glyph = 0;
   if (FAILED(face_->GetGlyphIndices(&cp, 1, &glyph)) || glyph == 0) return 0;
   DWRITE_GLYPH_METRICS gm{};
   if (FAILED(face_->GetDesignGlyphMetrics(&glyph, 1, &gm, FALSE))) return 0;
-  return gm.advanceWidth * size / upem_;
+  return gm.advanceWidth * size / upem_ * widthScale_;
 }
 
 Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : substitute_(std::move(substitute)) {
@@ -271,6 +258,8 @@ void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files,
   win32_.Reset();
   win32Tried_ = false;
   resolved_.clear();
+  adjust_.clear();
+  adjusted_.clear();
   faces_.clear();
   faceNames_.clear();
   substitutions_.clear();
@@ -288,33 +277,7 @@ bool Fonts::Installed(std::wstring_view family) {
   } else if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) {
     return true;
   }
-  // Not on the PC: one of Office's cloud fonts, which Word draws as installed ones.
-  if (!AddCloudFonts(name)) return false;
-  return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);
-}
-
-bool Fonts::AddCloudFonts(const std::wstring& name) {
-  const bool all = allCloudFaces_;
-  if (cloudAdded_ || !draw::CloudFontsHave(name, all)) return false;
-  cloudAdded_ = true;
-  // The collection with them, and the one without the document's own fonts (UseDocumentFonts) too.
-  ComPtr<IDWriteFactory5> factory;
-  if (FAILED(factory_.As(&factory))) return false;
-  const auto with = [&](ComPtr<IDWriteFontCollection>& c) {
-    ComPtr<IDWriteFontCollection1> c1;
-    ComPtr<IDWriteFontSet> set, merged;
-    ComPtr<IDWriteFontSetBuilder1> builder;
-    ComPtr<IDWriteFontCollection1> collection;
-    if (c && SUCCEEDED(c.As(&c1)) && SUCCEEDED(c1->GetFontSet(&set)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder)) &&
-        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(all ? draw::CloudFontSetAll() : draw::CloudFontSet())) &&
-        SUCCEEDED(builder->CreateFontSet(&merged)) && SUCCEEDED(factory->CreateFontCollectionFromFontSet(merged.Get(), &collection)))
-      c = collection;
-  };
-  with(collection_);
-  if (installed_) with(installed_);
-  win32_.Reset();
-  win32Tried_ = false;
-  return true;
+  return false;
 }
 
 ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {
@@ -355,15 +318,19 @@ const Face* Fonts::FaceFor(std::wstring_view requested, bool bold, bool italic) 
       weight = std::max(weight, it->second.weight);
       italic = italic || it->second.italic;
     }
-  return Get(family, weight, italic);
+  const Face* face = Get(family, weight, italic);
+  if (!face || adjust_.empty()) return face;
+  auto it = adjust_.find(Lower(requested));
+  if (it == adjust_.end()) return face;
+  std::unique_ptr<Face>& made = adjusted_[{face, it->second.first, it->second.second}];
+  if (!made) made = std::make_unique<Face>(*face, it->second.first, it->second.second);
+  return made.get();
 }
 
 std::wstring_view Fonts::BuiltInSubstitute(std::wstring_view family) {
   std::wstring key = Lower(family);
-  for (const auto& b : kBuiltIn) {
-    if (Lower(b.family) == key) return b.substitutes[0];
-  }
-  return {};
+  const std::span<const draw::FontSubstitute> subs = draw::BuiltInSubstitutes(family);
+  return subs.empty() ? std::wstring_view() : std::wstring_view(subs.front().family);
 }
 
 const std::wstring& Fonts::Resolve(std::wstring_view family) {
@@ -393,14 +360,12 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
       if (Installed(s)) used = s;
     }
     if (used.empty()) {
-      for (const auto& b : kBuiltIn) {
-        if (Lower(b.family) != key) continue;
-        for (const wchar_t* s : b.substitutes) {
-          if (s && Installed(s)) {
-            used = s;
-            break;
-          }
-        }
+      for (const draw::FontSubstitute& s : draw::BuiltInSubstitutes(family)) {
+        if (!Installed(s.family)) continue;
+        used = s.family;
+        // Its width and line height as measured against Word's renders (draw/FontSubstitutes.h).
+        if (s.scale != 1 || s.height > 0) adjust_[key] = {s.scale, s.height};
+        break;
       }
     }
     if (used.empty()) used = lastResort_;
@@ -411,7 +376,10 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
 }
 
 void Fonts::ClearSubstitutions() {
-  for (const Substitution& s : substitutions_) resolved_.erase(Lower(s.requested));
+  for (const Substitution& s : substitutions_) {
+    resolved_.erase(Lower(s.requested));
+    adjust_.erase(Lower(s.requested));
+  }
   substitutions_.clear();
 }
 

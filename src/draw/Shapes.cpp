@@ -1,6 +1,6 @@
 #include "draw/Shapes.h"
 
-#include "draw/CloudFonts.h"
+#include "draw/FontSubstitutes.h"
 
 #include <d2d1.h>
 #include <dwrite_3.h>
@@ -900,14 +900,13 @@ class PathSink : public IDWriteGeometrySink {
 ComPtr<IDWriteFontFace> FindFace(IDWriteFactory* dw, const std::wstring& family, bool bold, bool italic) {
   ComPtr<IDWriteFontCollection> system;
   if (FAILED(dw->GetSystemFontCollection(&system))) return nullptr;
-  // The family on the PC, or else among Office's cloud fonts (Aptos in recent charts); Arial last.
-  UINT32 at = 0;
-  BOOL there = FALSE;
-  IDWriteFontCollection* cloud = nullptr;
-  if (!(SUCCEEDED(system->FindFamilyName(family.c_str(), &at, &there)) && there) && CloudFontsHave(family))
-    cloud = CloudFontCollection();
-  for (const std::wstring& name : {family, std::wstring(L"Arial")}) {
-    IDWriteFontCollection* fonts = cloud && name == family ? cloud : system.Get();
+  // The family on the PC, else its substitutes (Aptos in recent charts: draw/FontSubstitutes.h);
+  // Arial last.
+  std::vector<std::wstring> names{family};
+  for (const FontSubstitute& s : BuiltInSubstitutes(family)) names.emplace_back(s.family);
+  names.emplace_back(L"Arial");
+  for (const std::wstring& name : names) {
+    IDWriteFontCollection* fonts = system.Get();
     UINT32 index = 0;
     BOOL exists = FALSE;
     ComPtr<IDWriteFontFamily> fam;
