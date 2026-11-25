@@ -60,11 +60,13 @@ target_link_libraries(Featherweight PRIVATE
   fwcore pdfium
   d2d1 d3d11 dxgi dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32
   comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp secur32
+  wintrust  # f1-ship: the updater's signature check, delay-loaded below
 )
 # pdfium.dll is loaded on first use, so the window appears before the engine is loaded, and
 # UI Automation's DLL only once a client such as a screen reader asks for the window. crypt32.dll
 # (DPAPI, for recovery autosaves) waits for the first unsaved change.
 target_link_options(Featherweight PRIVATE /DELAYLOAD:pdfium.dll /DELAYLOAD:uiautomationcore.dll /DELAYLOAD:crypt32.dll
+  /DELAYLOAD:wintrust.dll
   $<$<CONFIG:Release,MinSizeRel>:/OPT:REF /OPT:ICF /LTCG>)
 target_compile_options(Featherweight PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 target_compile_options(fwcore PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
@@ -86,6 +88,14 @@ if(FW_BUILD_TESTS)
     tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp
     tests/unit/test_usertemplates.cpp src/UserTemplates.cpp)
   target_link_libraries(fw_tests PRIVATE bcrypt shell32 ole32 advapi32 user32)
+  # f1-ship: the updater's trust rule, with test-only certificates from tests/data/updater.
+  target_sources(fw_tests PRIVATE tests/unit/test_f1_ship.cpp src/Updater.cpp)
+  target_include_directories(fw_tests PRIVATE "${CMAKE_BINARY_DIR}/generated")
+  target_sources(fw_tests PRIVATE src/Policy.cpp tests/unit/fw_tests.rc)
+  target_compile_definitions(fw_tests PRIVATE "FW_TEST_DATA_DIR=L\"${CMAKE_SOURCE_DIR}/tests/data\""
+    "FW_SOURCE_DIR=L\"${CMAKE_SOURCE_DIR}\"" "FW_PDFIUM_DLL=L\"${FW_PDFIUM_DIR}/bin/pdfium.dll\""
+    "FW_PDFIUM_IS_V8=$<BOOL:${FW_WITH_V8}>")
+  target_link_libraries(fw_tests PRIVATE winhttp wintrust crypt32 version)
 endif()
 
 # --- Office foundations (plan milestone D0): fwpkg, fwtool, corpus tests and fuzz targets ---

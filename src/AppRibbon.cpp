@@ -359,9 +359,13 @@ ui::FilePage::Model App::CurrentFilePage() {
                               : L"This file"));
   own(RibbonFilePlace::Options, opt, true);
   if (opt.size() == before + 1) opt.pop_back();
-  opt.push_back(heading(L"Updates"));
-  opt.push_back(command(CmdToggleAutoUpdate, 0, {}, true));
-  opt.push_back(command(CmdCheckUpdates, icon::Download));
+  if (QueryCommand(CmdCheckUpdates).visible) {  // f1-ship: inside an MSIX package the Store updates the app
+    opt.push_back(heading(L"Updates"));
+    opt.push_back(command(CmdToggleAutoUpdate, 0, {}, true));
+    opt.push_back(command(CmdUpdateBeta, 0, {}, true));
+    opt.push_back(command(CmdCheckUpdates, icon::Download));
+    if (QueryCommand(CmdRollBackUpdate).visible) opt.push_back(command(CmdRollBackUpdate, icon::Undo));
+  }
   opt.push_back(heading(L"Featherweight"));
   if (QueryCommand(CmdMakeDefault).visible) opt.push_back(command(CmdMakeDefault, icon::PDF));
   if (fw::pkg::backups::Any(DocFile::Config().backups))

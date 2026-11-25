@@ -224,6 +224,12 @@ class App : public PdfHost, public DropHost {
   void MakeDefaultApp(fw::FileKind kind);
   void MaybeCheckForUpdates(bool manual);
   void OnUpdaterDone();
+  // f1-ship: the update options (channel, skipped version), the commands' states under the admin policy and inside
+  // a package, and the one rollback.
+  Updater::Options UpdateOptions(bool install) const;
+  void UpdateCommandState(int cmd, CommandState& s);
+  void RollBackUpdate();
+  const std::wstring& PreviousVersion();
   void ShowAbout();
 
   // Keyboard focus and UI Automation
@@ -352,6 +358,9 @@ class App : public PdfHost, public DropHost {
   bool manualUpdateCheck_ = false;
   std::wstring bannerUpdateUrl_;
   std::wstring bannerUpdateVersion_;
+  std::wstring previousVersion_;  // f1-ship: the version previous\ holds ("" none), read once and after changes
+  bool previousVersionRead_ = false;
+  bool scriptEngineOffered_ = false;  // f1-ship: a PDF with scripts is open and the engine isn't installed
   enum BannerActions {
     kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
     kActKeepFormat, kActMakeDefault = 20

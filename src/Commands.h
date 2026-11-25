@@ -647,4 +647,8 @@ enum Cmd : int {
   CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
   CmdRecentRemove,            // Remove from list
   CmdRecentLocation,          // Open file location
+  // F1, f1-ship: updates and the script engine component, 4120-4149.
+  CmdUpdateBeta = 4120,  // File > Options > Updates: Get beta versions (the beta channel, GitHub pre-releases)
+  CmdRollBackUpdate,     // Go back to version x: the files the last update replaced, from the next start
+  CmdScriptEngine = 4125,  // Get the form script engine (PDFium with V8 and XFA), offered by a PDF with scripts
 };

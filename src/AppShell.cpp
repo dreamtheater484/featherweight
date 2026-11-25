@@ -47,6 +47,9 @@ constexpr AppCommand kAppCommands[] = {
     {CmdShowRecentFiles, L"Show recent files", L""},
     {CmdToggleAutoUpdate, L"Update automatically", L""},
     {CmdCheckUpdates, L"Check for updates now", L""},
+    {CmdUpdateBeta, L"Get beta versions", L""},  // f1-ship
+    {CmdRollBackUpdate, L"Go back to the previous version", L""},
+    {CmdScriptEngine, L"Get the form script engine", L""},
     {CmdMakeDefault, L"Make Featherweight the default PDF app", L""},
     {CmdAbout, L"About Featherweight", L""},
     {CmdExit, L"Exit", L"Alt+F4"},
@@ -116,7 +119,13 @@ CommandState App::QueryCommand(int cmd) {
                                            : settings_.autoCorrect;
       s.visible = ready && v->Kind() == TabKind::Document;
       break;
-    case CmdToggleAutoUpdate: s.checked = settings_.autoUpdate; break;
+    case CmdToggleAutoUpdate:  // f1-ship: off by policy, and left to the Store inside a package
+    case CmdCheckUpdates:
+    case CmdUpdateBeta:
+    case CmdRollBackUpdate:
+      UpdateCommandState(cmd, s);
+      break;
+    case CmdScriptEngine: s.visible = scriptEngineOffered_; break;
     case CmdClearRecent: {
       // Pinned files stay.
       const bool pinned = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return r.pinned; });

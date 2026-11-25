@@ -58,6 +58,7 @@ class Settings {
   bool autoUpdate = true;
   int64_t lastUpdateCheck = 0;
   std::wstring skippedVersion;
+  std::wstring updateChannel;  // f1-ship: "beta" for the beta channel; "" is stable
   std::wstring lastRunVersion;
   // The one-time offer to become the default app, per kind of file (indexed by fw::FileKind).
   std::array<bool, fw::kFileKindCount> offeredDefaultApp{};

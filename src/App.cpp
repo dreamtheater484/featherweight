@@ -14,6 +14,7 @@
 
 #include "Commands.h"
 #include "FileAssoc.h"
+#include "Policy.h"
 #include "UserTemplates.h"
 #include "Util.h"
 #include "Version.h"
@@ -1507,7 +1508,11 @@ void App::Execute(int cmd) {
       case kActUpdate:
         manualUpdateCheck_ = true;
         banner_.Show(BannerKind::Info, L"Downloading the update…");
-        updater_.Start(hwnd_, true);
+        {
+          Updater::Options options = UpdateOptions(true);
+          options.skippedVersion.clear();  // asked for: installed even if it was skipped
+          updater_.Start(hwnd_, options);
+        }
         break;
       case kActDownload: util::OpenExternalLink(bannerUpdateUrl_); break;
       case kActSkip:
@@ -1636,6 +1641,12 @@ void App::Execute(int cmd) {
       settings_.autoUpdate = !settings_.autoUpdate;
       settings_.Save();
       break;
+    case CmdUpdateBeta:  // f1-ship
+      settings_.updateChannel = settings_.updateChannel == L"beta" ? L"" : L"beta";
+      settings_.lastUpdateCheck = 0;  // the next check looks at the other channel
+      settings_.Save();
+      break;
+    case CmdRollBackUpdate: RollBackUpdate(); break;
     case CmdToggleSpelling:
       settings_.spelling = !settings_.spelling;
       settings_.Save();
@@ -1787,6 +1798,8 @@ bool App::FillWindowMenu(int which, HMENU m) {
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
     AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
     AppendItem(m, CmdCheckUpdates, L"Check for updates now");
+    if (QueryCommand(CmdUpdateBeta).visible) AppendItem(m, CmdUpdateBeta, L"Get beta versions", true, QueryCommand(CmdUpdateBeta).checked);
+    if (QueryCommand(CmdRollBackUpdate).visible) AppendItem(m, CmdRollBackUpdate, QueryCommand(CmdRollBackUpdate).label.c_str());
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
     AppendItem(m, CmdAbout, L"About Featherweight");
@@ -2593,13 +2606,20 @@ void App::MakeDefaultApp(fw::FileKind kind) {
 
 void App::MaybeCheckForUpdates(bool manual) {
   if (snapshot_ || updater_.Busy()) return;
+  // f1-ship: an administrator's policy turns updates off; inside an MSIX package the Store updates the app.
+  if (policy::Get().updatesOff || Updater::InPackage()) {
+    if (manual)
+      banner_.Show(BannerKind::Info, policy::Get().updatesOff ? L"Updates are turned off by your organization."
+                                                              : L"The Microsoft Store keeps Featherweight up to date.", {}, 6000);
+    return;
+  }
   int64_t now = util::UnixNow();
   if (!manual && now - settings_.lastUpdateCheck < 24 * 3600) return;
   settings_.lastUpdateCheck = now;
   settings_.Save();
   manualUpdateCheck_ = manual;
   if (manual) banner_.Show(BannerKind::Info, L"Checking for updates…");
-  updater_.Start(hwnd_, settings_.autoUpdate);
+  updater_.Start(hwnd_, UpdateOptions(settings_.autoUpdate));
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -2612,6 +2632,7 @@ void App::OnUpdaterDone() {
       if (manualUpdateCheck_) banner_.Show(BannerKind::Success, L"Featherweight is up to date.", {}, 3000);
       break;
     case Updater::Status::Installed:
+      previousVersionRead_ = false;  // previous\ changed
       if (manualUpdateCheck_)
         banner_.Show(BannerKind::Success,
                      L"Featherweight " + r.version + L" is ready. It will be used the next time you start Featherweight.",
@@ -2635,6 +2656,69 @@ void App::OnUpdaterDone() {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+// ---- f1-ship: update options, policy and rollback ----
+
+Updater::Options App::UpdateOptions(bool install) const {
+  Updater::Options o;
+  o.install = install;
+  const std::wstring& channel = policy::Get().updateChannel.empty() ? settings_.updateChannel : policy::Get().updateChannel;
+  o.beta = channel == L"beta";
+  o.skippedVersion = settings_.skippedVersion;
+  return o;
+}
+
+const std::wstring& App::PreviousVersion() {
+  if (!previousVersionRead_) {
+    previousVersion_ = Updater::PreviousVersion();
+    previousVersionRead_ = true;
+  }
+  return previousVersion_;
+}
+
+void App::UpdateCommandState(int cmd, CommandState& s) {
+  const policy::Values& p = policy::Get();
+  if (Updater::InPackage()) {  // the Store updates the app
+    s.visible = false;
+    return;
+  }
+  switch (cmd) {
+    case CmdToggleAutoUpdate:
+      s.checked = settings_.autoUpdate && !p.updatesOff;
+      s.enabled = !p.updatesOff;
+      break;
+    case CmdCheckUpdates: s.enabled = !p.updatesOff; break;
+    case CmdUpdateBeta:
+      s.checked = (p.updateChannel.empty() ? settings_.updateChannel : p.updateChannel) == L"beta";
+      s.enabled = !p.updatesOff && p.updateChannel.empty();
+      break;
+    case CmdRollBackUpdate:
+      s.visible = !PreviousVersion().empty() && Updater::CanSelfUpdate();
+      if (s.visible) s.label = L"Go back to version " + PreviousVersion();
+      break;
+  }
+  if (s.visible && !s.enabled) s.label += L" (set by your organization)";
+}
+
+void App::RollBackUpdate() {
+  const std::wstring to = PreviousVersion();
+  if (to.empty()) return;
+  std::wstring question = L"Featherweight " + to + L" will be used from the next start. Automatic updates turn off, so it stays; you can turn them on again in Options.";
+  if (MessageBoxW(hwnd_, question.c_str(), L"Go back to the previous version?", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+    return;
+  std::wstring error;
+  if (!Updater::RollBack(&error)) {
+    banner_.Show(BannerKind::Error, error, {}, 6000);
+    return;
+  }
+  // Kept on this version: even an earlier Featherweight (whose updater installs whatever is newer when updating
+  // automatically) only offers this version again, and not while it's skipped.
+  settings_.autoUpdate = false;
+  settings_.skippedVersion = FW_VERSION_WSTRING;
+  settings_.Save();
+  previousVersionRead_ = false;
+  banner_.Show(BannerKind::Success, L"Featherweight " + to + L" will be used the next time you start Featherweight.", {}, 8000);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
 void App::ShowAbout() {
   std::wstring content = L"Version " FW_VERSION_WSTRING L"\n\nA light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.\n\n"
                          L"PDF engine: PDFium (build " + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
@@ -2973,7 +3057,7 @@ void App::RunScript(const std::wstring& script) {
       if (!arg.empty() && iswdigit(arg[0])) Execute(_wtoi(arg.c_str()));  // any command by its id
     } else if (op == L"updatecheck") {
       if (!arg.empty()) Updater::SetReleaseUrlForTesting(arg);
-      updater_.Start(hwnd_, false);
+      updater_.Start(hwnd_, Updater::Options{});
       for (int i = 0; i < 300 && updater_.Busy(); ++i) Sleep(50);
       Updater::Result r = updater_.Get();
       fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),

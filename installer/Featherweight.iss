@@ -81,6 +81,8 @@ Filename: "{app}\Featherweight.exe"; Parameters: "--unregister"; Flags: runhidde
 [UninstallDelete]
 Type: files; Name: "{app}\*.old"
 Type: files; Name: "{app}\*.new"
+; The files the last update replaced, kept for one rollback (f1-ship).
+Type: filesandordirs; Name: "{app}\previous"
 
 [Code]
 // Settings are kept on uninstall unless the user asks to remove them.
