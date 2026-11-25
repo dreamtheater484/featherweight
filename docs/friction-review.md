@@ -845,3 +845,38 @@ A .pps starts as a show, and a .pot opens as a new presentation, as in PowerPoin
 | | **Total** | **3 C + 1 K** (from mail) | **1 C + 2 K** |
 
 An .otp opens as a new presentation (slide/view/PresentationView.cpp:120-121).
+
+## F1 (release 4.1)
+
+This is F1's part of the friction review (docs/f1-plan.md, exit criteria "Friction left from 4.0"). It uses the Word part's rules ("How steps are counted"). Two flows are left from R1, and five are new:
+- **RF2 and RF7** must take Word's steps or fewer.
+- **The new flows** (merge two PDFs, sign a PDF, OCR a scan, change the language, share as PDF) must take no more steps than Adobe Acrobat for the same job.
+
+**Who counts what:**
+- **Word** is as defined above.
+- **Acrobat** means Adobe Acrobat on Windows with its 2024 interface (All tools on the left). Merging, certificate signing and OCR are paid Acrobat features; the free Reader has Fill & Sign. Acrobat's steps come from its standard UI and weren't measured. The ones to confirm are marked *(check in Acrobat)*. Acrobat is installed on the reference PC, so they can be checked there.
+- **Featherweight's** counts are filled in by `tests\f1-friction-checks.ps1` as each piece lands. It runs each flow through `--script` and checks what the flow made with fwtool, as `tests\friction-checks.ps1` does for D5's flows.
+- The gate's friction row (`scripts\f1-gate.ps1`, checks friction.rf and friction.flows) runs it.
+
+### Targets
+
+| Flow | Piece | Target (the budget) | Featherweight |
+|---|---|---|---|
+| RF2. Reply to and resolve comments in a received contract | f1-word | Word: **7 C + 2 K** (4.0: 8 C + 2 K, the Review pane one click away) | *not built yet* |
+| RF7. Title from the Styles gallery, window 1366 px wide | f1-word | Word: **1 C** (4.0: 2 C, More then Title) | *not built yet* |
+| F1-1. Merge: with A open, add B's pages after A's, save | f1-pdf | Acrobat: All tools, Combine files, Add files, B, Open, Combine, Ctrl+S, the name, Save: **6 C + 1 K, 2 D** *(check in Acrobat)* | *not built yet* |
+| F1-2. Sign: draw a signature, place it on page 1, save | f1-pdf | Acrobat (Reader's Fill & Sign): Sign, Add signature, Draw, the drawing, Apply, place it, Ctrl+S, the name, Save: **5 C + 1 drag + 1 K, 1 D** *(check in Acrobat)* | *not built yet* |
+| F1-2b. Sign with a certificate (Windows' store), save | f1-pdf | Acrobat: All tools, Use a certificate, Digitally sign, drag the box, the ID, Continue, Sign, the name, Save: **6 C + 1 drag, 2 D** *(check in Acrobat)* | *not built yet* |
+| F1-3. OCR a scanned PDF, save | f1-pdf | Acrobat: All tools, Scan & OCR, Recognize text, In this file, Recognize text, Ctrl+S: **5 C + 1 K** *(check in Acrobat)* | *not built yet* |
+| F1-4. Change the interface language | f1-lang | Acrobat: Menu, Preferences, Language, the list, the language, OK, then close and start it again: **8 C, 1 D** *(check in Acrobat)*. Word's Options > Language takes as many. | *not built yet* |
+| F1-5. Share as PDF: send the open document as a PDF attachment | f1-pdf | Word: File, Share, Email, Send as PDF: **4 C** (Acrobat's Share sends a link to its cloud, not the file) | *not built yet* |
+
+**Share runs Windows' share sheet,** which a snapshot run can't drive (like the Save dialog, RF3). F1-5 is counted to the share sheet; the target is picked there, as in Word's mail program.
+
+### Found while building the gate
+
+- **The page tools inherit PDFium's behaviours** (FeatherweightNotes\f1\f1-gate-findings.md):
+  - a moved page loses inherited /Rotate and /MediaBox;
+  - an incremental save onto a file with a cross-reference stream writes one without /Type;
+  - a signed PDF saved whole breaks its signature's byte range.
+- **4.0's save of an unedited PDF appends a copy of the file.** Not a step, but "saving without edits stays byte-identical" depends on it.
