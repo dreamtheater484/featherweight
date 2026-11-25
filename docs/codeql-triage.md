@@ -9,7 +9,7 @@ Alerts that are false positives or accepted are dismissed on GitHub with the rea
 | Alert | Rule | Where | Decision |
 |---|---|---|---|
 | 16 | cpp/incorrect-string-type-conversion | src/CrashReport.cpp (the crash note read as UTF-16) | **Fixed** (f1-trust): the bytes are copied into the wide string, not cast |
-| 1 | cpp/integer-multiplication-cast-to-long | src/doc/edit/Editor.cpp:5300 | **Real, to fix** (f1-word's area): `widths[k] * room` is an `int` product, so a document with huge column widths overflows it before the division. The fix multiplies in 64 bits (`int64_t{widths[k]} * room / now`); results are the same for every width that didn't overflow |
+| 1 | cpp/integer-multiplication-cast-to-long | src/doc/edit/Editor.cpp:5300 | **Fixed** by f1-word (claude/f1-word 40d11edd); the alert closes when CodeQL runs on a branch with it: `widths[k] * room` is an `int` product, so a document with huge column widths overflows it before the division. The fix multiplies in 64 bits (`int64_t{widths[k]} * room / now`); results are the same for every width that didn't overflow |
 | 17 | cpp/incorrect-string-type-conversion | src/sheet/calc/Value.cpp:629 | **False positive**: `LCMapStringEx` with `LCMAP_SORTKEY` writes a byte array into its `LPWSTR` parameter, as its documentation says; the cast is the API's |
 | 15 | cpp/weak-cryptographic-algorithm | src/pkg/OfficeCrypto.cpp:454 | **Accepted (won't fix)**: RC4 only decrypts old `.doc`, `.xls` and `.ppt` files that were encrypted with it, to open them. Nothing is encrypted with RC4: protected files are saved with AES-256 and SHA-512 |
 | 14 | cpp/comparison-with-wider-type | src/draw/Pdf.cpp:1511 | **False positive**: the vector has `numGlyphs` entries, a 16-bit count, so the 16-bit counter reaches its size |
