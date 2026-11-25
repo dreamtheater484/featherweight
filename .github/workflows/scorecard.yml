@@ -1,14 +1,14 @@
 name: scorecard
 
-# OpenSSF Scorecard (F1, docs/f1-plan.md "External review"): weekly and on pushes to main. On main
-# the results are published for the README's badge; on other branches they're only uploaded to code
-# scanning. The scorecard action allows only these steps when it publishes: keep the job as it is.
+# OpenSSF Scorecard (F1, docs/f1-plan.md "External review"): weekly and on pushes to main, the only
+# branch the action supports. The results are published for the README's badge and uploaded to code
+# scanning. The action allows only these steps when it publishes: keep the job as it is.
 on:
   branch_protection_rule:
   schedule:
     - cron: '17 4 * * 1'
   push:
-    branches: [main, claude/f1-trust]
+    branches: [main]
   workflow_dispatch:
 
 permissions: read-all
@@ -29,7 +29,7 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          publish_results: ${{ github.ref == 'refs/heads/main' }}
+          publish_results: true
 
       - name: Keep the results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

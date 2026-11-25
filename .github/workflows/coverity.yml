@@ -8,8 +8,6 @@ name: coverity
 on:
   schedule:
     - cron: '41 2 * * 0'
-  push:
-    branches: [claude/f1-trust]
   workflow_dispatch:
 
 permissions:
