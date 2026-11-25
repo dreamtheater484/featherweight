@@ -5297,7 +5297,7 @@ Result Editor::AutoFit(Pos at, Fit fit, const std::vector<int32_t>& given) {
         if (now <= 0) return false;
         int64_t used = 0;
         for (size_t k = 0; k < widths.size(); ++k) {
-          widths[k] = k + 1 == widths.size() ? static_cast<int32_t>(room - used) : static_cast<int32_t>(widths[k] * room / now);
+          widths[k] = k + 1 == widths.size() ? static_cast<int32_t>(room - used) : static_cast<int32_t>(int64_t{widths[k]} * room / now);
           used += widths[k];
         }
         s.RemoveProp(tblPr, kLayout);
