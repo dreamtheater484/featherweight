@@ -370,10 +370,10 @@ Check "build.ctest" long "ctest on the shipped build (x64, locally)" "100 % of t
   $junit = Join-Path $script:outDir "ctest.xml"
   $code = Invoke-Tool "build.ctest" "ctest" @("--test-dir", (Full $Build), "-C", "Release", "--output-on-failure", "--output-junit", $junit)
   $text = Get-Content (Log "build.ctest") -Raw
-  $m = [regex]::Matches($text, '(\d+)% tests passed, (\d+) tests? failed out of (\d+)')
+  $m = [regex]::Matches($text, '(\d+)% tests passed(?:, (\d+) tests? failed)? out of (\d+)')  # no failed count when none failed
   if (-not $m.Count) { return Failed "ctest printed no total (exit $code)" }
   $last = $m[$m.Count - 1]
-  $n = [ordered]@{ total = [int]$last.Groups[3].Value; failed = [int]$last.Groups[2].Value }
+  $n = [ordered]@{ total = [int]$last.Groups[3].Value; failed = $(if ($last.Groups[2].Success) { [int]$last.Groups[2].Value } else { 0 }) }
   $names = @()
   if (Test-Path $junit) { $names = @(([xml](Get-Content $junit -Raw)).SelectNodes("//testcase") | ForEach-Object { $_.name }) }
   $n.tests = $names
