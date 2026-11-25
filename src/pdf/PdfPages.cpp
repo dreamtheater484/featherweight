@@ -124,6 +124,10 @@ void PdfView::ForgetPages() {
 
 bool PdfView::BeginPageChange() {
   if (!Ready()) return false;
+  if (ocr_) {
+    host_.ViewMessage(BannerKind::Info, T(L"Text is being recognized. Wait for it, or stop it with Esc."));
+    return false;
+  }
   if (const std::wstring why = PageToolsBlocked(); !why.empty()) {
     host_.ViewMessage(BannerKind::Info, why);
     return false;
@@ -498,6 +502,7 @@ bool PdfView::RunPageScript(const std::wstring& arg) {
   }
   if (op == L"extract") return ExtractTo(ToolPages(), rest);
   if (op == L"split") return SplitTo(pdftools::SplitEvery(PageCount(), std::max(1, _wtoi(field(0).c_str()))), field(1));
+  if (op == L"ocr") return OcrNow(rest.empty() ? std::vector<int>{} : ToolPages()) > 0;
   if (op == L"undo") return UndoPages();
   if (op == L"redo") return RedoPages();
   return false;

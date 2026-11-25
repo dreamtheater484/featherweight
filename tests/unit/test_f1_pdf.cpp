@@ -6,12 +6,17 @@
 
 #include <fpdf_edit.h>
 #include <fpdf_save.h>
+#include <fpdf_text.h>
 #include <fpdfview.h>
 
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
+#include "pdf/ocr/Ocr.h"
+#include "pdf/ocr/TextLayer.h"
 #include "pdf/tools/PageOps.h"
 
 namespace {
@@ -166,5 +171,89 @@ TEST(F1PdfExtractAndSplit) {
   CHECK(pdftools::PageList({3}) == L"4");
   CHECK(pdftools::PageToolsBlock(doc, false) == pdftools::Block::None);
   CHECK(pdftools::PageToolsBlock(doc, true) == pdftools::Block::Xfa);
+  FPDF_CloseDocument(doc);
+}
+
+// ---- OCR (Windows.Media.Ocr) as an invisible text layer
+
+namespace {
+
+// A "scan": a page whose only content is a picture of text, as a scanner makes it.
+FPDF_DOCUMENT MakeScan(const wchar_t* line1, const wchar_t* line2) {
+  InitPdfium();
+  // The text, typeset by PDFium and rendered at 200 dpi.
+  FPDF_DOCUMENT src = FPDF_CreateNewDocument();
+  FPDF_PAGE sp = FPDFPage_New(src, 0, 612, 792);
+  FPDF_FONT font = FPDFText_LoadStandardFont(src, "Times-Roman");
+  int y = 700;
+  for (const wchar_t* text : {line1, line2}) {
+    FPDF_PAGEOBJECT t = FPDFPageObj_CreateTextObj(src, font, 28.0f);
+    std::u16string u(text, text + wcslen(text));
+    FPDFText_SetText(t, reinterpret_cast<FPDF_WIDESTRING>(u.c_str()));
+    FPDFPageObj_Transform(t, 1, 0, 0, 1, 72, y);
+    FPDFPage_InsertObject(sp, t);
+    y -= 48;
+  }
+  FPDFPage_GenerateContent(sp);
+  const int w = 612 * 200 / 72, h = 792 * 200 / 72;
+  FPDF_BITMAP bmp = FPDFBitmap_Create(w, h, 0);
+  FPDFBitmap_FillRect(bmp, 0, 0, w, h, 0xFFFFFFFF);
+  FPDF_RenderPageBitmap(bmp, sp, 0, 0, w, h, 0, 0);
+  FPDF_ClosePage(sp);
+  FPDFFont_Close(font);
+  // The picture alone on a page of a new document.
+  FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
+  FPDF_PAGE page = FPDFPage_New(doc, 0, 612, 792);
+  FPDF_PAGEOBJECT image = FPDFPageObj_NewImageObj(doc);
+  FPDFImageObj_SetBitmap(nullptr, 0, image, bmp);
+  FPDFImageObj_SetMatrix(image, 612, 0, 0, 792, 0, 0);
+  FPDFPage_InsertObject(page, image);
+  FPDFPage_GenerateContent(page);
+  FPDF_ClosePage(page);
+  FPDFBitmap_Destroy(bmp);
+  FPDF_CloseDocument(src);
+  return doc;
+}
+
+std::wstring PageText(FPDF_DOCUMENT doc, int index) {
+  FPDF_PAGE page = FPDF_LoadPage(doc, index);
+  FPDF_TEXTPAGE tp = FPDFText_LoadPage(page);
+  const int n = FPDFText_CountChars(tp);
+  std::wstring out(static_cast<size_t>(n) + 1, L'\0');
+  FPDFText_GetText(tp, 0, n, reinterpret_cast<unsigned short*>(out.data()));
+  out.resize(static_cast<size_t>(n));
+  FPDFText_ClosePage(tp);
+  FPDF_ClosePage(page);
+  return out;
+}
+
+}  // namespace
+
+TEST(F1PdfOcrWritesFindableText) {
+  FPDF_DOCUMENT doc = MakeScan(L"Featherweight reads scanned pages", L"The quick brown fox jumps over the lazy dog");
+  FPDF_PAGE page = FPDF_LoadPage(doc, 0);
+  CHECK(pdfocr::NeedsText(page));
+  pdfocr::PageImage img;
+  CHECK(pdfocr::Render(page, 300, pdfocr::MaxDimension(), img));
+  pdfocr::Result result;
+  const pdfocr::Status status = pdfocr::Recognize(img.pixels.data(), img.width, img.height, img.stride, result);
+  if (status == pdfocr::Status::NoEngine || status == pdfocr::Status::NoLanguage) {
+    std::printf("  (no OCR language on this PC: skipped)\n");
+    FPDF_ClosePage(page);
+    FPDF_CloseDocument(doc);
+    return;
+  }
+  CHECK(status == pdfocr::Status::Ok);
+  CHECK(pdfocr::WriteTextLayer(doc, page, img, result) >= 12);
+  FPDF_ClosePage(page);
+  Reopened back(doc, true);
+  CHECK(back.doc != nullptr);
+  const std::wstring text = PageText(back.doc, 0);
+  for (const wchar_t* word : {L"Featherweight", L"scanned", L"quick", L"brown", L"lazy"})
+    CHECK(text.find(word) != std::wstring::npos);
+  // The page looks as it did: the text is invisible, the picture is still the page.
+  FPDF_PAGE again = FPDF_LoadPage(back.doc, 0);
+  CHECK(!pdfocr::NeedsText(again));
+  FPDF_ClosePage(again);
   FPDF_CloseDocument(doc);
 }

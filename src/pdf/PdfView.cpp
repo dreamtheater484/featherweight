@@ -362,12 +362,13 @@ void PdfView::DrawOverlays(Canvas& c, int first, int last) {
 
 bool PdfView::HasIdleWork() const {
   if (!Ready()) return false;
+  if (ocr_ && OcrHasWork()) return true;
   return cache_->HasWork() || (search_.Active() && !search_.Done()) || noteScanNext_ < PageCount();
 }
 
 bool PdfView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
   if (!Ready()) return false;
-  bool repaint = false;
+  bool repaint = ocr_ && OcrHasWork() && OcrStep();
   if (search_.Active() && !search_.Done()) {
     double searchDeadline = std::min(deadlineMs, anim::Now() + 5);
     if (search_.Work(*doc_, searchDeadline)) repaint = true;
@@ -792,6 +793,10 @@ bool PdfView::OnKeyDown(UINT vk, UINT mods) {
     return false;
   }
   if (vk == VK_ESCAPE) {
+    if (ocr_) {
+      StopOcr();
+      return true;
+    }
     if (!selection_.Empty()) {
       selection_.Clear();
       host_.ViewInvalidate();
@@ -1459,6 +1464,11 @@ CommandState PdfView::QueryCommand(int cmd) {
       s = {tools && PageCount() > 1, false};
       s.label = T(L"Split…");
       return s;
+    case CmdPdfOcr:
+    case CmdPdfOcrPage:
+      s = {tools, OcrRunning()};
+      s.label = OcrRunning() ? T(L"Stop recognizing text") : cmd == CmdPdfOcr ? T(L"Recognize text") : T(L"Recognize text on this page");
+      return s;
     case CmdUndo:
     case CmdRedo:
       s = {cmd == CmdUndo ? CanUndoPages() : CanRedoPages(), false};
@@ -1486,7 +1496,7 @@ CommandState PdfView::QueryCommand(int cmd) {
 
 std::vector<int> PdfView::Commands() {
   std::vector<int> ids = {CmdPdfPagesPanel,   CmdPdfRotatePagesRight, CmdPdfRotatePagesLeft, CmdPdfDeletePages,
-                          CmdPdfInsertPages, CmdPdfExtractPages};
+                          CmdPdfInsertPages, CmdPdfExtractPages,     CmdPdfOcr,             CmdPdfOcrPage};
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   return ids;
 }
@@ -1514,6 +1524,8 @@ bool PdfView::Execute(int cmd) {
       return true;
     }
     case CmdPdfSplitSelected: SplitPages(pdftools::SplitAt(PageCount(), ToolPages())); return true;
+    case CmdPdfOcr: StartOcr({}); return true;
+    case CmdPdfOcrPage: StartOcr({CurrentPage()}); return true;
     case CmdUndo: UndoPages(); return true;
     case CmdRedo: RedoPages(); return true;
     case CmdCopy: Copy(); return true;
@@ -1563,7 +1575,15 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   pages.sepBefore = true;
   pages.priority = 4;
   pages.menuLabel = T(L"Pages");
-  m.left = {save, saveAs, print, pages};
+  // Recognize text: scanned pages become searchable (on again while it runs: stop).
+  ToolItem ocr = item(CmdPdfOcr, icon::FontCase);
+  ocr.tooltip = OcrRunning() ? T(L"Stop recognizing text (Esc)") : T(L"Recognize text: make scanned pages searchable");
+  ocr.toggle = true;
+  ocr.checked = OcrRunning();
+  ocr.enabled = QueryCommand(CmdPdfOcr).enabled;
+  ocr.priority = 3;
+  ocr.menuLabel = T(L"Recognize text");
+  m.left = {save, saveAs, print, pages, ocr};
 
   m.pager = true;
   m.page = currentPage_;

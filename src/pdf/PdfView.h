@@ -136,10 +136,19 @@ class PdfView : public PagedView, public DocumentHost {
   bool ExtractTo(const std::vector<int>& sortedPages, const std::wstring& path);
   bool SplitTo(const std::vector<std::vector<int>>& parts, const std::wstring& path);
   bool RunPageScript(const std::wstring& arg);
-  bool CanUndoPages() const { return !pageUndo_.empty(); }
-  bool CanRedoPages() const { return !pageRedo_.empty(); }
+  bool CanUndoPages() const { return !pageUndo_.empty() && !ocr_; }
+  bool CanRedoPages() const { return !pageRedo_.empty() && !ocr_; }
   bool UndoPages();
   bool RedoPages();
+  // ---- Recognize text (F1, f1-pdf: PdfOcr.cpp) ----
+  // Windows' OCR on the pages that look scanned among `pages` (empty: every page), in the
+  // background, one page at a time; Esc stops it. Undo takes it back.
+  void StartOcr(std::vector<int> pages);
+  void StopOcr();
+  bool OcrRunning() const { return ocr_ != nullptr; }
+  // The same, finished before it returns (the screen tests' pdftool:ocr). Returns the pages read.
+  int OcrNow(const std::vector<int>& pages);
+
   // The thumbnail for the Pages panel, asking for it when it isn't there yet.
   ID2D1Bitmap* Thumbnail(int page, int priority);
   int ViewRotation() const { return rotation_; }
@@ -274,4 +283,12 @@ class PdfView : public PagedView, public DocumentHost {
   std::string pageBefore_;  // between BeginPageChange and EndPageChange
   bool pageBeforeModified_ = false;
   bool signatureWarned_ = false;  // asked once whether to change a signed PDF
+
+  // ---- Recognize text (PdfOcr.cpp) ----
+  struct OcrJob;
+  // Shared with the thread that runs Windows' OCR, which may outlive the tab by a page.
+  std::shared_ptr<OcrJob> ocr_;
+  bool OcrHasWork() const;  // the next page to start, or the last one's words to write
+  bool OcrStep();  // on the UI thread, from IdleWork
+  void FinishOcr();
 };
