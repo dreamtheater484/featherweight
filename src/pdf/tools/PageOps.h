@@ -19,7 +19,11 @@ enum class Block {
   Xfa,        // an XFA form: its pages come from the form, not the page tree
   Protected,  // encrypted, and its permissions don't allow changing or assembling pages
 };
-Block PageToolsBlock(FPDF_DOCUMENT doc, bool isXfa);
+// `isXfa`: PDFium loaded the document as an XFA form; one whose catalog says it is (FPDF_GetFormType)
+// is refused either way, since its pages are the form's and the page tree only a stand-in.
+Block PageToolsBlock(FPDF_DOCUMENT doc, bool isXfa = false);
+// The document is an XFA form (full or foreground), whether PDFium can run XFA or not.
+bool IsXfaForm(FPDF_DOCUMENT doc);
 
 // Each of `pages` turned by `quarterTurns` quarter turns clockwise (negative: counterclockwise).
 bool Rotate(FPDF_DOCUMENT doc, const std::vector<int>& pages, int quarterTurns);

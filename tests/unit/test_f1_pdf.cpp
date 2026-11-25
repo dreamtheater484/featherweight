@@ -30,6 +30,7 @@
 #include "pdf/sign/PdfObjects.h"
 #include "pdf/sign/Sign.h"
 #include "pdf/ocr/TextLayer.h"
+#include "pdf/tools/Editor.h"
 #include "pdf/tools/PageOps.h"
 
 namespace {
@@ -583,4 +584,66 @@ TEST(F1PdfMoveKeepsInheritedAttributes) {
   CHECK(pdftools::SaveBytes(flat, false, flatBytes));
   FPDF_CloseDocument(flat);
   CHECK(!pdftools::PinInherited(flatBytes, {0}, 3, none));
+}
+
+// The tools without a window, as fwtool's PDF torture and OCR runs call them (f1-gate).
+TEST(F1PdfEditorWithoutAWindow) {
+  InitPdfium();
+  const std::string original = ReadAll(std::string(FW_F1PDF_TESTDATA) + "/text.pdf");
+  pdftools::Editor ed;
+  CHECK(ed.Open(original) == pdftools::SourceError::None);
+  CHECK(ed.PageToolsBlocked() == pdftools::Block::None);
+  // Unedited: the bytes as they were.
+  std::string bytes;
+  CHECK(ed.Bytes(bytes) && bytes == original);
+  const int pages = ed.PageCount();
+  CHECK(pages >= 2);
+  CHECK(ed.Rotate({0}, 1));
+  CHECK(ed.Move({0}, pages));
+  pdfsign::Ink ink = pdfsign::InkFromPoints({{{0.f, 0.f}, {10.f, 5.f}, {20.f, 0.f}}});
+  CHECK(ed.PlaceSignature(0, 200, 200, 150, ink));
+  CHECK(ed.Modified());
+  // A certificate signature after the edits: the signed bytes are the document's now.
+  const CERT_CONTEXT* cert = TestSigner();
+  CHECK(cert != nullptr);
+  if (cert) {
+    pdfsign::Details d;
+    d.name = L"Featherweight test";
+    CHECK(ed.Sign(cert, d) == pdfsign::Error::None);
+    CertFreeCertificateContext(cert);
+  }
+  CHECK(!ed.Modified());
+  CHECK(ed.Bytes(bytes));
+  CHECK(Check(bytes).verdict.kind == pdfsign::Verdict::Untrusted);
+  // Saved safely, the same bytes; then a change keeps the signed revision (changed after signing).
+  wchar_t dir[MAX_PATH] = {};
+  GetTempPathW(MAX_PATH, dir);
+  const std::wstring path = std::wstring(dir) + L"fw-f1pdf-editor-" + std::to_wstring(GetCurrentProcessId()) + L".pdf";
+  std::wstring error;
+  CHECK(ed.SaveTo(path, error));
+  std::string written;
+  {
+    std::string narrow;  // the temporary folder's path is ASCII here
+    for (wchar_t ch : path) narrow += static_cast<char>(ch);
+    written = ReadAll(narrow);
+  }
+  CHECK(written == bytes);
+  DeleteFileW(path.c_str());
+  CHECK(ed.Rotate({0}, 1));
+  std::string after;
+  CHECK(ed.Bytes(after));
+  CHECK(after.compare(0, bytes.size(), bytes) == 0);
+  CHECK(Check(after).verdict.kind == pdfsign::Verdict::Changed);
+
+  // An XFA form: no page tools, no signing, and both say so.
+  const std::string xfa = ClassicPdf({
+      "<</Type /Catalog /Pages 2 0 R /AcroForm <</Fields [] /XFA (<xdp/>)>> /NeedsRendering true>>",
+      "<</Type /Pages /Kids [3 0 R] /Count 1>>",
+      "<</Type /Page /Parent 2 0 R /MediaBox [0 0 300 300]>>",
+  });
+  pdftools::Editor form;
+  CHECK(form.Open(xfa) == pdftools::SourceError::None);
+  CHECK(form.PageToolsBlocked() == pdftools::Block::Xfa);
+  CHECK(!form.Rotate({0}, 1));
+  CHECK(form.SigningBlocked() == pdfsign::Error::Encrypted);
 }

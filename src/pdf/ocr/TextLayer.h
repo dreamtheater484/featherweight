@@ -29,4 +29,9 @@ bool Render(FPDF_PAGE page, int dpi, uint32_t maxSide, PageImage& out);
 // is embedded), each scaled over its box, then the page's content. Returns the words written.
 int WriteTextLayer(FPDF_DOCUMENT doc, FPDF_PAGE page, const PageImage& image, const Result& result);
 
+// One page made searchable, as the PDF tab does it: rendered at `dpi`, recognized and written.
+// A page that already has text is left alone unless `force`. Ok with `words` written (0 for a page
+// left alone); otherwise why not (no OCR on this PC, no language for it, or a failure).
+Status RecognizePage(FPDF_DOCUMENT doc, FPDF_PAGE page, int& words, bool force = false, int dpi = 300);
+
 }  // namespace pdfocr

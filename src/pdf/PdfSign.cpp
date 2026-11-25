@@ -16,6 +16,7 @@
 #include "pdf/SignaturePanel.h"
 #include "pdf/sign/Sign.h"
 #include "pdf/sign/Stamp.h"
+#include "pdf/tools/PageOps.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
 
@@ -93,7 +94,8 @@ void PdfView::CheckSignatures(bool always) {
 
 std::wstring PdfView::SigningBlocked() const {
   if (!Ready()) return T(L"Signing works once the PDF is open.");
-  if (doc_->IsXfa()) return T(L"This PDF is an XFA form, which Featherweight can't sign.");
+  if (doc_->IsXfa() || pdftools::IsXfaForm(doc_->Handle()))
+    return T(L"This PDF is an XFA form, which Featherweight can't sign.");
   if (doc_->Encrypted()) return T(L"This PDF is protected, so Featherweight can't sign it.");
   return {};
 }

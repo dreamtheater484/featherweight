@@ -111,4 +111,16 @@ int WriteTextLayer(FPDF_DOCUMENT doc, FPDF_PAGE page, const PageImage& img, cons
   return written;
 }
 
+Status RecognizePage(FPDF_DOCUMENT doc, FPDF_PAGE page, int& words, bool force, int dpi) {
+  words = 0;
+  if (!doc || !page) return Status::Failed;
+  if (!force && !NeedsText(page)) return Status::Ok;
+  PageImage image;
+  if (!Render(page, dpi, MaxDimension(), image)) return Status::Failed;
+  Result result;
+  const Status s = Recognize(image.pixels.data(), image.width, image.height, image.stride, result);
+  if (s == Status::Ok) words = WriteTextLayer(doc, page, image, result);
+  return s;
+}
+
 }  // namespace pdfocr

@@ -1,6 +1,7 @@
 #include "pdf/tools/PageOps.h"
 
 #include <fpdf_edit.h>
+#include <fpdf_formfill.h>
 #include <fpdf_ppo.h>
 #include <fpdf_save.h>
 #include <fpdf_signature.h>
@@ -84,8 +85,13 @@ int WriteToMemory(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
 
 }  // namespace
 
+bool IsXfaForm(FPDF_DOCUMENT doc) {
+  const int type = FPDF_GetFormType(doc);
+  return type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND;
+}
+
 Block PageToolsBlock(FPDF_DOCUMENT doc, bool isXfa) {
-  if (isXfa) return Block::Xfa;
+  if (isXfa || IsXfaForm(doc)) return Block::Xfa;
   if (!MayChangePages(doc)) return Block::Protected;
   return Block::None;
 }
