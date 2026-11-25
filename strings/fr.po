@@ -31,6 +31,10 @@ msgstr " Ses macros sont conservées mais jamais exécutées."
 msgid " Reloading it discards your changes here."
 msgstr " Si vous le rechargez, vos modifications apportées ici seront perdues."
 
+#: src/pdf/PdfSign.cpp
+msgid " and "
+msgstr " et "
+
 #: src/sheet/view/WorkbookReview.cpp
 msgid " · resolved"
 msgstr " · résolu"
@@ -215,7 +219,7 @@ msgstr "il y a 1 heure"
 msgid "1 minute ago"
 msgstr "il y a 1 minute"
 
-#: src/sheet/view/WorkbookRibbon.cpp
+#: src/pdf/PdfText.h src/sheet/view/WorkbookRibbon.cpp
 msgid "1 page"
 msgstr "1 page"
 
@@ -306,6 +310,14 @@ msgstr "6,25 % gris"
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "75% gray"
 msgstr "75 % gris"
+
+#: src/pdf/PdfPages.cpp
+msgid "A PDF needs at least one page, so not every page can be deleted."
+msgstr "Un PDF doit contenir au moins une page, toutes les pages ne peuvent donc pas être supprimées."
+
+#: src/AppRibbon.cpp
+msgid "A PDF of it, to mail or another app"
+msgstr "Un PDF de ce fichier, pour un e-mail ou une autre application"
 
 #: src/sheet/edit/PivotInsert.cpp
 msgid "A PivotTable goes on a worksheet."
@@ -659,6 +671,10 @@ msgstr "Une page peut comporter de 1 à 45 colonnes."
 msgid "A paragraph can't be split inside a field."
 msgstr "Impossible de scinder un paragraphe à l'intérieur d'un champ."
 
+#: src/pdf/PdfPages.cpp
+msgid "A part couldn't be made."
+msgstr "Une partie n'a pas pu être créée."
+
 #: src/slide/view/PresentationProtect.cpp
 msgid "A password is needed to open this presentation."
 msgstr "Un mot de passe est nécessaire pour ouvrir cette présentation."
@@ -682,6 +698,10 @@ msgstr "Impossible de placer une image ici."
 #: src/doc/edit/Pictures.cpp
 msgid "A picture in line with the text moves with it."
 msgstr "Une image alignée sur le texte se déplace avec celui-ci."
+
+#: src/pdf/SignaturePanel.cpp
+msgid "A picture of your signature"
+msgstr "Une image de votre signature"
 
 #: src/doc/model/Document.cpp
 msgid "A picture or object in this document is missing."
@@ -1734,6 +1754,10 @@ msgstr "Ligne de base"
 msgid "Before"
 msgstr "Avant"
 
+#: src/pdf/PagesPanel.cpp
+msgid "Before each selected page"
+msgstr "Avant chaque page sélectionnée"
+
 #: src/word/DocPage.cpp
 msgid "Before, after"
 msgstr "Avant, après"
@@ -2146,6 +2170,10 @@ msgstr "Modifier les couleurs"
 msgid "Change case"
 msgstr "Modifier la casse"
 
+#: src/pdf/PdfPages.cpp src/pdf/PdfSign.cpp
+msgid "Change it"
+msgstr "Modifier quand même"
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Change rule"
 msgstr "Modifier la règle"
@@ -2238,6 +2266,14 @@ msgstr "Vérification"
 msgid "Check for updates now"
 msgstr "Rechercher les mises à jour maintenant"
 
+#: src/pdf/PdfView.cpp
+msgid "Check signatures"
+msgstr "Vérifier les signatures"
+
+#: src/pdf/PdfSign.cpp
+msgid "Check signatures ({0})"
+msgstr "Vérifier les signatures ({0})"
+
 #: src/AppShell.cpp
 msgid "Check spelling as you type"
 msgstr "Vérifier l'orthographe lors de la frappe"
@@ -2310,7 +2346,7 @@ msgstr "Références circulaires : "
 msgid "Circular reference: a formula refers to its own cell, directly or indirectly. It may calculate incorrectly."
 msgstr "Référence circulaire : une formule fait référence à sa propre cellule, directement ou indirectement. Son calcul risque d'être incorrect."
 
-#: src/sheet/edit/Edit.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocStyles.cpp
+#: src/pdf/SignaturePanel.cpp src/sheet/edit/Edit.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocStyles.cpp
 msgid "Clear"
 msgstr "Effacer"
 
@@ -2433,6 +2469,10 @@ msgstr "Cliquez d'abord dans la cellule fusionnée à fractionner."
 #: src/slide/view/PresentationText.cpp
 msgid "Click into the text to link first."
 msgstr "Cliquez d'abord dans le texte à lier."
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Click on a page where the signature goes. Esc stops."
+msgstr "Cliquez sur la page à l'endroit de la signature. Échap arrête."
 
 #: src/doc/edit/Forms.cpp
 msgid "Click or tap here to enter text."
@@ -3297,7 +3337,7 @@ msgstr "Suppr"
 msgid "Delay"
 msgstr "Délai"
 
-#: src/doc/edit/Editor.cpp src/sheet/edit/Edit.cpp src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookNames.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/ShapeOps.cpp src/slide/view/ObjectTool.cpp src/slide/view/PresentationComments.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/ui/Uia.cpp src/word/DocPanels.cpp src/word/DocReview.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
+#: src/doc/edit/Editor.cpp src/pdf/PdfPages.cpp src/sheet/edit/Edit.cpp src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookNames.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/ShapeOps.cpp src/slide/view/ObjectTool.cpp src/slide/view/PresentationComments.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/ui/Uia.cpp src/word/DocPanels.cpp src/word/DocReview.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
 msgid "Delete"
 msgstr "Supprimer"
 
@@ -3426,6 +3466,14 @@ msgstr "Supprimer la note"
 msgid "Delete object"
 msgstr "Supprimer l'objet"
 
+#: src/pdf/PdfView.cpp
+msgid "Delete pages"
+msgstr "Supprimer des pages"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Delete pages (Delete)"
+msgstr "Supprimer des pages (Suppr)"
+
 #: src/word/DocProof.cpp
 msgid "Delete repeated word"
 msgstr "Supprimer le mot répété"
@@ -3454,6 +3502,10 @@ msgstr "Supprimer le saut de section"
 msgid "Delete sheet"
 msgstr "Supprimer la feuille"
 
+#: src/pdf/PdfView.cpp
+msgid "Delete signature"
+msgstr "Supprimer la signature"
+
 #: src/slide/view/PresentationSlides.cpp
 msgid "Delete slide"
 msgstr "Supprimer la diapositive"
@@ -3478,6 +3530,10 @@ msgstr "Supprimer le tableau"
 msgid "Delete thread"
 msgstr "Supprimer le fil"
 
+#: src/pdf/PdfPages.cpp
+msgid "Delete {0}? This PDF is too large to undo it."
+msgstr "Supprimer {0} ? Ce PDF est trop volumineux pour annuler la suppression."
+
 #: src/word/DocView.cpp
 msgid "Deleted"
 msgstr "Supprimé"
@@ -3493,6 +3549,14 @@ msgstr "Supprimé par {0}"
 #: src/AppFiles.cpp
 msgid "Deleted {0} backups"
 msgstr "{0} sauvegardes supprimées"
+
+#: src/pdf/PdfPages.cpp
+msgid "Deleted {0}."
+msgstr "Suppression de {0} effectuée."
+
+#: src/pdf/PdfPages.cpp
+msgid "Deleted {0}. Ctrl+Z brings them back."
+msgstr "Suppression de {0} effectuée. Ctrl+Z annule la suppression."
 
 #: src/word/DocPanels.cpp
 msgid "Deleted “{0}”."
@@ -3646,7 +3710,7 @@ msgstr "Distribuer les colonnes"
 msgid "Distributed"
 msgstr "Distribué"
 
-#: src/core/FileKinds.cpp
+#: src/Share.cpp src/core/FileKinds.cpp
 msgid "Document"
 msgstr "Document"
 
@@ -3742,6 +3806,10 @@ msgstr "Faites glisser pour faire pivoter ; Maj : par pas de 15°"
 #: src/word/DocRibbon.cpp
 msgid "Draw Text Box"
 msgstr "Dessiner une zone de texte"
+
+#: src/pdf/PdfSign.cpp src/pdf/PdfView.cpp
+msgid "Draw signature…"
+msgstr "Dessiner une signature…"
 
 #: src/slide/view/PresentationRibbon.cpp
 msgid "Drawing"
@@ -4058,6 +4126,18 @@ msgstr "En-tête de page paire"
 msgid "Even pages"
 msgstr "Pages paires"
 
+#: src/pdf/PagesPanel.cpp
+msgid "Every 10 pages"
+msgstr "Toutes les 10 pages"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Every 2 pages"
+msgstr "Toutes les 2 pages"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Every 5 pages"
+msgstr "Toutes les 5 pages"
+
 #: src/slide/view/PresentationRibbon.cpp
 msgid "Every slide as a picture, in a folder"
 msgstr "Chaque diapositive sous forme d'image, dans un dossier"
@@ -4157,6 +4237,22 @@ msgstr "{0} diapositives exportées vers le dossier {1}"
 #: src/App.cpp
 msgid "Exporting…"
 msgstr "Exportation…"
+
+#: src/pdf/PdfPages.cpp
+msgid "Extract pages as a new PDF"
+msgstr "Extraire des pages dans un nouveau PDF"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Extract pages as a new PDF…"
+msgstr "Extraire des pages dans un nouveau PDF…"
+
+#: src/pdf/PdfView.cpp
+msgid "Extract pages…"
+msgstr "Extraire des pages…"
+
+#: src/pdf/PdfPages.cpp
+msgid "Extracted {0} to {1}."
+msgstr "Extraction de {0} vers {1} effectuée."
 
 #: src/slide/edit/TimingOps.cpp
 msgid "Fade"
@@ -5490,7 +5586,7 @@ msgstr "Entrée"
 msgid "Input message"
 msgstr "Message de saisie"
 
-#: src/doc/edit/Editor.cpp src/sheet/view/WorkbookReview.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/Edit.cpp src/slide/view/PresentationRibbon.cpp src/word/DocFormat.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
+#: src/doc/edit/Editor.cpp src/pdf/PdfPages.cpp src/sheet/view/WorkbookReview.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/Edit.cpp src/slide/view/PresentationRibbon.cpp src/word/DocFormat.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
 msgid "Insert"
 msgstr "Insertion"
 
@@ -5759,6 +5855,14 @@ msgstr "Insérer un saut de page"
 msgid "Insert page number"
 msgstr "Insérer un numéro de page"
 
+#: src/pdf/PdfPages.cpp
+msgid "Insert pages from a PDF"
+msgstr "Insérer des pages d'un PDF"
+
+#: src/pdf/PagesPanel.cpp src/pdf/PdfView.cpp
+msgid "Insert pages from a PDF…"
+msgstr "Insérer des pages d'un PDF…"
+
 #: src/doc/edit/Editor.cpp src/doc/edit/Pictures.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPictures.cpp
 msgid "Insert picture"
 msgstr "Insérer une image"
@@ -5847,6 +5951,14 @@ msgstr "Inséré"
 msgid "Inserted by {0}"
 msgstr "Inséré par {0}"
 
+#: src/pdf/PdfPages.cpp
+msgid "Inserted {0} from {1} files."
+msgstr "Insertion de {0} depuis {1} fichiers effectuée."
+
+#: src/pdf/PdfPages.cpp
+msgid "Inserted {0} from {1}."
+msgstr "Insertion de {0} depuis {1} effectuée."
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Inside"
 msgstr "Intérieur"
@@ -5866,6 +5978,10 @@ msgstr "Citation intense"
 #: src/word/DocFormat.cpp
 msgid "Intense Reference"
 msgstr "Référence intense"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Into single pages"
+msgstr "En pages individuelles"
 
 #: src/slide/view/ModelDeck.cpp
 msgid "It couldn't be opened — {0}"
@@ -7023,6 +7139,10 @@ msgstr "Aucun enregistrement n'est en cours."
 msgid "No scaling"
 msgstr "Aucune mise à l'échelle"
 
+#: src/pdf/PdfOcr.cpp
+msgid "No scanned pages without text were found."
+msgstr "Aucune page numérisée sans texte n'a été trouvée."
+
 #: src/word/DocFormat.cpp
 msgid "No shading"
 msgstr "Aucune trame"
@@ -7030,6 +7150,10 @@ msgstr "Aucune trame"
 #: src/slide/view/ObjectTool.cpp
 msgid "No shadow"
 msgstr "Aucune ombre"
+
+#: src/pdf/PdfSign.cpp
+msgid "No signatures in this PDF"
+msgstr "Aucune signature dans ce PDF"
 
 #: src/slide/view/PresentationCommands.cpp
 msgid "No slides"
@@ -7458,11 +7582,11 @@ msgstr "Vers la droite, puis en bas"
 msgid "PDF Document"
 msgstr "Document PDF"
 
-#: src/App.cpp src/pdf/PdfView.h
+#: src/App.cpp src/pdf/PdfPages.cpp src/pdf/PdfView.h
 msgid "PDF document"
 msgstr "Document PDF"
 
-#: src/App.cpp src/core/FileKinds.cpp
+#: src/App.cpp src/core/FileKinds.cpp src/pdf/PdfPages.cpp
 msgid "PDF documents"
 msgstr "Documents PDF"
 
@@ -7602,7 +7726,7 @@ msgstr "Dimensionnement"
 msgid "Page width"
 msgstr "Largeur de page"
 
-#: src/sheet/view/WorkbookPageSetup.cpp
+#: src/pdf/PagesPanel.cpp src/sheet/view/WorkbookPageSetup.cpp
 msgid "Page {0}"
 msgstr "Page {0}"
 
@@ -7610,13 +7734,17 @@ msgstr "Page {0}"
 msgid "Page {0} of {1}"
 msgstr "Page {0} sur {1}"
 
-#: src/word/DocRibbon.cpp
+#: src/pdf/PagesPanel.cpp src/pdf/PdfView.cpp src/word/DocRibbon.cpp
 msgid "Pages"
 msgstr "Pages"
 
 #: src/word/DocProof.cpp
 msgid "Pages: "
 msgstr "Pages : "
+
+#: src/pdf/PdfView.cpp
+msgid "Pages: reorder, rotate, delete, insert, extract and split"
+msgstr "Pages : réorganiser, faire pivoter, supprimer, insérer, extraire et fractionner"
 
 #: src/word/DocPage.cpp
 msgid "Paper"
@@ -7896,7 +8024,7 @@ msgstr "Image : habillage rapproché"
 msgid "Picture: top and bottom"
 msgstr "Image : haut et bas"
 
-#: src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/PresentationRibbon.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocShapes.cpp
+#: src/pdf/SignaturePanel.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/PresentationRibbon.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocShapes.cpp
 msgid "Pictures"
 msgstr "Images"
 
@@ -7911,6 +8039,10 @@ msgstr "Les images d'une zone de texte ne peuvent pas encore être modifiées."
 #: src/sheet/view/WorkbookShapes.cpp
 msgid "Pictures…"
 msgstr "Images…"
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Picture…"
+msgstr "Image…"
 
 #: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
 msgid "Pie"
@@ -7935,6 +8067,14 @@ msgstr "Les tableaux croisés dynamiques nécessitent un classeur Excel : enreg
 #: src/sheet/view/WorkbookReview.cpp
 msgid "Place in this workbook"
 msgstr "Emplacement dans ce classeur"
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Place on a page"
+msgstr "Placer sur une page"
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Placed as a stamp that other PDF readers show and print. It isn't a certificate signature: for one, use Sign, Sign with a certificate."
+msgstr "Placée comme un tampon que les autres lecteurs PDF affichent et impriment. Ce n'est pas une signature par certificat : pour cela, utilisez Signer, Signer avec un certificat."
 
 #: src/slide/edit/ShapeOps.cpp
 msgid "Placeholders can't be grouped."
@@ -8364,6 +8504,30 @@ msgstr "Couleurs récentes"
 msgid "Recent files are hidden."
 msgstr "Les fichiers récents sont masqués."
 
+#: src/pdf/PdfView.cpp
+msgid "Recognize text"
+msgstr "Reconnaître le texte"
+
+#: src/pdf/PdfView.cpp
+msgid "Recognize text on this page"
+msgstr "Reconnaître le texte de cette page"
+
+#: src/pdf/PdfView.cpp
+msgid "Recognize text: make scanned pages searchable"
+msgstr "Reconnaître le texte : permettre la recherche dans les pages numérisées"
+
+#: src/pdf/PdfOcr.cpp
+msgid "Recognized {0} words on {1}. They can be found, selected and copied now."
+msgstr "{0} mots reconnus sur {1}. Ils peuvent maintenant être recherchés, sélectionnés et copiés."
+
+#: src/pdf/PdfOcr.cpp
+msgid "Recognizing text on page {0} of {1}… Esc stops."
+msgstr "Reconnaissance du texte, page {0} sur {1}… Échap arrête."
+
+#: src/pdf/PdfOcr.cpp
+msgid "Recognizing text… Esc stops."
+msgstr "Reconnaissance du texte… Échap arrête."
+
 #: src/AppFiles.cpp src/slide/edit/Journal.cpp
 msgid "Recover"
 msgstr "Récupérer"
@@ -8407,6 +8571,10 @@ msgstr "Rouge {0}, vert {1}, bleu {2}"
 #: src/sheet/view/WorkbookCommands.cpp src/word/DocView.cpp
 msgid "Redo"
 msgstr "Rétablir"
+
+#: src/pdf/PagesPanel.cpp
+msgid "Redo (Ctrl+Y)"
+msgstr "Rétablir (Ctrl+Y)"
 
 #: src/sheet/view/WorkbookCommands.cpp src/slide/view/ObjectTool.cpp src/word/DocView.cpp
 msgid "Redo {0}"
@@ -8877,17 +9045,25 @@ msgstr "Faire pivoter à gauche de 90°"
 msgid "Rotate Right 90°"
 msgstr "Faire pivoter à droite de 90°"
 
-#: src/pdf/PdfView.cpp
+#: src/pdf/PagesPanel.cpp src/pdf/PdfView.cpp
 msgid "Rotate clockwise"
 msgstr "Faire pivoter dans le sens horaire"
 
-#: src/pdf/PdfView.cpp
+#: src/pdf/PagesPanel.cpp src/pdf/PdfView.cpp
 msgid "Rotate counterclockwise"
 msgstr "Faire pivoter dans le sens antihoraire"
 
 #: src/PagedView.cpp src/pdf/PdfView.cpp
 msgid "Rotate counterclockwise\tCtrl+Shift+−"
 msgstr "Faire pivoter dans le sens antihoraire\tCtrl+Shift+−"
+
+#: src/pdf/PdfView.cpp
+msgid "Rotate pages clockwise"
+msgstr "Faire pivoter les pages dans le sens horaire"
+
+#: src/pdf/PdfView.cpp
+msgid "Rotate pages counterclockwise"
+msgstr "Faire pivoter les pages dans le sens antihoraire"
 
 #: src/word/DocView.cpp
 msgid "Rotate picture 90°"
@@ -9064,6 +9240,14 @@ msgstr "Enregistrer les modifications apportées à « {0} » ?"
 #: src/pdf/NoteEditor.cpp
 msgid "Save note (Ctrl+Enter)"
 msgstr "Enregistrer la note (Ctrl+Entrée)"
+
+#: src/Share.cpp
+msgid "Save the file first: Share sends it as it's saved."
+msgstr "Enregistrez d'abord le fichier : Partager l'envoie tel qu'il est enregistré."
+
+#: src/pdf/PdfSign.cpp
+msgid "Save the signed PDF"
+msgstr "Enregistrer le PDF signé"
 
 #: src/App.cpp
 msgid "Saved"
@@ -9301,6 +9485,10 @@ msgstr "Semi-transparent"
 msgid "Send Backward"
 msgstr "Reculer"
 
+#: src/AppShell.cpp
+msgid "Send as attachment"
+msgstr "Envoyer en pièce jointe"
+
 #: src/slide/edit/ShapeOps.cpp src/slide/view/ObjectTool.cpp
 msgid "Send to Back"
 msgstr "Mettre à l'arrière-plan"
@@ -9428,6 +9616,22 @@ msgstr "Les formes de groupes différents ne peuvent pas être organisées ensem
 #: src/slide/edit/ShapeOps.cpp
 msgid "Shapes in different groups can't be grouped together."
 msgstr "Les formes de groupes différents ne peuvent pas être groupées ensemble."
+
+#: src/pdf/PdfView.cpp src/ui/FilePage.cpp
+msgid "Share"
+msgstr "Partager"
+
+#: src/AppShell.cpp
+msgid "Share as PDF"
+msgstr "Partager en PDF"
+
+#: src/pdf/PdfView.cpp
+msgid "Share: send the PDF to mail or another app"
+msgstr "Partager : envoyer le PDF par e-mail ou à une autre application"
+
+#: src/App.cpp
+msgid "Share…"
+msgstr "Partager…"
 
 #: src/sheet/view/WorkbookPageSetup.cpp
 msgid "Sheet"
@@ -9561,6 +9765,50 @@ msgstr "Ajuster"
 #: src/word/DocRibbon.cpp
 msgid "Side\nto Side"
 msgstr "Côte\nà côte"
+
+#: src/pdf/PdfView.cpp
+msgid "Sign"
+msgstr "Signer"
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Sign here with a pen or the mouse"
+msgstr "Signez ici avec un stylet ou la souris"
+
+#: src/pdf/PdfSign.cpp src/pdf/PdfView.cpp
+msgid "Sign with a certificate…"
+msgstr "Signer avec un certificat…"
+
+#: src/pdf/PdfView.cpp
+msgid "Sign: draw a signature, or sign with a certificate"
+msgstr "Signer : dessiner une signature ou signer avec un certificat"
+
+#: src/pdf/SignaturePanel.cpp src/pdf/sign/Stamp.cpp
+msgid "Signature"
+msgstr "Signature"
+
+#: src/pdf/PdfSign.cpp
+msgid "Signature placed. To take it away, right-click it, Delete signature."
+msgstr "Signature placée. Pour la retirer, cliquez dessus avec le bouton droit, Supprimer la signature."
+
+#: src/pdf/PdfSign.cpp
+msgid "Signed by {0}, but the PDF was changed after it was signed."
+msgstr "Signé par {0}, mais le PDF a été modifié après la signature."
+
+#: src/pdf/PdfSign.cpp
+msgid "Signed by {0}. The PDF is as it was signed, but Windows doesn't trust the certificate it was signed with."
+msgstr "Signé par {0}. Le PDF est tel qu'il a été signé, mais Windows ne fait pas confiance au certificat utilisé pour le signer."
+
+#: src/pdf/PdfSign.cpp
+msgid "Signed by {0}. The PDF is as it was signed, but Windows doesn't trust the certificate of {1}."
+msgstr "Signé par {0}. Le PDF est tel qu'il a été signé, mais Windows ne fait pas confiance au certificat de {1}."
+
+#: src/pdf/PdfSign.cpp
+msgid "Signed by {0}. The signature is valid: the PDF is as it was signed."
+msgstr "Signé par {0}. La signature est valide : le PDF est tel qu'il a été signé."
+
+#: src/pdf/PdfSign.cpp
+msgid "Signing works once the PDF is open."
+msgstr "La signature est possible une fois le PDF ouvert."
 
 #: src/word/DocReview.cpp
 msgid "Simple markup"
@@ -9827,6 +10075,22 @@ msgstr "Fractionner les cellules"
 msgid "Split cells…"
 msgstr "Fractionner les cellules…"
 
+#: src/pdf/PagesPanel.cpp
+msgid "Split into several PDFs"
+msgstr "Fractionner en plusieurs PDF"
+
+#: src/pdf/PdfPages.cpp
+msgid "Split into {0} PDFs in {1}."
+msgstr "Fractionné en {0} PDF dans {1}."
+
+#: src/pdf/PdfPages.cpp
+msgid "Split: where the new PDFs go, and their name"
+msgstr "Fractionner : emplacement et nom des nouveaux PDF"
+
+#: src/pdf/PdfView.cpp
+msgid "Split…"
+msgstr "Fractionner…"
+
 #: src/core/FileKinds.cpp
 msgid "Spreadsheet"
 msgstr "Classeur"
@@ -9859,6 +10123,10 @@ msgstr "Démarrer"
 msgid "Start Slide Show"
 msgstr "Démarrer le diaporama"
 
+#: src/pdf/SignaturePanel.cpp
+msgid "Start again"
+msgstr "Recommencer"
+
 #: src/word/DocPanels.cpp
 msgid "Start at"
 msgstr "À partir de"
@@ -9879,9 +10147,21 @@ msgstr "Arrêt"
 msgid "Stop if true"
 msgstr "Interrompre si Vrai"
 
+#: src/pdf/PdfView.cpp
+msgid "Stop recognizing text"
+msgstr "Arrêter la reconnaissance du texte"
+
+#: src/pdf/PdfView.cpp
+msgid "Stop recognizing text (Esc)"
+msgstr "Arrêter la reconnaissance du texte (Échap)"
+
 #: src/pkg/SafeFile.cpp
 msgid "Stopped before replacing."
 msgstr "Arrêté avant le remplacement."
+
+#: src/pdf/PdfOcr.cpp
+msgid "Stopped recognizing text."
+msgstr "Reconnaissance du texte arrêtée."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "Straight-line depreciation for one period."
@@ -10216,6 +10496,10 @@ msgstr "Couleur de surbrillance du texte"
 msgid "Text in heading styles shows here."
 msgstr "Le texte mis en forme avec les styles de titre s'affiche ici."
 
+#: src/pdf/PdfPages.cpp
+msgid "Text is being recognized. Wait for it, or stop it with Esc."
+msgstr "Reconnaissance du texte en cours. Attendez la fin ou arrêtez-la avec Échap."
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Text length"
 msgstr "Longueur du texte"
@@ -10400,6 +10684,10 @@ msgstr "Ce mot de passe est incorrect. Réessayez."
 msgid "That picture can't be used as a background."
 msgstr "Cette image ne peut pas être utilisée comme arrière-plan."
 
+#: src/pdf/SignaturePanel.cpp
+msgid "That picture couldn't be read."
+msgstr "Cette image n'a pas pu être lue."
+
 #: src/doc/edit/Pictures.cpp
 msgid "That picture isn't in the document any more."
 msgstr "Cette image ne figure plus dans le document."
@@ -10496,6 +10784,10 @@ msgstr "Cela représente plus de cellules que Featherweight ne peut en additionn
 msgid "That's more cells than the format painter paints at once."
 msgstr "Cela représente plus de cellules que l'outil Reproduire la mise en forme ne peut en traiter en une fois."
 
+#: src/pdf/PdfPages.cpp
+msgid "That's this PDF. Choose another name for the new file."
+msgstr "C'est ce PDF. Choisissez un autre nom pour le nouveau fichier."
+
 #: src/sheet/view/WorkbookCommands.cpp
 msgid "That's too many cells to copy at once. Select fewer and copy again."
 msgstr "Trop de cellules à copier en une fois. Sélectionnez-en moins et copiez de nouveau."
@@ -10527,6 +10819,10 @@ msgstr "Impossible d'enregistrer le PDF. {0}"
 #: src/pdf/Document.cpp src/word/DocPdf.cpp
 msgid "The PDF couldn't be saved: another program has {0} open."
 msgstr "Impossible d'enregistrer le PDF : un autre programme a ouvert {0}."
+
+#: src/pdf/PdfView.cpp
+msgid "The PDF couldn't be written."
+msgstr "Le PDF n'a pas pu être écrit."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The Pearson correlation coefficient."
@@ -10639,6 +10935,10 @@ msgstr "La cellule ou le graphique que vous essayez de modifier se trouve sur un
 #: src/sheet/view/WorkbookClipboard.cpp
 msgid "The cells don't fit there: there aren't enough rows or columns."
 msgstr "Les cellules ne tiennent pas à cet endroit : il n'y a pas assez de lignes ou de colonnes."
+
+#: src/pdf/PdfSign.cpp
+msgid "The certificate's private key can't be used on this PC."
+msgstr "La clé privée du certificat ne peut pas être utilisée sur ce PC."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The character with this Unicode number."
@@ -10824,6 +11124,10 @@ msgstr "Impossible de lire le fichier."
 msgid "The file couldn't be saved. {0}"
 msgstr "Impossible d'enregistrer le fichier. {0}"
 
+#: src/pdf/Document.cpp
+msgid "The file couldn't be saved: the PDF couldn't be written."
+msgstr "Le fichier n'a pas pu être enregistré : le PDF n'a pas pu être écrit."
+
 #: src/pkg/Zip.cpp
 msgid "The file couldn't be written. The disk may be full."
 msgstr "Impossible d'écrire le fichier. Le disque est peut-être plein."
@@ -10835,6 +11139,14 @@ msgstr "Ce fichier n'est pas une présentation PowerPoint."
 #: src/slide/Reader.cpp
 msgid "The file isn't a presentation."
 msgstr "Ce fichier n'est pas une présentation."
+
+#: src/AppRibbon.cpp
+msgid "The file itself, to mail or another app"
+msgstr "Le fichier lui-même, pour un e-mail ou une autre application"
+
+#: src/pdf/Document.cpp
+msgid "The file was saved, but it couldn't be opened again."
+msgstr "Le fichier a été enregistré, mais n'a pas pu être rouvert."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The first characters of a text."
@@ -11240,9 +11552,21 @@ msgstr "L'original est introuvable dans les sauvegardes."
 msgid "The originals kept for Restore original, in every folder"
 msgstr "Les originaux conservés pour Restaurer l'original, dans tous les dossiers"
 
+#: src/pdf/PdfPages.cpp
+msgid "The page tools work once the PDF is open."
+msgstr "Les outils de page fonctionnent une fois le PDF ouvert."
+
 #: src/AppRibbon.cpp
 msgid "The pages as a PDF file, as they look"
 msgstr "Les pages sous forme de fichier PDF, telles qu'elles apparaissent"
+
+#: src/pdf/PdfPages.cpp
+msgid "The pages couldn't be extracted."
+msgstr "Les pages n'ont pas pu être extraites."
+
+#: src/pdf/PdfPages.cpp
+msgid "The pages couldn't be inserted."
+msgstr "Les pages n'ont pas pu être insérées."
 
 #: src/doc/edit/Page.cpp
 msgid "The paper can be from half an inch to 22 inches on each side."
@@ -11547,6 +11871,14 @@ msgstr "Les chaînes partagées sont trop volumineuses."
 #: src/sheet/xlsx/Save.cpp
 msgid "The sheet {0} holds macros, which only a macro-enabled workbook (.xlsm) keeps."
 msgstr "La feuille {0} contient des macros, que seul un classeur prenant en charge les macros (.xlsm) conserve."
+
+#: src/pdf/PdfSign.cpp
+msgid "The signature by {0} isn't valid: what was signed has been changed, or the signature can't be checked."
+msgstr "La signature de {0} n'est pas valide : ce qui a été signé a été modifié, ou la signature ne peut pas être vérifiée."
+
+#: src/pdf/PdfSign.cpp
+msgid "The signature couldn't be placed."
+msgstr "La signature n'a pas pu être placée."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The sine of an angle in radians."
@@ -11920,6 +12252,10 @@ msgstr "Thèmes"
 msgid "Then by"
 msgstr "Puis par"
 
+#: src/pdf/SignaturePanel.cpp
+msgid "Then click on a page where it goes"
+msgstr "Puis cliquez sur la page à l'endroit voulu"
+
 #: src/AppFiles.cpp
 msgid "There are no backups."
 msgstr "Il n'y a aucune sauvegarde."
@@ -11991,6 +12327,10 @@ msgstr "Aucun signet ne porte ce nom."
 #: src/sheet/view/WorkbookPanels.cpp
 msgid "There's no cell, range or name like that."
 msgstr "Aucune cellule, plage ou nom ne correspond."
+
+#: src/pdf/PdfSign.cpp
+msgid "There's no certificate for signing on this PC. A drawn signature can be placed instead (Sign, Draw signature)."
+msgstr "Ce PC n'a pas de certificat pour signer. Une signature dessinée peut être placée à la place (Signer, Dessiner une signature)."
 
 #: src/doc/edit/Editor.cpp
 msgid "There's no column border there."
@@ -12164,9 +12504,37 @@ msgstr "Impossible de préparer ce PDF pour l'impression."
 msgid "This PDF doesn’t allow printing"
 msgstr "Ce PDF n'autorise pas l'impression"
 
+#: src/pdf/PdfSign.cpp
+msgid "This PDF has no signatures."
+msgstr "Ce PDF ne contient aucune signature."
+
+#: src/pdf/PdfSign.cpp
+msgid "This PDF is an XFA form, which Featherweight can't sign."
+msgstr "Ce PDF est un formulaire XFA, que Featherweight ne peut pas signer."
+
+#: src/pdf/PdfPages.cpp
+msgid "This PDF is an XFA form, whose pages come from the form, so the page tools are off."
+msgstr "Ce PDF est un formulaire XFA dont les pages viennent du formulaire ; les outils de page sont donc désactivés."
+
+#: src/pdf/PdfPages.cpp
+msgid "This PDF is protected against changes, so the page tools are off."
+msgstr "Ce PDF est protégé contre les modifications ; les outils de page sont donc désactivés."
+
+#: src/pdf/PdfSign.cpp
+msgid "This PDF is protected, so Featherweight can't sign it."
+msgstr "Ce PDF est protégé, Featherweight ne peut donc pas le signer."
+
 #: src/pdf/Document.cpp
 msgid "This PDF is protected, so it can't be exported. Save as makes a copy."
 msgstr "Ce PDF est protégé ; il ne peut donc pas être exporté. Enregistrer sous en crée une copie."
+
+#: src/pdf/PdfPages.cpp src/pdf/PdfSign.cpp
+msgid "This PDF is signed. Changing it breaks the signature: readers will show it was changed after it was signed."
+msgstr "Ce PDF est signé. Le modifier invalide la signature : les lecteurs indiqueront qu'il a été modifié après la signature."
+
+#: src/pdf/PdfSign.cpp
+msgid "This PDF's structure couldn't be read well enough to sign it."
+msgstr "La structure de ce PDF n'a pas pu être lue assez bien pour le signer."
 
 #: src/sheet/edit/Pivots.cpp src/sheet/pivot/PivotLayout.cpp
 msgid "This PivotTable uses features Featherweight keeps but doesn't refresh."
@@ -12219,6 +12587,10 @@ msgstr "La durée de cette animation ne peut pas être modifiée dans Featherwei
 #: src/slide/edit/TimingOps.cpp
 msgid "This animation's options can't be changed in Featherweight."
 msgstr "Les options de cette animation ne peuvent pas être modifiées dans Featherweight."
+
+#: src/Share.cpp
+msgid "This can't be made into a PDF."
+msgstr "Impossible d'en faire un PDF."
 
 #: src/doc/edit/Editor.cpp
 msgid "This can't go here."
@@ -13144,6 +13516,10 @@ msgstr "Souligné"
 msgid "Undo"
 msgstr "Annuler"
 
+#: src/pdf/PagesPanel.cpp
+msgid "Undo (Ctrl+Z)"
+msgstr "Annuler (Ctrl+Z)"
+
 #: src/sheet/view/WorkbookCommands.cpp src/slide/view/ObjectTool.cpp src/word/DocView.cpp
 msgid "Undo {0}"
 msgstr "Annuler {0}"
@@ -13328,6 +13704,10 @@ msgstr "Utiliser le paramètre Windows"
 #: src/sheet/view/WorkbookData.cpp
 msgid "Use a formula"
 msgstr "Utiliser une formule"
+
+#: src/pdf/SignaturePanel.cpp
+msgid "Use a picture of your signature (a photo or a scan)"
+msgstr "Utiliser une image de votre signature (une photo ou une numérisation)"
 
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Use in Formula"
@@ -13604,6 +13984,18 @@ msgstr "Largeur : {0} ({1} pixels)"
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Window"
 msgstr "Fenêtre"
+
+#: src/pdf/PdfOcr.cpp
+msgid "Windows can't recognize text in any of your languages. A language with its optical character recognition can be added in Windows' language settings."
+msgstr "Windows ne peut reconnaître le texte dans aucune de vos langues. Une langue avec sa reconnaissance optique de caractères peut être ajoutée dans les paramètres de langue de Windows."
+
+#: src/pdf/PdfSign.cpp
+msgid "Windows couldn't make the signature (was the PIN cancelled?)."
+msgstr "Windows n'a pas pu créer la signature (la saisie du code PIN a-t-elle été annulée ?)."
+
+#: src/Share.cpp
+msgid "Windows couldn't open its share sheet here."
+msgstr "Windows n'a pas pu ouvrir sa fenêtre de partage ici."
 
 #: src/slide/show/SlideShow.cpp
 msgid "Windows couldn’t open this link."
@@ -14205,6 +14597,10 @@ msgstr "scénarios"
 msgid "smart tags"
 msgstr "balises actives"
 
+#: src/pdf/PdfSign.cpp
+msgid "someone"
+msgstr "quelqu'un"
+
 #: src/sheet/pivot/PivotRead.cpp
 msgid "subtotals other than the automatic ones"
 msgstr "sous-totaux autres qu'automatiques"
@@ -14289,9 +14685,21 @@ msgstr "{0} (masquée)"
 msgid "{0} (no spelling dictionary)"
 msgstr "{0} (aucun dictionnaire orthographique)"
 
+#: src/pdf/PdfPages.cpp
+msgid "{0} (page {1})"
+msgstr "{0} (page {1})"
+
+#: src/pdf/PdfPages.cpp
+msgid "{0} (pages {1})"
+msgstr "{0} (pages {1})"
+
 #: src/word/DocView.cpp
 msgid "{0} (shown in {1})"
 msgstr "{0} (affiché avec {1})"
+
+#: src/pdf/PdfSign.cpp
+msgid "{0} (signed)"
+msgstr "{0} (signé)"
 
 #: src/word/DocView.cpp
 msgid "{0} and {1} more"
@@ -14401,7 +14809,7 @@ msgstr "Impossible d'ouvrir {0}. {1}"
 msgid "{0} couldn't be read in full: only its first rows show, and it can't be saved."
 msgstr "{0} n'a pas pu être lu entièrement : seules ses premières lignes s'affichent, et il ne peut pas être enregistré."
 
-#: src/pkg/Snapshot.cpp
+#: src/pdf/PdfPages.cpp src/pkg/Snapshot.cpp
 msgid "{0} couldn't be read."
 msgstr "Impossible de lire {0}."
 
@@ -14457,6 +14865,10 @@ msgstr "il y a {0} jours"
 msgid "{0} documents couldn’t be recovered."
 msgstr "{0} documents n'ont pas pu être récupérés."
 
+#: src/pdf/PdfPages.cpp
+msgid "{0} doesn't allow copying its pages."
+msgstr "{0} n'autorise pas la copie de ses pages."
+
 #: src/pkg/Snapshot.cpp
 msgid "{0} doesn't exist anymore."
 msgstr "{0} n'existe plus."
@@ -14469,9 +14881,21 @@ msgstr "{0} valeurs en double trouvées et supprimées ; {1} valeurs uniques re
 msgid "{0} files couldn’t be opened. They may be damaged."
 msgstr "Impossible d'ouvrir {0} fichiers. Ils sont peut-être endommagés."
 
+#: src/pdf/PdfPages.cpp
+msgid "{0} files were made, then: {1}"
+msgstr "{0} fichiers ont été créés, puis : {1}"
+
+#: src/pdf/PdfPages.cpp
+msgid "{0} has a password. Open it, save a copy without one, and insert that."
+msgstr "{0} a un mot de passe. Ouvrez-le, enregistrez une copie sans mot de passe et insérez celle-ci."
+
 #: src/pkg/XmlPull.cpp
 msgid "{0} has an element with more than {1} attributes, which is more than Featherweight allows."
 msgstr "{0} contient un élément de plus de {1} attributs, soit plus que ce que Featherweight autorise."
+
+#: src/pdf/PdfPages.cpp
+msgid "{0} has no pages."
+msgstr "{0} ne contient aucune page."
 
 #: src/core/Strings.cpp
 msgid "{0} hours ago"
@@ -14545,6 +14969,10 @@ msgstr "{0} est le fichier de ce document. Choisissez un autre nom pour la copie
 msgid "{0} is this workbook's own file. Choose another name for the copy."
 msgstr "{0} est le fichier de ce classeur. Choisissez un autre nom pour la copie."
 
+#: src/pdf/PdfPages.cpp
+msgid "{0} isn't a PDF, or it's damaged."
+msgstr "{0} n'est pas un PDF ou il est endommagé."
+
 #: src/core/Strings.cpp
 msgid "{0} minutes ago"
 msgstr "il y a {0} minutes"
@@ -14557,6 +14985,10 @@ msgstr "il y a {0} mois"
 msgid "{0} of 1 word"
 msgstr "{0} sur 1 mot"
 
+#: src/pdf/PagesPanel.cpp
+msgid "{0} of {1} selected"
+msgstr "Sélection : {0} sur {1}"
+
 #: src/word/DocProof.cpp
 msgid "{0} of {1} words"
 msgstr "{0} sur {1} mots"
@@ -14564,6 +14996,10 @@ msgstr "{0} sur {1} mots"
 #: src/ui/Ribbon.cpp
 msgid "{0} options"
 msgstr "Options {0}"
+
+#: src/pdf/PdfText.h
+msgid "{0} pages"
+msgstr "{0} pages"
 
 #: src/slide/view/PictureExport.cpp
 msgid "{0} pixels"
@@ -14632,6 +15068,10 @@ msgstr "{0} – Section {1}"
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "{0}% - Accent{1}"
 msgstr "{0} % - Accent{1}"
+
+#: src/pdf/PdfSign.cpp
+msgid "{0}, issued by {1}"
+msgstr "{0}, émis par {1}"
 
 #: src/word/DocRuler.cpp
 msgid "{0}: a click on the ruler sets one. Click here for another kind."
