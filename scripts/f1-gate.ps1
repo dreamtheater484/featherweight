@@ -674,24 +674,55 @@ Check "legal.names" quick "Word, Excel and PowerPoint only as descriptions; the 
   $readme = Get-Content (Join-Path $root "README.md") -Raw -Encoding UTF8
   $n = [ordered]@{}
   $n.readmeNameAndLogo = [bool]($readme -match '(?is)(MIT|licen[cs]e).{0,200}(name|logo).{0,120}(logo|name)' -and $readme -match '(?i)not|doesn.t|don.t')
-  # Feature names: a ribbon or menu label that is "Word ..."/"Excel ..."/"PowerPoint ..." as a name
+  # Feature names: a string a person reads that is "Word ..."/"Excel ..."/"PowerPoint ..." as a name
   # (not "Word documents", "Excel workbooks", "PowerPoint presentations", "Word 97-2003", "the Word format").
-  $hits = @()
-  foreach ($f in @(Get-ChildItem (Join-Path $root "src") -Recurse -File -Include *.cpp, *.h, *.rc, *.txt)) {
-    foreach ($m in [regex]::Matches((Get-Content $f.FullName -Raw), 'L"([^"]*\b(Word|Excel|PowerPoint)\b[^"]*)"')) {
-      $s = $m.Groups[1].Value
-      if ($s -match '\b(Word|Excel|PowerPoint)\s+(\d|document|documents|workbook|workbooks|presentation|presentations|file|files|format|formats|template|templates|show|show''s|97|2003|2007|binary|Macro|Add-in|XML|Open XML)' -or
-          $s -match '(as|in|like|than|from|by|of|the)\s+(Word|Excel|PowerPoint)\b' -or $s -match '^\s*$') { continue }
-      $hits += "$($f.FullName.Substring($root.Length + 1)): $s"
+  # The strings are the catalog's msgids (strings\featherweight.pot: every string a person reads, and only
+  # those; ctest strings_marked keeps it so), else the source's literals on one line each, without the
+  # lines marked "// lang: no" (data such as registry key names). Strings reviewed as descriptions are in
+  # tests\legal-names-reviewed.txt; the row lists those apart.
+  $strings = @()
+  $pot = Join-Path $root "strings\featherweight.pot"
+  if (Test-Path $pot) {
+    $n.source = "strings\featherweight.pot"
+    $cur = $null
+    foreach ($line in [IO.File]::ReadAllLines($pot, $utf8)) {
+      if ($line -match '^msgid(_plural)? "(.*)"$') { if ($null -ne $cur) { $strings += $cur }; $cur = $Matches[2] }
+      elseif ($null -ne $cur -and $line -match '^"(.*)"$') { $cur += $Matches[1] }
+      else { if ($null -ne $cur) { $strings += $cur }; $cur = $null }
+    }
+    if ($null -ne $cur) { $strings += $cur }
+    $strings = @($strings | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ where = "featherweight.pot"; text = $_ } })
+  } else {
+    $n.source = "src literals"
+    foreach ($f in @(Get-ChildItem (Join-Path $root "src") -Recurse -File -Include *.cpp, *.h, *.rc)) {
+      foreach ($line in [IO.File]::ReadAllLines($f.FullName)) {
+        if ($line -match '//\s*lang:\s*no') { continue }
+        foreach ($m in [regex]::Matches($line, 'L"([^"\r\n]*)"')) { $strings += [pscustomobject]@{ where = $f.FullName.Substring($root.Length + 1); text = $m.Groups[1].Value } }
+      }
     }
   }
+  $reviewedFile = Join-Path $root "tests\legal-names-reviewed.txt"
+  $reviewed = @{}
+  if (Test-Path $reviewedFile) {
+    foreach ($line in [IO.File]::ReadAllLines($reviewedFile, $utf8)) { if ($line -and -not $line.StartsWith("#")) { $reviewed[($line -split "`t")[0]] = $true } }
+  }
+  $hits = @(); $accepted = @()
+  foreach ($x in $strings) {
+    $s = $x.text -replace '\\n', "`n" -replace '\\"', '"' -replace '\\\\', '\'
+    if ($s -cnotmatch '\b(Word|Excel|PowerPoint)\b') { continue }  # the names, capitalized: not the English word "word"
+    if ($s -match '\b(Word|Excel|PowerPoint)\s+(\d|document|documents|workbook|workbooks|presentation|presentations|file|files|format|formats|template|templates|show|show''s|97|2003|2007|binary|Macro|Add-in|XML|Open XML)' -or
+        $s -match '(as|in|like|than|from|by|of|the)\s+(Word|Excel|PowerPoint)\b') { continue }
+    if ($reviewed.ContainsKey($x.text)) { $accepted += $x.text; continue }
+    $hits += "$($x.where): $($x.text)"
+  }
   $n.possibleNames = $hits.Count
+  $n.reviewedAsDescriptions = $accepted.Count
   if ($hits.Count) { $n.first = $hits[0] }
   $listFile = Join-Path $script:outDir "legal-names.txt"
   New-Item -ItemType Directory -Force $script:outDir | Out-Null
-  [IO.File]::WriteAllLines($listFile, [string[]]$hits, $utf8)
+  [IO.File]::WriteAllLines($listFile, [string[]](@($hits) + @("", "# reviewed as descriptions (tests\legal-names-reviewed.txt):") + @($accepted)), $utf8)
   if (-not $n.readmeNameAndLogo) { return NotBuilt "f1-trust" "the README's line that the MIT licence doesn't cover the name and logo" }
-  if ($hits.Count) { Failed "$($hits.Count) strings may use a program's name as a name (list: legal-names.txt)" $n } else { Passed "only as descriptions" $n }
+  if ($hits.Count) { Failed "$($hits.Count) strings may use a program's name as a name, not yet reviewed (list: legal-names.txt; reviewed ones go in tests\legal-names-reviewed.txt)" $n } else { Passed "only as descriptions ($($accepted.Count) reviewed)" $n }
 }
 
 # ===== Languages =====
