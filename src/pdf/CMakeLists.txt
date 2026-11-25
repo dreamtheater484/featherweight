@@ -10,7 +10,8 @@ target_link_libraries(fwpdftools PUBLIC pdfium fwpkg fwcore runtimeobject crypt3
 target_compile_options(fwpdftools PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy /O1>)
 
 if(FW_BUILD_TESTS)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_f1_pdf.cpp")
+  # ShareSheet.cpp, the share sheet's Windows Runtime part, has no app code: its test is here too.
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_f1_pdf.cpp" "${PROJECT_SOURCE_DIR}/src/ShareSheet.cpp")
   target_link_libraries(fw_tests PRIVATE fwpdftools delayimp)
   target_link_options(fw_tests PRIVATE /DELAYLOAD:pdfium.dll)
   # The tests load the build's pdfium.dll from where FetchPdfium put it (a POST_BUILD copy can only

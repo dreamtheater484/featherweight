@@ -10,12 +10,21 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <roapi.h>
+#include <windows.applicationmodel.datatransfer.h>
+#include <windows.storage.h>
+#include <winstring.h>
+#include <wrl/client.h>
+#include <wrl/wrappers/corewrappers.h>
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "Share.h"
 #include "pdf/ocr/Ocr.h"
 #include "pdf/sign/PdfObjects.h"
 #include "pdf/sign/Sign.h"
@@ -414,4 +423,63 @@ TEST(F1PdfSignsAndCatchesChanges) {
   CHECK_EQ(info.count, 1);
   CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
   CertFreeCertificateContext(cert);
+}
+
+// The share sheet's part that can run without showing it: a real DataPackage, as the sheet's
+// request hands one over, gets the file as its one storage item, read back as a target app reads it.
+TEST(F1PdfShareSheetPackagesTheFile) {
+  namespace wf = ABI::Windows::Foundation;
+  namespace wfc = ABI::Windows::Foundation::Collections;
+  namespace dt = ABI::Windows::ApplicationModel::DataTransfer;
+  namespace ws = ABI::Windows::Storage;
+  using Microsoft::WRL::ComPtr;
+  wchar_t full[MAX_PATH] = {};
+  const std::string rel = std::string(FW_F1PDF_TESTDATA) + "/text.pdf";
+  GetFullPathNameW(std::wstring(rel.begin(), rel.end()).c_str(), MAX_PATH, full, nullptr);
+  const std::wstring path = full;
+  bool put = false, read = false;
+  unsigned count = 0;
+  std::wstring got;
+  // Windows' data transfer runs in the multithreaded apartment, as the sheet's file lookup does.
+  std::thread([&] {
+    if (FAILED(RoInitialize(RO_INIT_MULTITHREADED))) return;
+    {
+      ComPtr<IInspectable> made;
+      ComPtr<dt::IDataPackage> package;
+      const HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      if (SUCCEEDED(RoActivateInstance(Microsoft::WRL::Wrappers::HStringReference(
+                                           RuntimeClass_Windows_ApplicationModel_DataTransfer_DataPackage).Get(),
+                                       &made)) &&
+          SUCCEEDED(made.As(&package))) {
+        put = share::PutFileForTesting(package.Get(), path, done) && WaitForSingleObject(done, 10000) == WAIT_OBJECT_0;
+        ComPtr<dt::IDataPackageView> view;
+        ComPtr<wf::IAsyncOperation<wfc::IVectorView<ws::IStorageItem*>*>> op;
+        ComPtr<wf::IAsyncInfo> info;
+        if (put && SUCCEEDED(package->GetView(&view)) && SUCCEEDED(view->GetStorageItemsAsync(&op)) &&
+            SUCCEEDED(op.As(&info))) {
+          wf::AsyncStatus status = wf::AsyncStatus::Started;
+          for (int i = 0; i < 1000 && status == wf::AsyncStatus::Started; ++i) {
+            Sleep(10);
+            info->get_Status(&status);
+          }
+          ComPtr<wfc::IVectorView<ws::IStorageItem*>> items;
+          ComPtr<ws::IStorageItem> item;
+          HSTRING name = nullptr;
+          if (status == wf::AsyncStatus::Completed && SUCCEEDED(op->GetResults(&items)) &&
+              SUCCEEDED(items->get_Size(&count)) && count == 1 && SUCCEEDED(items->GetAt(0, &item)) &&
+              SUCCEEDED(item->get_Path(&name))) {
+            got = WindowsGetStringRawBuffer(name, nullptr);
+            read = true;
+          }
+          WindowsDeleteString(name);
+        }
+      }
+      CloseHandle(done);
+    }
+    RoUninitialize();
+  }).join();
+  CHECK(put);
+  CHECK(read);
+  CHECK_EQ(count, 1u);
+  CHECK(_wcsicmp(got.c_str(), path.c_str()) == 0);
 }

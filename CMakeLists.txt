@@ -52,6 +52,11 @@ add_executable(Featherweight WIN32
 # The ribbon (R1) and the start page (P3) are UI code that runs once a frame at most: built for size.
 set_source_files_properties(src/AppRibbon.cpp src/ui/Ribbon.cpp src/ui/FilePage.cpp src/ui/Icons.cpp src/ui/EmptyState.cpp
                             PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# So are the PDF tab's page tools, OCR and signing panels and the share sheet (F1, f1-pdf): their
+# work is PDFium's, Windows' or fwpdftools'.
+set_source_files_properties(src/pdf/PagesPanel.cpp src/pdf/PdfPages.cpp src/pdf/PdfOcr.cpp src/pdf/PdfSign.cpp
+                            src/pdf/SignaturePanel.cpp src/Share.cpp src/ShareSheet.cpp
+                            PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
