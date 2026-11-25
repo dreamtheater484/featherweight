@@ -760,3 +760,61 @@ TEST(F1PdfSameObjectMatchesItself) {
   CHECK(same("[" + huge + "]", "[" + huge + "]"));
   CHECK(!same("[" + huge + "]", "[2" + huge.substr(1) + "]"));
 }
+
+// f1-gate: the PDF Office makes of a 16,000-page workbook (287 MB) numbers 6.85 million objects, past
+// the reader's old 2 million. Here a classic table of 2.5 million entries (50 MB, most of them free)
+// with the document's objects numbered past 2.4 million: it opens, signs and checks. A small file
+// numbering objects that high is still refused (an entry per 8 bytes of file at most).
+TEST(F1PdfSignsAFileWithMillionsOfObjects) {
+  InitPdfium();
+  constexpr int kCount = 2'500'000, kBase = 2'400'000;
+  auto make = [&](bool large) {
+    const std::vector<std::string> objects = {"<</Type /Catalog /Pages 2400001 0 R>>",
+                                              "<</Type /Pages /Kids [2400002 0 R] /Count 1>>",
+                                              "<</Type /Page /Parent 2400001 0 R /MediaBox [0 0 200 200]>>"};
+    std::string pdf = "%PDF-1.4\n";
+    std::vector<size_t> at;
+    for (size_t k = 0; k < objects.size(); ++k) {
+      at.push_back(pdf.size());
+      pdf += std::to_string(kBase + k) + " 0 obj\n" + objects[k] + "\nendobj\n";
+    }
+    const size_t xref = pdf.size();
+    char row[24];
+    if (large) {
+      pdf.reserve(xref + size_t{kCount} * 20 + 200);
+      pdf += "xref\n0 " + std::to_string(kCount) + "\n";
+      for (int n = 0; n < kCount; ++n) {
+        if (n >= kBase && n < kBase + 3) std::snprintf(row, sizeof row, "%010zu 00000 n\r\n", at[n - kBase]);
+        else std::snprintf(row, sizeof row, "0000000000 65535 f\r\n");
+        pdf.append(row, 20);
+      }
+    } else {
+      pdf += "xref\n0 1\n0000000000 65535 f\r\n" + std::to_string(kBase) + " 3\n";
+      for (size_t a : at) {
+        std::snprintf(row, sizeof row, "%010zu 00000 n\r\n", a);
+        pdf.append(row, 20);
+      }
+    }
+    return pdf + "trailer\n<</Size " + std::to_string(large ? kCount : kBase + 3) + " /Root 2400000 0 R>>\nstartxref\n" +
+           std::to_string(xref) + "\n%%EOF\n";
+  };
+  const std::string pdf = make(true);
+  pdfobj::File f;
+  CHECK(f.Open(pdf));
+  CHECK_EQ(f.Size(), kCount);
+  CHECK_EQ(f.FirstPage(), kBase + 2);
+  const CERT_CONTEXT* cert = TestSigner();
+  CHECK(cert != nullptr);
+  if (!cert) return;
+  pdfsign::Details d;
+  d.name = L"Featherweight test";
+  std::string signedPdf;
+  CHECK(pdfsign::SignPdf(pdf, cert, d, signedPdf) == pdfsign::Error::None);
+  const SigInfo info = Check(signedPdf);
+  CHECK_EQ(info.count, 1);
+  CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
+  CHECK(signedPdf.compare(0, pdf.size(), pdf) == 0);
+  std::string refused;
+  CHECK(pdfsign::SignPdf(make(false), cert, d, refused) == pdfsign::Error::Unreadable);
+  CertFreeCertificateContext(cert);
+}
