@@ -88,10 +88,14 @@ PageSig SigOf(FPDF_DOCUMENT doc, int index) {
       std::wstring t(reinterpret_cast<const wchar_t*>(buf.data()), got > 0 ? static_cast<size_t>(got - 1) : 0);
       // Its characters, whitespace aside and in any order: PDFium reads a page's text in another order
       // once the page is turned or its content written again (a stamp), and spaces runs differently.
-      // A character lost, added or changed still shows.
+      // A character lost, added or changed still shows. A hyphen is one character however PDFium
+      // reports it: U+FFFE for one it takes as a line-end hyphen, which depends on the reading order
+      // (the same page's hyphen came back as U+FFFE in one file and "-" in another: f1-gate, 4.1).
       std::wstring squeezed;
-      for (wchar_t c : t)
+      for (wchar_t c : t) {
+        if (c == 0xFFFE || c == 0x00AD || c == 0x2010 || c == 0x2011) c = L'-';
         if (!iswspace(c)) squeezed += c;
+      }
       std::sort(squeezed.begin(), squeezed.end());
       s.textHash = std::hash<std::wstring>()(squeezed);
       s.textStart = fw::WideToUtf8(t.substr(0, 40));
