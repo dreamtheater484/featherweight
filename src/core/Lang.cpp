@@ -230,6 +230,33 @@ const wchar_t* T(const wchar_t* en, const wchar_t* context) {
   return i < 0 ? en : g_table->text.data() + g_table->offsets[i];
 }
 
+namespace {
+template <class C>
+std::basic_string<C> FormatWith(const C* pattern, std::initializer_list<std::basic_string_view<C>> args) {
+  std::basic_string<C> out;
+  for (const C* p = pattern; *p; ++p) {
+    if (p[0] == C('{') && p[1] >= C('0') && p[1] <= C('9') && p[2] == C('}')) {
+      const size_t i = static_cast<size_t>(p[1] - C('0'));
+      if (i < args.size()) out += *(args.begin() + i);
+      p += 2;
+      continue;
+    }
+    out += *p;
+  }
+  return out;
+}
+}  // namespace
+
+std::wstring Fmt(const wchar_t* pattern, std::initializer_list<std::wstring_view> args) {
+  return FormatWith(pattern, args);
+}
+std::string Fmt(const char* pattern, std::initializer_list<std::string_view> args) {
+  return FormatWith(pattern, args);
+}
+std::u16string Fmt(const char16_t* pattern, std::initializer_list<std::u16string_view> args) {
+  return FormatWith(pattern, args);
+}
+
 const char16_t* T(const char16_t* en) {
   static_assert(sizeof(char16_t) == sizeof(wchar_t));
   return reinterpret_cast<const char16_t*>(T(reinterpret_cast<const wchar_t*>(en)));

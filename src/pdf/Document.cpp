@@ -87,11 +87,11 @@ std::wstring NoteAppearance(float x, float y) {
   const float l = x + 1.0f, r = x + 19.0f, t = y - 1.0f, b = y - 15.0f, rad = 4.0f, k = rad * 0.5523f;
   wchar_t buf[2048];
   swprintf_s(buf,
-             T(L"q 1 0.725 0 rg "
+             L"q 1 0.725 0 rg "
              L"%.2f %.2f m %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c "
              L"%.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c h "
              L"%.2f %.2f m %.2f %.2f l %.2f %.2f l h f "
-             L"1 1 1 rg %.2f %.2f 11 1.6 re f %.2f %.2f 11 1.6 re f %.2f %.2f 7 1.6 re f Q"),
+             L"1 1 1 rg %.2f %.2f 11 1.6 re f %.2f %.2f 11 1.6 re f %.2f %.2f 7 1.6 re f Q",  // lang: no
              // rounded rectangle
              l + rad, b, r - rad, b, r - rad + k, b, r, b + rad - k, r, b + rad, r, t - rad, r, t - rad + k, r - rad + k,
              t, r - rad, t, l + rad, t, l + rad - k, t, l, t - rad + k, l, t - rad, l, b + rad, l, b + rad - k,

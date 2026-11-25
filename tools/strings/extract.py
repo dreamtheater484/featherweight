@@ -21,6 +21,7 @@ POT = os.path.join(ROOT, 'strings', 'featherweight.pot')
 SKIP = {'src/core/Lang.h', 'src/core/Lang.cpp', 'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h'}
 CALL = re.compile(r'(?:\b|::)(T|N_)\(\s*$')
 TABLE = re.compile(r'\bUiText(8|16)?\b')
+TABLE_PREFIX = {None: ('L',), '8': ('', 'u8'), '16': ('u',)}  # the literals a UiText, UiText8, UiText16 takes
 CONTEXT = re.compile(r'\s*,\s*(L|u8|u)?"((?:[^"\\]|\\.)*)"\s*\)')
 
 HEADER = '''# Featherweight's interface strings: the template for every language's catalog (strings/<code>.po).
@@ -56,6 +57,8 @@ def keys():
                         ctx = cpplex.decode(m.group(2))
                 elif not (TABLE.search(lit.head) and lit.scope != 'function' or TABLE.search(lit.head) and lit.constexpr):
                     continue
+                elif lit.prefix not in {p for m in TABLE.finditer(lit.head) for p in TABLE_PREFIX[m.group(1)]}:
+                    continue  # a table's other column: {"dataConsolidate", N_(u"a data consolidation")}
                 found.setdefault((ctx, lit.text), set()).add(rel)
     return found
 

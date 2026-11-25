@@ -17,6 +17,7 @@
 // T() is cheap (one test in English; a hash and a binary search otherwise) and safe from any thread
 // once Init has run. Its result lives as long as the process.
 
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,6 +31,13 @@ __declspec(noinline) const char* T(const char* en);  // UTF-8 in, UTF-8 out
 
 // Marks a string for the catalog where T() can't run yet (constexpr tables, namespace scope).
 #define N_(s) s
+
+// A sentence with numbers or names in it, whole, so each language orders its words: {0}, {1} ...
+// replaced by `args`. Fmt(T(L"Page {0} of {1}"), {std::to_wstring(page), std::to_wstring(count)}).
+// A sentence is never glued from pieces: "Exported " + n + " pages" can't be put in German order.
+std::wstring Fmt(const wchar_t* pattern, std::initializer_list<std::wstring_view> args);
+std::string Fmt(const char* pattern, std::initializer_list<std::string_view> args);  // UTF-8
+std::u16string Fmt(const char16_t* pattern, std::initializer_list<std::u16string_view> args);
 
 // A table's string, translated each time it's read: a table built before main keeps its N_()
 // strings in this type (UiText label; constexpr UiText kNames[] = {N_(L"Left"), ...}), and every

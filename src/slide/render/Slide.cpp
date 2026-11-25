@@ -485,8 +485,9 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool direct
       // One DirectWrite still can't outline would leave its text blank on screen: drawn in the
       // font's substitute instead, noted once in the debugger's log.
       if (directWrite && !draw::OutlinesInDirectWrite(sfnt)) {
-        OutputDebugStringW((::T(L"Featherweight: embedded font ") + f.typeface +
-                            ::T(L" has no outlines DirectWrite draws; its text is drawn in a substitute\n")).c_str());
+        OutputDebugStringW((L"Featherweight: embedded font " + f.typeface +  // lang: no
+                            L" has no outlines DirectWrite draws; its text is drawn in a substitute\n")  // lang: no
+                               .c_str());
         continue;
       }
     }

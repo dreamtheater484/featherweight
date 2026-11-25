@@ -242,10 +242,6 @@ msgstr ""
 msgid " has an element with more than "
 msgstr ""
 
-#: src/slide/render/Slide.cpp
-msgid " has no outlines DirectWrite draws; its text is drawn in a substitute\n"
-msgstr ""
-
 #: src/sheet/xlsx/Save.cpp
 msgid " holds macros, which only a macro-enabled workbook (.xlsm) keeps."
 msgstr ""
@@ -4468,10 +4464,6 @@ msgstr ""
 
 #: src/pdf/Document.cpp
 msgid "Featherweight's PDF engine (pdfium.dll) is missing. Please reinstall Featherweight."
-msgstr ""
-
-#: src/slide/render/Slide.cpp
-msgid "Featherweight: embedded font "
 msgstr ""
 
 #: src/slide/view/PresentationComments.cpp src/word/DocReview.cpp
@@ -13730,14 +13722,6 @@ msgstr ""
 msgid "custom views"
 msgstr ""
 
-#: src/sheet/edit/Refs.cpp
-msgid "customSheetViews"
-msgstr ""
-
-#: src/sheet/edit/Refs.cpp
-msgid "dataConsolidate"
-msgstr ""
-
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "delimiter, ignore_empty, text1, ..."
 msgstr ""
@@ -14018,10 +14002,6 @@ msgstr ""
 msgid "parts it can't read"
 msgstr ""
 
-#: src/pdf/Document.cpp
-msgid "q 1 0.725 0 rg %.2f %.2f m %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c h %.2f %.2f m %.2f %.2f l %.2f %.2f l h f 1 1 1 rg %.2f %.2f 11 1.6 re f %.2f %.2f 11 1.6 re f %.2f %.2f 7 1.6 re f Q"
-msgstr ""
-
 #: src/sheet/calc/Parser.cpp
 msgid "reference expected after the sheet"
 msgstr ""
@@ -14032,10 +14012,6 @@ msgstr ""
 
 #: src/sheet/edit/Refs.cpp
 msgid "smart tags"
-msgstr ""
-
-#: src/sheet/edit/Refs.cpp
-msgid "smartTags"
 msgstr ""
 
 #: src/sheet/pivot/PivotRead.cpp
@@ -14104,10 +14080,6 @@ msgstr ""
 
 #: src/sheet/pivot/PivotRead.cpp
 msgid "values shown as a percentage or difference"
-msgstr ""
-
-#: src/sheet/edit/Refs.cpp
-msgid "webPublishItems"
 msgstr ""
 
 #: src/pdf/Document.cpp
