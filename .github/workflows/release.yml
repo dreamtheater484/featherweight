@@ -56,12 +56,41 @@ jobs:
         run: ctest --test-dir build-release -C Release --output-on-failure
       - name: Smoke test with the standard PDFium (no V8)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          foreach ($f in 'tests\pdfs\text.pdf', 'tests\pdfs\form.pdf', 'tests\office\layout\report.docx') {
+          function Snap([string]$exe, [string]$file) {
             Remove-Item smoke.png -ErrorAction SilentlyContinue
-            $p = Start-Process -FilePath build-release\Release\Featherweight.exe -ArgumentList '--snapshot','smoke.png',$f -PassThru -Wait
-            if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.png)) { throw "snapshot of $f failed ($($p.ExitCode))" }
+            $p = Start-Process -FilePath $exe -ArgumentList '--snapshot', 'smoke.png', $file -PassThru -Wait
+            if ($p.ExitCode -eq 0 -and (Test-Path smoke.png)) { return "ok" } else { return "failed ($($p.ExitCode))" }
           }
+          $failed = @()
+          foreach ($f in 'tests\pdfs\text.pdf', 'tests\pdfs\form.pdf', 'tests\office\layout\report.docx') {
+            $r = Snap build-release\Release\Featherweight.exe $f
+            Write-Host "$f : $r"
+            if ($r -ne "ok") { $failed += $f }
+          }
+          if (-not $failed) { exit 0 }
+          # A crash: its stack (cdb, at the second-chance exception), then the same file with the V8 build and with 4.0.
+          $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\${{ matrix.arch }}\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          Set-Content cdb-commands.txt "sxd -c2 `"kn 60; .ecxr; kn 60; q`" av`ng"
+          New-Item -ItemType Directory -Force v8test | Out-Null
+          Copy-Item build-release\Release\Featherweight.exe v8test\
+          Copy-Item build-release\Release\pdfium-v8.dll v8test\pdfium.dll
+          gh release download v4.0.0 -R "${{ github.repository }}" -p "Featherweight-4.0.0-Portable.zip" -D v40 --clobber
+          if (Test-Path v40\Featherweight-4.0.0-Portable.zip) { Expand-Archive v40\Featherweight-4.0.0-Portable.zip v40\app -Force }
+          foreach ($f in $failed) {
+            Write-Host "== $f"
+            if ($cdb) {
+              $p = Start-Process $cdb.FullName -ArgumentList '-G', '-lines', '-y', "$PWD\build-release\Release", '-cf', "$PWD\cdb-commands.txt",
+                "$PWD\build-release\Release\Featherweight.exe", '--snapshot', "$PWD\smoke.png", "$PWD\$f" -NoNewWindow -PassThru -RedirectStandardOutput cdb.txt
+              if (-not $p.WaitForExit(180000)) { $p.Kill() }
+              Get-Content cdb.txt | Select-Object -Last 150 | Out-Host
+            } else { Write-Host "No cdb on this runner" }
+            Write-Host "with the V8 PDFium: $(Snap v8test\Featherweight.exe $f)"
+            if (Test-Path v40\app\Featherweight.exe) { Write-Host "with 4.0.0: $(Snap v40\app\Featherweight.exe $f)" }
+          }
+          throw "snapshot failed: $($failed -join ', ')"
       - name: Stage the program files
         shell: pwsh
         run: |
