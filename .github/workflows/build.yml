@@ -119,6 +119,27 @@ jobs:
           path: budgets*.json
           if-no-files-found: ignore
 
+  # Windows on ARM (f1-ship): the same build and unit tests on GitHub's arm64 runner.
+  build-arm64:
+    name: arm64 (build and ctest)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: third_party/pdfium
+          key: pdfium-arm64-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build -A ARM64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
   fuzz:
     # Short fuzz runs (plan §10, §12): each target for 60 s, seeded from tests/fuzz/seeds and the
     # office corpus, with AddressSanitizer. A crash fails the job and uploads the input that caused

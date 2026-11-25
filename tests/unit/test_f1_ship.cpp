@@ -329,7 +329,8 @@ class Sandbox {
   Sandbox() {
     wchar_t dir[MAX_PATH];
     GetTempPathW(MAX_PATH, dir);
-    root_ = std::wstring(dir) + L"fw-updater-e2e-" + std::to_wstring(GetCurrentProcessId());
+    static int n = 0;
+    root_ = std::wstring(dir) + L"fw-updater-e2e-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++n);
     DeleteTree(root_);
     CreateDirectoryW(root_.c_str(), nullptr);
     CreateDirectoryW(Install().c_str(), nullptr);
@@ -371,72 +372,129 @@ Updater::Options InstallOptions() {
   return o;
 }
 
+
+// A signed install (publisher A) and a release folder; the tests below publish a file and run the updater on it.
+struct SignedInstall {
+  TestCert a{L"publisher-a.pfx"}, b{L"publisher-b.pfx"};
+  TempCopy signedA{L"e2e-a"}, signedB{L"e2e-b"}, plain{L"e2e-plain"};
+  Signature running;
+  Sandbox box;
+  bool ok = false;
+  SignedInstall() {
+    if (!a.Ok() || !b.Ok() || !a.Sign(signedA.Path()) || !b.Sign(signedB.Path())) return;
+    updater::SetTestRootsForTesting({a.Thumbprint(), b.Thumbprint()});
+    running = updater::ReadSignature(signedA.Path());
+    Updater::SetRunningSignatureForTesting(&running);
+    ok = running.state == Signature::State::Trusted && running.fileVersion == L"9.9.9" &&
+         running.productName == L"Featherweight";
+  }
+  ~SignedInstall() { updater::SetTestRootsForTesting({}); }
+};
+
 }  // namespace
 
-TEST(UpdaterInstallsOnlyTrustedFiles) {
-  TestCert a(L"publisher-a.pfx"), b(L"publisher-b.pfx");
-  CHECK(a.Ok() && b.Ok());
-  if (!a.Ok() || !b.Ok()) return;
-  TempCopy signedA(L"e2e-a"), signedB(L"e2e-b"), plain(L"e2e-plain");
-  CHECK(a.Sign(signedA.Path()) && b.Sign(signedB.Path()));
-  updater::SetTestRootsForTesting({a.Thumbprint(), b.Thumbprint()});
-  const Signature running = updater::ReadSignature(signedA.Path());  // this install is signed by A
-  CHECK(running.state == Signature::State::Trusted);
-  CHECK(running.fileVersion == L"9.9.9" && running.productName == L"Featherweight");
-
-  Sandbox box;
-  Updater::SetRunningSignatureForTesting(&running);
-  const std::string old = box.InstalledHash();
-
-  box.Publish(plain.Path(), "v9.9.9");  // unsigned: refused, nothing changes, nothing left behind
+TEST(UpdaterRefusesUnsigned) {
+  SignedInstall s;
+  CHECK(s.ok);
+  const std::string old = s.box.InstalledHash();
+  s.box.Publish(s.plain.Path(), "v9.9.9");  // unsigned: refused, nothing changes, nothing left behind
   Updater::Result r = Updater::RunForTesting(InstallOptions());
   CHECK(r.status == Updater::Status::Failed && r.error.find(L"isn’t signed") != std::wstring::npos);
-  CHECK(box.InstalledHash() == old && !box.Leftovers());
+  CHECK(s.box.InstalledHash() == old && !s.box.Leftovers());
 
-  box.Publish(signedB.Path(), "v9.9.9");  // another publisher: refused
-  r = Updater::RunForTesting(InstallOptions());
-  CHECK(r.status == Updater::Status::Failed && r.error.find(L"another publisher") != std::wstring::npos);
-  CHECK(box.InstalledHash() == old && !box.Leftovers());
+  // An unsigned install (4.0, or 4.1 before SignPath) keeps the SHA-256 check instead.
+  const Signature unsignedRunning;
+  Updater::SetRunningSignatureForTesting(&unsignedRunning);
+  util::WriteFileAtomic(s.box.Release() + L"\\SHA256SUMS.txt", std::string(64, '0') + "  Featherweight.exe\n");
+  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Failed);  // the hash doesn't match
+  CHECK(s.box.InstalledHash() == old && !s.box.Leftovers());
+  s.box.Publish(s.plain.Path(), "v9.9.9");
+  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Installed);
+  CHECK(s.box.InstalledHash() == util::Sha256File(s.plain.Path()));
+}
 
-  box.Publish(signedA.Path(), "v9.9.8");  // signed, but not the release's version: refused (no replayed old build)
-  r = Updater::RunForTesting(InstallOptions());
-  CHECK(r.status == Updater::Status::Failed && r.error.find(L"version") != std::wstring::npos);
-  CHECK(box.InstalledHash() == old);
+TEST(UpdaterRefusesOtherPublisher) {
+  SignedInstall s;
+  CHECK(s.ok);
+  TestCert impostor(L"impostor-a.pfx");
+  TempCopy fake(L"e2e-impostor"), tampered(L"e2e-tampered");
+  CHECK(impostor.Sign(fake.Path()) && s.a.Sign(tampered.Path()) && tampered.Tamper());
+  const std::string old = s.box.InstalledHash();
+  struct Case {
+    const std::wstring* file;
+    const char* tag;
+    const wchar_t* why;
+  } cases[] = {
+      {&s.signedB.Path(), "v9.9.9", L"another publisher"},
+      {&fake.Path(), "v9.9.9", L"signature isn’t valid"},  // A's name on a certificate A never had
+      {&tampered.Path(), "v9.9.9", L"signature isn’t valid"},
+      {&s.signedA.Path(), "v9.9.8", L"release’s version"},  // no older signed build passed off as new
+  };
+  for (const Case& c : cases) {
+    s.box.Publish(*c.file, c.tag);
+    Updater::Result r = Updater::RunForTesting(InstallOptions());
+    CHECK(r.status == Updater::Status::Failed && r.error.find(c.why) != std::wstring::npos);
+    CHECK(s.box.InstalledHash() == old && !s.box.Leftovers());
+  }
+  s.box.Publish(s.signedA.Path(), "v9.9.9");  // the same publisher, product and version: installed
+  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Installed);
+  CHECK(s.box.InstalledHash() == util::Sha256File(s.signedA.Path()));
+}
 
-  Updater::Options skipped = InstallOptions();  // a skipped version is offered, never installed by itself
+TEST(UpdaterChannels) {
+  SignedInstall s;
+  CHECK(s.ok);
+  // Stable reads latest.json (GitHub's /releases/latest), beta the list (/releases) with pre-releases.
+  s.box.Publish(s.signedA.Path(), "v9.9.9");
+  std::string base = fw::WideToUtf8(s.box.Release());
+  for (char& c : base) c = c == '\\' ? '/' : c;
+  const std::string asset = "\"assets\":[{\"name\":\"Featherweight.exe\",\"browser_download_url\":\"file:///" + base +
+                            "/Featherweight.exe\"},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"file:///" +
+                            base + "/SHA256SUMS.txt\"}]";
+  util::WriteFileAtomic(s.box.Release() + L"\\latest.json", "{\"tag_name\":\"v4.0.0\",\"prerelease\":false}");
+  util::WriteFileAtomic(s.box.Release() + L"\\releases.json",
+                        "[{\"tag_name\":\"v9.9.10\",\"draft\":true},{\"tag_name\":\"v9.9.9\",\"prerelease\":true," + asset +
+                            "},{\"tag_name\":\"v4.0.0\",\"prerelease\":false}]");
+  Updater::Options stable = InstallOptions(), beta = InstallOptions();
+  beta.beta = true;
+  CHECK(Updater::RunForTesting(stable).status == Updater::Status::UpToDate);  // stable: nothing newer than 4.0
+  Updater::Result r = Updater::RunForTesting(beta);  // beta: the pre-release, never the draft
+  CHECK(r.status == Updater::Status::Installed && r.version == L"9.9.9");
+  CHECK(s.box.InstalledHash() == util::Sha256File(s.signedA.Path()));
+
+  // A skipped version (Skip this version, or a rollback) is offered but never installed by itself.
+  Sandbox again;
+  again.Publish(s.signedA.Path(), "v9.9.9");
+  Updater::Options skipped = InstallOptions();
   skipped.skippedVersion = L"9.9.9";
-  box.Publish(signedA.Path(), "v9.9.9");
   CHECK(Updater::RunForTesting(skipped).status == Updater::Status::Available);
-  CHECK(box.InstalledHash() == old);
+  CHECK(again.InstalledHash() == util::Sha256(std::string("the old build").data(), 13));
+}
 
-  r = Updater::RunForTesting(InstallOptions());  // the same publisher and version: installed, the old build kept
-  CHECK(r.status == Updater::Status::Installed);
-  CHECK(box.InstalledHash() == util::Sha256File(signedA.Path()));
-  CHECK(util::Sha256File(box.Install() + L"\\previous\\Featherweight.exe") == old);
+TEST(UpdaterRollback) {
+  SignedInstall s;
+  CHECK(s.ok);
+  const std::string old = s.box.InstalledHash();
+  CHECK(Updater::PreviousVersion().empty());
+  s.box.Publish(s.signedA.Path(), "v9.9.9");
+  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Installed);  // the old build kept
+  CHECK(util::Sha256File(s.box.Install() + L"\\previous\\Featherweight.exe") == old);
   CHECK(Updater::PreviousVersion() == FW_VERSION_WSTRING);
-
   std::wstring error;  // one rollback: the old build is back, previous\ is gone
   CHECK(Updater::RollBack(&error));
-  CHECK(box.InstalledHash() == old);
+  CHECK(s.box.InstalledHash() == old);
   CHECK(Updater::PreviousVersion().empty());
   CHECK(!Updater::RollBack(&error) && !error.empty());
   Updater::CleanupOldFiles();
-  CHECK(!util::FileExists(box.Install() + L"\\Featherweight.exe.old"));
-  updater::SetTestRootsForTesting({});
+  CHECK(!util::FileExists(s.box.Install() + L"\\Featherweight.exe.old"));
 }
 
-TEST(UpdaterUnsignedInstallKeepsTheHashCheck) {
-  TempCopy plain(L"e2e-unsigned");
-  Sandbox box;
-  const Signature unsignedRunning;  // 4.0, or 4.1 before SignPath
-  Updater::SetRunningSignatureForTesting(&unsignedRunning);
-  box.Publish(plain.Path(), "v9.9.9");
-  util::WriteFileAtomic(box.Release() + L"\\SHA256SUMS.txt", std::string(64, '0') + "  Featherweight.exe\n");
-  const std::string old = box.InstalledHash();
-  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Failed);  // the hash doesn't match
-  CHECK(box.InstalledHash() == old && !box.Leftovers());
-  box.Publish(plain.Path(), "v9.9.9");
-  CHECK(Updater::RunForTesting(InstallOptions()).status == Updater::Status::Installed);
-  CHECK(box.InstalledHash() == util::Sha256File(plain.Path()));
-  CHECK(Updater::RunForTesting(Updater::Options{}).status == Updater::Status::Available);  // nothing more to do
+TEST(PolicyUpdatesOff) {
+  policy::Values none, off, beta;
+  off.updatesOff = true;
+  beta.updateChannel = L"beta";
+  CHECK(updater::Allowed(none, false));
+  CHECK(!updater::Allowed(off, false));  // an administrator turned updates off
+  CHECK(!updater::Allowed(none, true));  // the Store updates a packaged copy
+  CHECK(updater::Allowed(beta, false));
 }

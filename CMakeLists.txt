@@ -22,6 +22,15 @@ configure_file(src/Version.h.in "${CMAKE_BINARY_DIR}/generated/Version.h" @ONLY)
 set(FW_COMPILE_OPTIONS /W4 /permissive- /utf-8 /Zc:__cplusplus /EHsc /MP)
 set(FW_DEFINITIONS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 
+# Reproducible builds (f1-ship, docs/reproducible-builds.md): the same source, toolchain and folder give the same
+# bytes. /Brepro replaces the timestamps in the objects and the PE header with hashes of the content, and the
+# exe names its PDB without the build folder.
+option(FW_REPRODUCIBLE "Byte-identical builds: no timestamps or build folders in the binaries" ON)
+if(FW_REPRODUCIBLE)
+  add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/Brepro>)
+  add_link_options(/Brepro /PDBALTPATH:%_PDB%)
+endif()
+
 # --- Pure logic (no UI, no PDFium): shared by the app and the unit tests ---
 add_library(fwcore STATIC
   src/core/Strings.cpp
@@ -75,6 +84,11 @@ set_target_properties(Featherweight PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<
 add_custom_command(TARGET Featherweight POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FW_PDFIUM_DIR}/bin/pdfium.dll" "$<TARGET_FILE_DIR:Featherweight>"
   COMMENT "Copying pdfium.dll")
+if(FW_PDFIUM_V8_DLL)  # f1-ship: release builds stage the script engine component beside it
+  add_custom_command(TARGET Featherweight POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FW_PDFIUM_V8_DLL}" "$<TARGET_FILE_DIR:Featherweight>/pdfium-v8.dll"
+    COMMENT "Copying pdfium-v8.dll (the form script engine component)")
+endif()
 
 # --- Unit tests ---
 if(FW_BUILD_TESTS)
@@ -96,6 +110,16 @@ if(FW_BUILD_TESTS)
     "FW_SOURCE_DIR=L\"${CMAKE_SOURCE_DIR}\"" "FW_PDFIUM_DLL=L\"${FW_PDFIUM_DIR}/bin/pdfium.dll\""
     "FW_PDFIUM_IS_V8=$<BOOL:${FW_WITH_V8}>")
   target_link_libraries(fw_tests PRIVATE winhttp wintrust crypt32 version)
+  # The gate reads these names (FeatherweightNotes\f1\gate-contract.md): each runs its own part of fw_tests.
+  foreach(_fw_case IN ITEMS updater_refuses_unsigned=UpdaterRefusesUnsigned updater_refuses_other_publisher=UpdaterRefusesOtherPublisher
+                            updater_channels=UpdaterChannels updater_rollback=UpdaterRollback policy_updates_off=PolicyUpdatesOff)
+    string(REPLACE "=" ";" _fw_case "${_fw_case}")
+    list(GET _fw_case 0 _fw_name)
+    list(GET _fw_case 1 _fw_filter)
+    add_test(NAME ${_fw_name} COMMAND fw_tests ${_fw_filter})
+    # fw_tests passes when no name matches, so each must show its own test passing.
+    set_tests_properties(${_fw_name} PROPERTIES PASS_REGULAR_EXPRESSION "\\[ ok \\] ${_fw_filter}" FAIL_REGULAR_EXPRESSION "FAILED")
+  endforeach()
 endif()
 
 # --- Office foundations (plan milestone D0): fwpkg, fwtool, corpus tests and fuzz targets ---

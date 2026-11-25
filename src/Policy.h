@@ -8,10 +8,11 @@
 // packaging/admx, which write HKLM\SOFTWARE\Policies\Featherweight. Read once, at the first use (the start).
 namespace policy {
 
-constexpr wchar_t kKey[] = L"SOFTWARE\\Policies\\Featherweight";
-constexpr wchar_t kDisableUpdates[] = L"DisableUpdates";  // REG_DWORD 1: no update checks, no updates
-constexpr wchar_t kUpdateChannel[] = L"UpdateChannel";    // REG_SZ "stable" or "beta"
-constexpr wchar_t kLanguage[] = L"Language";              // REG_SZ, a language tag such as "de" or "nl-NL"
+// The key and value names (packaging\admx\Featherweight.admx writes the same; a unit test checks).
+extern const wchar_t kKey[];             // SOFTWARE\Policies\Featherweight
+extern const wchar_t kDisableUpdates[];  // REG_DWORD 1: no update checks, no updates
+extern const wchar_t kUpdateChannel[];   // REG_SZ "stable" or "beta"
+extern const wchar_t kLanguage[];        // REG_SZ: en, nl, de, fr or es
 
 struct Values {
   bool updatesOff = false;

@@ -291,6 +291,8 @@ const fw::JsonValue* PickRelease(const fw::JsonValue& answer, bool beta) {
   return best;
 }
 
+bool Allowed(const policy::Values& policy, bool inPackage) { return !policy.updatesOff && !inPackage; }
+
 bool IsScriptEngine(const std::wstring& pdfiumPath) {
   HANDLE file = CreateFileW(pdfiumPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                             0, nullptr);

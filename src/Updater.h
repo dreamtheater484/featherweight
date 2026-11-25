@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "Policy.h"
 #include "core/Json.h"
 
 // The updater's trust rule (f1-ship; plan decision "the updater trusts what it is"). Once the running exe is
@@ -109,4 +110,7 @@ namespace updater {
 const fw::JsonValue* PickRelease(const fw::JsonValue& answer, bool beta);
 // Whether a pdfium.dll is the build with form scripts (V8 and XFA): it exports FPDF_LoadXFA.
 bool IsScriptEngine(const std::wstring& pdfiumPath);
+// Whether Featherweight checks for updates and updates itself: not when an administrator's policy turns updates off,
+// and not inside an MSIX package, which the Store updates.
+bool Allowed(const policy::Values& policy, bool inPackage);
 }  // namespace updater

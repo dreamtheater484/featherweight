@@ -4,6 +4,11 @@
 
 namespace policy {
 
+const wchar_t kKey[] = L"SOFTWARE\\Policies\\Featherweight";
+const wchar_t kDisableUpdates[] = L"DisableUpdates";
+const wchar_t kUpdateChannel[] = L"UpdateChannel";
+const wchar_t kLanguage[] = L"Language";
+
 Values Read(HKEY root, const wchar_t* subkey) {
   Values v;
   HKEY key = nullptr;

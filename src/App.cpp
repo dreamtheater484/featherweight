@@ -2607,7 +2607,7 @@ void App::MakeDefaultApp(fw::FileKind kind) {
 void App::MaybeCheckForUpdates(bool manual) {
   if (snapshot_ || updater_.Busy()) return;
   // f1-ship: an administrator's policy turns updates off; inside an MSIX package the Store updates the app.
-  if (policy::Get().updatesOff || Updater::InPackage()) {
+  if (!updater::Allowed(policy::Get(), Updater::InPackage())) {
     if (manual)
       banner_.Show(BannerKind::Info, policy::Get().updatesOff ? L"Updates are turned off by your organization."
                                                               : L"The Microsoft Store keeps Featherweight up to date.", {}, 6000);
