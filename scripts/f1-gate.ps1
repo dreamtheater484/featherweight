@@ -1074,6 +1074,8 @@ Check "docs.site" quick "The website (site\): help, known issues, the privacy st
 Check "docs.notes" quick "The release notes: the size and timing ledger lines, the report links" "Present; scan links wait for step 5" {
   $cm = Get-Content (Join-Path $root "CMakeLists.txt") -Raw
   $ver = if ($cm -match 'project\(Featherweight VERSION (\d+\.\d+\.\d+)') { $Matches[1] } else { "" }
+  # The tag, the file names and the manifests come from CMake's version, so it must be this gate's.
+  if (-not $ver.StartsWith("$Version.")) { return Failed "CMakeLists.txt says VERSION ${ver}; $Version needs project(Featherweight VERSION $Version.0) before the final run (the notes, the manifests and the tag follow it)" ([ordered]@{ cmakeVersion = $ver }) }
   $p = @("docs\release-notes\$ver.md", "packaging\release-notes.md", "docs\release-notes.md") | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $p) { return NotBuilt "f1-ship" "the release notes (docs\release-notes\$ver.md: see gate-contract.md)" }
   $t = Get-Content $p -Raw -Encoding UTF8
