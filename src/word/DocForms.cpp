@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "doc/edit/Forms.h"
 #include "ui/Theme.h"
 #include "word/DocView.h"
@@ -35,14 +36,14 @@ bool Chosen(ControlKind k) { return k == ControlKind::CheckBox || k == ControlKi
 struct Insertable {
   int cmd;
   ControlKind kind;
-  const wchar_t* label;
+  UiText label;
 };
 constexpr Insertable kInserts[] = {
-    {CmdInsertRichText, ControlKind::RichText, L"Rich text content control"},
-    {CmdInsertPlainText, ControlKind::PlainText, L"Plain text content control"},
-    {CmdInsertCheckBox, ControlKind::CheckBox, L"Check box content control"},
-    {CmdInsertDropDown, ControlKind::DropDown, L"Drop-down list content control"},
-    {CmdInsertDatePicker, ControlKind::Date, L"Date picker content control"},
+    {CmdInsertRichText, ControlKind::RichText, N_(L"Rich text content control")},
+    {CmdInsertPlainText, ControlKind::PlainText, N_(L"Plain text content control")},
+    {CmdInsertCheckBox, ControlKind::CheckBox, N_(L"Check box content control")},
+    {CmdInsertDropDown, ControlKind::DropDown, N_(L"Drop-down list content control")},
+    {CmdInsertDatePicker, ControlKind::Date, N_(L"Date picker content control")},
 };
 
 std::wstring Wide(std::u16string_view s) { return std::wstring(s.begin(), s.end()); }
@@ -99,7 +100,7 @@ bool DocView::ExecuteForms(int cmd) {
     }
     // Otherwise where the selection starts. The new control shows its placeholder, selected, as in
     // Word (the caret goes after a check box).
-    editor_->BeginGroup(u"Content control");
+    editor_->BeginGroup(T(u"Content control"));
     Result r;
     r.caret = SelFrom();
     if (!items.empty()) r = editor_->Delete(SelFrom(), SelTo());
@@ -245,7 +246,7 @@ void DocView::FormMenu(fw::doc::Pos at) {
   std::vector<fw::doc::DateTime> days;
   if (c && c->kind == ControlKind::Date) {
     const std::u16string picture = c->dateFormat.empty() ? u"d MMMM yyyy" : c->dateFormat;
-    const std::pair<int, const wchar_t*> choices[] = {{0, L"Today"}, {-1, L"Yesterday"}, {1, L"Tomorrow"}};
+    const std::pair<int, const wchar_t*> choices[] = {{0, T(L"Today")}, {-1, T(L"Yesterday")}, {1, T(L"Tomorrow")}};
     for (const auto& [offset, name] : choices) {
       days.push_back(Day(offset));
       const std::wstring label = std::wstring(name) + L"\t" + Wide(fw::doc::FormatDateTime(days.back(), picture, false, c->dateLang));

@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/Shapes.h"
 #include "doc/edit/Watermark.h"
 #include "ui/Controls.h"
@@ -42,7 +43,7 @@ class ShapePanel : public RowsPanel {
   };
   explicit ShapePanel(Actions actions);
 
-  std::wstring Title() const override { return L"Shape"; }
+  std::wstring Title() const override { return T(L"Shape"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
 
   void Show(const std::optional<fw::doc::edit::ShapeInfo>& info, const std::wstring& why = {});
@@ -72,7 +73,7 @@ class WatermarkPanel : public RowsPanel {
   };
   explicit WatermarkPanel(Actions actions);
 
-  std::wstring Title() const override { return L"Watermark"; }
+  std::wstring Title() const override { return T(L"Watermark"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
 
   void Show(const fw::doc::edit::WatermarkInfo& info, bool editable);

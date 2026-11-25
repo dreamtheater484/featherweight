@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/DrawingEdit.h"
 #include "doc/model/Internal.h"
@@ -74,32 +75,32 @@ bool Load(const Editor& editor, uint32_t i, Frame& f, std::u16string& why) {
   const Document& doc = editor.Doc();
   if (!editor.CanEdit(&why)) return false;
   if (i >= doc.Drawings().size()) {
-    why = u"That picture isn't in the document any more.";
+    why = T(u"That picture isn't in the document any more.");
     return false;
   }
   const Drawing& d = doc.Drawings()[i];
   if (d.pos.para == kNone || !d.node) {
-    why = u"That picture isn't in the document any more.";
+    why = T(u"That picture isn't in the document any more.");
     return false;
   }
   if (d.kind != DrawingKind::DrawingML) {
     why = d.kind == DrawingKind::Vml || d.kind == DrawingKind::Object
-              ? u"This picture is in an older format, so it can't be changed. You can delete it and insert it again."
-              : u"Only pictures can be changed.";
+              ? T(u"This picture is in an older format, so it can't be changed. You can delete it and insert it again.")
+              : T(u"Only pictures can be changed.");
     return false;
   }
   if (d.displayOnly || !d.keptXml.empty()) {
-    why = u"This picture has a second version for older Word versions, so it can't be changed yet.";
+    why = T(u"This picture has a second version for older Word versions, so it can't be changed yet.");
     return false;
   }
   const Part* part = PartOf(doc, d.part);
   if (!part || !part->Editable() || !part->writable) {
-    why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
+    why = T(u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.");
     return false;
   }
   const Story& story = doc.Stories()[doc.Para(d.pos.para).story];
   if (story.drawing != kNone) {
-    why = u"Pictures in a text box can't be changed yet.";
+    why = T(u"Pictures in a text box can't be changed yet.");
     return false;
   }
   f.fragments = doc.Store().FragmentsCopy(d.node.Raw().node);
@@ -116,13 +117,13 @@ bool Load(const Editor& editor, uint32_t i, Frame& f, std::u16string& why) {
     }
   }
   if (!found) {
-    why = u"Only pictures can be changed.";
+    why = T(u"Only pictures can be changed.");
     return false;
   }
   pugi::xml_node data = Child(Child(f.root, kA, "graphic"), kA, "graphicData");
   f.pic = Child(data, kPic, "pic");
   if (!f.pic) {
-    why = u"Only pictures can be changed. This is a shape, a chart or another kind of drawing.";
+    why = T(u"Only pictures can be changed. This is a shape, a chart or another kind of drawing.");
     return false;
   }
   f.wp = PrefixOf(f.root);
@@ -442,8 +443,8 @@ bool ToInline(Frame& f, std::u16string& why) {
                                 std::find_if(std::begin(kWraps), std::end(kWraps), [&](const char* w) { return local == w; }) != std::end(kWraps))) ||
                  (ns == kA && local == "graphic") || (ns == kWp14 && (local == "sizeRelH" || local == "sizeRelV"));
     if (!known) {
-      why = f.pic ? u"This picture has settings Featherweight doesn't know, so it stays where it is."
-                    : u"This shape has settings Featherweight doesn't know, so it stays where it is.";
+      why = f.pic ? T(u"This picture has settings Featherweight doesn't know, so it stays where it is.")
+                    : T(u"This shape has settings Featherweight doesn't know, so it stays where it is.");
       return false;
     }
   }
@@ -476,7 +477,7 @@ Result ChangeDrawing(Editor& editor, uint32_t i, const char* name, const std::fu
   const Drawing& was = doc.Drawings()[i];
   if (!edit(f, why)) return Fail(why);
   std::string xml = Serialize(f);
-  if (!XmlSafe(xml)) return Fail(u"That can't be written in the document.");
+  if (!XmlSafe(xml)) return Fail(T(u"That can't be written in the document."));
   auto step = std::make_shared<DrawingStep>();
   step->doc = &doc;
   step->drawing = i;
@@ -734,21 +735,21 @@ Result Pictures::Insert(Pos at, const std::vector<uint8_t>& bytes, Emu maxWidth,
   Document& doc = const_cast<Document&>(editor_.Doc());
   std::u16string why;
   if (!editor_.CanEdit(&why)) return Fail(why);
-  if (at.para >= doc.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  if (at.para >= doc.Paragraphs().size()) return Fail(T(u"That place isn't in the document."));
   const Story& story = doc.Stories()[doc.Para(at.para).story];
   const uint32_t storyPart = story.part;
   const Part* part = PartOf(doc, storyPart);
-  if (!part || story.drawing != kNone) return Fail(u"A picture can't go here.");
-  if (Strict(*part)) return Fail(u"Pictures can't be added to documents saved as Strict Open XML yet.");
-  if (!Accepts(bytes)) return Fail(u"This isn't a picture Featherweight can add. Use a PNG, JPEG, GIF, BMP, TIFF or SVG file.");
+  if (!part || story.drawing != kNone) return Fail(T(u"A picture can't go here."));
+  if (Strict(*part)) return Fail(T(u"Pictures can't be added to documents saved as Strict Open XML yet."));
+  if (!Accepts(bytes)) return Fail(T(u"This isn't a picture Featherweight can add. Use a PNG, JPEG, GIF, BMP, TIFF or SVG file."));
 
   // Read it as anything from outside is: its header, within the limits.
   std::string error;
   std::shared_ptr<draw::Image> image = draw::Image::Open(bytes, draw::ImageLimits::Default(), &error);
-  if (!image) return Fail(error.empty() ? u"This picture can't be read." : Utf16(error));
+  if (!image) return Fail(error.empty() ? T(u"This picture can't be read.") : Utf16(error));
   draw::Size natural = image->NaturalSize();
   if (!(natural.width > 0 && natural.height > 0 && std::isfinite(natural.width) && std::isfinite(natural.height)))
-    return Fail(u"This picture has no size.");
+    return Fail(T(u"This picture has no size."));
 
   // What goes in the package.
   Media main, svg;
@@ -771,11 +772,11 @@ Result Pictures::Insert(Pos at, const std::vector<uint8_t>& bytes, Emu maxWidth,
       int w = std::max(1, static_cast<int>(natural.width * k)), h = std::max(1, static_cast<int>(natural.height * k));
       std::shared_ptr<const draw::Bitmap> px = image->Vector() ? draw::RasterizeVectorImage(*image->Vector(), w, h) : nullptr;
       std::vector<uint8_t> png = px ? EncodePng(*px) : std::vector<uint8_t>{};
-      if (png.empty()) return Fail(u"This SVG picture can't be drawn, so it can't be added.");
+      if (png.empty()) return Fail(T(u"This SVG picture can't be drawn, so it can't be added."));
       main = {std::move(png), "png", "image/png"};
       break;
     }
-    default: return Fail(u"This isn't a picture Featherweight can add.");
+    default: return Fail(T(u"This isn't a picture Featherweight can add."));
   }
 
   // Its size: its own, made smaller to fit the column.
@@ -819,19 +820,19 @@ Result Pictures::Insert(Pos at, const std::vector<uint8_t>& bytes, Emu maxWidth,
       std::to_string(cy) + "\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>" +
       "</pic:pic></a:graphicData></a:graphic></wp:inline>";
   pkg::XmlDom dom;
-  if (!dom.Parse(xml, doc.Package().GetLimits()).Ok()) return Fail(u"This picture can't be added.");
+  if (!dom.Parse(xml, doc.Package().GetLimits()).Ok()) return Fail(T(u"This picture can't be added."));
   Drawing info;
   info.kind = DrawingKind::DrawingML;
   docx::ReadDrawingFrame(dom.Root(), info);
 
-  editor_.BeginGroup(u"Insert picture");
+  editor_.BeginGroup(T(u"Insert picture"));
   Result r = editor_.InsertDrawing(at, xml, info);
   if (r && step->Any()) {
     step->parts = {storyPart};
     step->first = at.para;
     step->count = 1;
     step->Redo();
-    editor_.RecordStep(u"Insert picture", step, at);
+    editor_.RecordStep(T(u"Insert picture"), step, at);
   }
   editor_.EndGroup();
   if (r) r.caret = at;  // the picture's own character: the view selects it
@@ -870,7 +871,7 @@ Result Pictures::Resize(uint32_t drawing, Emu cx, Emu cy) {
 }
 
 Result Pictures::Rotate(uint32_t drawing, double degrees) {
-  if (!std::isfinite(degrees)) return Fail(u"That isn't an angle.");
+  if (!std::isfinite(degrees)) return Fail(T(u"That isn't an angle."));
   double d = std::fmod(std::fmod(degrees, 360.0) + 360.0, 360.0);
   int64_t rot = std::llround(d * 60000) % 21600000;
   return ChangeDrawing(editor_, drawing, "Rotate picture", [&](Frame& f, std::u16string&) {
@@ -881,10 +882,10 @@ Result Pictures::Rotate(uint32_t drawing, double degrees) {
 }
 
 Result Pictures::SetCrop(uint32_t drawing, const Crop& crop) {
-  if (!ValidCrop(crop)) return Fail(u"That crop would leave nothing of the picture.");
+  if (!ValidCrop(crop)) return Fail(T(u"That crop would leave nothing of the picture."));
   return ChangeDrawing(editor_, drawing, "Crop picture", [&](Frame& f, std::u16string& why) {
     if (!Child(f.pic, kPic, "blipFill")) {
-      why = u"This picture can't be cropped.";
+      why = T(u"This picture can't be cropped.");
       return false;
     }
     Crop old = CropOf(f);
@@ -903,7 +904,7 @@ Result Pictures::SetCrop(uint32_t drawing, const Crop& crop) {
 
 Result Pictures::SetWrap(uint32_t drawing, Wrap wrap, Emu x, Emu y) {
   const Document& doc = editor_.Doc();
-  return ChangeDrawing(editor_, drawing, wrap == Wrap::Inline ? "In line with text" : "Wrap text", [&](Frame& f, std::u16string& why) {
+  return ChangeDrawing(editor_, drawing, wrap == Wrap::Inline ? T("In line with text") : "Wrap text", [&](Frame& f, std::u16string& why) {
     bool inlineNow = pkg::LocalNameOf(f.root) == "inline";
     if (wrap == Wrap::Inline) return inlineNow || ToInline(f, why);
     if (inlineNow) ToAnchor(f, doc, wrap, x.Value(), y.Value());
@@ -920,14 +921,14 @@ static void NewDocPrId(const Document& doc, Frame& f) {
 
 Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos> anchor) {
   const Document& doc = editor_.Doc();
-  if (drawing >= doc.Drawings().size()) return Fail(u"That picture isn't in the document any more.");
+  if (drawing >= doc.Drawings().size()) return Fail(T(u"That picture isn't in the document any more."));
   Pos was = doc.Drawings()[drawing].pos;
   bool reanchor = anchor && anchor->para != kNone && was.para != kNone && anchor->para != was.para &&
                   doc.Para(anchor->para).story == doc.Para(was.para).story;
   if (!reanchor) {
     return ChangeDrawing(editor_, drawing, "Move picture", [&](Frame& f, std::u16string& why) {
       if (pkg::LocalNameOf(f.root) != "anchor") {
-        why = u"A picture in line with the text moves with it.";
+        why = T(u"A picture in line with the text moves with it.");
         return false;
       }
       SetPosition(f, x.Value(), y.Value());
@@ -938,13 +939,13 @@ Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos>
   Frame f;
   std::u16string why;
   if (!Load(editor_, drawing, f, why)) return Fail(why);
-  if (pkg::LocalNameOf(f.root) != "anchor") return Fail(u"A picture in line with the text moves with it.");
+  if (pkg::LocalNameOf(f.root) != "anchor") return Fail(T(u"A picture in line with the text moves with it."));
   SetPosition(f, x.Value(), y.Value());
   NewDocPrId(doc, f);
   std::string xml = Serialize(f);
   Drawing handle = HandleFor(doc.Drawings()[drawing], f.root);
   Pos to = *anchor;
-  editor_.BeginGroup(u"Move picture");
+  editor_.BeginGroup(T(u"Move picture"));
   Result r = editor_.InsertDrawing(to, xml, handle);
   if (r) {
     Pos old = was;
@@ -965,16 +966,16 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
   Frame f;
   std::u16string why;
   if (!Load(editor_, drawing, f, why)) return Fail(why);
-  if (pkg::LocalNameOf(f.root) != "inline") return Fail(u"Drag a floating picture to place it.");
+  if (pkg::LocalNameOf(f.root) != "inline") return Fail(T(u"Drag a floating picture to place it."));
   Pos was = doc.Drawings()[drawing].pos;
-  if (to.para >= doc.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  if (to.para >= doc.Paragraphs().size()) return Fail(T(u"That place isn't in the document."));
   // Its r:embed names a relationship of its own part: it stays in that part (the main text, a
   // header or footer, the notes), and out of text boxes, as Insert does.
   const Story& from = doc.Stories()[doc.Para(was.para).story];
   const Story& into = doc.Stories()[doc.Para(to.para).story];
   if (into.part != from.part)
-    return Fail(u"A picture can't be moved between the main text, a header or footer, and the notes. Copy it and paste it there.");
-  if (into.drawing != kNone) return Fail(u"A picture can't go here.");
+    return Fail(T(u"A picture can't be moved between the main text, a header or footer, and the notes. Copy it and paste it there."));
+  if (into.drawing != kNone) return Fail(T(u"A picture can't go here."));
   if (to.para == was.para && (to.offset == was.offset || to.offset == was.offset + 1)) {
     Result r;
     r.caret = was;
@@ -983,7 +984,7 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
   NewDocPrId(doc, f);
   std::string xml = Serialize(f);
   Drawing handle = HandleFor(doc.Drawings()[drawing], f.root);
-  editor_.BeginGroup(u"Move picture");
+  editor_.BeginGroup(T(u"Move picture"));
   Result r = editor_.InsertDrawing(to, xml, handle);
   Pos final = to;
   if (r) {
@@ -1038,7 +1039,7 @@ Result Pictures::ResetSize(uint32_t drawing) {
     Frame f;
     std::u16string why;
     if (!Load(editor_, drawing, f, why)) return Fail(why);
-    return Fail(u"This picture's own size can't be read.");
+    return Fail(T(u"This picture's own size can't be read."));
   }
   return ChangeDrawing(editor_, drawing, "Reset picture", [&](Frame& f, std::u16string&) {
     SetCropXml(f, Crop{});

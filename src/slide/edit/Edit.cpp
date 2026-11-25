@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/Journal.h"
@@ -591,9 +592,9 @@ std::string Editor::Impl::SlidePart(size_t index) const {
 }
 
 Result Editor::Impl::CheckSlides(const std::vector<size_t>& slides, size_t count) const {
-  if (slides.empty()) return Result::Fail(u"No slides are selected.");
+  if (slides.empty()) return Result::Fail(T(u"No slides are selected."));
   for (size_t s : slides) {
-    if (s >= count) return Result::Fail(u"That slide isn't in the presentation.");
+    if (s >= count) return Result::Fail(T(u"That slide isn't in the presentation."));
   }
   return {};
 }
@@ -788,7 +789,7 @@ DomPtr Editor::ModelDom(std::string_view part) const {
 bool Editor::CanEdit(std::u16string* why) const {
   pugi::xml_node root = impl_->Root(deck_.PresentationPart());
   if (!root || !Is(root, kP, "presentation")) {
-    if (why) *why = u"This presentation can't be edited, because its main part is damaged.";
+    if (why) *why = T(u"This presentation can't be edited, because its main part is damaged.");
     return false;
   }
   return true;
@@ -832,8 +833,8 @@ std::vector<std::u16string> Editor::RedoNames() const {
 
 Result Editor::Undo(size_t steps) {
   Impl& m = *impl_;
-  if (!m.open.empty() || m.calls) return Result::Fail(u"Finish the current edit first.");
-  if (m.undo.empty()) return Result::Fail(u"There's nothing to undo.");
+  if (!m.open.empty() || m.calls) return Result::Fail(T(u"Finish the current edit first."));
+  if (m.undo.empty()) return Result::Fail(T(u"There's nothing to undo."));
   m.typingOpen = false;
   Changes c;
   c.cause = Changes::Cause::Undo;
@@ -851,8 +852,8 @@ Result Editor::Undo(size_t steps) {
 
 Result Editor::Redo(size_t steps) {
   Impl& m = *impl_;
-  if (!m.open.empty() || m.calls) return Result::Fail(u"Finish the current edit first.");
-  if (m.redo.empty()) return Result::Fail(u"There's nothing to redo.");
+  if (!m.open.empty() || m.calls) return Result::Fail(T(u"Finish the current edit first."));
+  if (m.redo.empty()) return Result::Fail(T(u"There's nothing to redo."));
   m.typingOpen = false;
   Changes c;
   c.cause = Changes::Cause::Redo;
@@ -892,14 +893,14 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   Impl& m = *impl_;
   if (m.open.empty() || name.empty() || !name.starts_with("/") || m.Exists(name)) return {};
   if (source != "/" && !m.Exists(source)) return {};
-  Call call(*this, u"Insert");
+  Call call(*this, T(u"Insert"));
   bool xml = name.ends_with(".xml") || name.ends_with(".rels");
   std::shared_ptr<pkg::XmlDom> dom;
   if (xml) {
     dom = ParseDom(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
                    deck_.GetPackage().GetLimits(), name);
     if (!dom) {
-      call.End(Result::Fail(u"The part isn't well-formed XML."));
+      call.End(Result::Fail(T(u"The part isn't well-formed XML.")));
       return {};
     }
     m.PutXml(name, std::move(dom), contentType);
@@ -916,7 +917,7 @@ std::string Editor::AddRelationship(std::string_view source, std::string_view re
   Impl& m = *impl_;
   if (m.open.empty()) return {};
   if (!external && !m.Exists(target)) return {};
-  Call call(*this, u"Insert");
+  Call call(*this, T(u"Insert"));
   std::string id = m.AddRel(source, relType, target, external);
   call.End({});
   return id;
@@ -925,12 +926,12 @@ std::string Editor::AddRelationship(std::string_view source, std::string_view re
 bool Editor::WritePart(std::string_view name, std::vector<uint8_t> bytes) {
   Impl& m = *impl_;
   if (m.open.empty() || !m.Exists(name)) return false;
-  Call call(*this, u"Edit");
+  Call call(*this, T(u"Edit"));
   if (name.ends_with(".xml")) {
     auto dom = ParseDom(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
                         deck_.GetPackage().GetLimits(), name);
     if (!dom) {
-      call.End(Result::Fail(u"The part isn't well-formed XML."));
+      call.End(Result::Fail(T(u"The part isn't well-formed XML.")));
       return false;
     }
     m.PutXml(name, std::move(dom), {});

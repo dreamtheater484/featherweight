@@ -10,6 +10,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/numfmt/Parse.h"
@@ -656,7 +657,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     }
     const uint64_t count = uint64_t{sel.lastRow - sel.firstRow + 1} * (sel.lastCol - sel.firstCol + 1);
     if (count > 1000000) {
-      host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight fills at once.");
+      host_.ViewMessage(BannerKind::Warning, T(L"That's more cells than Featherweight fills at once."));
       return false;
     }
     std::vector<std::pair<CellAddr, edit::CellInput>> cells;
@@ -744,8 +745,8 @@ void WorkbookView::CheckCircular() {
   // Excel's warning, once when one appears (none while iterative calculation is on).
   if (now && !circular_)
     host_.ViewMessage(BannerKind::Warning,
-                      L"Circular reference: a formula refers to its own cell, directly or indirectly. It may calculate "
-                      L"incorrectly.");
+                      T(L"Circular reference: a formula refers to its own cell, directly or indirectly. It may calculate "
+                      L"incorrectly."));
   if (now != circular_) {
     circular_ = now;
     host_.ViewStateChanged();

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/Format.h"
 
 namespace fw::doc::edit {
@@ -135,7 +136,7 @@ Result ChangeCase(Editor& ed, Pos from, Pos to, TextCase c) {
   // run's formatting (the text before it), then the old letters go.
   std::sort(pieces.begin(), pieces.end(),
             [](const Piece& x, const Piece& y) { return x.para != y.para ? x.para > y.para : x.start > y.start; });
-  ed.BeginGroup(u"Change case");
+  ed.BeginGroup(T(u"Change case"));
   for (const Piece& piece : pieces) {
     const uint32_t end = piece.start + static_cast<uint32_t>(piece.text.size());
     Result r = ed.InsertText({piece.para, end}, piece.text);

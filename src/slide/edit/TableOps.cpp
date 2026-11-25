@@ -7,6 +7,7 @@
 #include <sstream>
 #include <utility>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 #include "slide/edit/TableGrid.h"
@@ -30,9 +31,9 @@ Result OnTable(Editor& ed, std::u16string name, size_t slide, uint32_t id, const
   Call call(ed, std::move(name));
   Editor::Impl& m = ed.Internals();
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   pugi::xml_node frame = TableFrame(m, part, id);
-  if (!frame) return call.End(Result::Fail(u"That isn't a table."));
+  if (!frame) return call.End(Result::Fail(T(u"That isn't a table.")));
   if (!change(frame)) return call.End(Result::Fail(why));
   m.Touched(part, id);
   return call.End({});
@@ -48,51 +49,51 @@ bool Repeat(int count, const std::function<bool(int)>& each) {
 }  // namespace
 
 Result Editor::InsertTableRows(size_t slide, uint32_t id, int at, int count) {
-  return OnTable(*this, u"Insert Rows", slide, id, u"Rows can't be added there.", [&](pugi::xml_node f) {
+  return OnTable(*this, T(u"Insert Rows"), slide, id, T(u"Rows can't be added there."), [&](pugi::xml_node f) {
     return Repeat(count, [&](int i) { return table::InsertRow(f, at + i); });
   });
 }
 
 Result Editor::DeleteTableRows(size_t slide, uint32_t id, int first, int count) {
-  return OnTable(*this, u"Delete Rows", slide, id, u"Those rows can't be deleted (a table keeps one row).",
+  return OnTable(*this, T(u"Delete Rows"), slide, id, T(u"Those rows can't be deleted (a table keeps one row)."),
                  [&](pugi::xml_node f) { return Repeat(count, [&](int) { return table::DeleteRow(f, first); }); });
 }
 
 Result Editor::InsertTableColumns(size_t slide, uint32_t id, int at, int count) {
-  return OnTable(*this, u"Insert Columns", slide, id, u"Columns can't be added there.", [&](pugi::xml_node f) {
+  return OnTable(*this, T(u"Insert Columns"), slide, id, T(u"Columns can't be added there."), [&](pugi::xml_node f) {
     return Repeat(count, [&](int i) { return table::InsertColumn(f, at + i); });
   });
 }
 
 Result Editor::DeleteTableColumns(size_t slide, uint32_t id, int first, int count) {
-  return OnTable(*this, u"Delete Columns", slide, id, u"Those columns can't be deleted (a table keeps one column).",
+  return OnTable(*this, T(u"Delete Columns"), slide, id, T(u"Those columns can't be deleted (a table keeps one column)."),
                  [&](pugi::xml_node f) { return Repeat(count, [&](int) { return table::DeleteColumn(f, first); }); });
 }
 
 Result Editor::MergeTableCells(size_t slide, uint32_t id, int row0, int col0, int row1, int col1) {
-  return OnTable(*this, u"Merge Cells", slide, id, u"Those cells can't be merged.",
+  return OnTable(*this, T(u"Merge Cells"), slide, id, T(u"Those cells can't be merged."),
                  [&](pugi::xml_node f) { return table::Merge(f, row0, col0, row1, col1); });
 }
 
 Result Editor::SplitTableCell(size_t slide, uint32_t id, int row, int col) {
-  return OnTable(*this, u"Split Cells", slide, id, u"That cell isn't merged.",
+  return OnTable(*this, T(u"Split Cells"), slide, id, T(u"That cell isn't merged."),
                  [&](pugi::xml_node f) { return table::Split(f, row, col); });
 }
 
 Result Editor::SetTableColumnWidth(size_t slide, uint32_t id, int column, float points) {
-  return OnTable(*this, u"Column Width", slide, id, u"That width can't be set.", [&](pugi::xml_node f) {
+  return OnTable(*this, T(u"Column Width"), slide, id, T(u"That width can't be set."), [&](pugi::xml_node f) {
     return points >= 1 && points <= 4000 && table::SetColumnWidth(f, column, std::llround(points * kEmu));
   });
 }
 
 Result Editor::SetTableRowHeight(size_t slide, uint32_t id, int row, float points) {
-  return OnTable(*this, u"Row Height", slide, id, u"That height can't be set.", [&](pugi::xml_node f) {
+  return OnTable(*this, T(u"Row Height"), slide, id, T(u"That height can't be set."), [&](pugi::xml_node f) {
     return points >= 1 && points <= 4000 && table::SetRowHeight(f, row, std::llround(points * kEmu));
   });
 }
 
 Result Editor::SetCellProps(size_t slide, uint32_t id, int row0, int col0, int row1, int col1, const CellPatch& patch) {
-  return OnTable(*this, u"Format Cells", slide, id, u"Those cells can't be formatted that way.", [&](pugi::xml_node f) {
+  return OnTable(*this, T(u"Format Cells"), slide, id, T(u"Those cells can't be formatted that way."), [&](pugi::xml_node f) {
     if (row0 > row1) std::swap(row0, row1);
     if (col0 > col1) std::swap(col0, col1);
     if (row0 < 0 || col0 < 0 || row1 >= table::Rows(f) || col1 >= table::Columns(f)) return false;

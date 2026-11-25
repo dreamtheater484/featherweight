@@ -647,6 +647,9 @@ enum Cmd : int {
   CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
   CmdRecentRemove,            // Remove from list
   CmdRecentLocation,          // Open file location
+  // F1, f1-lang: the interface's language, 4020-4039.
+  CmdLanguageWindows = 4020,  // File > Options: the language Windows shows its own interface in
+  CmdLanguage0 = 4021,        // ... + i: fw::lang::Languages()[i] (English, Nederlands, ...; up to 4029)
   // F1, f1-pdf: the PDF tab's page tools, OCR, signing, and sharing in every tab, 4040-4119.
   CmdPdfPagesPanel = 4040,    // the Pages panel: thumbnails to reorder, rotate and delete pages
   CmdPdfRotatePagesRight,     // the selected pages (or the current one), a quarter turn clockwise, in the file

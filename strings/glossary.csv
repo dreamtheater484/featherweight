@@ -1,0 +1,80 @@
+en,context,nl,de,fr,es
+File,ribbon tab,Bestand,Datei,Fichier,Archivo
+Home,ribbon tab,Start,Start,Accueil,Inicio
+Insert,ribbon tab and verb,Invoegen,Einfügen,Insertion,Insertar
+Design,ribbon tab,Ontwerpen,Entwurf,Création,Diseño
+Layout,ribbon tab (documents),Indeling,Layout,Mise en page,Disposición
+References,ribbon tab,Verwijzingen,Referenzen,Références,Referencias
+Review,ribbon tab,Controleren,Überprüfen,Révision,Revisar
+View,ribbon tab,Beeld,Ansicht,Affichage,Vista
+Page Layout,ribbon tab (spreadsheets),Pagina-indeling,Seitenlayout,Mise en page,Disposición de página
+Formulas,ribbon tab,Formules,Formeln,Formules,Fórmulas
+Data,ribbon tab,Gegevens,Daten,Données,Datos
+Transitions,ribbon tab,Overgangen,Übergänge,Transitions,Transiciones
+Animations,ribbon tab,Animaties,Animationen,Animations,Animaciones
+Slide Show,ribbon tab,Diavoorstelling,Bildschirmpräsentation,Diaporama,Presentación con diapositivas
+Ribbon,the band of tabs,Lint,Menüband,Ruban,Cinta de opciones
+Save,verb,Opslaan,Speichern,Enregistrer,Guardar
+Save as,verb,Opslaan als,Speichern unter,Enregistrer sous,Guardar como
+Open,verb,Openen,Öffnen,Ouvrir,Abrir
+Close,verb,Sluiten,Schließen,Fermer,Cerrar
+Print,verb,Afdrukken,Drucken,Imprimer,Imprimir
+Export,verb,Exporteren,Exportieren,Exporter,Exportar
+Options,File page,Opties,Optionen,Options,Opciones
+Undo,verb,Ongedaan maken,Rückgängig,Annuler,Deshacer
+Redo,verb,Opnieuw,Wiederholen,Rétablir,Rehacer
+Cut,verb,Knippen,Ausschneiden,Couper,Cortar
+Copy,verb,Kopiëren,Kopieren,Copier,Copiar
+Paste,verb,Plakken,Einfügen,Coller,Pegar
+Find,verb,Zoeken,Suchen,Rechercher,Buscar
+Replace,verb,Vervangen,Ersetzen,Remplacer,Reemplazar
+Bold,,Vet,Fett,Gras,Negrita
+Italic,,Cursief,Kursiv,Italique,Cursiva
+Underline,,Onderstrepen,Unterstrichen,Souligné,Subrayado
+Font,,Lettertype,Schriftart,Police,Fuente
+Font size,,Tekengrootte,Schriftgrad,Taille de police,Tamaño de fuente
+Paragraph,,Alinea,Absatz,Paragraphe,Párrafo
+Style,a named set of formatting,Stijl,Formatvorlage,Style,Estilo
+Table,,Tabel,Tabelle,Tableau,Tabla
+Picture,,Afbeelding,Bild,Image,Imagen
+Shape,,Vorm,Form,Forme,Forma
+Chart,,Grafiek,Diagramm,Graphique,Gráfico
+Text box,,Tekstvak,Textfeld,Zone de texte,Cuadro de texto
+Header,top of a page,Koptekst,Kopfzeile,En-tête,Encabezado
+Footer,bottom of a page,Voettekst,Fußzeile,Pied de page,Pie de página
+Page,,Pagina,Seite,Page,Página
+Section,part of a document,Sectie,Abschnitt,Section,Sección
+Comment,a remark in a thread,Opmerking,Kommentar,Commentaire,Comentario
+Note,a spreadsheet cell's note,Notitie,Notiz,Note,Nota
+Track changes,,Wijzigingen bijhouden,Änderungen nachverfolgen,Suivi des modifications,Control de cambios
+Spelling,,Spelling,Rechtschreibung,Orthographe,Ortografía
+Document,a Word file,Document,Dokument,Document,Documento
+Spreadsheet,the kind of file (a workbook),Werkmap,Arbeitsmappe,Classeur,Libro
+Workbook,,Werkmap,Arbeitsmappe,Classeur,Libro
+Sheet,,Blad,Blatt,Feuille,Hoja
+Cell,,Cel,Zelle,Cellule,Celda
+Row,,Rij,Zeile,Ligne,Fila
+Column,,Kolom,Spalte,Colonne,Columna
+Range,cells,Bereik,Bereich,Plage,Rango
+Formula,,Formule,Formel,Formule,Fórmula
+Function,,Functie,Funktion,Fonction,Función
+Filter,,Filter,Filter,Filtre,Filtro
+Sort,verb,Sorteren,Sortieren,Trier,Ordenar
+PivotTable,,Draaitabel,PivotTable,Tableau croisé dynamique,Tabla dinámica
+Conditional formatting,,Voorwaardelijke opmaak,Bedingte Formatierung,Mise en forme conditionnelle,Formato condicional
+Data validation,,Gegevensvalidatie,Datenüberprüfung,Validation des données,Validación de datos
+Freeze panes,,Titels blokkeren,Fenster fixieren,Figer les volets,Inmovilizar paneles
+Presentation,,Presentatie,Präsentation,Présentation,Presentación
+Slide,,Dia,Folie,Diapositive,Diapositiva
+Layout,a slide's layout,Indeling,Layout,Disposition,Diseño
+Theme,,Thema,Design,Thème,Tema
+Notes,a slide's speaker notes,Notities,Notizen,Notes,Notas
+Transition,,Overgang,Übergang,Transition,Transición
+Animation,,Animatie,Animation,Animation,Animación
+Placeholder,a slide's box for text or a picture,Tijdelijke aanduiding,Platzhalter,Espace réservé,Marcador de posición
+Blank,a new file with nothing in it,Leeg,Leer,Vide,En blanco
+Recent,recently opened files,Recent,Zuletzt verwendet,Récent,Reciente
+Zoom,,Zoomen,Zoom,Zoom,Zoom
+Dark mode,,Donkere modus,Dunkler Modus,Mode sombre,Modo oscuro
+Backup,a copy kept in case,Back-up,Sicherung,Sauvegarde,Copia de seguridad
+Featherweight,the app's name: never translated,Featherweight,Featherweight,Featherweight,Featherweight

@@ -8,6 +8,7 @@
 #include <cwchar>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Case.h"
 #include "doc/edit/Lists.h"
@@ -24,65 +25,65 @@ namespace {
 
 struct Named {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 // Labels and keys, for tooltips and command search, as Word names them.
 constexpr Named kNames[] = {
-    {CmdBold, L"Bold", L"Ctrl+B"},
-    {CmdItalic, L"Italic", L"Ctrl+I"},
-    {CmdUnderline, L"Underline", L"Ctrl+U"},
-    {CmdStrike, L"Strikethrough", L""},
-    {CmdSubscript, L"Subscript", L"Ctrl+="},
-    {CmdSuperscript, L"Superscript", L"Ctrl+Shift+="},
-    {CmdGrowFont, L"Increase font size", L"Ctrl+Shift+>"},
-    {CmdShrinkFont, L"Decrease font size", L"Ctrl+Shift+<"},
-    {CmdGrowFontPoint, L"Increase font size by 1 point", L"Ctrl+]"},
-    {CmdShrinkFontPoint, L"Decrease font size by 1 point", L"Ctrl+["},
-    {CmdClearCharFormat, L"Reset character formatting", L"Ctrl+Space"},
-    {CmdClearParaFormat, L"Reset paragraph formatting", L"Ctrl+Q"},
-    {CmdClearAllFormat, L"Clear all formatting", L""},
-    {CmdFontColor, L"Font color", L""},
-    {CmdHighlightColor, L"Text highlight color", L""},
-    {CmdFormatPainter, L"Format painter", L""},
-    {CmdCopyFormat, L"Copy formatting", L"Ctrl+Shift+C"},
-    {CmdPasteFormat, L"Paste formatting", L"Ctrl+Shift+V"},
-    {CmdAlignLeft, L"Align left", L"Ctrl+L"},
-    {CmdAlignCenter, L"Center", L"Ctrl+E"},
-    {CmdAlignRight, L"Align right", L"Ctrl+R"},
-    {CmdAlignJustify, L"Justify", L"Ctrl+J"},
-    {CmdSpacing1, L"Line spacing 1.0", L"Ctrl+1"},
-    {CmdSpacing115, L"Line spacing 1.15", L""},
-    {CmdSpacing15, L"Line spacing 1.5", L"Ctrl+5"},
-    {CmdSpacing2, L"Line spacing 2.0", L"Ctrl+2"},
-    {CmdSpaceBefore, L"Add or remove space before paragraph", L"Ctrl+0"},
-    {CmdBullets, L"Bullets", L"Ctrl+Shift+L"},
-    {CmdNumbering, L"Numbering", L""},
-    {CmdMultilevel, L"Multilevel list", L""},
-    {CmdRestartNumbering, L"Restart numbering at 1", L""},
-    {CmdContinueNumbering, L"Continue numbering", L""},
-    {CmdIndent, L"Increase indent", L"Ctrl+M"},
-    {CmdOutdent, L"Decrease indent", L"Ctrl+Shift+M"},
-    {CmdHangingIndent, L"Hanging indent", L"Ctrl+T"},
-    {CmdUnhangIndent, L"Remove hanging indent", L"Ctrl+Shift+T"},
-    {CmdStyleNormal, L"Normal style", L"Ctrl+Shift+N"},
-    {CmdStyleHeading1, L"Heading 1", L"Ctrl+Alt+1"},
-    {CmdStyleHeading2, L"Heading 2", L"Ctrl+Alt+2"},
-    {CmdStyleHeading3, L"Heading 3", L"Ctrl+Alt+3"},
-    {CmdUpdateStyle, L"Update style to match selection", L""},
-    {CmdInsertDate, L"Insert date", L""},
-    {CmdInsertTime, L"Insert time", L""},
-    {CmdBorderBox, L"Box border", L""},
-    {CmdBorderBottom, L"Bottom border", L""},
-    {CmdBorderNone, L"No border", L""},
-    {CmdShading, L"Gray shading", L""},
-    {CmdShadingNone, L"No shading", L""},
-    {CmdChangeCase, L"Change case", L"Shift+F3"},
-    {CmdCaseSentence, L"Sentence case.", L""},
+    {CmdBold, N_(L"Bold"), L"Ctrl+B"},
+    {CmdItalic, N_(L"Italic"), L"Ctrl+I"},
+    {CmdUnderline, N_(L"Underline"), L"Ctrl+U"},
+    {CmdStrike, N_(L"Strikethrough"), L""},
+    {CmdSubscript, N_(L"Subscript"), L"Ctrl+="},
+    {CmdSuperscript, N_(L"Superscript"), L"Ctrl+Shift+="},
+    {CmdGrowFont, N_(L"Increase font size"), L"Ctrl+Shift+>"},
+    {CmdShrinkFont, N_(L"Decrease font size"), L"Ctrl+Shift+<"},
+    {CmdGrowFontPoint, N_(L"Increase font size by 1 point"), L"Ctrl+]"},
+    {CmdShrinkFontPoint, N_(L"Decrease font size by 1 point"), L"Ctrl+["},
+    {CmdClearCharFormat, N_(L"Reset character formatting"), L"Ctrl+Space"},
+    {CmdClearParaFormat, N_(L"Reset paragraph formatting"), L"Ctrl+Q"},
+    {CmdClearAllFormat, N_(L"Clear all formatting"), L""},
+    {CmdFontColor, N_(L"Font color"), L""},
+    {CmdHighlightColor, N_(L"Text highlight color"), L""},
+    {CmdFormatPainter, N_(L"Format painter"), L""},
+    {CmdCopyFormat, N_(L"Copy formatting"), L"Ctrl+Shift+C"},
+    {CmdPasteFormat, N_(L"Paste formatting"), L"Ctrl+Shift+V"},
+    {CmdAlignLeft, N_(L"Align left"), L"Ctrl+L"},
+    {CmdAlignCenter, N_(L"Center"), L"Ctrl+E"},
+    {CmdAlignRight, N_(L"Align right"), L"Ctrl+R"},
+    {CmdAlignJustify, N_(L"Justify"), L"Ctrl+J"},
+    {CmdSpacing1, N_(L"Line spacing 1.0"), L"Ctrl+1"},
+    {CmdSpacing115, N_(L"Line spacing 1.15"), L""},
+    {CmdSpacing15, N_(L"Line spacing 1.5"), L"Ctrl+5"},
+    {CmdSpacing2, N_(L"Line spacing 2.0"), L"Ctrl+2"},
+    {CmdSpaceBefore, N_(L"Add or remove space before paragraph"), L"Ctrl+0"},
+    {CmdBullets, N_(L"Bullets"), L"Ctrl+Shift+L"},
+    {CmdNumbering, N_(L"Numbering"), L""},
+    {CmdMultilevel, N_(L"Multilevel list"), L""},
+    {CmdRestartNumbering, N_(L"Restart numbering at 1"), L""},
+    {CmdContinueNumbering, N_(L"Continue numbering"), L""},
+    {CmdIndent, N_(L"Increase indent"), L"Ctrl+M"},
+    {CmdOutdent, N_(L"Decrease indent"), L"Ctrl+Shift+M"},
+    {CmdHangingIndent, N_(L"Hanging indent"), L"Ctrl+T"},
+    {CmdUnhangIndent, N_(L"Remove hanging indent"), L"Ctrl+Shift+T"},
+    {CmdStyleNormal, N_(L"Normal style"), L"Ctrl+Shift+N"},
+    {CmdStyleHeading1, N_(L"Heading 1"), L"Ctrl+Alt+1"},
+    {CmdStyleHeading2, N_(L"Heading 2"), L"Ctrl+Alt+2"},
+    {CmdStyleHeading3, N_(L"Heading 3"), L"Ctrl+Alt+3"},
+    {CmdUpdateStyle, N_(L"Update style to match selection"), L""},
+    {CmdInsertDate, N_(L"Insert date"), L""},
+    {CmdInsertTime, N_(L"Insert time"), L""},
+    {CmdBorderBox, N_(L"Box border"), L""},
+    {CmdBorderBottom, N_(L"Bottom border"), L""},
+    {CmdBorderNone, N_(L"No border"), L""},
+    {CmdShading, N_(L"Gray shading"), L""},
+    {CmdShadingNone, N_(L"No shading"), L""},
+    {CmdChangeCase, N_(L"Change case"), L"Shift+F3"},
+    {CmdCaseSentence, N_(L"Sentence case."), L""},
     {CmdCaseLower, L"lowercase", L""},
     {CmdCaseUpper, L"UPPERCASE", L""},
-    {CmdCaseCapitalize, L"Capitalize Each Word", L""},
+    {CmdCaseCapitalize, N_(L"Capitalize Each Word"), L""},
     {CmdCaseToggle, L"tOGGLE cASE", L""},
 };
 
@@ -124,8 +125,8 @@ namespace {
 // The theme colors in the order Office's palette shows them, as w:themeColor names them.
 constexpr const char* kThemeColorNames[] = {"background1", "text1",   "background2", "text2",   "accent1",
                                             "accent2",     "accent3", "accent4",     "accent5", "accent6"};
-constexpr const wchar_t* kThemeColorLabels[] = {L"Background 1", L"Text 1",   L"Background 2", L"Text 2",   L"Accent 1",
-                                                L"Accent 2",     L"Accent 3", L"Accent 4",     L"Accent 5", L"Accent 6"};
+constexpr UiText kThemeColorLabels[] = {N_(L"Background 1"), N_(L"Text 1"),   N_(L"Background 2"), N_(L"Text 2"),   N_(L"Accent 1"),
+                                                N_(L"Accent 2"),     N_(L"Accent 3"), N_(L"Accent 4"),     N_(L"Accent 5"), N_(L"Accent 6")};
 }  // namespace
 
 std::vector<std::wstring> DocFormat::ThemeFontChoices(const fw::doc::Document& doc) {
@@ -148,7 +149,7 @@ std::vector<NamedColor> DocFormat::ThemeColors(const fw::doc::Document& doc) {
   for (size_t i = 0; i < std::size(kThemeColorNames); ++i) {
     const std::optional<uint32_t> rgb = doc.ThemeColor(kThemeColorNames[i]);
     if (!rgb) return {};
-    out.push_back({D2D1::ColorF(*rgb), kThemeColorLabels[i]});
+    out.push_back({D2D1::ColorF(*rgb), std::wstring(kThemeColorLabels[i])});
   }
   return out;
 }
@@ -312,9 +313,9 @@ CommandState DocFormat::Query(int cmd) {
     s.shortcut = n->keys;
   }
   // The boxes and menus (the ribbon's tooltips and checks); command search doesn't list them.
-  static constexpr std::pair<int, const wchar_t*> kBoxes[] = {{CmdStyleBox, L"Styles"},    {CmdFontBox, L"Font"},
-                                                               {CmdSizeBox, L"Font size"}, {CmdCaseBox, L"Change case"},
-                                                               {CmdAlignBox, L"Line and paragraph spacing"}, {CmdInsertBox, L"Insert"}};
+  static constexpr std::pair<int, UiText> kBoxes[] = {{CmdStyleBox, N_(L"Styles")},    {CmdFontBox, N_(L"Font")},
+                                                               {CmdSizeBox, N_(L"Font size")}, {CmdCaseBox, N_(L"Change case")},
+                                                               {CmdAlignBox, N_(L"Line and paragraph spacing")}, {CmdInsertBox, N_(L"Insert")}};
   for (const auto& [id, label] : kBoxes)
     if (id == cmd) s.label = label;
   const bool on = target_().any && Editable();
@@ -471,7 +472,7 @@ void DocFormat::Execute(int cmd) {
     case CmdContinueNumbering: {
       bool ok = true;
       Run([&ok](edit::TreeEdit& te, const Target& t) { ok = edit::ContinueNumbering(te, t.sel.from.para); });
-      if (!ok) done_({std::nullopt, L"There's no list before this one to continue."});
+      if (!ok) done_({std::nullopt, T(L"There's no list before this one to continue.")});
       return;
     }
     case CmdIndent:
@@ -484,7 +485,7 @@ void DocFormat::Execute(int cmd) {
         // The left indent moves a tab stop, the first line stays where it was.
         const fw::doc::Document& doc = te.Doc();
         const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());
-        te.Begin(cmd == CmdHangingIndent ? u"Hanging indent" : u"Remove hanging indent");
+        te.Begin(cmd == CmdHangingIndent ? T(u"Hanging indent") : T(u"Remove hanging indent"));
         te.Local();
         for (uint32_t p : edit::ParagraphsOf(doc, t.sel)) {
           const fw::doc::ParaProps& pp = doc.ResolvedPara(p);
@@ -535,7 +536,7 @@ void DocFormat::ApplyFont(const std::wstring& font) {
   }
   f.font = fw::WideToUtf8(font);
   if (!edit::XmlSafe(*f.font)) {  // typed or pasted into the font box
-    done_({std::nullopt, L"A font's name can't hold control characters."});
+    done_({std::nullopt, T(L"A font's name can't hold control characters.")});
     return;
   }
   Run([&f](edit::TreeEdit& te, const Target& t) { edit::FormatRuns(te, t.chars, f); });
@@ -599,7 +600,7 @@ void DocFormat::PaintTo(const Format& f, const Target& t) {
   // Paragraph formatting goes with whole paragraphs, as Word's painter does.
   const bool whole = t.sel.from.offset == 0 &&
                      (t.sel.to.para > t.sel.from.para || t.sel.to.offset >= doc.Para(t.sel.from.para).text.size());
-  editor_.BeginGroup(u"Format Painter");
+  editor_.BeginGroup(T(u"Format Painter"));
   std::u16string refused;
   {
     edit::TreeEdit te(editor_, t.sel.from);
@@ -705,7 +706,7 @@ ToolItem DocFormat::StyleBox() {
   ToolItem style;
   style.kind = ToolKind::Dropdown;
   style.cmd = CmdStyleBox;
-  style.tooltip = L"Styles";
+  style.tooltip = T(L"Styles");
   style.enabled = target_().any && Editable();
   const auto& gallery = Gallery();
   for (size_t i = 0; i < gallery.size(); ++i) {
@@ -728,7 +729,7 @@ ToolItem DocFormat::FontBox() {
   ToolItem font;
   font.kind = ToolKind::ComboBox;
   font.cmd = CmdFontBox;
-  font.tooltip = L"Font";
+  font.tooltip = T(L"Font");
   font.enabled = target_().any && Editable();
   font.choices = ThemeFontChoices(Doc());
   font.choices.insert(font.choices.end(), Families().begin(), Families().end());
@@ -742,7 +743,7 @@ ToolItem DocFormat::SizeBox() {
   ToolItem size;
   size.kind = ToolKind::ComboBox;
   size.cmd = CmdSizeBox;
-  size.tooltip = L"Font size";
+  size.tooltip = T(L"Font size");
   size.enabled = target_().any && Editable();
   size.choices = Sizes();
   size.text = st.size ? PointsText(*st.size) : std::wstring();
@@ -769,7 +770,7 @@ ToolItem DocFormat::ColorButton(bool highlight) {
   t.width = 52;
   t.colors = true;
   t.color = highlight ? highlight_ : fontColor_;
-  t.automaticLabel = highlight ? L"No color" : L"Automatic";
+  t.automaticLabel = highlight ? T(L"No color") : T(L"Automatic");
   if (!highlight) {
     if (!themeRead_) {
       themeColors_ = ThemeColors(Doc());
@@ -789,7 +790,7 @@ ToolItem DocFormat::DateBox() {
   t.cmd = CmdInsertDate;
   t.glyph = icon::Calendar;
   t.dropdown = true;
-  t.tooltip = L"Date and time";
+  t.tooltip = T(L"Date and time");
   t.enabled = target_().any && Editable();
   std::vector<std::wstring> pictures;
   DateFormats(pictures, t.choices);
@@ -813,8 +814,13 @@ void DocFormat::StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, fl
   const float px = std::clamp(run.size.Value() / 2.0f, 9.0f, 18.0f) * 1.2f * ui;
   const float nameH = 18 * ui;
   c.PushClip(r);
-  c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
-         run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  {
+#if FW_TEST_SCREENS
+    gfx::ClippingPause sample;  // cut at the box's edge by design, as Word's (the clipping check skips it)
+#endif
+    c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
+           run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
+  }
   c.Text(W(std::string_view(g[static_cast<size_t>(index)].name)), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
          p.textSecondary, 11 * ui, DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
   c.PopClip();

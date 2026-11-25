@@ -13,6 +13,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "slide/view/PresentationView.h"
@@ -65,25 +66,26 @@ int PresentationView::ExportSlidePictures(const std::wstring& path, bool all, un
   const UINT w = std::clamp(width, 16u, 8192u);
   if (!all) {
     if (WriteSlidePng(*deck_, current_, w, path)) {
-      message = L"Exported slide " + std::to_wstring(current_ + 1) + L" to " + FileNameOf(path);
+      message = Fmt(T(L"Exported slide {0} to {1}"), {std::to_wstring(current_ + 1), FileNameOf(path)});
       return 1;
     }
-    message = FileNameOf(path) + L" couldn't be written.";
+    message = Fmt(T(L"{0} couldn't be written."), {FileNameOf(path)});
     return 0;
   }
   // A folder named as the file, beside it.
   std::wstring dir = path;
   if (const size_t dot = dir.rfind(L'.'); dot != std::wstring::npos && dot > dir.find_last_of(L"\\/") + 1) dir.resize(dot);
   if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-    message = L"The folder " + FileNameOf(dir) + L" couldn't be made.";
+    message = Fmt(T(L"The folder {0} couldn't be made."), {FileNameOf(dir)});
     return 0;
   }
   int written = 0;
   for (size_t i = 0; i < SlideCount(); ++i)
     written += WriteSlidePng(*deck_, i, w, dir + L"\\Slide" + std::to_wstring(i + 1) + L".png") ? 1 : 0;
   message = written == static_cast<int>(SlideCount())
-                ? L"Exported " + std::to_wstring(written) + L" slides to the folder " + FileNameOf(dir)
-                : std::to_wstring(SlideCount() - written) + L" slides couldn't be written to the folder " + FileNameOf(dir) + L".";
+                ? Fmt(T(L"Exported {0} slides to the folder {1}"), {std::to_wstring(written), FileNameOf(dir)})
+                : Fmt(T(L"{0} slides couldn't be written to the folder {1}."),
+                      {std::to_wstring(SlideCount() - written), FileNameOf(dir)});
   return written;
 }
 
@@ -92,20 +94,20 @@ bool PresentationView::PictureCommand(int cmd, CommandState* state) {
   const bool all = cmd == CmdExportSlidesPng;
   if (state) {
     state->enabled = Ready() && SlideCount() > 0;
-    state->label = all ? L"All slides as PNG…" : L"Current slide as PNG…";
+    state->label = all ? T(L"All slides as PNG…") : T(L"Current slide as PNG…");
     return true;
   }
   if (!Ready() || SlideCount() == 0) return true;
   // Save As for a PNG, with the picture's width beside the file type.
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return true;
-  const COMDLG_FILTERSPEC png[] = {{L"PNG picture", L"*.png"}};
+  const COMDLG_FILTERSPEC png[] = {{T(L"PNG picture"), L"*.png"}};
   dlg->SetFileTypes(1, png);
   dlg->SetDefaultExtension(L"png");
   std::wstring name = Title();
   if (const size_t dot = name.rfind(L'.'); dot != std::wstring::npos) name.resize(dot);
-  dlg->SetFileName((all ? name : L"Slide" + std::to_wstring(current_ + 1)).c_str());
-  dlg->SetTitle(all ? L"Export all slides as PNG" : L"Export the current slide as PNG");
+  dlg->SetFileName((all ? name : T(L"Slide") + std::to_wstring(current_ + 1)).c_str());
+  dlg->SetTitle(all ? T(L"Export all slides as PNG") : T(L"Export the current slide as PNG"));
   if (!Path().empty()) {
     ComPtr<IShellItem> folder;
     if (SUCCEEDED(SHCreateItemFromParsingName(DirOf(Path()).c_str(), nullptr, IID_PPV_ARGS(&folder))))
@@ -113,10 +115,10 @@ bool PresentationView::PictureCommand(int cmd, CommandState* state) {
   }
   ComPtr<IFileDialogCustomize> custom;
   if (SUCCEEDED(dlg.As(&custom))) {
-    custom->StartVisualGroup(kWidthBox + 10, L"Width:");
+    custom->StartVisualGroup(kWidthBox + 10, T(L"Width:"));
     custom->AddComboBox(kWidthBox);
     for (DWORD i = 0; i < std::size(kWidths); ++i) {
-      custom->AddControlItem(kWidthBox, i, (std::to_wstring(kWidths[i]) + L" pixels").c_str());
+      custom->AddControlItem(kWidthBox, i, Fmt(T(L"{0} pixels"), {std::to_wstring(kWidths[i])}).c_str());
       if (kWidths[i] == pictureWidth_) custom->SetSelectedControlItem(kWidthBox, i);
     }
     custom->EndVisualGroup();

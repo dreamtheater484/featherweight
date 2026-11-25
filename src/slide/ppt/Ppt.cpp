@@ -16,6 +16,7 @@
 
 #include <pugixml.hpp>
 
+#include "core/Lang.h"
 #include "draw/OfficeArt.h"
 #include "pkg/OfficeCrypto.h"
 #include "pkg/Snapshot.h"
@@ -79,7 +80,7 @@ class Converter {
   std::vector<uint8_t> Convert(const StreamFn& streams, pkg::Status& status) {
     auto docStream = streams("PowerPoint Document");
     if (!docStream) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
       return {};
     }
     doc_ = std::move(*docStream);
@@ -89,7 +90,7 @@ class Converter {
     if (encrypted) {
       if (!Decrypt(status)) return {};
       if (!Persist(docPersist_) || Persist(docPersist_)->type != 0x03E8) {
-        status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+        status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
         return {};
       }
     }
@@ -175,11 +176,11 @@ class Converter {
       offset = last ? last : UINT32_MAX;
     }
     if (docPersist_ == 0 && !encrypted) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
       return false;
     }
     if (!encrypted && (!Persist(docPersist_) || Persist(docPersist_)->type != 0x03E8)) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
       return false;
     }
     return true;
@@ -197,12 +198,12 @@ class Converter {
     const Result r = session && session->type == 0x2F14 ? key.Open(session->body, password) : Result::Damaged;
     if (r == Result::WrongPassword) {
       status = pkg::Status::Fail(pkg::Status::Code::Rejected,
-                                 password.empty() ? "it is protected with a password." : "the password is wrong.");
+                                 password.empty() ? T("it is protected with a password.") : T("the password is wrong."));
       return false;
     }
     if (r != Result::Ok) {
       status = pkg::Status::Fail(r == Result::Damaged ? pkg::Status::Code::Damaged : pkg::Status::Code::Unsupported,
-                                 r == Result::Damaged ? "it seems to be damaged." : "it is protected in a way Featherweight doesn't support.");
+                                 r == Result::Damaged ? T("it seems to be damaged.") : T("it is protected in a way Featherweight doesn't support."));
       return false;
     }
     std::set<uint32_t> done;  // a damaged directory may name a place twice
@@ -317,7 +318,7 @@ class Converter {
     if (slideW_ <= 0 || slideH_ <= 0) slideW_ = 5760, slideH_ = 4320;
     if (notesW_ <= 0 || notesH_ <= 0) notesW_ = 4320, notesH_ = 5760;
     if (masters_.empty()) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
       return false;
     }
     return true;
@@ -705,7 +706,7 @@ class Converter {
       mains.push_back(std::move(m));
     }
     if (mains.empty()) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged, "it isn't a PowerPoint presentation or it is damaged.");
+      status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("it isn't a PowerPoint presentation or it is damaged."));
       return {};
     }
     std::vector<std::pair<size_t, size_t>> titleMasters;  // masters_ index, main master index
@@ -939,21 +940,21 @@ class Converter {
     pkg::ZipWriter zip(sink);
     for (const Part& p : parts)
       if (!zip.Add(p.name, std::span(reinterpret_cast<const uint8_t*>(p.text.data()), p.text.size())).Ok()) {
-        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
         return {};
       }
     for (const auto& [name, bytes] : mediaParts_)
       if (!zip.Add("ppt/media/" + name, bytes, nullptr, pkg::ZipWriter::Compression::Store).Ok()) {
-        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
         return {};
       }
     for (const auto& [name, bytes] : fontParts)
       if (!zip.Add(name, bytes).Ok()) {
-        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+        status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
         return {};
       }
     if (!zip.Finish().Ok()) {
-      status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "it is too large to open.");
+      status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("it is too large to open."));
       return {};
     }
     return std::move(sink.bytes);

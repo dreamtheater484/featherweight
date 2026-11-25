@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/RibbonModel.h"
 
@@ -116,54 +117,54 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   };
 
   // ---- Home
-  b.Tab(L"Home", L"H");
-  b.Group(L"Clipboard", L"ZL");
-  b.Split(CmdPaste, glyph::Paste, Size::Large, L"Paste", L"V", {CmdPaste, CmdPasteMerge}).smallest = Size::Large;
-  b.Button(CmdCut, glyph::Cut, Size::Medium, L"Cut", L"X");
-  b.Button(CmdCopy, icon::Copy, Size::Medium, L"Copy", L"C");
-  b.Toggle(CmdFormatPainter, icon::Brush, Size::Medium, L"Format Painter", L"FP");
+  b.Tab(T(L"Home"), L"H");
+  b.Group(T(L"Clipboard"), L"ZL");
+  b.Split(CmdPaste, glyph::Paste, Size::Large, T(L"Paste"), L"V", {CmdPaste, CmdPasteMerge}).smallest = Size::Large;
+  b.Button(CmdCut, glyph::Cut, Size::Medium, T(L"Cut"), L"X");
+  b.Button(CmdCopy, icon::Copy, Size::Medium, T(L"Copy"), L"C");
+  b.Toggle(CmdFormatPainter, icon::Brush, Size::Medium, T(L"Format Painter"), L"FP");
 
-  b.Group(L"Font", L"ZF", 0, 2);
-  b.Add(width(format_ ? format_->FontBox() : Greyed(ToolKind::ComboBox, CmdFontBox), 128), Size::Small, L"Font", L"FF");
-  b.Row(b.Add(width(format_ ? format_->SizeBox() : Greyed(ToolKind::ComboBox, CmdSizeBox), 60), Size::Small, L"Font Size", L"FS"));
-  b.Row(b.Button(CmdGrowFont, glyph::GrowFont, Size::Small, L"Grow Font", L"FG"));
-  b.Row(b.Button(CmdShrinkFont, glyph::ShrinkFont, Size::Small, L"Shrink Font", L"FK"));
-  b.Row(b.Menu(CmdCaseBox, icon::FontCase, Size::Small, L"Change Case", L"7",
+  b.Group(T(L"Font"), L"ZF", 0, 2);
+  b.Add(width(format_ ? format_->FontBox() : Greyed(ToolKind::ComboBox, CmdFontBox), 128), Size::Small, T(L"Font"), L"FF");
+  b.Row(b.Add(width(format_ ? format_->SizeBox() : Greyed(ToolKind::ComboBox, CmdSizeBox), 60), Size::Small, T(L"Font Size"), L"FS"));
+  b.Row(b.Button(CmdGrowFont, glyph::GrowFont, Size::Small, T(L"Grow Font"), L"FG"));
+  b.Row(b.Button(CmdShrinkFont, glyph::ShrinkFont, Size::Small, T(L"Shrink Font"), L"FK"));
+  b.Row(b.Menu(CmdCaseBox, icon::FontCase, Size::Small, T(L"Change Case"), L"7",
                {CmdCaseSentence, CmdCaseLower, CmdCaseUpper, CmdCaseCapitalize, CmdCaseToggle}));
-  b.Row(b.Button(CmdClearAllFormat, icon::ClearFormatting, Size::Small, L"Clear All Formatting", L"E"));
-  b.Toggle(CmdBold, icon::Bold, Size::Small, L"Bold", L"1");
-  b.Row(b.Toggle(CmdItalic, icon::Italic, Size::Small, L"Italic", L"2"));
-  b.Row(b.Toggle(CmdUnderline, icon::Underline, Size::Small, L"Underline", L"3"));
-  b.Row(b.Toggle(CmdStrike, icon::Strikethrough, Size::Small, L"Strikethrough", L"4"));
-  b.Row(b.Toggle(CmdSubscript, icon::Subscript, Size::Small, L"Subscript", L"5"));
-  b.Row(b.Toggle(CmdSuperscript, icon::Superscript, Size::Small, L"Superscript", L"6"));
+  b.Row(b.Button(CmdClearAllFormat, icon::ClearFormatting, Size::Small, T(L"Clear All Formatting"), L"E"));
+  b.Toggle(CmdBold, icon::Bold, Size::Small, T(L"Bold"), L"1");
+  b.Row(b.Toggle(CmdItalic, icon::Italic, Size::Small, T(L"Italic"), L"2"));
+  b.Row(b.Toggle(CmdUnderline, icon::Underline, Size::Small, T(L"Underline"), L"3"));
+  b.Row(b.Toggle(CmdStrike, icon::Strikethrough, Size::Small, T(L"Strikethrough"), L"4"));
+  b.Row(b.Toggle(CmdSubscript, icon::Subscript, Size::Small, T(L"Subscript"), L"5"));
+  b.Row(b.Toggle(CmdSuperscript, icon::Superscript, Size::Small, T(L"Superscript"), L"6"));
   if (format_) {
-    b.Row(b.Add(format_->ColorButton(true), Size::Small, L"Text Highlight Color", L"I"));
-    b.Row(b.Add(format_->ColorButton(false), Size::Small, L"Font Color", L"FC"));
+    b.Row(b.Add(format_->ColorButton(true), Size::Small, T(L"Text Highlight Color"), L"I"));
+    b.Row(b.Add(format_->ColorButton(false), Size::Small, T(L"Font Color"), L"FC"));
   }
 
-  b.Group(L"Paragraph", L"ZP", CmdParagraph, 2);
-  b.Toggle(CmdBullets, icon::BulletedList, Size::Small, L"Bullets", L"U");
-  b.Row(b.Split(CmdNumbering, icon::NumberedList, Size::Small, L"Numbering", L"N",
+  b.Group(T(L"Paragraph"), L"ZP", CmdParagraph, 2);
+  b.Toggle(CmdBullets, icon::BulletedList, Size::Small, T(L"Bullets"), L"U");
+  b.Row(b.Split(CmdNumbering, icon::NumberedList, Size::Small, T(L"Numbering"), L"N",
                 {CmdNumbering, CmdRestartNumbering, CmdContinueNumbering}))
       .tool.checked = QueryCommand(CmdNumbering).checked;
-  b.Row(b.Button(CmdMultilevel, icon::MultilevelList, Size::Small, L"Multilevel List", L"M"));
-  b.Row(b.Button(CmdOutdent, icon::DecreaseIndent, Size::Small, L"Decrease Indent", L"AO"));
-  b.Row(b.Button(CmdIndent, icon::IncreaseIndent, Size::Small, L"Increase Indent", L"AI"));
+  b.Row(b.Button(CmdMultilevel, icon::MultilevelList, Size::Small, T(L"Multilevel List"), L"M"));
+  b.Row(b.Button(CmdOutdent, icon::DecreaseIndent, Size::Small, T(L"Decrease Indent"), L"AO"));
+  b.Row(b.Button(CmdIndent, icon::IncreaseIndent, Size::Small, T(L"Increase Indent"), L"AI"));
   b.Row(b.Toggle(CmdShowMarks, glyph::Pilcrow, Size::Small, L"Show/Hide ¶", L"8"));
-  b.Toggle(CmdAlignLeft, icon::AlignLeft, Size::Small, L"Align Left", L"AL");
-  b.Row(b.Toggle(CmdAlignCenter, icon::AlignCenter, Size::Small, L"Center", L"AC"));
-  b.Row(b.Toggle(CmdAlignRight, icon::AlignRight, Size::Small, L"Align Right", L"AR"));
-  b.Row(b.Toggle(CmdAlignJustify, icon::AlignJustify, Size::Small, L"Justify", L"AJ"));
+  b.Toggle(CmdAlignLeft, icon::AlignLeft, Size::Small, T(L"Align Left"), L"AL");
+  b.Row(b.Toggle(CmdAlignCenter, icon::AlignCenter, Size::Small, T(L"Center"), L"AC"));
+  b.Row(b.Toggle(CmdAlignRight, icon::AlignRight, Size::Small, T(L"Align Right"), L"AR"));
+  b.Row(b.Toggle(CmdAlignJustify, icon::AlignJustify, Size::Small, T(L"Justify"), L"AJ"));
   // CmdAlignBox: the toolbar's paragraph menu once, Word's Line and Paragraph Spacing menu now.
-  b.Row(b.Menu(CmdAlignBox, icon::LineSpacing, Size::Small, L"Line and Paragraph Spacing", L"K",
+  b.Row(b.Menu(CmdAlignBox, icon::LineSpacing, Size::Small, T(L"Line and Paragraph Spacing"), L"K",
                {CmdSpacing1, CmdSpacing115, CmdSpacing15, CmdSpacing2, 0, CmdParagraph, CmdSpaceBefore}));
-  b.Row(b.Split(CmdShading, icon::FillBucket, Size::Small, L"Shading", L"H", {CmdShading, CmdShadingNone}));
-  b.Row(b.Split(CmdBorderBottom, icon::BordersBottom, Size::Small, L"Borders", L"B", {CmdBorderBottom, CmdBorderBox, CmdBorderNone}));
+  b.Row(b.Split(CmdShading, icon::FillBucket, Size::Small, T(L"Shading"), L"H", {CmdShading, CmdShadingNone}));
+  b.Row(b.Split(CmdBorderBottom, icon::BordersBottom, Size::Small, T(L"Borders"), L"B", {CmdBorderBottom, CmdBorderBox, CmdBorderNone}));
 
-  b.Group(L"Styles", L"ZS");
+  b.Group(T(L"Styles"), L"ZS");
   {
-    RibbonItem& styles = b.Add(format_ ? format_->StyleBox() : Greyed(ToolKind::Dropdown, CmdStyleBox), Size::Large, L"Styles", L"L");
+    RibbonItem& styles = b.Add(format_ ? format_->StyleBox() : Greyed(ToolKind::Dropdown, CmdStyleBox), Size::Large, T(L"Styles"), L"L");
     styles.tool.glyph = icon::FontCase;  // the gallery folded into one button (a narrow window)
     RibbonGallery g;
     g.columns = 7;  // five at its middle width (1366 px), where Word's first row also reaches Title (RF7)
@@ -175,40 +176,40 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     styles.gallery = std::move(g);
   }
 
-  b.Group(L"Editing", L"ZN");
-  b.Split(CmdFind, icon::Search, Size::Medium, L"Find", L"FD", {CmdFind, CmdGoToPage}).tool.enabled = true;
-  b.Button(CmdReplace, icon::Replace, Size::Medium, L"Replace", L"R").tool.enabled = editing;
-  b.Button(CmdSelectAll, glyph::SelectAll, Size::Medium, L"Select All", L"SL");
+  b.Group(T(L"Editing"), L"ZN");
+  b.Split(CmdFind, icon::Search, Size::Medium, T(L"Find"), L"FD", {CmdFind, CmdGoToPage}).tool.enabled = true;
+  b.Button(CmdReplace, icon::Replace, Size::Medium, T(L"Replace"), L"R").tool.enabled = editing;
+  b.Button(CmdSelectAll, glyph::SelectAll, Size::Medium, T(L"Select All"), L"SL");
 
   // ---- Insert
-  b.Tab(L"Insert", L"N");
-  b.Group(L"Pages", L"ZP");
-  b.Button(CmdPageBreak, icon::PageBreak, Size::Large, L"Page\nBreak", L"B");
-  b.Group(L"Tables", L"ZB");
-  if (table_) b.Add(table_->GridItem(), Size::Large, L"Table", L"T");
-  else b.Button(CmdInsertTable, icon::Table, Size::Large, L"Table", L"T");
-  b.Group(L"Illustrations", L"ZI");
-  b.Button(CmdInsertPicture, icon::Picture, Size::Large, L"Pictures", L"P");
+  b.Tab(T(L"Insert"), L"N");
+  b.Group(T(L"Pages"), L"ZP");
+  b.Button(CmdPageBreak, icon::PageBreak, Size::Large, T(L"Page\nBreak"), L"B");
+  b.Group(T(L"Tables"), L"ZB");
+  if (table_) b.Add(table_->GridItem(), Size::Large, T(L"Table"), L"T");
+  else b.Button(CmdInsertTable, icon::Table, Size::Large, T(L"Table"), L"T");
+  b.Group(T(L"Illustrations"), L"ZI");
+  b.Button(CmdInsertPicture, icon::Picture, Size::Large, T(L"Pictures"), L"P");
   const std::vector<int> shapes = {CmdInsertRectangle, CmdInsertRoundedRectangle, CmdInsertOval,
                                    CmdInsertLine,      CmdInsertArrow,            CmdInsertCallout};
-  b.Menu(CmdInsertRectangle, icon::Shapes, Size::Large, L"Shapes", L"SH", shapes);
-  b.Group(L"Links", L"ZL");
-  b.Button(CmdInsertLink, icon::Link, Size::Large, L"Link", L"I");
-  b.Button(CmdBookmark, icon::Bookmark, Size::Large, L"Bookmark", L"K");
-  b.Group(L"Comments", L"Z1");
-  b.Button(CmdNewComment, icon::Comment, Size::Large, L"Comment", L"L");
-  b.Group(L"Header & Footer", L"ZH");
-  b.Button(CmdEditHeader, icon::Header, Size::Large, L"Header", L"H");
-  b.Button(CmdEditFooter, icon::Footer, Size::Large, L"Footer", L"O");
-  b.Button(CmdPageNumber, icon::PageNumber, Size::Large, L"Page\nNumber", L"NU");
-  b.Group(L"Text", L"ZT");
-  b.Button(CmdInsertTextBox, icon::TextBox, Size::Large, L"Text\nBox", L"X");
-  if (format_) b.Add(format_->DateBox(), Size::Medium, L"Date & Time", L"D");
+  b.Menu(CmdInsertRectangle, icon::Shapes, Size::Large, T(L"Shapes"), L"SH", shapes);
+  b.Group(T(L"Links"), L"ZL");
+  b.Button(CmdInsertLink, icon::Link, Size::Large, T(L"Link"), L"I");
+  b.Button(CmdBookmark, icon::Bookmark, Size::Large, T(L"Bookmark"), L"K");
+  b.Group(T(L"Comments"), L"Z1");
+  b.Button(CmdNewComment, icon::Comment, Size::Large, T(L"Comment"), L"L");
+  b.Group(T(L"Header & Footer"), L"ZH");
+  b.Button(CmdEditHeader, icon::Header, Size::Large, T(L"Header"), L"H");
+  b.Button(CmdEditFooter, icon::Footer, Size::Large, T(L"Footer"), L"O");
+  b.Button(CmdPageNumber, icon::PageNumber, Size::Large, T(L"Page\nNumber"), L"NU");
+  b.Group(T(L"Text"), L"ZT");
+  b.Button(CmdInsertTextBox, icon::TextBox, Size::Large, T(L"Text\nBox"), L"X");
+  if (format_) b.Add(format_->DateBox(), Size::Medium, T(L"Date & Time"), L"D");
 
   // ---- Design
-  b.Tab(L"Design", L"G");
-  b.Group(L"Page Background", L"ZB");
-  b.Menu(CmdWatermarkPanel, icon::Watermark, Size::Large, L"Watermark", L"PW", {CmdWatermarkPanel, CmdWatermarkRemove});
+  b.Tab(T(L"Design"), L"G");
+  b.Group(T(L"Page Background"), L"ZB");
+  b.Menu(CmdWatermarkPanel, icon::Watermark, Size::Large, T(L"Watermark"), L"PW", {CmdWatermarkPanel, CmdWatermarkRemove});
 
   // ---- Layout
   const uint32_t d = editing ? SelectedPicture() : fw::doc::kNone;
@@ -216,56 +217,56 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
   const bool picture = object && PictureInfoOf(d).picture, shape = object && !picture;
   const int objectPanel = shape ? CmdShapePanel : CmdPicturePanel;
   auto arrange = [&] {
-    b.Group(L"Arrange", L"ZA");
-    b.Menu(CmdPictureWrapBox, icon::WrapSquare, Size::Large, L"Wrap\nText", L"TW",
+    b.Group(T(L"Arrange"), L"ZA");
+    b.Menu(CmdPictureWrapBox, icon::WrapSquare, Size::Large, T(L"Wrap\nText"), L"TW",
            {CmdPictureInline, CmdPictureSquare, CmdPictureTight, CmdPictureTopBottom, CmdPictureBehind, CmdPictureInFront});
-    b.Menu(CmdPictureRotate, icon::Rotate, Size::Medium, L"Rotate", L"AY", {CmdPictureRotate, 0, objectPanel});
+    b.Menu(CmdPictureRotate, icon::Rotate, Size::Medium, T(L"Rotate"), L"AY", {CmdPictureRotate, 0, objectPanel});
   };
-  b.Tab(L"Layout", L"P");
-  b.Group(L"Page Setup", L"ZS", CmdPageSetup);
-  b.Menu(CmdMarginsNormal, icon::Margins, Size::Large, L"Margins", L"M",
+  b.Tab(T(L"Layout"), L"P");
+  b.Group(T(L"Page Setup"), L"ZS", CmdPageSetup);
+  b.Menu(CmdMarginsNormal, icon::Margins, Size::Large, T(L"Margins"), L"M",
          {CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate, CmdMarginsWide, 0, CmdPageSetup});
-  b.Menu(CmdPortrait, icon::Orientation, Size::Large, L"Orientation", L"O", {CmdPortrait, CmdLandscape});
-  if (page_) b.Add(page_->SizeMenu(), Size::Large, L"Size", L"SZ").tool.glyph = icon::PaperSize;
-  b.Menu(CmdColumnsOne, icon::Columns, Size::Large, L"Columns", L"J", {CmdColumnsOne, CmdColumnsTwo, CmdColumnsThree, 0, CmdPageSetup});
-  b.Menu(CmdPageBreak, icon::PageBreak, Size::Medium, L"Breaks", L"B",
+  b.Menu(CmdPortrait, icon::Orientation, Size::Large, T(L"Orientation"), L"O", {CmdPortrait, CmdLandscape});
+  if (page_) b.Add(page_->SizeMenu(), Size::Large, T(L"Size"), L"SZ").tool.glyph = icon::PaperSize;
+  b.Menu(CmdColumnsOne, icon::Columns, Size::Large, T(L"Columns"), L"J", {CmdColumnsOne, CmdColumnsTwo, CmdColumnsThree, 0, CmdPageSetup});
+  b.Menu(CmdPageBreak, icon::PageBreak, Size::Medium, T(L"Breaks"), L"B",
          {CmdPageBreak, CmdColumnBreak, 0, CmdSectionNextPage, CmdSectionContinuous, CmdSectionEvenPage, CmdSectionOddPage});
-  b.Menu(CmdHyphenation, icon::Hyphenation, Size::Medium, L"Hyphenation", L"H", {CmdHyphenation, 0, CmdOptionalHyphen, CmdNonBreakingHyphen});
+  b.Menu(CmdHyphenation, icon::Hyphenation, Size::Medium, T(L"Hyphenation"), L"H", {CmdHyphenation, 0, CmdOptionalHyphen, CmdNonBreakingHyphen});
   if (page_) {
-    b.Group(L"Paragraph", L"ZG", CmdParagraph, 2);
-    b.Add(page_->ParaSpin(CmdIndentLeftBox), Size::Medium, L"Left", L"IL");
-    b.Add(page_->ParaSpin(CmdIndentRightBox), Size::Medium, L"Right", L"IR");
-    b.Add(page_->ParaSpin(CmdSpaceBeforeBox), Size::Medium, L"Before", L"SB").newColumn = true;
-    b.Add(page_->ParaSpin(CmdSpaceAfterBox), Size::Medium, L"After", L"SA");
+    b.Group(T(L"Paragraph"), L"ZG", CmdParagraph, 2);
+    b.Add(page_->ParaSpin(CmdIndentLeftBox), Size::Medium, T(L"Left"), L"IL");
+    b.Add(page_->ParaSpin(CmdIndentRightBox), Size::Medium, T(L"Right"), L"IR");
+    b.Add(page_->ParaSpin(CmdSpaceBeforeBox), Size::Medium, T(L"Before"), L"SB").newColumn = true;
+    b.Add(page_->ParaSpin(CmdSpaceAfterBox), Size::Medium, T(L"After"), L"SA");
   }
   arrange();
 
   // ---- References
-  b.Tab(L"References", L"S");
-  b.Group(L"Table of Contents", L"ZC");
-  b.Button(CmdInsertToc, icon::TableOfContents, Size::Large, L"Table of\nContents", L"T");
-  b.Split(CmdUpdateToc, glyph::Refresh, Size::Medium, L"Update Table", L"U", {CmdUpdateTocPages, CmdUpdateToc});
-  b.Group(L"Footnotes", L"ZF");
-  b.Button(CmdInsertFootnote, icon::Footnote, Size::Large, L"Insert\nFootnote", L"F");
-  b.Button(CmdInsertEndnote, icon::Endnote, Size::Medium, L"Insert Endnote", L"E");
+  b.Tab(T(L"References"), L"S");
+  b.Group(T(L"Table of Contents"), L"ZC");
+  b.Button(CmdInsertToc, icon::TableOfContents, Size::Large, T(L"Table of\nContents"), L"T");
+  b.Split(CmdUpdateToc, glyph::Refresh, Size::Medium, T(L"Update Table"), L"U", {CmdUpdateTocPages, CmdUpdateToc});
+  b.Group(T(L"Footnotes"), L"ZF");
+  b.Button(CmdInsertFootnote, icon::Footnote, Size::Large, T(L"Insert\nFootnote"), L"F");
+  b.Button(CmdInsertEndnote, icon::Endnote, Size::Medium, T(L"Insert Endnote"), L"E");
 
   // ---- Review
-  b.Tab(L"Review", L"R");
-  b.Group(L"Proofing", L"ZP");
-  b.Button(CmdSpelling, icon::Spelling, Size::Large, L"Spelling &\nGrammar", L"S");
-  b.Button(CmdWordCount, icon::WordCount, Size::Large, L"Word\nCount", L"W");
-  b.Group(L"Language", L"ZL");
-  b.Button(CmdLanguage, glyph::Language, Size::Large, L"Language", L"U");
-  b.Group(L"Comments", L"ZC");
-  b.Button(CmdNewComment, icon::Comment, Size::Large, L"New\nComment", L"C");
-  b.Group(L"Markup", L"ZM", CmdReviewerName);
+  b.Tab(T(L"Review"), L"R");
+  b.Group(T(L"Proofing"), L"ZP");
+  b.Button(CmdSpelling, icon::Spelling, Size::Large, T(L"Spelling &\nGrammar"), L"S");
+  b.Button(CmdWordCount, icon::WordCount, Size::Large, T(L"Word\nCount"), L"W");
+  b.Group(T(L"Language"), L"ZL");
+  b.Button(CmdLanguage, glyph::Language, Size::Large, T(L"Language"), L"U");
+  b.Group(T(L"Comments"), L"ZC");
+  b.Button(CmdNewComment, icon::Comment, Size::Large, T(L"New\nComment"), L"C");
+  b.Group(T(L"Markup"), L"ZM", CmdReviewerName);
   {
     ToolItem show;
     show.kind = ToolKind::Dropdown;
     show.cmd = CmdMarkupSimple;
     show.width = 120;
     show.enabled = Ready();
-    show.tooltip = L"Display for Review";
+    show.tooltip = T(L"Display for Review");
     for (int cmd = CmdMarkupSimple; cmd <= CmdMarkupOriginal; ++cmd) {
       const CommandState q = QueryCommand(cmd);
       show.choices.push_back(q.label);
@@ -274,135 +275,135 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     show.onChange = [this](const ToolValue& v) {
       if (v.index >= 0 && v.index <= CmdMarkupOriginal - CmdMarkupSimple) Execute(CmdMarkupSimple + v.index);
     };
-    b.Add(std::move(show), Size::Medium, L"Display for Review", L"TD");
+    b.Add(std::move(show), Size::Medium, T(L"Display for Review"), L"TD");
   }
-  b.Toggle(CmdReviewPane, glyph::Panes, Size::Medium, L"Reviewing Pane", L"TP");
-  b.Group(L"Tracking", L"ZT");
-  b.Toggle(CmdTrackChanges, glyph::Track, Size::Large, L"Track\nChanges", L"G");
-  b.Split(CmdAcceptChange, glyph::Accept, Size::Large, L"Accept", L"A2", {CmdAcceptChange, CmdAcceptAll});
-  b.Split(CmdRejectChange, icon::Cancel, Size::Large, L"Reject", L"J", {CmdRejectChange, CmdRejectAll});
-  b.Button(CmdPrevChange, glyph::Up, Size::Medium, L"Previous", L"F");
-  b.Button(CmdNextChange, glyph::Down, Size::Medium, L"Next", L"H1");
+  b.Toggle(CmdReviewPane, glyph::Panes, Size::Medium, T(L"Reviewing Pane"), L"TP");
+  b.Group(T(L"Tracking"), L"ZT");
+  b.Toggle(CmdTrackChanges, glyph::Track, Size::Large, T(L"Track\nChanges"), L"G");
+  b.Split(CmdAcceptChange, glyph::Accept, Size::Large, T(L"Accept"), L"A2", {CmdAcceptChange, CmdAcceptAll});
+  b.Split(CmdRejectChange, icon::Cancel, Size::Large, T(L"Reject"), L"J", {CmdRejectChange, CmdRejectAll});
+  b.Button(CmdPrevChange, glyph::Up, Size::Medium, T(L"Previous"), L"F");
+  b.Button(CmdNextChange, glyph::Down, Size::Medium, T(L"Next"), L"H1");
 
   // ---- View
-  b.Tab(L"View", L"W");
-  b.Group(L"Views", L"ZV");
-  b.Button(CmdPresentation, icon::Slideshow, Size::Large, L"Present", L"F").tool.enabled = true;
-  b.Group(L"Immersive", L"Z1");
-  RibbonItem& full = b.Toggle(CmdFullScreen, icon::FullScreen, Size::Large, L"Full\nScreen", L"O");
+  b.Tab(T(L"View"), L"W");
+  b.Group(T(L"Views"), L"ZV");
+  b.Button(CmdPresentation, icon::Slideshow, Size::Large, T(L"Present"), L"F").tool.enabled = true;
+  b.Group(T(L"Immersive"), L"Z1");
+  RibbonItem& full = b.Toggle(CmdFullScreen, icon::FullScreen, Size::Large, T(L"Full\nScreen"), L"O");
   full.tool.enabled = true;
   full.tool.checked = ctx.fullscreen;
-  RibbonItem& night = b.Toggle(CmdToggleInvert, icon::QuietHours, Size::Large, L"Night\nReading", L"D");
+  RibbonItem& night = b.Toggle(CmdToggleInvert, icon::QuietHours, Size::Large, T(L"Night\nReading"), L"D");
   night.tool.enabled = true;
   night.tool.checked = ctx.inverted;
-  b.Group(L"Page Movement", L"Z2");
-  b.Toggle(CmdViewContinuous, icon::ViewContinuous, Size::Large, L"Vertical", L"C");
-  b.Toggle(CmdViewSingle, icon::ViewSingle, Size::Large, L"Side\nto Side", L"H");
-  b.Group(L"Show", L"ZS");
-  RibbonItem& ruler = b.Toggle(CmdRuler, 0, Size::Medium, L"Ruler", L"R");
+  b.Group(T(L"Page Movement"), L"Z2");
+  b.Toggle(CmdViewContinuous, icon::ViewContinuous, Size::Large, T(L"Vertical"), L"C");
+  b.Toggle(CmdViewSingle, icon::ViewSingle, Size::Large, T(L"Side\nto Side"), L"H");
+  b.Group(T(L"Show"), L"ZS");
+  RibbonItem& ruler = b.Toggle(CmdRuler, 0, Size::Medium, T(L"Ruler"), L"R");
   ruler.tool.enabled = editing;
   ruler.tool.checked = host_.ViewRuler();
-  b.Toggle(CmdNavigationPane, 0, Size::Medium, L"Navigation Pane", L"K");
-  b.Group(L"Zoom", L"ZZ");
-  b.Menu(CmdZoomMenu, glyph::Zoom, Size::Large, L"Zoom", L"Q", {}).tool.enabled = true;
+  b.Toggle(CmdNavigationPane, 0, Size::Medium, T(L"Navigation Pane"), L"K");
+  b.Group(T(L"Zoom"), L"ZZ");
+  b.Menu(CmdZoomMenu, glyph::Zoom, Size::Large, T(L"Zoom"), L"Q", {}).tool.enabled = true;
   b.Button(CmdZoomActual, icon::Zoom100, Size::Large, L"100%", L"J");
-  b.Toggle(CmdZoomFitPage, icon::Page, Size::Medium, L"One Page", L"1");
-  b.Toggle(CmdViewFacing, icon::ViewFacing, Size::Medium, L"Multiple Pages", L"2");
-  b.Toggle(CmdZoomFitWidth, glyph::FitWidth, Size::Medium, L"Page Width", L"I");
+  b.Toggle(CmdZoomFitPage, icon::Page, Size::Medium, T(L"One Page"), L"1");
+  b.Toggle(CmdViewFacing, icon::ViewFacing, Size::Medium, T(L"Multiple Pages"), L"2");
+  b.Toggle(CmdZoomFitWidth, glyph::FitWidth, Size::Medium, T(L"Page Width"), L"I");
 
   // ---- Developer: content controls, which Word has only here. Hidden until File > Options > Show
   // Developer tab, as in Word; Alt+Q finds them either way.
   if (host_.ViewDeveloperTab() || ribbonAll_) {
-    b.Tab(L"Developer", L"L");
-    b.Group(L"Controls", L"ZC");
-    b.Button(CmdInsertRichText, icon::FontCase, Size::Small, L"Rich Text Content Control", L"R");
-    b.Button(CmdInsertPlainText, glyph::GrowFont, Size::Small, L"Plain Text Content Control", L"P");
-    b.Button(CmdInsertCheckBox, glyph::CheckBox, Size::Small, L"Check Box Content Control", L"K");
-    b.Button(CmdInsertDropDown, icon::DropDownList, Size::Small, L"Drop-Down List Content Control", L"Q");
-    b.Button(CmdInsertDatePicker, icon::Calendar, Size::Small, L"Date Picker Content Control", L"D");
+    b.Tab(T(L"Developer"), L"L");
+    b.Group(T(L"Controls"), L"ZC");
+    b.Button(CmdInsertRichText, icon::FontCase, Size::Small, T(L"Rich Text Content Control"), L"R");
+    b.Button(CmdInsertPlainText, glyph::GrowFont, Size::Small, T(L"Plain Text Content Control"), L"P");
+    b.Button(CmdInsertCheckBox, glyph::CheckBox, Size::Small, T(L"Check Box Content Control"), L"K");
+    b.Button(CmdInsertDropDown, icon::DropDownList, Size::Small, T(L"Drop-Down List Content Control"), L"Q");
+    b.Button(CmdInsertDatePicker, icon::Calendar, Size::Small, T(L"Date Picker Content Control"), L"D");
   }
 
   // ---- Contextual tabs
   // ribbon:check builds every contextual tab, to walk their commands too.
   if (table_ && ((editing && table_->InTable()) || ribbonAll_)) {
-    b.Tab(L"Table Design", L"JT", true);
-    b.Group(L"Table Styles", L"ZS");
-    b.Add(table_->ShadingButton(), Size::Large, L"Shading", L"H").tool.glyph = icon::FillBucket;
-    b.Group(L"Borders", L"ZB", CmdTableProperties);
-    b.Add(table_->BordersButton(), Size::Large, L"Borders", L"B").tool.glyph = icon::BordersAll;
+    b.Tab(T(L"Table Design"), L"JT", true);
+    b.Group(T(L"Table Styles"), L"ZS");
+    b.Add(table_->ShadingButton(), Size::Large, T(L"Shading"), L"H").tool.glyph = icon::FillBucket;
+    b.Group(T(L"Borders"), L"ZB", CmdTableProperties);
+    b.Add(table_->BordersButton(), Size::Large, T(L"Borders"), L"B").tool.glyph = icon::BordersAll;
 
-    b.Tab(L"Table Layout", L"JL", true);
-    b.Group(L"Table", L"ZT");
-    b.Menu(CmdTableSelectCell, glyph::SelectAll, Size::Large, L"Select", L"K",
+    b.Tab(T(L"Table Layout"), L"JL", true);
+    b.Group(T(L"Table"), L"ZT");
+    b.Menu(CmdTableSelectCell, glyph::SelectAll, Size::Large, T(L"Select"), L"K",
            {CmdTableSelectCell, CmdTableSelectColumn, CmdTableSelectRow, CmdTableSelectTable});
-    b.Button(CmdTableProperties, icon::Settings, Size::Large, L"Properties", L"O");
-    b.Group(L"Rows & Columns", L"ZR");
-    b.Menu(CmdTableDeleteColumns, icon::TableDelete, Size::Large, L"Delete", L"D",
+    b.Button(CmdTableProperties, icon::Settings, Size::Large, T(L"Properties"), L"O");
+    b.Group(T(L"Rows & Columns"), L"ZR");
+    b.Menu(CmdTableDeleteColumns, icon::TableDelete, Size::Large, T(L"Delete"), L"D",
            {CmdTableDeleteColumns, CmdTableDeleteRows, CmdTableDeleteTable});
-    b.Button(CmdTableInsertAbove, icon::TableInsertAbove, Size::Large, L"Insert\nAbove", L"A");
-    b.Button(CmdTableInsertBelow, icon::TableInsertBelow, Size::Large, L"Insert\nBelow", L"BE");
-    b.Button(CmdTableInsertLeft, icon::TableInsertLeft, Size::Large, L"Insert\nLeft", L"L");
-    b.Button(CmdTableInsertRight, icon::TableInsertRight, Size::Large, L"Insert\nRight", L"R");
-    b.Group(L"Merge", L"ZM");
-    b.Button(CmdTableMerge, icon::MergeCells, Size::Large, L"Merge\nCells", L"M");
-    b.Button(CmdTableSplit, icon::SplitCells, Size::Large, L"Split\nCells", L"P");
-    b.Group(L"Cell Size", L"ZS", CmdTableProperties, 2);
+    b.Button(CmdTableInsertAbove, icon::TableInsertAbove, Size::Large, T(L"Insert\nAbove"), L"A");
+    b.Button(CmdTableInsertBelow, icon::TableInsertBelow, Size::Large, T(L"Insert\nBelow"), L"BE");
+    b.Button(CmdTableInsertLeft, icon::TableInsertLeft, Size::Large, T(L"Insert\nLeft"), L"L");
+    b.Button(CmdTableInsertRight, icon::TableInsertRight, Size::Large, T(L"Insert\nRight"), L"R");
+    b.Group(T(L"Merge"), L"ZM");
+    b.Button(CmdTableMerge, icon::MergeCells, Size::Large, T(L"Merge\nCells"), L"M");
+    b.Button(CmdTableSplit, icon::SplitCells, Size::Large, T(L"Split\nCells"), L"P");
+    b.Group(T(L"Cell Size"), L"ZS", CmdTableProperties, 2);
     b.Menu(CmdTableAutoFitContents, icon::AutoFit, Size::Large, L"AutoFit", L"F",
            {CmdTableAutoFitContents, CmdTableAutoFitWindow, CmdTableFixedWidth});
-    b.Add(table_->SizeBox(true), Size::Medium, L"Height", L"H");
-    b.Add(table_->SizeBox(false), Size::Medium, L"Width", L"W");
-    b.Button(CmdTableDistributeColumns, icon::DistributeColumns, Size::Medium, L"Distribute Columns", L"UC").newColumn = true;
-    b.Group(L"Data", L"ZD2");
-    b.Toggle(CmdTableHeaderRow, icon::RepeatHeader, Size::Large, L"Repeat\nHeader Rows", L"J");
-    b.Button(CmdTableToText, icon::ConvertToText, Size::Large, L"Convert\nto Text", L"V");
+    b.Add(table_->SizeBox(true), Size::Medium, T(L"Height"), L"H");
+    b.Add(table_->SizeBox(false), Size::Medium, T(L"Width"), L"W");
+    b.Button(CmdTableDistributeColumns, icon::DistributeColumns, Size::Medium, T(L"Distribute Columns"), L"UC").newColumn = true;
+    b.Group(T(L"Data"), L"ZD2");
+    b.Toggle(CmdTableHeaderRow, icon::RepeatHeader, Size::Large, T(L"Repeat\nHeader Rows"), L"J");
+    b.Button(CmdTableToText, icon::ConvertToText, Size::Large, T(L"Convert\nto Text"), L"V");
   }
   if (picture || ribbonAll_) {
-    b.Tab(L"Picture Format", L"JP", true);
-    b.Group(L"Adjust", L"ZT");
-    b.Button(CmdPictureReset, glyph::Reset, Size::Medium, L"Reset Picture", L"Q");
-    b.Group(L"Accessibility", L"Z1");
-    b.Toggle(CmdPicturePanel, icon::AltText, Size::Large, L"Alt\nText", L"AT");
+    b.Tab(T(L"Picture Format"), L"JP", true);
+    b.Group(T(L"Adjust"), L"ZT");
+    b.Button(CmdPictureReset, glyph::Reset, Size::Medium, T(L"Reset Picture"), L"Q");
+    b.Group(T(L"Accessibility"), L"Z1");
+    b.Toggle(CmdPicturePanel, icon::AltText, Size::Large, T(L"Alt\nText"), L"AT");
     arrange();
-    b.Group(L"Size", L"ZZ", CmdPicturePanel, 2);
-    b.Toggle(CmdPictureCrop, icon::Crop, Size::Large, L"Crop", L"V");
-    b.Add(ObjectSizeBox(true), Size::Medium, L"Height", L"H");
-    b.Add(ObjectSizeBox(false), Size::Medium, L"Width", L"W");
+    b.Group(T(L"Size"), L"ZZ", CmdPicturePanel, 2);
+    b.Toggle(CmdPictureCrop, icon::Crop, Size::Large, T(L"Crop"), L"V");
+    b.Add(ObjectSizeBox(true), Size::Medium, T(L"Height"), L"H");
+    b.Add(ObjectSizeBox(false), Size::Medium, T(L"Width"), L"W");
   }
   if (shape || ribbonAll_) {
-    b.Tab(L"Shape Format", L"JD", true);
-    b.Group(L"Insert Shapes", L"ZH");
-    b.Menu(CmdInsertRectangle, icon::Shapes, Size::Large, L"Shapes", L"SH", shapes);
-    b.Button(CmdInsertTextBox, icon::TextBox, Size::Medium, L"Draw Text Box", L"X");
-    b.Group(L"Shape Styles", L"ZY", CmdShapePanel);
-    b.Toggle(CmdShapePanel, icon::Settings, Size::Large, L"Format\nShape", L"O");
+    b.Tab(T(L"Shape Format"), L"JD", true);
+    b.Group(T(L"Insert Shapes"), L"ZH");
+    b.Menu(CmdInsertRectangle, icon::Shapes, Size::Large, T(L"Shapes"), L"SH", shapes);
+    b.Button(CmdInsertTextBox, icon::TextBox, Size::Medium, T(L"Draw Text Box"), L"X");
+    b.Group(T(L"Shape Styles"), L"ZY", CmdShapePanel);
+    b.Toggle(CmdShapePanel, icon::Settings, Size::Large, T(L"Format\nShape"), L"O");
     arrange();
-    b.Group(L"Size", L"ZZ", CmdShapePanel, 2);
-    b.Add(ObjectSizeBox(true), Size::Medium, L"Height", L"H");
-    b.Add(ObjectSizeBox(false), Size::Medium, L"Width", L"W");
+    b.Group(T(L"Size"), L"ZZ", CmdShapePanel, 2);
+    b.Add(ObjectSizeBox(true), Size::Medium, T(L"Height"), L"H");
+    b.Add(ObjectSizeBox(false), Size::Medium, T(L"Width"), L"W");
   }
   if ((editing && hf_) || ribbonAll_) {
-    b.Tab(L"Header & Footer", L"JH", true);
-    b.Group(L"Header & Footer", L"ZH");
-    b.Button(CmdPageNumber, icon::PageNumber, Size::Large, L"Page\nNumber", L"NU");
-    b.Group(L"Insert", L"ZI");
-    if (format_) b.Add(format_->DateBox(), Size::Large, L"Date &\nTime", L"D");
-    b.Button(CmdInsertPicture, icon::Picture, Size::Large, L"Pictures", L"P");
-    b.Group(L"Navigation", L"ZN");
-    b.Toggle(CmdLinkToPrevious, icon::Link, Size::Medium, L"Link to Previous", L"K");
-    b.Group(L"Options", L"ZO");
-    b.Toggle(CmdDifferentFirstPage, 0, Size::Medium, L"Different First Page", L"A");
-    b.Toggle(CmdDifferentOddEven, 0, Size::Medium, L"Different Odd & Even Pages", L"V");
-    b.Group(L"Close", L"ZC");
-    b.Button(CmdCloseHeaderFooter, icon::Cancel, Size::Large, L"Close Header\nand Footer", L"C");
+    b.Tab(T(L"Header & Footer"), L"JH", true);
+    b.Group(T(L"Header & Footer"), L"ZH");
+    b.Button(CmdPageNumber, icon::PageNumber, Size::Large, T(L"Page\nNumber"), L"NU");
+    b.Group(T(L"Insert"), L"ZI");
+    if (format_) b.Add(format_->DateBox(), Size::Large, T(L"Date &\nTime"), L"D");
+    b.Button(CmdInsertPicture, icon::Picture, Size::Large, T(L"Pictures"), L"P");
+    b.Group(T(L"Navigation"), L"ZN");
+    b.Toggle(CmdLinkToPrevious, icon::Link, Size::Medium, T(L"Link to Previous"), L"K");
+    b.Group(T(L"Options"), L"ZO");
+    b.Toggle(CmdDifferentFirstPage, 0, Size::Medium, T(L"Different First Page"), L"A");
+    b.Toggle(CmdDifferentOddEven, 0, Size::Medium, T(L"Different Odd & Even Pages"), L"V");
+    b.Group(T(L"Close"), L"ZC");
+    b.Button(CmdCloseHeaderFooter, icon::Cancel, Size::Large, T(L"Close Header\nand Footer"), L"C");
   }
   // A picture or shape just inserted shows its tab, as in Word; selecting one later doesn't.
   if (!object || d != ribbonInserted_) ribbonInserted_ = fw::doc::kNone;
-  else m.show = picture ? L"Picture Format" : L"Shape Format";
+  else m.show = picture ? T(L"Picture Format") : T(L"Shape Format");
 
   // ---- The File page: Word's proofing and user name options.
   // (Spelling and AutoCorrect as you type are the File page's own, under Editing.)
-  m.file = {{RibbonFilePlace::Options, CmdDeveloperTab, L"Show Developer tab", L"Content controls: text, check boxes, lists and dates", 0, true},
-            {RibbonFilePlace::Options, CmdReviewerName, L"User name…", L"The name your changes and comments carry", 0}};
+  m.file = {{RibbonFilePlace::Options, CmdDeveloperTab, T(L"Show Developer tab"), T(L"Content controls: text, check boxes, lists and dates"), 0, true},
+            {RibbonFilePlace::Options, CmdReviewerName, T(L"User name…"), T(L"The name your changes and comments carry"), 0}};
 }
 
 ToolItem DocView::ObjectSizeBox(bool height) {

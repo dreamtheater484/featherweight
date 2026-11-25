@@ -9,6 +9,7 @@
 #include <cwchar>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
@@ -36,14 +37,14 @@ enum Kind {
   kBottomPercent, kAbove, kBelow, kBars, kScales, kIcons, kFormula, kNotBetween, kNotEqual, kGreaterEqual,
   kLessEqual, kBeginsWith, kEndsWith, kNotContains, kKinds
 };
-constexpr const wchar_t* kKindNames[] = {
-    L"Greater than",         L"Less than",          L"Between",         L"Equal to",
-    L"Text that contains",   L"A date occurring",   L"Duplicate values", L"Unique values",
-    L"Top N items",          L"Top N %",            L"Bottom N items",  L"Bottom N %",
-    L"Above average",        L"Below average",      L"Data bars",       L"Color scales",
-    L"Icon sets",            L"Use a formula",      L"Not between",     L"Not equal to",
-    L"Greater than or equal to", L"Less than or equal to", L"Text that begins with", L"Text that ends with",
-    L"Text that does not contain"};
+constexpr UiText kKindNames[] = {
+    N_(L"Greater than"),         N_(L"Less than"),          N_(L"Between"),         N_(L"Equal to"),
+    N_(L"Text that contains"),   N_(L"A date occurring"),   N_(L"Duplicate values"), N_(L"Unique values"),
+    N_(L"Top N items"),          N_(L"Top N %"),            N_(L"Bottom N items"),  N_(L"Bottom N %"),
+    N_(L"Above average"),        N_(L"Below average"),      N_(L"Data bars"),       N_(L"Color scales"),
+    N_(L"Icon sets"),            N_(L"Use a formula"),      N_(L"Not between"),     N_(L"Not equal to"),
+    N_(L"Greater than or equal to"), N_(L"Less than or equal to"), N_(L"Text that begins with"), N_(L"Text that ends with"),
+    N_(L"Text that does not contain")};
 // Script names (rule:greater,5).
 constexpr const wchar_t* kKindKeys[] = {L"greater", L"less",      L"between",   L"equal",    L"contains",
                                         L"date",    L"duplicate", L"unique",    L"top",      L"toppct",
@@ -79,6 +80,12 @@ std::vector<std::wstring> Wide(const char* const* names, size_t n) {
 template <size_t N>
 std::vector<std::wstring> List(const wchar_t* const (&names)[N]) {
   return std::vector<std::wstring>(std::begin(names), std::end(names));
+}
+template <size_t N>
+std::vector<std::wstring> List(const UiText (&names)[N]) {
+  std::vector<std::wstring> v;
+  for (const UiText& n : names) v.emplace_back(n);
+  return v;
 }
 
 std::string Quote(std::string_view s) {
@@ -178,20 +185,20 @@ int DxfOf(const std::string& xml) {
 class WorkbookView::RulesPanel : public PanelContent {
  public:
   explicit RulesPanel(WorkbookView& view) : v_(view) {
-    list_.label = L"Rules on this sheet";
+    list_.label = ::T(L"Rules on this sheet");
     list_.rowHeight = 34;
     list_.onSelect = [this](int i) { Select(i); };
-    up_.text = L"Move up";
-    down_.text = L"Move down";
-    delete_.text = L"Delete";
+    up_.text = ::T(L"Move up");
+    down_.text = ::T(L"Move down");
+    delete_.text = ::T(L"Delete");
     up_.onInvoke = [this] { Move(-1); };
     down_.onInvoke = [this] { Move(1); };
     delete_.onInvoke = [this] {
       if (selected_ < 0 || selected_ >= static_cast<int>(rules_.size())) return;
       rules_.erase(rules_.begin() + selected_);
-      Commit(u"Delete Rule", std::min(selected_, static_cast<int>(rules_.size()) - 1));
+      Commit(::T(u"Delete Rule"), std::min(selected_, static_cast<int>(rules_.size()) - 1));
     };
-    kind_.label = L"Format cells that are";
+    kind_.label = ::T(L"Format cells that are");
     kind_.items = List(kKindNames);
     kind_.selected = 0;
     kind_.onChange = [this](int) { Place(); };
@@ -202,28 +209,28 @@ class WorkbookView::RulesPanel : public PanelContent {
       const std::string sq = SqrefOf(text);
       if (sq.empty()) return;
       data::SetCfSqref(rules_[static_cast<size_t>(selected_)], sq);
-      Commit(u"Conditional Formatting", selected_);
+      Commit(::T(u"Conditional Formatting"), selected_);
     };
-    stop_.text = L"Stop if true";
+    stop_.text = ::T(L"Stop if true");
     stop_.toggle = true;
     stop_.onInvoke = [this] {
       if (selected_ < 0) return;
       rules_[static_cast<size_t>(selected_)].stopIfTrue = stop_.checked;
-      Commit(u"Conditional Formatting", selected_);
+      Commit(::T(u"Conditional Formatting"), selected_);
     };
-    add_.text = L"Add rule";
+    add_.text = ::T(L"Add rule");
     add_.onInvoke = [this] { Make(false); };
-    change_.text = L"Change rule";
+    change_.text = ::T(L"Change rule");
     change_.onInvoke = [this] { Make(true); };
-    clearSel_.text = L"Clear from selection";
+    clearSel_.text = ::T(L"Clear from selection");
     clearSel_.textSize = 12;
     clearSel_.onInvoke = [this] { v_.RulesCommand(CmdCfClearSelection); };
-    clearAll_.text = L"Clear from sheet";
+    clearAll_.text = ::T(L"Clear from sheet");
     clearAll_.textSize = 12;
     clearAll_.onInvoke = [this] { v_.RulesCommand(CmdCfClearSheet); };
   }
 
-  std::wstring Title() const override { return L"Conditional formatting"; }
+  std::wstring Title() const override { return ::T(L"Conditional formatting"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -308,7 +315,7 @@ class WorkbookView::RulesPanel : public PanelContent {
       y += 20 * u;
     };
     const float third = (right - left - 2 * gap) / 3, half = (right - left - gap) / 2;
-    label(L"Rules on this sheet, the first applying first");
+    label(::T(L"Rules on this sheet, the first applying first"));
     const float listBottom = std::max(y + 110 * u, std::min(y + 190 * u, body_.bottom - 400 * u));
     list_.rc = RectF(left, y, right, listBottom);
     y = listBottom + 8 * u;
@@ -318,7 +325,7 @@ class WorkbookView::RulesPanel : public PanelContent {
     for (PanelButton* b : {&up_, &down_, &delete_}) b->visible = selected_ >= 0;
     y += 40 * u;
     const int k = kind_.selected;
-    label(selected_ >= 0 ? L"The selected rule: format cells that are" : L"New rule: format cells that are");
+    label(selected_ >= 0 ? ::T(L"The selected rule: format cells that are") : ::T(L"New rule: format cells that are"));
     kind_.rc = RectF(left, y, right, y + 30 * u);
     y += 40 * u;
     // The values, or the gallery's choices.
@@ -326,8 +333,8 @@ class WorkbookView::RulesPanel : public PanelContent {
     value_[0].visible = n >= 1;
     value_[1].visible = n == 2;
     if (n >= 1) {
-      label(k == kFormula ? L"Formula" : k == kTop || k == kBottom || k == kTopPercent || k == kBottomPercent ? L"How many"
-            : n == 2 ? L"From and to" : L"Value");
+      label(k == kFormula ? ::T(L"Formula") : k == kTop || k == kBottom || k == kTopPercent || k == kBottomPercent ? ::T(L"How many")
+            : n == 2 ? ::T(L"From and to") : ::T(L"Value"));
       value_[0].rc = RectF(left, y, n == 2 ? left + half : right, y + 30 * u);
       value_[1].rc = RectF(left + half + gap, y, right, y + 30 * u);
       y += 40 * u;
@@ -342,23 +349,23 @@ class WorkbookView::RulesPanel : public PanelContent {
         choice_.items = std::move(items);
         choice_.selected = 0;
       }
-      label(k == kDate ? L"Period" : k == kBars ? L"Fill" : k == kScales ? L"Colors" : L"Icons");
+      label(k == kDate ? ::T(L"Period") : k == kBars ? ::T(L"Fill") : k == kScales ? ::T(L"Colors") : ::T(L"Icons"));
       choice_.rc = RectF(left, y, right, y + 30 * u);
       y += 40 * u;
     }
     format_.visible = HasFormat(k);
     std::vector<std::wstring> formats = List(data::kCfPresets);
-    if (selected_ >= 0 && DxfOf(rules_[static_cast<size_t>(selected_)].xml) >= 0) formats.push_back(L"The rule's own format");
+    if (selected_ >= 0 && DxfOf(rules_[static_cast<size_t>(selected_)].xml) >= 0) formats.push_back(::T(L"The rule's own format"));
     if (format_.items != formats) {
       format_.items = std::move(formats);
       format_.selected = static_cast<int>(format_.items.size()) - (selected_ >= 0 && format_.items.size() > std::size(data::kCfPresets) ? 1 : static_cast<int>(format_.items.size()));
     }
     if (format_.visible) {
-      label(L"With");
+      label(::T(L"With"));
       format_.rc = RectF(left, y, right, y + 30 * u);
       y += 40 * u;
     }
-    label(L"Applies to");
+    label(::T(L"Applies to"));
     applies_.rc = RectF(left, y, right, y + 30 * u);
     y += 38 * u;
     stop_.rc = RectF(left, y, left + half, y + 26 * u);
@@ -430,18 +437,18 @@ class WorkbookView::RulesPanel : public PanelContent {
     const int to = selected_ + dir;
     if (selected_ < 0 || to < 0 || to >= static_cast<int>(rules_.size())) return;
     std::swap(rules_[static_cast<size_t>(selected_)], rules_[static_cast<size_t>(to)]);
-    Commit(u"Conditional Formatting", to);
+    Commit(::T(u"Conditional Formatting"), to);
   }
 
   void Make(bool change) {
     if (change && selected_ < 0) return;
     const std::string sq = SqrefOf(applies_.Text());
     if (sq.empty()) {
-      v_.host_.ViewMessage(BannerKind::Warning, L"Type the cells the rule applies to, such as A1:B10.");
+      v_.host_.ViewMessage(BannerKind::Warning, ::T(L"Type the cells the rule applies to, such as A1:B10."));
       return;
     }
     const int keep = change ? DxfOf(rules_[static_cast<size_t>(selected_)].xml) : -1;
-    edit::EditGroup group(v_.Ed(), change ? u"Edit Rule" : u"New Rule");
+    edit::EditGroup group(v_.Ed(), change ? ::T(u"Edit Rule") : ::T(u"New Rule"));
     data::CfRule r;
     if (!Build(kind_.selected, value_[0].Text(), value_[1].Text(), choice_.selected, format_.selected, sq, keep, r)) {
       v_.host_.ViewMessage(BannerKind::Warning, L"Type a value for the rule (a number, text or a formula with =).");
@@ -455,7 +462,7 @@ class WorkbookView::RulesPanel : public PanelContent {
     } else {
       rules_.insert(rules_.begin(), std::move(r));  // a new rule applies first, as in Excel
     }
-    group.done = Commit(change ? u"Edit Rule" : u"New Rule", change ? at : -1, false);
+    group.done = Commit(change ? ::T(u"Edit Rule") : ::T(u"New Rule"), change ? at : -1, false);
   }
 
   bool Commit(const char16_t* name, int select, bool reload = true) {
@@ -482,11 +489,11 @@ class WorkbookView::RulesPanel : public PanelContent {
 // Data validation
 
 namespace {
-constexpr const wchar_t* kAllow[] = {L"Any value", L"Whole number", L"Decimal", L"List",
-                                     L"Date",      L"Time",         L"Text length", L"Custom"};
-constexpr const wchar_t* kDvOps[] = {L"between",   L"not between", L"equal to", L"not equal to", L"greater than",
-                                     L"less than", L"greater than or equal to", L"less than or equal to"};
-constexpr const wchar_t* kAlerts[] = {L"Stop", L"Warning", L"Information"};
+constexpr UiText kAllow[] = {N_(L"Any value"), N_(L"Whole number"), N_(L"Decimal"), N_(L"List"),
+                                     N_(L"Date"),      N_(L"Time"),         N_(L"Text length"), N_(L"Custom")};
+constexpr UiText kDvOps[] = {N_(L"between"),   N_(L"not between"), N_(L"equal to"), N_(L"not equal to"), N_(L"greater than"),
+                                     N_(L"less than"), N_(L"greater than or equal to"), N_(L"less than or equal to")};
+constexpr UiText kAlerts[] = {N_(L"Stop"), N_(L"Warning"), N_(L"Information")};
 }  // namespace
 
 class WorkbookView::ValidationPanel : public PanelContent {
@@ -498,24 +505,24 @@ class WorkbookView::ValidationPanel : public PanelContent {
     op_.onChange = [this](int) { Place(); };
     alert_.items = List(kAlerts);
     for (ComboBox* b : {&min_, &max_, &inTitle_, &inText_, &errTitle_, &errText_}) b->autoComplete = false;
-    blank_.text = L"Ignore blank";
-    dropDown_.text = L"In-cell dropdown";
-    showIn_.text = L"Show input message";
-    showErr_.text = L"Show error alert";
+    blank_.text = ::T(L"Ignore blank");
+    dropDown_.text = ::T(L"In-cell dropdown");
+    showIn_.text = ::T(L"Show input message");
+    showErr_.text = ::T(L"Show error alert");
     for (PanelButton* b : {&blank_, &dropDown_, &showIn_, &showErr_}) b->toggle = true;
-    apply_.text = L"Apply";
+    apply_.text = ::T(L"Apply");
     apply_.onInvoke = [this] { Apply(); };
-    clear_.text = L"Clear all";
+    clear_.text = ::T(L"Clear all");
     clear_.onInvoke = [this] { Clear(); };
-    circle_.text = L"Circle invalid data";
+    circle_.text = ::T(L"Circle invalid data");
     circle_.textSize = 12;
     circle_.onInvoke = [this] { v_.RulesCommand(CmdCircleInvalid); };
-    uncircle_.text = L"Clear circles";
+    uncircle_.text = ::T(L"Clear circles");
     uncircle_.textSize = 12;
     uncircle_.onInvoke = [this] { v_.RulesCommand(CmdClearCircles); };
   }
 
-  std::wstring Title() const override { return L"Data validation"; }
+  std::wstring Title() const override { return ::T(L"Data validation"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -617,14 +624,14 @@ class WorkbookView::ValidationPanel : public PanelContent {
     labels_.clear();
     auto label = [&](const wchar_t* text, float x0, float x1) { labels_.push_back({text, RectF(x0, y, x1, y + 16 * u)}); };
     const int t = allow_.selected;
-    label(L"Allow", left, right);
+    label(::T(L"Allow"), left, right);
     y += 20 * u;
     allow_.rc = RectF(left, y, right, y + 30 * u);
     y += 38 * u;
     const bool ops = t != 0 && t != 3 && t != 7;
     op_.visible = ops;
     if (ops) {
-      label(L"Data", left, right);
+      label(::T(L"Data"), left, right);
       y += 20 * u;
       op_.rc = RectF(left, y, right, y + 30 * u);
       y += 38 * u;
@@ -633,9 +640,9 @@ class WorkbookView::ValidationPanel : public PanelContent {
     min_.visible = t != 0;
     max_.visible = two;
     if (t != 0) {
-      label(t == 3 ? L"Source (items, or =range)" : t == 7 ? L"Formula" : two ? L"Minimum" : L"Value", left,
+      label(t == 3 ? L"Source (items, or =range)" : t == 7 ? ::T(L"Formula") : two ? ::T(L"Minimum") : ::T(L"Value"), left,
             two ? left + half : right);
-      if (two) label(L"Maximum", left + half + gap, right);
+      if (two) label(::T(L"Maximum"), left + half + gap, right);
       y += 20 * u;
       min_.rc = RectF(left, y, two ? left + half : right, y + 30 * u);
       max_.rc = RectF(left + half + gap, y, right, y + 30 * u);
@@ -647,8 +654,8 @@ class WorkbookView::ValidationPanel : public PanelContent {
     y += 34 * u;
     showIn_.rc = RectF(left, y, right, y + 26 * u);
     y += 30 * u;
-    label(L"Title", left, left + half);
-    label(L"Input message", left + half + gap, right);
+    label(::T(L"Title"), left, left + half);
+    label(::T(L"Input message"), left + half + gap, right);
     y += 20 * u;
     inTitle_.rc = RectF(left, y, left + half, y + 30 * u);
     inText_.rc = RectF(left + half + gap, y, right, y + 30 * u);
@@ -656,8 +663,8 @@ class WorkbookView::ValidationPanel : public PanelContent {
     showErr_.rc = RectF(left, y, left + half, y + 26 * u);
     alert_.rc = RectF(left + half + gap, y - 2 * u, right, y + 28 * u);
     y += 34 * u;
-    label(L"Title", left, left + half);
-    label(L"Error message", left + half + gap, right);
+    label(::T(L"Title"), left, left + half);
+    label(::T(L"Error message"), left + half + gap, right);
     y += 20 * u;
     errTitle_.rc = RectF(left, y, left + half, y + 30 * u);
     errText_.rc = RectF(left + half + gap, y, right, y + 30 * u);
@@ -681,13 +688,13 @@ class WorkbookView::ValidationPanel : public PanelContent {
     data::ClearValidations(rules, v_.Selected());
     const bool nothing = v.type == Validation::Type::Any && v.prompt.empty() && v.promptTitle.empty();
     if (!nothing) rules.push_back(std::move(v));
-    v_.ApplyValidations(rules, u"Data Validation");
+    v_.ApplyValidations(rules, ::T(u"Data Validation"));
   }
 
   void Clear() {
     std::vector<Validation> rules = v_.Validations();
     data::ClearValidations(rules, v_.Selected());
-    v_.ApplyValidations(rules, u"Data Validation");
+    v_.ApplyValidations(rules, ::T(u"Data Validation"));
     Open();
   }
 
@@ -710,7 +717,7 @@ class WorkbookView::ListPanel : public PanelContent {
       if (!filling_) Pick(i);
     };
   }
-  std::wstring Title() const override { return L"Choose a value"; }
+  std::wstring Title() const override { return ::T(L"Choose a value"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     list_.rc = RectF(body.left + 16 * ui, body.top + 12 * ui, body.right - 16 * ui, body.bottom - 16 * ui);
     return {&list_};
@@ -793,21 +800,21 @@ void WorkbookView::ShowRulesPanel(bool manage) {
 bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet() && Current().Kind() == SheetKind::Worksheet;
   switch (cmd) {
-    case CmdCondFormat: s.label = L"Conditional formatting: new rule…"; break;
-    case CmdCfManage: s.label = L"Conditional formatting: manage rules…"; break;
-    case CmdCfClearSelection: s.label = L"Conditional formatting: clear rules from selected cells"; break;
-    case CmdCfClearSheet: s.label = L"Conditional formatting: clear rules from entire sheet"; break;
-    case CmdCondFormatBox: s.label = L"Conditional formatting"; break;
-    case CmdDataValidation: s.label = L"Data validation…"; break;
-    case CmdCircleInvalid: s.label = L"Circle invalid data"; break;
-    case CmdClearCircles: s.label = L"Clear validation circles"; s.enabled = !circles_.empty(); return true;
-    case CmdValidationList: s.label = L"Pick from the list"; s.shortcut = L"Alt+Down"; break;
-    case CmdCreateTable: s.label = L"Table…"; s.shortcut = L"Ctrl+T"; break;
-    case CmdTableDesign: s.label = L"Table design…"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
-    case CmdConvertToRange: s.label = L"Convert to range"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
+    case CmdCondFormat: s.label = ::T(L"Conditional formatting: new rule…"); break;
+    case CmdCfManage: s.label = ::T(L"Conditional formatting: manage rules…"); break;
+    case CmdCfClearSelection: s.label = ::T(L"Conditional formatting: clear rules from selected cells"); break;
+    case CmdCfClearSheet: s.label = ::T(L"Conditional formatting: clear rules from entire sheet"); break;
+    case CmdCondFormatBox: s.label = ::T(L"Conditional formatting"); break;
+    case CmdDataValidation: s.label = ::T(L"Data validation…"); break;
+    case CmdCircleInvalid: s.label = ::T(L"Circle invalid data"); break;
+    case CmdClearCircles: s.label = ::T(L"Clear validation circles"); s.enabled = !circles_.empty(); return true;
+    case CmdValidationList: s.label = ::T(L"Pick from the list"); s.shortcut = L"Alt+Down"; break;
+    case CmdCreateTable: s.label = ::T(L"Table…"); s.shortcut = L"Ctrl+T"; break;
+    case CmdTableDesign: s.label = ::T(L"Table design…"); s.enabled = cells && TableIndexAt(active_) >= 0; return true;
+    case CmdConvertToRange: s.label = ::T(L"Convert to range"); s.enabled = cells && TableIndexAt(active_) >= 0; return true;
     case CmdTableTotalRow: {
       const int t = cells ? TableIndexAt(active_) : -1;
-      s.label = L"Total row";
+      s.label = ::T(L"Total row");
       s.enabled = t >= 0;
       s.checked = t >= 0 && Current().Tables()[static_cast<size_t>(t)].totalsRows > 0;  // the ribbon's check box
       return true;
@@ -830,7 +837,7 @@ bool WorkbookView::RulesCommand(int cmd) {
       std::vector<data::CfRule> rules = data::ReadCfRules(Current().Text());
       if (cmd == CmdCfClearSheet) rules.clear();
       else data::ClearCfRules(rules, Selected());
-      ApplyCfRules(rules, u"Clear Rules");
+      ApplyCfRules(rules, ::T(u"Clear Rules"));
       break;
     }
     case CmdDataValidation: {
@@ -900,7 +907,7 @@ std::vector<std::string> TableStyleNames() {
   return out;
 }
 std::wstring StyleLabel(const std::string& name) {
-  if (name.empty()) return L"None";
+  if (name.empty()) return ::T(L"None");
   std::wstring w = Utf8ToWide(name.rfind("TableStyle", 0) == 0 ? name.substr(10) : name);
   for (size_t i = 1; i < w.size(); ++i)
     if (iswdigit(w[i]) && !iswdigit(w[i - 1])) {
@@ -1062,9 +1069,9 @@ class TableStyleGallery : public Control {
     const wchar_t* section = nullptr;
     for (size_t i = 0; i < names.size(); ++i) {
       const std::string& n = names[i];
-      const wchar_t* sec = n.rfind("TableStyleMedium", 0) == 0 ? L"Medium" : n.rfind("TableStyleDark", 0) == 0 ? L"Dark"
-                           : n.rfind("TableStyleLight", 0) == 0 || n.empty()                     ? L"Light"
-                                                                                                 : L"Custom";
+      const wchar_t* sec = n.rfind("TableStyleMedium", 0) == 0 ? ::T(L"Medium") : n.rfind("TableStyleDark", 0) == 0 ? ::T(L"Dark")
+                           : n.rfind("TableStyleLight", 0) == 0 || n.empty()                     ? ::T(L"Light")
+                                                                                                 : ::T(L"Custom");
       if (sec != section) {
         if (section) y += kCellH * u;  // past the last row of the one before
         heads_.push_back({sec, rc.top + y});
@@ -1172,21 +1179,21 @@ class WorkbookView::TablePanel : public PanelContent {
  public:
   explicit TablePanel(WorkbookView& view) : v_(view) {
     styles_ = TableStyleNames();
-    style_.label = L"Table style";
+    style_.label = ::T(L"Table style");
     style_.names = styles_;
     for (const std::string& s : styles_) style_.labels.push_back(StyleLabel(s));
     style_.onPick = [this](int i) {
       if (index_ >= 0 && i >= 0) Change([&](Table& t) { t.style.name = styles_[static_cast<size_t>(i)]; });
     };
     range_.autoComplete = name_.autoComplete = false;
-    headers_.text = L"My table has headers";
+    headers_.text = ::T(L"My table has headers");
     headers_.toggle = true;
-    create_.text = L"Create table";
+    create_.text = ::T(L"Create table");
     create_.onInvoke = [this] {
       Range r;
       std::string sq = SqrefOf(range_.Text());
       if (sq.empty() || !ParseRange(sq, r)) {
-        v_.host_.ViewMessage(BannerKind::Warning, L"Type the table's cells, such as A1:D20.");
+        v_.host_.ViewMessage(BannerKind::Warning, ::T(L"Type the table's cells, such as A1:D20."));
         return;
       }
       if (v_.CreateTable(r, headers_.checked, styles_[static_cast<size_t>(std::max(0, style_.selected))])) Open();
@@ -1195,26 +1202,26 @@ class WorkbookView::TablePanel : public PanelContent {
       const std::string n = WideToUtf8(Trim(text));
       if (index_ < 0 || n.empty()) return;
       if (!TableNameOk(n)) {
-        v_.host_.ViewMessage(BannerKind::Warning, L"The name isn't valid: start with a letter or _, and use no spaces.");
+        v_.host_.ViewMessage(BannerKind::Warning, ::T(L"The name isn't valid: start with a letter or _, and use no spaces."));
         return;
       }
       Change([&](Table& t) { t.name = t.displayName = n; });
     };
-    const wchar_t* texts[] = {L"Total row", L"Banded rows", L"Banded columns", L"First column", L"Last column", L"Filter button"};
+    const wchar_t* texts[] = {::T(L"Total row"), ::T(L"Banded rows"), ::T(L"Banded columns"), ::T(L"First column"), ::T(L"Last column"), ::T(L"Filter button")};
     for (int i = 0; i < 6; ++i) {
       option_[i].text = texts[i];
       option_[i].toggle = true;
       option_[i].onInvoke = [this, i] { Option(i, option_[i].checked); };
     }
-    convert_.text = L"Convert to range";
+    convert_.text = ::T(L"Convert to range");
     convert_.onInvoke = [this] { v_.RulesCommand(CmdConvertToRange); };
-    resize_.text = L"Resize";
+    resize_.text = ::T(L"Resize");
     resize_.onInvoke = [this] {
       Range r;
       const std::string sq = SqrefOf(range_.Text());
       if (index_ < 0) return;
       if (sq.empty() || !ParseRange(sq, r)) {
-        v_.host_.ViewMessage(BannerKind::Warning, L"Type the table's new cells, such as A1:D20.");
+        v_.host_.ViewMessage(BannerKind::Warning, ::T(L"Type the table's new cells, such as A1:D20."));
         return;
       }
       v_.ResizeTable(static_cast<size_t>(index_), r);
@@ -1222,7 +1229,7 @@ class WorkbookView::TablePanel : public PanelContent {
     };
   }
 
-  std::wstring Title() const override { return index_ >= 0 ? L"Table design" : L"Create table"; }
+  std::wstring Title() const override { return index_ >= 0 ? ::T(L"Table design") : ::T(L"Create table"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -1282,19 +1289,19 @@ class WorkbookView::TablePanel : public PanelContent {
     name_.visible = convert_.visible = resize_.visible = design;
     for (PanelButton& b : option_) b.visible = design;
     if (!design) {
-      label(L"Where is the data for your table?");
+      label(::T(L"Where is the data for your table?"));
       range_.rc = RectF(left, y, right, y + 30 * u);
       y += 38 * u;
       headers_.rc = RectF(left, y, right, y + 28 * u);
       y += 38 * u;
     } else {
-      label(L"Table name");
+      label(::T(L"Table name"));
       name_.rc = RectF(left, y, right, y + 30 * u);
       y += 40 * u;
     }
     // The styles' previews take the room that's left, above Create table (they scroll in less).
     auto gallery = [&](float reserve) {
-      label(L"Style");
+      label(::T(L"Style"));
       const float bottom = std::max(y + 90 * u, std::min(y + style_.ContentHeight(), body_.bottom - reserve));
       style_.rc = RectF(left, y, right, bottom);
       y = bottom + 12 * u;
@@ -1304,14 +1311,14 @@ class WorkbookView::TablePanel : public PanelContent {
       gallery(54 * u);
       create_.rc = RectF(left, y, left + half, y + 30 * u);
     } else {
-      label(L"Table style options");
+      label(::T(L"Table style options"));
       for (int i = 0; i < 6; ++i) {
         const float x = i % 2 ? left + half + gap : left;
         option_[i].rc = RectF(x, y, x + half, y + 28 * u);
         if (i % 2) y += 36 * u;
       }
       y += 8 * u;
-      label(L"Resize table: the new range");
+      label(::T(L"Resize table: the new range"));
       range_.rc = RectF(left, y, left + half, y + 30 * u);
       resize_.rc = RectF(left + half + gap, y, right, y + 30 * u);
       y += 42 * u;
@@ -1325,7 +1332,7 @@ class WorkbookView::TablePanel : public PanelContent {
 
   void Change(const std::function<void(Table&)>& change) {
     if (index_ < 0) return;
-    v_.ChangeTable(static_cast<size_t>(index_), change, u"Table");
+    v_.ChangeTable(static_cast<size_t>(index_), change, ::T(u"Table"));
     Open();
   }
 
@@ -1383,7 +1390,7 @@ void WorkbookView::ShowTablePanel() {
 bool WorkbookView::CreateTable(Range r, bool headers, const std::string& style) {
   const int sheet = static_cast<int>(sheet_);
   if (TableIndexAt({r.firstRow, r.firstCol}) >= 0 || r.lastCol - r.firstCol >= 16384) return false;
-  edit::EditGroup group(Ed(), u"Create Table");
+  edit::EditGroup group(Ed(), ::T(u"Create Table"));
   // The sheet's filter goes, as in Excel, its hidden rows shown.
   if (const std::optional<SheetFilter>& f = Current().Filter();
       f && !(f->ref.lastRow < r.firstRow || f->ref.firstRow > r.lastRow || f->ref.lastCol < r.firstCol || f->ref.firstCol > r.lastCol)) {
@@ -1415,7 +1422,7 @@ bool WorkbookView::CreateTable(Range r, bool headers, const std::string& style) 
       n = buf;
     }
     else if (headers && v.type == ValueType::Bool) n = v.boolean ? "TRUE" : "FALSE";
-    if (n.empty()) n = "Column" + std::to_string(col - r.firstCol + 1);
+    if (n.empty()) n = ::T("Column") + std::to_string(col - r.firstCol + 1);
     const std::string base = n;
     for (int k = 2; std::any_of(names.begin(), names.end(), [&](const std::string& x) { return NameEqualsNoCase(x, n); }); ++k)
       n = base + std::to_string(k);
@@ -1455,7 +1462,7 @@ static std::string NewColumnName(const Value& header, const std::function<bool(c
   } else if (header.type == ValueType::Bool) n = header.boolean ? "TRUE" : "FALSE";
   if (n.empty()) {
     for (int k = 1;; ++k)
-      if (!taken(n = "Column" + std::to_string(k))) return n;
+      if (!taken(n = ::T("Column") + std::to_string(k))) return n;
   }
   const std::string base = n;
   for (int k = 2; taken(n); ++k) n = base + std::to_string(k);
@@ -1469,18 +1476,18 @@ bool WorkbookView::ResizeTable(size_t index, Range r) {
   const Range old = t.ref;
   const bool overlaps = !(r.lastRow < old.firstRow || r.firstRow > old.lastRow || r.lastCol < old.firstCol || r.firstCol > old.lastCol);
   if (r.firstRow != old.firstRow || !overlaps) {
-    host_.ViewMessage(BannerKind::Warning, L"The headers must remain in the same row, and the resulting table range must overlap the original table range.");
+    host_.ViewMessage(BannerKind::Warning, ::T(L"The headers must remain in the same row, and the resulting table range must overlap the original table range."));
     return false;
   }
   // The total row: to the new last row; when that's above the old one, just below the range.
   Range now = r;
   if (t.totalsRows && r.lastRow < old.lastRow) now.lastRow = r.lastRow + 1;
   if (now.lastRow < now.firstRow + t.headerRows + t.totalsRows || now.lastCol - now.firstCol >= 16384) {
-    host_.ViewMessage(BannerKind::Warning, L"A table needs a row of data below its headers.");
+    host_.ViewMessage(BannerKind::Warning, ::T(L"A table needs a row of data below its headers."));
     return false;
   }
   if (now == old) return true;
-  edit::EditGroup group(Ed(), u"Resize Table");
+  edit::EditGroup group(Ed(), ::T(u"Resize Table"));
   edit::Result res;
   if (t.totalsRows && now.lastRow != old.lastRow) {
     // The rows between the old and the new total row turn: the total row's cells to its new row,
@@ -1528,7 +1535,7 @@ bool WorkbookView::SetTotalRow(size_t index, bool on) {
   const int sheet = static_cast<int>(sheet_);
   Table t = Current().Tables()[index];
   if ((t.totalsRows != 0) == on) return true;
-  edit::EditGroup group(Ed(), u"Total Row");
+  edit::EditGroup group(Ed(), ::T(u"Total Row"));
   const Sheet& s = Current();
   if (on) {
     const uint32_t row = t.ref.lastRow + 1;
@@ -1551,7 +1558,7 @@ bool WorkbookView::SetTotalRow(size_t index, bool on) {
       quoted += c;
     }
     std::vector<std::pair<CellAddr, edit::CellInput>> cells;
-    if (last > 0) cells.emplace_back(CellAddr{row, t.ref.firstCol}, edit::CellInput::Text("Total"));
+    if (last > 0) cells.emplace_back(CellAddr{row, t.ref.firstCol}, edit::CellInput::Text(::T("Total")));
     cells.emplace_back(CellAddr{row, t.ref.lastCol},
                        edit::CellInput::Formula("SUBTOTAL(" + std::string(numbers ? "109" : "103") + "," + t.name + "[" + quoted + "])"));
     if (EditRefused(Ed().SetCells(sheet, cells))) return false;
@@ -1559,7 +1566,7 @@ bool WorkbookView::SetTotalRow(size_t index, bool on) {
     t.ref.lastRow = row;
     t.totalsRows = 1;
     t.totalsRowShown = true;
-    if (last > 0) t.columns[0].totalsLabel = "Total";
+    if (last > 0) t.columns[0].totalsLabel = ::T("Total");
     t.columns[last].totalsFunction = numbers ? "sum" : "count";
     t.columns[last].totalsFormula.clear();
   } else {
@@ -1583,7 +1590,7 @@ bool WorkbookView::ConvertToRange(size_t index) {
   const Table t = Current().Tables()[index];
   const int home = static_cast<int>(sheet_);
   const std::string homeName = Current().Name();
-  edit::EditGroup group(Ed(), u"Convert to Range");
+  edit::EditGroup group(Ed(), ::T(u"Convert to Range"));
   // Formulas that refer to the table refer to its cells instead, as Excel writes them.
   for (size_t si = 0; si < book_->SheetCount(); ++si) {
     if (!book_->GetSheet(si).Loaded() && !book_->LoadSheet(si).Ok()) continue;
@@ -1648,7 +1655,7 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
         }
       if (!empty) return;
       const std::string text(typed.text);
-      edit::EditGroup group(Ed(), u"Calculated Column");
+      edit::EditGroup group(Ed(), ::T(u"Calculated Column"));
       std::vector<std::pair<CellAddr, edit::CellInput>> cells;
       calc::CompileOptions from;
       from.sheet = sheet, from.row = static_cast<int32_t>(cell.row), from.col = static_cast<int32_t>(cell.col);
@@ -1674,7 +1681,7 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
     const bool right = cell.col == t.ref.lastCol + 1 && cell.row >= t.ref.firstRow && cell.row <= t.ref.lastRow;
     if (!below && !right) continue;
     // Excel's AutoCorrect: the table takes the new row or column, as a step of its own after the value.
-    edit::EditGroup group(Ed(), u"Table AutoExpansion");
+    edit::EditGroup group(Ed(), ::T(u"Table AutoExpansion"));
     std::vector<std::pair<CellAddr, edit::CellInput>> fills;
     if (below) {
       ++t.ref.lastRow;
@@ -1734,8 +1741,8 @@ bool WorkbookView::TableScriptOp(const std::wstring& arg) {
     Range r;
     return ParseRange(WideToUtf8(a[1]), r) && ResizeTable(i, r);
   }
-  if (a[0] == L"style") return ChangeTable(i, [&](Table& t) { t.style.name = WideToUtf8(a[1]); }, u"Table");
-  if (a[0] == L"name") return TableNameOk(WideToUtf8(a[1])) && ChangeTable(i, [&](Table& t) { t.name = t.displayName = WideToUtf8(a[1]); }, u"Table");
+  if (a[0] == L"style") return ChangeTable(i, [&](Table& t) { t.style.name = WideToUtf8(a[1]); }, ::T(u"Table"));
+  if (a[0] == L"name") return TableNameOk(WideToUtf8(a[1])) && ChangeTable(i, [&](Table& t) { t.name = t.displayName = WideToUtf8(a[1]); }, ::T(u"Table"));
   if (a[0] == L"option" && a[1] == L"filter") return SetTableButtons(i, !Current().Tables()[i].autoFilter);
   if (a[0] == L"option")
     return ChangeTable(i, [&](Table& t) {
@@ -1744,7 +1751,7 @@ bool WorkbookView::TableScriptOp(const std::wstring& arg) {
       else if (a[1] == L"first") t.style.firstColumn = !t.style.firstColumn;
       else if (a[1] == L"last") t.style.lastColumn = !t.style.lastColumn;
       else t.autoFilter = !t.autoFilter;
-    }, u"Table");
+    }, ::T(u"Table"));
   return false;
 }
 
@@ -1826,7 +1833,7 @@ edit::Result WorkbookView::PasteRules(int fromSheet, const Range& src, int sheet
     if (!SameRules(rules, before)) {
       std::string xml, ext;
       data::WriteCfRules(rules, ds.Text(), xml, ext);
-      r = Ed().SetSheetRules(sheet, edit::Editor::RuleKind::ConditionalFormats, xml, ext, u"Paste");
+      r = Ed().SetSheetRules(sheet, edit::Editor::RuleKind::ConditionalFormats, xml, ext, ::T(u"Paste"));
       if (!r) return r;
     }
   }
@@ -1851,7 +1858,7 @@ edit::Result WorkbookView::PasteRules(int fromSheet, const Range& src, int sheet
   if (!changed) return r;
   std::string xml, ext;
   data::WriteValidations(rules, ds.Text(), xml, ext);
-  return Ed().SetSheetRules(sheet, edit::Editor::RuleKind::Validations, xml, ext, u"Paste");
+  return Ed().SetSheetRules(sheet, edit::Editor::RuleKind::Validations, xml, ext, ::T(u"Paste"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1954,7 +1961,7 @@ bool WorkbookView::ValidateValue(const data::Validation& v, int sheet, CellAddr 
     }
     case T::Custom: {
       // The formula reads the cell, so it's worked out with the value in it, which is then taken out.
-      edit::EditGroup trial(Ed(), u"Validation");
+      edit::EditGroup trial(Ed(), ::T(u"Validation"));
       if (!Ed().SetCell(sheet, cell.row, cell.col, in).ok) return true;
       calc::Value r;
       if (!EvalAt(Calc(), v.f1, sheet, cell, r)) return true;
@@ -1970,11 +1977,11 @@ bool WorkbookView::ValidateEntry(int sheet, CellAddr cell, const edit::CellInput
   if (!v || !v->showError || v->type == data::Validation::Type::Any) return true;
   const data::Validation rule = *v;  // a custom rule's check edits, and the list is read again
   if (ValidateValue(rule, sheet, cell, in, true)) return true;
-  std::wstring text = rule.error.empty() ? L"This value doesn't match the data validation restrictions defined for this cell."
+  std::wstring text = rule.error.empty() ? ::T(L"This value doesn't match the data validation restrictions defined for this cell.")
                                          : Utf8ToWide(rule.error);
   if (!rule.errorTitle.empty()) text = Utf8ToWide(rule.errorTitle) + L": " + text;
   switch (rule.alert) {
-    case data::Validation::Alert::Warning: return host_.ViewConfirm(text + L" Continue?", L"Yes");
+    case data::Validation::Alert::Warning: return host_.ViewConfirm(text + L" Continue?", ::T(L"Yes"));
     case data::Validation::Alert::Information: return host_.ViewConfirm(text, L"OK");
     default:
       host_.ViewMessage(BannerKind::Warning, text);
@@ -2090,7 +2097,7 @@ bool WorkbookView::DataRulesScriptOp(const std::wstring& op, const std::wstring&
       if (a[0] == L"delete") rules.erase(rules.begin() + static_cast<ptrdiff_t>(i));
       else if (a[0] == L"up") std::swap(rules[i], rules[i - 1]);
       else rules[i].stopIfTrue = !rules[i].stopIfTrue;
-      return ApplyCfRules(rules, u"Conditional Formatting");
+      return ApplyCfRules(rules, ::T(u"Conditional Formatting"));
     }
     int k = -1;
     for (int j = 0; j < kKinds; ++j)
@@ -2098,20 +2105,20 @@ bool WorkbookView::DataRulesScriptOp(const std::wstring& op, const std::wstring&
     if (k < 0) return false;
     if (!rulesPanel_) rulesPanel_ = std::make_shared<RulesPanel>(*this);
     auto* p = static_cast<RulesPanel*>(rulesPanel_.get());
-    edit::EditGroup group(Ed(), u"New Rule");
+    edit::EditGroup group(Ed(), ::T(u"New Rule"));
     data::CfRule r;
     const int choice = static_cast<int>(std::wcstol(a[3].c_str(), nullptr, 10));
     const int format = static_cast<int>(std::wcstol(a[4].c_str(), nullptr, 10));
     if (!p->Build(k, a[1], a[2], choice, format, sq, -1, r)) return false;
     rules.insert(rules.begin(), std::move(r));
-    group.done = ApplyCfRules(rules, u"New Rule");
+    group.done = ApplyCfRules(rules, ::T(u"New Rule"));
     return group.done;
   }
   if (a[0] == L"circle") return RulesCommand(CmdCircleInvalid);
   if (a[0] == L"clear") {
     std::vector<data::Validation> rules = Validations();
     data::ClearValidations(rules, Selected());
-    return ApplyValidations(rules, u"Data Validation");
+    return ApplyValidations(rules, ::T(u"Data Validation"));
   }
   static constexpr const wchar_t* kKeys[] = {L"any", L"whole", L"decimal", L"list", L"date", L"time", L"length", L"custom"};
   static constexpr const wchar_t* kOps[] = {L"between", L"notbetween", L"equal",        L"notequal",

@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/Lang.h"
 #include "draw/Painter.h"
 #include "slide/Presentation.h"
 #include "slide/Text.h"
@@ -428,7 +429,7 @@ class Editor {
   // element declaring its prefixes, made when the shape has none (p2-text's working copy, a rich
   // paste). Hyperlinks in it must name relationships of the slide (AddRelationship in the same group).
   // `typing`: coalesced with the typing into the same target before it, as InsertText is.
-  Result SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u16string stepName = u"Paste",
+  Result SetTextBodyXml(const TextTarget& t, std::string_view xml, std::u16string stepName = T(u"Paste"),
                         bool typing = false);
   // Typing ends: the next text edit starts a new undo step (the caret moved, the shape lost focus).
   void EndTyping();

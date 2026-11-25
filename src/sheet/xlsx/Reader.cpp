@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "core/Lang.h"
 #include "draw/Theme.h"
 #include "pkg/Check.h"
 #include "pkg/References.h"
@@ -467,7 +468,7 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
   do {
     e = pull.Next();
   } while (e == XmlPull::Event::Comment || e == XmlPull::Event::ProcessingInstruction || e == XmlPull::Event::Text);
-  if (e != XmlPull::Event::StartElement) return pull.GetStatus().Ok() ? Status::Fail(Status::Code::Damaged, "The shared strings are damaged.") : pull.GetStatus();
+  if (e != XmlPull::Event::StartElement) return pull.GetStatus().Ok() ? Status::Fail(Status::Code::Damaged, T("The shared strings are damaged.")) : pull.GetStatus();
   size_t rootBegin = TagBegin(src, pull.Offset());
   part.prolog = std::string(src.substr(declEnd, rootBegin > declEnd ? rootBegin - declEnd : 0));
   part.rootStart = std::string(src.substr(rootBegin, pull.Offset() - rootBegin));
@@ -485,7 +486,7 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
     size_t before = pull.Offset();
     e = pull.Next();
     if (e == XmlPull::Event::Error) return pull.GetStatus();
-    if (e == XmlPull::Event::EndDocument) return Status::Fail(Status::Code::Damaged, "The shared strings are damaged.");
+    if (e == XmlPull::Event::EndDocument) return Status::Fail(Status::Code::Damaged, T("The shared strings are damaged."));
     if (e == XmlPull::Event::EndElement && pull.Depth() == 1) {
       flushText(true);
       size_t endBegin = rootEmpty ? pull.Offset() : TagBegin(src, pull.Offset());
@@ -555,7 +556,7 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
     }
     if (!seenT || (siSpaceOnlyText && !siMarkup)) plain = false;
     std::string_view raw = src.substr(before, pull.Offset() - before);
-    if (!table.HasRoom(raw.size() * 2)) return Status::Fail(Status::Code::TooLarge, "The shared strings are too large.");
+    if (!table.HasRoom(raw.size() * 2)) return Status::Fail(Status::Code::TooLarge, T("The shared strings are too large."));
     if (plain) {
       DecodeXstringIn(text);  // Excel's _x000D_ for a CR, _x005F_x0041_ for the text _x0041_
       table.AddRead(text, preserve ? StringTable::kPreserve : 0, {}, {});
@@ -817,7 +818,7 @@ std::shared_ptr<const draw::Theme> ReadThemePart(const pkg::Package& pkg, const 
 std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& status, const ReadOptions& options) {
   status = {};
   if (!package) {
-    status = Status::Fail(Status::Code::NotFound, "There is no workbook to read.");
+    status = Status::Fail(Status::Code::NotFound, T("There is no workbook to read."));
     return nullptr;
   }
   // The main part.
@@ -832,7 +833,7 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
   else if (type.find("ms-excel.sheet.macroEnabled.main") != std::string::npos) format = FileFormat::Xlsm;
   else if (type.find("ms-excel.template.macroEnabled.main") != std::string::npos) format = FileFormat::Xltm;
   else {
-    status = Status::Fail(Status::Code::Unsupported, "This file isn't an Excel workbook.");
+    status = Status::Fail(Status::Code::Unsupported, T("This file isn't an Excel workbook."));
     return nullptr;
   }
   std::vector<uint8_t> bytes;
@@ -842,7 +843,7 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
   if (!(status = dom.Parse(xml, package->GetLimits(), main.substr(1))).Ok()) return nullptr;
   pugi::xml_node root = dom.Root();
   if (Local(root) != "workbook" || !IsMainNs(pkg::NamespaceOf(root))) {
-    status = Status::Fail(Status::Code::Damaged, "The workbook part is damaged: it isn't a SpreadsheetML workbook.");
+    status = Status::Fail(Status::Code::Damaged, T("The workbook part is damaged: it isn't a SpreadsheetML workbook."));
     return nullptr;
   }
 

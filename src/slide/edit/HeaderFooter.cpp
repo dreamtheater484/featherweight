@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <random>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
@@ -129,7 +130,7 @@ bool TitleLayout(pugi::xml_node layoutRoot) {
 }  // namespace
 
 Result Editor::SetHeaderFooter(const std::vector<size_t>& slides, const HeaderFooter& hf) {
-  Call call(*this, u"Header and Footer");
+  Call call(*this, T(u"Header and Footer"));
   Impl& m = *impl_;
   const std::vector<Impl::SlideEntry> list = m.SlideList();
   std::vector<size_t> targets = slides;
@@ -158,12 +159,12 @@ Result Editor::SetHeaderFooter(const std::vector<size_t>& slides, const HeaderFo
       const pugi::xml_node layoutShape = PlaceholderShape(layoutRoot, TypeOf(kind));
       if (!layoutShape) continue;
       pugi::xml_node root = m.Edit(part);
-      if (!root) return call.End(Result::Fail(u"That slide can't be changed."));
+      if (!root) return call.End(Result::Fail(T(u"That slide can't be changed.")));
       pugi::xml_node shape = PlaceholderShape(root, TypeOf(kind));
       if (!shape) {
         pugi::xml_document doc;
         if (!ParseFragment(EmptyPlaceholderXml(PlaceholderOf(layoutShape), Impl::NextShapeId(root)), doc))
-          return call.End(Result::Fail(u"The placeholder couldn't be made."));
+          return call.End(Result::Fail(T(u"The placeholder couldn't be made.")));
         shape = InsertCopy(P(P(root, "cSld"), "spTree"), doc.document_element());
       }
       FillBody(shape, kind, hf, FieldId(layoutShape));

@@ -138,11 +138,25 @@ IDWriteTextFormat* Canvas::Format(float sizePx, DWRITE_FONT_WEIGHT weight, bool 
   return fmt.Get();
 }
 
+#if FW_TEST_SCREENS
+namespace {
+std::vector<ClippedText>* g_clipped = nullptr;
+}
+void WatchClipping(std::vector<ClippedText>* into) { g_clipped = into; }
+std::vector<ClippedText>* WatchingClipping() { return g_clipped; }
+#endif
+
 void Canvas::Text(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COLOR_F c, float sizePx,
                   DWRITE_FONT_WEIGHT weight, Align align) {
   if (text.empty() || c.a <= 0) return;
   IDWriteTextFormat* fmt = Format(sizePx, weight, false);
   if (!fmt) return;
+#if FW_TEST_SCREENS
+  if (g_clipped && Width(r) > 0) {
+    const float need = MeasureText(text, sizePx, weight);
+    if (need > Width(r) + 0.5f) g_clipped->push_back({std::wstring(text), need, Width(r)});
+  }
+#endif
   fmt->SetTextAlignment(align == Align::Leading   ? DWRITE_TEXT_ALIGNMENT_LEADING
                         : align == Align::Center ? DWRITE_TEXT_ALIGNMENT_CENTER
                                                  : DWRITE_TEXT_ALIGNMENT_TRAILING);
@@ -206,6 +220,13 @@ float Canvas::TextWrapped(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COL
   DWRITE_TEXT_METRICS m{};
   layout->GetMetrics(&m);
   float h = std::min(m.height, maxH);
+#if FW_TEST_SCREENS
+  if (g_clipped && draw) {
+    if (m.height > maxH + 0.5f) g_clipped->push_back({std::wstring(text), m.height, maxH});
+    else if (m.widthIncludingTrailingWhitespace > Width(r) + 0.5f)
+      g_clipped->push_back({std::wstring(text), m.widthIncludingTrailingWhitespace, Width(r)});
+  }
+#endif
   if (draw && dc_) dc_->DrawTextLayout({r.left, r.top}, layout.Get(), Brush(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
   return h;
 }

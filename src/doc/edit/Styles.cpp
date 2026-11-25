@@ -4,6 +4,7 @@
 #include <iterator>
 #include <map>
 
+#include "core/Lang.h"
 #include "doc/edit/Editor.h"
 #include "doc/model/Internal.h"
 
@@ -368,7 +369,7 @@ std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId) {
 void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
   const Document& doc = ed.Doc();
   if (!ed.CanChange(ParagraphsOf(doc, range)) || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
-  ed.Begin(u"Style");
+  ed.Begin(T(u"Style"));
   std::string id = EnsureStyle(ed, nameOrId);
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
   if (s && (s->type == StyleType::Paragraph || s->type == StyleType::Character)) {
@@ -414,7 +415,7 @@ void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, c
   ElemId elem = s->node.Id();
   bool isPara = s->type == StyleType::Paragraph;
   std::string basedOn = s->basedOn == kNone ? std::string() : std::string(doc.Styles()[s->basedOn].id);
-  ed.Begin(u"Modify style");
+  ed.Begin(T(u"Modify style"));
   RunFormat r = run;
   r.charStyle.reset();
   r.highlight.reset();  // never a style's, as NotStyleFormatting says (finding 23)
@@ -455,7 +456,7 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Style* s = doc.FindStyle(doc.ResolvedPara(p).style);
   if (!s || s->type != StyleType::Paragraph) return;
   Style style = *s;
-  ed.Begin(u"Update style");
+  ed.Begin(T(u"Update style"));
   // The paragraph's own formatting moves into the style, and so does its first character's.
   CopyFormatting(ed, p, range.from.offset, style.node.Id());
   // Then the paragraph takes the style again, without what moved.
@@ -471,21 +472,21 @@ std::string NewStyleFromSelection(TreeEdit& ed, Range range, std::string_view na
   const std::string trimmed(name.substr(a, b - a));
   why.clear();
   if (trimmed.empty()) {
-    why = u"Type a name for the style.";
+    why = T(u"Type a name for the style.");
     return {};
   }
   if (!XmlSafe(trimmed) || trimmed.size() > 253) {
-    why = u"A style's name can't hold control characters or be that long.";
+    why = T(u"A style's name can't hold control characters or be that long.");
     return {};
   }
   if (FindByName(doc, trimmed) || FindBuiltin(trimmed) || SameName(trimmed, "Normal")) {
-    why = u"There's already a style with that name.";
+    why = T(u"There's already a style with that name.");
     return {};
   }
   const std::vector<uint32_t> paras = ParagraphsOf(doc, range);
   if (paras.empty()) return {};
   if (!ed.CanChange(paras) || ed.EnsurePart(PartKind::Styles) == kNoElem) {
-    why = ed.Refused().empty() ? std::u16string(u"This document can't have styles.") : ed.Refused();
+    why = ed.Refused().empty() ? std::u16string(T(u"This document can't have styles.")) : ed.Refused();
     return {};
   }
   const ElemId root = StylesRoot(doc);
@@ -499,12 +500,12 @@ std::string NewStyleFromSelection(TreeEdit& ed, Range range, std::string_view na
   for (char& c : idBase)  // what an id can't hold well
     if (c == '"' || c == '<' || c == '>' || c == '&' || c == '\'') c = '_';
   const std::string id = UniqueId(doc, idBase);
-  ed.Begin(u"New style");
+  ed.Begin(T(u"New style"));
   ed.Local();
   const ElemId elem = ed.AddXml(root, StyleXml("paragraph", id, trimmed, false, true, basedOn, "", "", -1, true, "", "", ""));
   if (elem == kNoElem) {
     ed.Commit();
-    why = u"The style couldn't be added.";
+    why = T(u"The style couldn't be added.");
     return {};
   }
   ed.Reindex();

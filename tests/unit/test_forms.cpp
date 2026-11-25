@@ -331,7 +331,7 @@ TEST(Forms_ProtectedFormGetsNoHeaderOrFooter) {
   const size_t parts = doc->Parts().size();
   const std::string ticked = MainXml(*doc);
   std::u16string why;
-  CHECK(edit::EnsureHeaderFooter(editor, 0, true, HdrFtrType::Default, why) == kNone && why == edit::kFormsProtected);
+  CHECK(edit::EnsureHeaderFooter(editor, 0, true, HdrFtrType::Default, why) == kNone && why == std::u16string(edit::kFormsProtected));
   CHECK(!edit::InsertPageNumber(editor, 0, true, HdrFtrType::Default, Justification::Center, false));
   CHECK(doc->Parts().size() == parts && MainXml(*doc) == ticked && editor.UndoName() == u"Check box");
   REQUIRE(editor.Undo());

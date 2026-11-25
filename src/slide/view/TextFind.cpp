@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 
+#include "core/Lang.h"
 #include "slide/Presentation.h"
 
 namespace fw::slide::view {
@@ -132,7 +133,7 @@ bool ReplaceMatch(TextModel& model, const TextMatch& match, std::wstring_view qu
   if (!doc || !Still(*doc, match, query, matchCase)) return false;
   ReplaceIn(*doc, match.from, match.to, with);
   std::wstring error;
-  return model.SetText(match.target, doc->Body(), u"Replace", false, error);
+  return model.SetText(match.target, doc->Body(), T(u"Replace"), false, error);
 }
 
 int ReplaceAll(TextModel& model, const std::vector<TextMatch>& matches, std::wstring_view with) {
@@ -144,7 +145,7 @@ int ReplaceAll(TextModel& model, const std::vector<TextMatch>& matches, std::wst
     else it->second.push_back(&m);
   }
   int replaced = 0;
-  model.BeginGroup(u"Replace All");
+  model.BeginGroup(T(u"Replace All"));
   for (auto& [target, list] : bodies) {
     std::unique_ptr<TextDoc> doc = OpenText(model, target);
     if (!doc) continue;
@@ -156,7 +157,7 @@ int ReplaceAll(TextModel& model, const std::vector<TextMatch>& matches, std::wst
       ++here;
     }
     std::wstring error;
-    if (here && model.SetText(target, doc->Body(), u"Replace All", false, error)) replaced += here;
+    if (here && model.SetText(target, doc->Body(), T(u"Replace All"), false, error)) replaced += here;
   }
   model.EndGroup();
   return replaced;

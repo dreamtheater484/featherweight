@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "core/Lang.h"
 #include "pkg/Zip.h"
 
 namespace fw::doc::msdoc {
@@ -617,18 +618,18 @@ bool Converter::Load(const StreamFn& streams, pkg::Status& status) {
     return false;
   };
   std::optional<std::vector<uint8_t>> word = streams("WordDocument");
-  if (!word) return fail(Code::Damaged, "This file isn't a Word document.");
+  if (!word) return fail(Code::Damaged, T("This file isn't a Word document."));
   wordBuf_ = std::move(*word);
   word_ = Bytes{wordBuf_};
-  if (word_.U16(0) != 0xA5EC || word_.size() < 154) return fail(Code::Damaged, "This Word document is damaged.");
+  if (word_.U16(0) != 0xA5EC || word_.size() < 154) return fail(Code::Damaged, T("This Word document is damaged."));
   if (word_.U16(2) < 0xC0)
     return fail(Code::Unsupported,
-                "This document was made with Word 6 or Word 95, which Featherweight doesn't open. Open it in Word and "
-                "save it as a .docx.");
+                T("This document was made with Word 6 or Word 95, which Featherweight doesn't open. Open it in Word and "
+                "save it as a .docx."));
   const uint16_t flags = word_.U16(10);
-  if ((flags & 0x0100) && !decrypted) return fail(Code::Unsupported, "This document is protected with a password.");
+  if ((flags & 0x0100) && !decrypted) return fail(Code::Unsupported, T("This document is protected with a password."));
   std::optional<std::vector<uint8_t>> table = streams((flags & 0x0200) ? "1Table" : "0Table");
-  if (!table) return fail(Code::Damaged, "This Word document is damaged: its table stream is missing.");
+  if (!table) return fail(Code::Damaged, T("This Word document is damaged: its table stream is missing."));
   tableBuf_ = std::move(*table);
   table_ = Bytes{tableBuf_};
   if (std::optional<std::vector<uint8_t>> data = streams("Data")) dataBuf_ = std::move(*data);
@@ -647,7 +648,7 @@ bool Converter::Load(const StreamFn& streams, pkg::Status& status) {
     fcLcb_.push_back({word_.U32(o + 8 * k), word_.U32(o + 8 * k + 4)});
 
   ReadPieces();
-  if (pieces_.empty()) return fail(Code::Damaged, "This Word document is damaged: its text can't be found.");
+  if (pieces_.empty()) return fail(Code::Damaged, T("This Word document is damaged: its text can't be found."));
   ReadFkps(12, false, chpx_);
   ReadFkps(13, true, papx_);
   ReadStyles();
@@ -2247,7 +2248,7 @@ bool Converter::Convert(const StreamFn& streams, pkg::Status& status, std::vecto
   for (const auto& [name, text] : parts) zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
   for (const auto& [name, bytes] : media_) zip.Add(name, bytes, nullptr, pkg::ZipWriter::Compression::Store);
   if (!zip.Finish().Ok()) {
-    status = pkg::Status::Fail(pkg::Status::Code::TooLarge, "This Word document is too large to open.");
+    status = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("This Word document is too large to open."));
     return false;
   }
   out = std::move(sink.bytes);

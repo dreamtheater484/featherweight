@@ -13,6 +13,7 @@
 #include <tuple>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "doc/proof/Language.h"
 #include "doc/proof/WordCount.h"
 #include "ui/Anim.h"
@@ -48,7 +49,7 @@ std::wstring Thousands(uint64_t n) {
   return out;
 }
 
-std::wstring Words(uint64_t n) { return Thousands(n) + (n == 1 ? L" word" : L" words"); }
+std::wstring Words(uint64_t n) { return n == 1 ? T(L"1 word") : Fmt(T(L"{0} words"), {Thousands(n)}); }
 
 // A menu item's text as it is: & would underline the next letter.
 std::wstring MenuText(std::wstring s) {
@@ -278,15 +279,15 @@ void DocView::FillSpellingMenu(HMENU m, int x, int y) {
   else if (e->action == Action::Suggest) t.suggestions = Checker().Suggest(spelling_->Language(*e), t.word, kSuggestions);
   const bool can = Editing();
   if (e->action == Action::Delete) {
-    AppendItem(m, CmdSpellDelete, L"Delete repeated word", can);
+    AppendItem(m, CmdSpellDelete, T(L"Delete repeated word"), can);
   } else if (t.suggestions.empty()) {
-    AppendItem(m, CmdSpellSuggest, L"(No spelling suggestions)", false);
+    AppendItem(m, CmdSpellSuggest, T(L"(No spelling suggestions)"), false);
   }
   for (size_t i = 0; i < t.suggestions.size(); ++i)
     AppendItem(m, CmdSpellSuggest + static_cast<UINT>(i), MenuText(t.suggestions[i]), can);
   menu::AppendSeparator(m);
-  AppendItem(m, CmdSpellIgnore, L"Ignore all");
-  if (e->action != Action::Delete) AppendItem(m, CmdSpellAdd, L"Add to dictionary");
+  AppendItem(m, CmdSpellIgnore, T(L"Ignore all"));
+  if (e->action != Action::Delete) AppendItem(m, CmdSpellAdd, T(L"Add to dictionary"));
   menu::AppendSeparator(m);
   menuError_ = std::move(t);
 }
@@ -307,7 +308,8 @@ void DocView::FillLanguageMenu(HMENU m) {
   // The text's own language, when Windows has no dictionary for it.
   if (current && !listed && !current->empty()) {
     if (!langs.empty()) menu::AppendSeparator(m);
-    menu::AppendItem(m, 0, MenuText(proof::LanguageName(*current)) + L" (no spelling dictionary)", false, true, true);
+    menu::AppendItem(m, 0, Fmt(T(L"{0} (no spelling dictionary)"), {MenuText(proof::LanguageName(*current))}), false,
+                     true, true);
   }
 }
 
@@ -319,7 +321,7 @@ bool DocView::ExecuteProof(int cmd) {
     const std::wstring& s = menuError_->suggestions[i];
     const MenuError e = *menuError_;
     editor_->BreakTyping();
-    editor_->BeginGroup(u"Spelling");
+    editor_->BeginGroup(T(u"Spelling"));
     const auto r = editor_->Replace({e.para, e.error.from}, {e.para, e.error.to}, std::u16string(s.begin(), s.end()));
     editor_->EndGroup();
     editor_->BreakTyping();
@@ -341,7 +343,7 @@ bool DocView::ExecuteProof(int cmd) {
       const std::wstring lang = spelling_->Language(menuError_->error), word = menuError_->word;
       // Ignore all lasts until Featherweight closes; Add goes into Windows' own word list.
       if (cmd == CmdSpellIgnore) Checker().Ignore(lang, word);
-      else if (!Checker().Add(lang, word)) host_.ViewMessage(BannerKind::Warning, L"The word couldn't be added to the dictionary.");
+      else if (!Checker().Add(lang, word)) host_.ViewMessage(BannerKind::Warning, T(L"The word couldn't be added to the dictionary."));
       spelling_->Recheck(word);
       menuError_.reset();
       host_.ViewInvalidate();
@@ -366,9 +368,9 @@ void DocView::NextMisspelling() {
   if (!spelling_ && spellingWanted_) ProofIdle(anim::Now() + 8);  // made now
   if (!spelling_) {
     host_.ViewMessage(BannerKind::Info, !host_.ViewSpelling()
-                                            ? L"Spelling isn't checked: turn on “Check spelling as you type” in the ⋯ menu."
-                                        : !Checker().Available() ? L"Windows' spell checker isn't available on this PC."
-                                                                 : L"This document asks not to show spelling errors.");
+                                            ? T(L"Spelling isn't checked: turn on “Check spelling as you type” in the ⋯ menu.")
+                                        : !Checker().Available() ? T(L"Windows' spell checker isn't available on this PC.")
+                                                                 : T(L"This document asks not to show spelling errors."));
     return;
   }
   TextPos from = HasSelection() ? std::max(anchor_, focus_) : focus_;
@@ -378,7 +380,7 @@ void DocView::NextMisspelling() {
   auto next = spelling_->FindNext({from.para, from.offset}, 2000, complete);
   if (!next) {
     host_.ViewMessage(complete ? BannerKind::Success : BannerKind::Info,
-                      complete ? L"No spelling errors." : L"Still checking the spelling: press F7 again to go on.");
+                      complete ? T(L"No spelling errors.") : T(L"Still checking the spelling: press F7 again to go on."));
     host_.ViewInvalidate();
     return;
   }
@@ -480,7 +482,8 @@ void DocView::ProofStatus(StatusBarModel& m) {
         selWordsTo_ = b;
         selWordsEdits_ = edits_;
       }
-      m.segments.push_back(Thousands(selWords_) + L" of " + Words(words_));
+      m.segments.push_back(words_ == 1 ? Fmt(T(L"{0} of 1 word"), {Thousands(selWords_)})
+                                       : Fmt(T(L"{0} of {1} words"), {Thousands(selWords_), Thousands(words_)}));
     } else {
       m.segments.push_back(Words(words_));
     }
@@ -535,16 +538,16 @@ void DocView::ShowWordCount() {
                    (notes && (k == StoryKind::Footnote || k == StoryKind::Endnote || k == StoryKind::TextBox));
         }
       }
-      content = L"Pages: " + Thousands(pagination_->PageCount()) + L"\n";
-      content += L"Characters (no spaces): " + Thousands(n.characters) + L"\n";
-      content += L"Characters (with spaces): " + Thousands(n.charactersSpaces) + L"\n";
-      content += L"Paragraphs: " + Thousands(n.paragraphs) + L"\n";
-      content += L"Lines: " + Thousands(lines);
+      content = T(L"Pages: ") + Thousands(pagination_->PageCount()) + L"\n";
+      content += T(L"Characters (no spaces): ") + Thousands(n.characters) + L"\n";
+      content += T(L"Characters (with spaces): ") + Thousands(n.charactersSpaces) + L"\n";
+      content += T(L"Paragraphs: ") + Thousands(n.paragraphs) + L"\n";
+      content += T(L"Lines: ") + Thousands(lines);
     } else {
-      content = L"In the selection:\n";
-      content += L"Characters (no spaces): " + Thousands(n.characters) + L"\n";
-      content += L"Characters (with spaces): " + Thousands(n.charactersSpaces) + L"\n";
-      content += L"Paragraphs: " + Thousands(n.paragraphs);
+      content = T(L"In the selection:\n");
+      content += T(L"Characters (no spaces): ") + Thousands(n.characters) + L"\n";
+      content += T(L"Characters (with spaces): ") + Thousands(n.charactersSpaces) + L"\n";
+      content += T(L"Paragraphs: ") + Thousands(n.paragraphs);
     }
     return std::make_pair(Words(n.words), content);
   };
@@ -556,10 +559,10 @@ void DocView::ShowWordCount() {
   cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION |
                 (notesAndBoxes ? TDF_VERIFICATION_FLAG_CHECKED : 0);
   cfg.dwCommonButtons = TDCBF_CLOSE_BUTTON;
-  cfg.pszWindowTitle = L"Word count";
+  cfg.pszWindowTitle = T(L"Word count");
   cfg.pszMainInstruction = d.main.c_str();
   cfg.pszContent = d.content.c_str();
-  if (!selection) cfg.pszVerificationText = L"Include text boxes, footnotes and endnotes";
+  if (!selection) cfg.pszVerificationText = T(L"Include text boxes, footnotes and endnotes");
   cfg.lpCallbackData = reinterpret_cast<LONG_PTR>(&d);
   cfg.pfCallback = [](HWND hwnd, UINT msg, WPARAM wp, LPARAM, LONG_PTR data) -> HRESULT {
     if (msg != TDN_VERIFICATION_CLICKED) return S_OK;

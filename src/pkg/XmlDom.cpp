@@ -3,6 +3,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/Lang.h"
 #include "pkg/XmlPull.h"
 #include "pkg/XmlWriter.h"
 
@@ -51,8 +52,8 @@ Status XmlDom::Parse(std::string_view xml, const Limits& limits, std::string_vie
   pugi::xml_parse_result result = doc_.load_buffer(utf8.data(), utf8.size(), kFlags, pugi::encoding_utf8);
   if (!result) {
     doc_.reset();
-    return Status::Fail(Status::Code::Damaged,
-                        (label.empty() ? std::string("This XML") : "Part " + std::string(label)) + " is damaged.");
+    return Status::Fail(Status::Code::Damaged, label.empty() ? std::string(T("This XML is damaged."))
+                                                             : Fmt(T("Part {0} is damaged."), {label}));
   }
   return Status{};
 }

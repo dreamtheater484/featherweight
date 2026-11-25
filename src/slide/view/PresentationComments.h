@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "slide/edit/Comments.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Controls.h"
@@ -23,7 +24,7 @@ class PresentationView::CommentsPanel : public PanelContent {
  public:
   explicit CommentsPanel(PresentationView& view);
   // ---- The pane
-  std::wstring Title() const override { return L"Comments"; }
+  std::wstring Title() const override { return T(L"Comments"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   bool OnMouseDown(float x, float y, bool dbl) override;
@@ -116,7 +117,7 @@ class PresentationView::CommentsPanel : public PanelContent {
 class PresentationView::PasswordPanel : public PanelContent {
  public:
   explicit PasswordPanel(PresentationView& view);
-  std::wstring Title() const override { return L"Encrypt with password"; }
+  std::wstring Title() const override { return T(L"Encrypt with password"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   void Open();

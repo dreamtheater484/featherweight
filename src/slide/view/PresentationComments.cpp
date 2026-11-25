@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
@@ -25,7 +26,7 @@ namespace {
 
 // "2026-11-24T09:07:35.328" -> "24 Nov 2026, 10:07" (local time; `utc`: stored in UTC).
 std::wstring When(const std::string& date, bool utc) {
-  static const wchar_t* kMonths[] = {L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun", L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec"};
+  static const wchar_t* kMonths[] = {T(L"Jan"), T(L"Feb"), T(L"Mar"), T(L"Apr"), T(L"May"), T(L"Jun"), T(L"Jul"), T(L"Aug"), T(L"Sep"), T(L"Oct"), T(L"Nov"), T(L"Dec")};
   if (date.size() < 16) return Utf8ToWide(date);
   SYSTEMTIME t{};
   t.wYear = static_cast<WORD>(std::atoi(date.substr(0, 4).c_str()));
@@ -67,28 +68,28 @@ PresentationView::CommentsPanel& PresentationView::Comments() {
 }
 
 PresentationView::CommentsPanel::CommentsPanel(PresentationView& view) : v_(view) {
-  name_.label = L"Your name";
+  name_.label = T(L"Your name");
   name_.autoComplete = false;
-  name_.tooltip = L"Comments are made with this name";
+  name_.tooltip = T(L"Comments are made with this name");
   name_.onCommit = [this](const std::wstring& text, int) {
     v_.host_.ViewSetReviewer(Trimmed(text));
     name_.SetText(Writer().name);
   };
-  box_.label = L"New comment";
+  box_.label = T(L"New comment");
   box_.autoComplete = false;
   box_.onEnter = [this] {
     if (!editing_.empty() || newThread_ || picked_.empty()) Post(box_.Text());
     else Reply(box_.Text());
   };
-  post_.text = L"Post";
+  post_.text = T(L"Post");
   post_.onInvoke = [this] { box_.onEnter(); };
-  reply_.text = L"New";
+  reply_.text = T(L"New");
   reply_.onInvoke = [this] { Open(true); };
-  edit_.text = L"Edit";
+  edit_.text = T(L"Edit");
   edit_.onInvoke = [this] { Edit(); };
-  resolve_.text = L"Resolve";
+  resolve_.text = T(L"Resolve");
   resolve_.onInvoke = [this] { Resolve(); };
-  delete_.text = L"Delete";
+  delete_.text = T(L"Delete");
   delete_.onInvoke = [this] { Delete(); };
 }
 
@@ -231,7 +232,7 @@ std::wstring PresentationView::CommentsPanel::Tooltip(float x, float y) {
     if (c.id != id) continue;
     std::wstring text = c.text;
     if (text.size() > 120) text = text.substr(0, 117) + L"...";
-    return (c.author.empty() ? std::wstring(L"Someone") : c.author) + L": " + text;
+    return (c.author.empty() ? std::wstring(T(L"Someone")) : c.author) + L": " + text;
   }
   return {};
 }
@@ -249,35 +250,35 @@ CommandState PresentationView::CommentsPanel::Query(int cmd) {
   auto anyInDeck = [&] { return AnyInDeck(); };
   switch (cmd) {
     case CmdNewComment:
-      s.label = L"New comment";
+      s.label = T(L"New comment");
       s.shortcut = L"Ctrl+Alt+M";
       s.enabled = editable;
       break;
     case CmdReviewPane:
-      s.label = L"Comments pane";
+      s.label = T(L"Comments pane");
       s.enabled = ed != nullptr;
       s.checked = Shown();
       break;
     case CmdShowCommentMarkup:
-      s.label = L"Show markup";
+      s.label = T(L"Show markup");
       s.enabled = ed != nullptr;
       s.checked = markers_;
       break;
     case CmdDeleteThread:
-      s.label = L"Delete comment";
+      s.label = T(L"Delete comment");
       s.enabled = editable && !picked_.empty();
       break;
     case CmdDeleteSlideComments:
-      s.label = L"Delete all comments on this slide";
+      s.label = T(L"Delete all comments on this slide");
       s.enabled = editable && !list.empty();
       break;
     case CmdDeleteAllComments:
-      s.label = L"Delete all comments in this presentation";
+      s.label = T(L"Delete all comments in this presentation");
       s.enabled = editable && anyInDeck();
       break;
     case CmdPrevComment:
     case CmdNextComment:
-      s.label = cmd == CmdPrevComment ? L"Previous comment" : L"Next comment";
+      s.label = cmd == CmdPrevComment ? T(L"Previous comment") : T(L"Next comment");
       s.enabled = ed && anyInDeck();
       break;
     default: return s;
@@ -300,8 +301,8 @@ bool PresentationView::CommentsPanel::Execute(int cmd) {
       v_.host_.ViewInvalidate();
       return true;
     case CmdDeleteThread: Delete(); return true;
-    case CmdDeleteSlideComments: return Done(edit::DeleteAllComments(*ed, {v_.current_}), L"Comments deleted.");
-    case CmdDeleteAllComments: return Done(edit::DeleteAllComments(*ed, {}), L"Comments deleted.");
+    case CmdDeleteSlideComments: return Done(edit::DeleteAllComments(*ed, {v_.current_}), T(L"Comments deleted."));
+    case CmdDeleteAllComments: return Done(edit::DeleteAllComments(*ed, {}), T(L"Comments deleted."));
     case CmdPrevComment: Step(false); return true;
     case CmdNextComment: Step(true); return true;
     default: return false;
@@ -387,7 +388,7 @@ void PresentationView::CommentsPanel::Step(bool forward) {
     for (const edit::Comment& c : s == v_.current_ ? List() : edit::SlideComments(*ed, s))
       if (c.parent.empty()) all.push_back({s, c.id});
   if (all.empty()) {
-    v_.host_.ViewMessage(BannerKind::Info, L"There are no comments in this presentation.");
+    v_.host_.ViewMessage(BannerKind::Info, T(L"There are no comments in this presentation."));
     return;
   }
   // From the picked thread, else from the current slide's place in the deck.
@@ -443,7 +444,7 @@ bool PresentationView::CommentsPanel::Post(const std::wstring& text) {
     }
   }
   if (r) box_.ReplaceText(L"");
-  return Done(r, L"Posted.");
+  return Done(r, T(L"Posted."));
 }
 
 bool PresentationView::CommentsPanel::Reply(const std::wstring& text) {
@@ -451,7 +452,7 @@ bool PresentationView::CommentsPanel::Reply(const std::wstring& text) {
   if (!ed || picked_.empty()) return false;
   const edit::Result r = edit::ReplyToComment(*ed, v_.current_, picked_, text, Writer());
   if (r) box_.ReplaceText(L"");
-  return Done(r, L"Reply posted.");
+  return Done(r, T(L"Reply posted."));
 }
 
 void PresentationView::CommentsPanel::Edit() {
@@ -461,7 +462,7 @@ void PresentationView::CommentsPanel::Edit() {
     // The box holds one line of up to 256 characters: a longer comment, or one with line breaks, would
     // lose text when saved from it, so it isn't edited here (never damage a file).
     if (c.text.size() > 256 || c.text.find(L'\n') != std::wstring::npos) {
-      note_ = L"This comment is too long to edit here: reply to it instead.";
+      note_ = T(L"This comment is too long to edit here: reply to it instead.");
       seenState_ = UINT64_MAX;
       v_.host_.ViewInvalidate();
       return;
@@ -480,7 +481,7 @@ void PresentationView::CommentsPanel::Resolve() {
   bool resolved = false;
   for (const edit::Comment& c : List())
     if (c.id == picked_) resolved = c.resolved;
-  Done(edit::ResolveComment(*ed, v_.current_, picked_, !resolved), resolved ? L"Open again." : L"Resolved.");
+  Done(edit::ResolveComment(*ed, v_.current_, picked_, !resolved), resolved ? T(L"Open again.") : T(L"Resolved."));
 }
 
 void PresentationView::CommentsPanel::Delete() {
@@ -492,7 +493,7 @@ void PresentationView::CommentsPanel::Delete() {
     editing_.clear();
     newThread_ = true;
   }
-  Done(r, L"Deleted.");
+  Done(r, T(L"Deleted."));
 }
 
 // ---------------------------------------------------------------------------
@@ -520,9 +521,9 @@ std::vector<Control*> PresentationView::CommentsPanel::Layout(const D2D1_RECT_F&
     }
     y += rowH + 8 * ui;
   };
-  label(L"Your name");
+  label(T(L"Your name"));
   row({&name_});
-  label(!editing_.empty() ? L"Edit comment" : !newThread_ && !picked_.empty() ? L"Reply" : L"New comment");
+  label(!editing_.empty() ? T(L"Edit comment") : !newThread_ && !picked_.empty() ? T(L"Reply") : T(L"New comment"));
   row({&box_});
   row({&post_});
   row({&reply_, &edit_, &resolve_, &delete_});
@@ -543,7 +544,7 @@ void PresentationView::CommentsPanel::Refresh() {
   cards_.clear();
   const std::vector<edit::Comment>& list = List();
   auto line = [](const edit::Comment& c) {
-    return std::pair{(c.author.empty() ? std::wstring(L"Someone") : c.author) + L" · " + When(c.created, c.utc), c.text};
+    return std::pair{(c.author.empty() ? std::wstring(T(L"Someone")) : c.author) + L" · " + When(c.created, c.utc), c.text};
   };
   for (const edit::Comment& c : list) {
     if (!c.parent.empty()) continue;
@@ -564,14 +565,14 @@ void PresentationView::CommentsPanel::Refresh() {
   }
   const bool replying = pick && !newThread_ && editing_.empty();
   box_.enabled = post_.enabled = editable;
-  post_.text = !editing_.empty() ? L"Save" : replying ? L"Reply" : L"Post";
-  box_.label = !editing_.empty() ? L"Edit comment" : replying ? L"Reply" : L"New comment";
+  post_.text = !editing_.empty() ? T(L"Save") : replying ? T(L"Reply") : T(L"Post");
+  box_.label = !editing_.empty() ? T(L"Edit comment") : replying ? T(L"Reply") : T(L"New comment");
   reply_.enabled = editable;
   edit_.enabled = delete_.enabled = editable && pick;
   resolve_.enabled = editable && pick && !pick->legacy;
-  resolve_.text = pick && pick->resolved ? L"Reopen" : L"Resolve";
-  if (cards_.empty() && note_.empty()) note_ = editable ? L"No comments on this slide." : L"No comments.";
-  else if (!cards_.empty() && note_ == L"No comments on this slide.") note_.clear();
+  resolve_.text = pick && pick->resolved ? T(L"Reopen") : T(L"Resolve");
+  if (cards_.empty() && note_.empty()) note_ = editable ? T(L"No comments on this slide.") : T(L"No comments.");
+  else if (!cards_.empty() && note_ == T(L"No comments on this slide.")) note_.clear();
 }
 
 void PresentationView::CommentsPanel::PlaceCards() {
@@ -620,7 +621,7 @@ void PresentationView::CommentsPanel::Draw(Canvas& c) {
       const D2D1_RECT_F head = RectF(k.rc.left + indent, y, k.rc.right - 12 * u, y + 18 * u);
       const D2D1_COLOR_F text = k.resolved ? p.textSecondary : p.text;
       c.Text((l == 0 ? L"" : L"↳ ") + k.lines[l].first, head, text, 12 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-      if (l == 0 && k.resolved) c.Text(L"Resolved", head, p.textSecondary, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);
+      if (l == 0 && k.resolved) c.Text(T(L"Resolved"), head, p.textSecondary, 12 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Trailing);
       y += 20 * u;
       y += c.TextWrapped(k.lines[l].second, RectF(k.rc.left + indent, y, k.rc.right - 12 * u, k.rc.bottom), text, 13 * u, 6) +
            6 * u;
@@ -667,7 +668,7 @@ bool PresentationView::CommentsPanel::OnWheel(int delta, float x, float y) {
 }
 
 std::wstring PresentationView::CommentsPanel::TooltipAt(float x, float y) {
-  return CardAt(x, y) >= 0 ? L"Click to reply; its marker is outlined on the slide" : L"";
+  return CardAt(x, y) >= 0 ? T(L"Click to reply; its marker is outlined on the slide") : L"";
 }
 
 }  // namespace fw::slide::view

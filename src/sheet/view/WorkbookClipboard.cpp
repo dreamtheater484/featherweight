@@ -7,6 +7,7 @@
 #include <map>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/view/ClipHtml.h"
@@ -105,11 +106,11 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     const uint32_t ny = !clip_->cut && selH % th == 0 && selW % tw == 0 ? selH / th : 1;
     const uint32_t nx = !clip_->cut && selH % th == 0 && selW % tw == 0 ? selW / tw : 1;
     if (uint64_t{sel.firstRow} + uint64_t{th} * ny > kMaxRows || uint64_t{sel.firstCol} + uint64_t{tw} * nx > kMaxCols) {
-      host_.ViewMessage(BannerKind::Warning, L"The cells don't fit there: there aren't enough rows or columns.");
+      host_.ViewMessage(BannerKind::Warning, T(L"The cells don't fit there: there aren't enough rows or columns."));
       return;
     }
     if (uint64_t{h} * w * ny * nx > 1000000) {
-      host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight pastes at once.");
+      host_.ViewMessage(BannerKind::Warning, T(L"That's more cells than Featherweight pastes at once."));
       return;
     }
     calc::Engine& names = Calc().engine();
@@ -156,7 +157,7 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     // Excel, Word or a web page: the HTML's cells, with their formats.
     const uint32_t th = transpose ? grid.cols : grid.rows, tw = transpose ? grid.rows : grid.cols;
     if (uint64_t{sel.firstRow} + th > kMaxRows || uint64_t{sel.firstCol} + tw > kMaxCols) {
-      host_.ViewMessage(BannerKind::Warning, L"The cells don't fit there: there aren't enough rows or columns.");
+      host_.ViewMessage(BannerKind::Warning, T(L"The cells don't fit there: there aren't enough rows or columns."));
       return;
     }
     auto place = [&](uint32_t r, uint32_t c) {
@@ -259,7 +260,7 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     const uint32_t th = static_cast<uint32_t>(transpose ? width : rows.size());
     const uint32_t tw = static_cast<uint32_t>(transpose ? rows.size() : width);
     if (uint64_t{sel.firstRow} + th > kMaxRows || uint64_t{sel.firstCol} + tw > kMaxCols) {
-      host_.ViewMessage(BannerKind::Warning, L"The cells don't fit there: there aren't enough rows or columns.");
+      host_.ViewMessage(BannerKind::Warning, T(L"The cells don't fit there: there aren't enough rows or columns."));
       return;
     }
     for (size_t r = 0; r < rows.size(); ++r)
@@ -276,7 +277,7 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
   }
   const bool cut = from && clip_->cut;
   const Range cutFrom = cut ? clip_->range : Range{};
-  edit::EditGroup group(Ed(), cut ? u"Move" : u"Paste");
+  edit::EditGroup group(Ed(), cut ? T(u"Move") : T(u"Paste"));
   pasting_ = true;
   edit::Result r;
   if (cut && from == &Current()) r = Ed().ClearAll(sheet, cutFrom);  // the cells move: their place empties first

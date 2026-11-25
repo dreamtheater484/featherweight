@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <set>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 
 // Transitions and the main animation sequence (P3, p3-anim). PowerPoint 2021's own forms, read from
@@ -52,35 +53,35 @@ void SetAttr(pugi::xml_node n, const char* name, const std::string& v) {
 // Transitions
 
 struct TransOpt {
-  const char16_t* label;
+  UiText16 label;
   const char* dir;     // null: none
   const char* orient;  // split
   bool thruBlk;
 };
 
-constexpr TransOpt kFadeOpts[] = {{u"Smoothly", nullptr, nullptr, false}, {u"Through Black", nullptr, nullptr, true}};
-constexpr TransOpt kPushOpts[] = {{u"From Bottom", "u", nullptr, false},
-                                  {u"From Left", "r", nullptr, false},
-                                  {u"From Right", "l", nullptr, false},
-                                  {u"From Top", "d", nullptr, false}};
-constexpr TransOpt kWipeOpts[] = {{u"From Right", "l", nullptr, false},
-                                  {u"From Top", "d", nullptr, false},
-                                  {u"From Left", "r", nullptr, false},
-                                  {u"From Bottom", "u", nullptr, false}};
-constexpr TransOpt kSplitOpts[] = {{u"Vertical Out", "out", "vert", false},
-                                   {u"Vertical In", "in", "vert", false},
-                                   {u"Horizontal Out", "out", "horz", false},
-                                   {u"Horizontal In", "in", "horz", false}};
-constexpr TransOpt kCoverOpts[] = {{u"From Right", "l", nullptr, false},       {u"From Top", "d", nullptr, false},
-                                   {u"From Left", "r", nullptr, false},        {u"From Bottom", "u", nullptr, false},
-                                   {u"From Top-Right", "ld", nullptr, false},  {u"From Bottom-Right", "lu", nullptr, false},
-                                   {u"From Top-Left", "rd", nullptr, false},   {u"From Bottom-Left", "ru", nullptr, false}};
-constexpr TransOpt kZoomOpts[] = {{u"In", "in", nullptr, false}, {u"Out", "out", nullptr, false}};
+constexpr TransOpt kFadeOpts[] = {{N_(u"Smoothly"), nullptr, nullptr, false}, {N_(u"Through Black"), nullptr, nullptr, true}};
+constexpr TransOpt kPushOpts[] = {{N_(u"From Bottom"), "u", nullptr, false},
+                                  {N_(u"From Left"), "r", nullptr, false},
+                                  {N_(u"From Right"), "l", nullptr, false},
+                                  {N_(u"From Top"), "d", nullptr, false}};
+constexpr TransOpt kWipeOpts[] = {{N_(u"From Right"), "l", nullptr, false},
+                                  {N_(u"From Top"), "d", nullptr, false},
+                                  {N_(u"From Left"), "r", nullptr, false},
+                                  {N_(u"From Bottom"), "u", nullptr, false}};
+constexpr TransOpt kSplitOpts[] = {{N_(u"Vertical Out"), "out", "vert", false},
+                                   {N_(u"Vertical In"), "in", "vert", false},
+                                   {N_(u"Horizontal Out"), "out", "horz", false},
+                                   {N_(u"Horizontal In"), "in", "horz", false}};
+constexpr TransOpt kCoverOpts[] = {{N_(u"From Right"), "l", nullptr, false},       {N_(u"From Top"), "d", nullptr, false},
+                                   {N_(u"From Left"), "r", nullptr, false},        {N_(u"From Bottom"), "u", nullptr, false},
+                                   {N_(u"From Top-Right"), "ld", nullptr, false},  {N_(u"From Bottom-Right"), "lu", nullptr, false},
+                                   {N_(u"From Top-Left"), "rd", nullptr, false},   {N_(u"From Bottom-Left"), "ru", nullptr, false}};
+constexpr TransOpt kZoomOpts[] = {{N_(u"In"), "in", nullptr, false}, {N_(u"Out"), "out", nullptr, false}};
 
 struct TransDef {
   TransitionEffect effect;
   const char* element;  // its element's local name
-  const char16_t* name;
+  UiText16 name;
   double ms;
   const TransOpt* opts;
   int count;
@@ -88,16 +89,16 @@ struct TransDef {
 };
 
 constexpr TransDef kTrans[] = {
-    {TransitionEffect::None, "", u"None", 0, nullptr, 0, nullptr},
-    {TransitionEffect::Cut, "cut", u"Cut", 0, nullptr, 0, nullptr},
-    {TransitionEffect::Fade, "fade", u"Fade", 700, kFadeOpts, 2, nullptr},
-    {TransitionEffect::Push, "push", u"Push", 1000, kPushOpts, 4, "l"},
-    {TransitionEffect::Wipe, "wipe", u"Wipe", 1000, kWipeOpts, 4, "l"},
-    {TransitionEffect::Split, "split", u"Split", 1500, kSplitOpts, 4, "out"},
-    {TransitionEffect::Uncover, "pull", u"Uncover", 1000, kCoverOpts, 8, "l"},
-    {TransitionEffect::Cover, "cover", u"Cover", 1000, kCoverOpts, 8, "l"},
-    {TransitionEffect::Zoom, "zoom", u"Zoom", 500, kZoomOpts, 2, "out"},
-    {TransitionEffect::Other, "", u"Other", 0, nullptr, 0, nullptr},
+    {TransitionEffect::None, "", N_(u"None"), 0, nullptr, 0, nullptr},
+    {TransitionEffect::Cut, "cut", N_(u"Cut"), 0, nullptr, 0, nullptr},
+    {TransitionEffect::Fade, "fade", N_(u"Fade"), 700, kFadeOpts, 2, nullptr},
+    {TransitionEffect::Push, "push", N_(u"Push"), 1000, kPushOpts, 4, "l"},
+    {TransitionEffect::Wipe, "wipe", N_(u"Wipe"), 1000, kWipeOpts, 4, "l"},
+    {TransitionEffect::Split, "split", N_(u"Split"), 1500, kSplitOpts, 4, "out"},
+    {TransitionEffect::Uncover, "pull", N_(u"Uncover"), 1000, kCoverOpts, 8, "l"},
+    {TransitionEffect::Cover, "cover", N_(u"Cover"), 1000, kCoverOpts, 8, "l"},
+    {TransitionEffect::Zoom, "zoom", N_(u"Zoom"), 500, kZoomOpts, 2, "out"},
+    {TransitionEffect::Other, "", N_(u"Other"), 0, nullptr, 0, nullptr},
 };
 
 const TransDef& DefOf(TransitionEffect e) {
@@ -376,7 +377,7 @@ pugi::xml_node CopyTransition(Editor::Impl& m, std::string_view from, pugi::xml_
 
 Result SetOneTransition(Editor::Impl& m, const std::string& part, const TransitionPatch& patch) {
   pugi::xml_node root = m.Root(part);
-  if (!root) return Result::Fail(u"The slide can't be read.");
+  if (!root) return Result::Fail(T(u"The slide can't be read."));
   std::string from;
   const bool layoutHas = static_cast<bool>(LayoutTransition(m, part, &from));
   if (layoutHas && !FindTransition(root).node) {
@@ -384,7 +385,7 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
     // it's changed.
     root = m.Edit(part);
     if (!CopyTransition(m, from, LayoutTransition(m, part, nullptr), part, root, TransitionPlace(root)))
-      return Result::Fail(u"The layout's transition can't be copied to the slide.");
+      return Result::Fail(T(u"The layout's transition can't be copied to the slide."));
   }
   TransitionInfo now = ReadTransition(root);
   TransTarget t{now.effect, now.option, now.durationMs, now.advanceOnClick, now.advanceAfterMs};
@@ -396,8 +397,8 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
     t.ms = d.ms;
   }
   if (patch.option) {
-    if (t.effect == TransitionEffect::Other) return Result::Fail(u"This transition's options can't be changed in Featherweight.");
-    if (*patch.option < 0 || *patch.option >= std::max(d.count, 1)) return Result::Fail(u"That effect option isn't available.");
+    if (t.effect == TransitionEffect::Other) return Result::Fail(T(u"This transition's options can't be changed in Featherweight."));
+    if (*patch.option < 0 || *patch.option >= std::max(d.count, 1)) return Result::Fail(T(u"That effect option isn't available."));
     t.option = *patch.option;
   }
   bool timed = t.effect != TransitionEffect::None && t.effect != TransitionEffect::Cut;
@@ -439,7 +440,7 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
       pugi::xml_document doc;
       std::string ac = "<mc:AlternateContent xmlns:mc=\"" + std::string(kMc) + "\"><mc:Choice xmlns:p14=\"" +
                        std::string(kP14) + "\" Requires=\"p14\"/><mc:Fallback/></mc:AlternateContent>";
-      if (!Fragment(ac, doc)) return Result::Fail(u"The transition can't be written.");
+      if (!Fragment(ac, doc)) return Result::Fail(T(u"The transition can't be written."));
       pugi::xml_node made = InsertCopy(root, doc.document_element().first_child(), plain);
       pugi::xml_node choice = made.first_child(), fallback = choice.next_sibling();
       pugi::xml_node c = InsertCopy(choice, plain);
@@ -466,7 +467,7 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
       x = TransitionXml(t, false);
     }
     pugi::xml_document doc;
-    if (!Fragment(x, doc)) return Result::Fail(u"The transition can't be written.");
+    if (!Fragment(x, doc)) return Result::Fail(T(u"The transition can't be written."));
     pugi::xml_node made = InsertCopy(root, doc.document_element().first_child(), place);
     std::vector<pugi::xml_node> made2;
     if (IsP(made, "transition")) made2.push_back(made);
@@ -486,34 +487,34 @@ Result SetOneTransition(Editor::Impl& m, const std::string& part, const Transiti
 // Animations: the presets
 
 struct AnimOpt {
-  const char16_t* label;
+  UiText16 label;
   int subtype;
   int presetId;  // 0: the animation's own
 };
 
 constexpr AnimOpt kNoOpts[] = {{u"", 0, 0}};
-constexpr AnimOpt kFlyInOpts[] = {{u"From Bottom", 4, 0},    {u"From Bottom-Left", 12, 0}, {u"From Left", 8, 0},
-                                  {u"From Top-Left", 9, 0},  {u"From Top", 1, 0},          {u"From Top-Right", 3, 0},
-                                  {u"From Right", 2, 0},     {u"From Bottom-Right", 6, 0}};
-constexpr AnimOpt kFlyOutOpts[] = {{u"To Bottom", 4, 0},   {u"To Bottom-Left", 12, 0}, {u"To Left", 8, 0},
-                                   {u"To Top-Left", 9, 0}, {u"To Top", 1, 0},          {u"To Top-Right", 3, 0},
-                                   {u"To Right", 2, 0},    {u"To Bottom-Right", 6, 0}};
-constexpr AnimOpt kFloatInOpts[] = {{u"Float Up", 0, 42}, {u"Float Down", 0, 47}};
-constexpr AnimOpt kFloatOutOpts[] = {{u"Float Down", 0, 47}, {u"Float Up", 0, 42}};
-constexpr AnimOpt kSplitOpts2[] = {{u"Horizontal In", 26, 0}, {u"Horizontal Out", 42, 0}, {u"Vertical In", 21, 0}, {u"Vertical Out", 37, 0}};
-constexpr AnimOpt kWipeInOpts[] = {{u"From Bottom", 4, 0}, {u"From Left", 8, 0}, {u"From Right", 2, 0}, {u"From Top", 1, 0}};
-constexpr AnimOpt kWipeOutOpts[] = {{u"To Bottom", 4, 0}, {u"To Left", 8, 0}, {u"To Right", 2, 0}, {u"To Top", 1, 0}};
-constexpr AnimOpt kZoomOpts2[] = {{u"Object Center", 16, 0}};
-constexpr AnimOpt kZoomOutOpts[] = {{u"Object Center", 32, 0}};  // PowerPoint 2021 writes the exit as #53/32
-constexpr AnimOpt kGrowOpts[] = {{u"Both", 0, 0}, {u"Horizontal", 0, 0}, {u"Vertical", 0, 0}};
-constexpr AnimOpt kSpinOpts[] = {{u"Clockwise", 0, 0}, {u"Counterclockwise", 0, 0}};
+constexpr AnimOpt kFlyInOpts[] = {{N_(u"From Bottom"), 4, 0},    {N_(u"From Bottom-Left"), 12, 0}, {N_(u"From Left"), 8, 0},
+                                  {N_(u"From Top-Left"), 9, 0},  {N_(u"From Top"), 1, 0},          {N_(u"From Top-Right"), 3, 0},
+                                  {N_(u"From Right"), 2, 0},     {N_(u"From Bottom-Right"), 6, 0}};
+constexpr AnimOpt kFlyOutOpts[] = {{N_(u"To Bottom"), 4, 0},   {N_(u"To Bottom-Left"), 12, 0}, {N_(u"To Left"), 8, 0},
+                                   {N_(u"To Top-Left"), 9, 0}, {N_(u"To Top"), 1, 0},          {N_(u"To Top-Right"), 3, 0},
+                                   {N_(u"To Right"), 2, 0},    {N_(u"To Bottom-Right"), 6, 0}};
+constexpr AnimOpt kFloatInOpts[] = {{N_(u"Float Up"), 0, 42}, {N_(u"Float Down"), 0, 47}};
+constexpr AnimOpt kFloatOutOpts[] = {{N_(u"Float Down"), 0, 47}, {N_(u"Float Up"), 0, 42}};
+constexpr AnimOpt kSplitOpts2[] = {{N_(u"Horizontal In"), 26, 0}, {N_(u"Horizontal Out"), 42, 0}, {N_(u"Vertical In"), 21, 0}, {N_(u"Vertical Out"), 37, 0}};
+constexpr AnimOpt kWipeInOpts[] = {{N_(u"From Bottom"), 4, 0}, {N_(u"From Left"), 8, 0}, {N_(u"From Right"), 2, 0}, {N_(u"From Top"), 1, 0}};
+constexpr AnimOpt kWipeOutOpts[] = {{N_(u"To Bottom"), 4, 0}, {N_(u"To Left"), 8, 0}, {N_(u"To Right"), 2, 0}, {N_(u"To Top"), 1, 0}};
+constexpr AnimOpt kZoomOpts2[] = {{N_(u"Object Center"), 16, 0}};
+constexpr AnimOpt kZoomOutOpts[] = {{N_(u"Object Center"), 32, 0}};  // PowerPoint 2021 writes the exit as #53/32
+constexpr AnimOpt kGrowOpts[] = {{N_(u"Both"), 0, 0}, {N_(u"Horizontal"), 0, 0}, {N_(u"Vertical"), 0, 0}};
+constexpr AnimOpt kSpinOpts[] = {{N_(u"Clockwise"), 0, 0}, {N_(u"Counterclockwise"), 0, 0}};
 
 struct AnimDef {
   Anim anim;
   AnimClass cls;
   const char* presetClass;
   int presetId;
-  const char16_t* name;
+  UiText16 name;
   double ms;
   int defaultOption;
   const AnimOpt* opts;
@@ -521,22 +522,22 @@ struct AnimDef {
 };
 
 constexpr AnimDef kAnims[] = {
-    {Anim::Appear, AnimClass::Entrance, "entr", 1, u"Appear", 0, 0, kNoOpts, 0},
-    {Anim::Fade, AnimClass::Entrance, "entr", 10, u"Fade", 500, 0, kNoOpts, 0},
-    {Anim::FlyIn, AnimClass::Entrance, "entr", 2, u"Fly In", 500, 0, kFlyInOpts, 8},
-    {Anim::FloatIn, AnimClass::Entrance, "entr", 42, u"Float In", 1000, 0, kFloatInOpts, 2},
-    {Anim::Split, AnimClass::Entrance, "entr", 16, u"Split", 500, 2, kSplitOpts2, 4},
-    {Anim::Wipe, AnimClass::Entrance, "entr", 22, u"Wipe", 500, 0, kWipeInOpts, 4},
-    {Anim::Zoom, AnimClass::Entrance, "entr", 53, u"Zoom", 500, 0, kZoomOpts2, 1},
+    {Anim::Appear, AnimClass::Entrance, "entr", 1, N_(u"Appear"), 0, 0, kNoOpts, 0},
+    {Anim::Fade, AnimClass::Entrance, "entr", 10, N_(u"Fade"), 500, 0, kNoOpts, 0},
+    {Anim::FlyIn, AnimClass::Entrance, "entr", 2, N_(u"Fly In"), 500, 0, kFlyInOpts, 8},
+    {Anim::FloatIn, AnimClass::Entrance, "entr", 42, N_(u"Float In"), 1000, 0, kFloatInOpts, 2},
+    {Anim::Split, AnimClass::Entrance, "entr", 16, N_(u"Split"), 500, 2, kSplitOpts2, 4},
+    {Anim::Wipe, AnimClass::Entrance, "entr", 22, N_(u"Wipe"), 500, 0, kWipeInOpts, 4},
+    {Anim::Zoom, AnimClass::Entrance, "entr", 53, N_(u"Zoom"), 500, 0, kZoomOpts2, 1},
     {Anim::GrowShrink, AnimClass::Emphasis, "emph", 6, u"Grow/Shrink", 2000, 0, kGrowOpts, 3},
-    {Anim::Spin, AnimClass::Emphasis, "emph", 8, u"Spin", 2000, 0, kSpinOpts, 2},
-    {Anim::Disappear, AnimClass::Exit, "exit", 1, u"Disappear", 0, 0, kNoOpts, 0},
-    {Anim::FadeOut, AnimClass::Exit, "exit", 10, u"Fade", 500, 0, kNoOpts, 0},
-    {Anim::FlyOut, AnimClass::Exit, "exit", 2, u"Fly Out", 500, 0, kFlyOutOpts, 8},
-    {Anim::FloatOut, AnimClass::Exit, "exit", 47, u"Float Out", 1000, 0, kFloatOutOpts, 2},
-    {Anim::SplitOut, AnimClass::Exit, "exit", 16, u"Split", 500, 2, kSplitOpts2, 4},
-    {Anim::WipeOut, AnimClass::Exit, "exit", 22, u"Wipe", 500, 0, kWipeOutOpts, 4},
-    {Anim::ZoomOut, AnimClass::Exit, "exit", 53, u"Zoom", 500, 0, kZoomOutOpts, 1},
+    {Anim::Spin, AnimClass::Emphasis, "emph", 8, N_(u"Spin"), 2000, 0, kSpinOpts, 2},
+    {Anim::Disappear, AnimClass::Exit, "exit", 1, N_(u"Disappear"), 0, 0, kNoOpts, 0},
+    {Anim::FadeOut, AnimClass::Exit, "exit", 10, N_(u"Fade"), 500, 0, kNoOpts, 0},
+    {Anim::FlyOut, AnimClass::Exit, "exit", 2, N_(u"Fly Out"), 500, 0, kFlyOutOpts, 8},
+    {Anim::FloatOut, AnimClass::Exit, "exit", 47, N_(u"Float Out"), 1000, 0, kFloatOutOpts, 2},
+    {Anim::SplitOut, AnimClass::Exit, "exit", 16, N_(u"Split"), 500, 2, kSplitOpts2, 4},
+    {Anim::WipeOut, AnimClass::Exit, "exit", 22, N_(u"Wipe"), 500, 0, kWipeOutOpts, 4},
+    {Anim::ZoomOut, AnimClass::Exit, "exit", 53, N_(u"Zoom"), 500, 0, kZoomOutOpts, 1},
 };
 
 const AnimDef* AnimDefOf(Anim a) {
@@ -830,7 +831,7 @@ Classified Classify(pugi::xml_node cTn) {
 // ---------------------------------------------------------------------------------------------
 // Animations: the main sequence
 
-constexpr const char16_t* kOdd = u"The animations on this slide are stored in a way Featherweight can't change.";
+constexpr const char16_t* kOdd = N_(u"The animations on this slide are stored in a way Featherweight can't change.");
 
 struct Entry {
   pugi::xml_node par, cTn;
@@ -1120,17 +1121,17 @@ bool HasText(pugi::xml_node shape) {
 
 Result Check(const Editor::Impl& m, size_t slide, std::string& part) {
   part = m.SlidePart(slide);
-  if (part.empty()) return Result::Fail(u"That slide isn't in the presentation.");
-  if (!m.Root(part)) return Result::Fail(u"The slide can't be read.");
+  if (part.empty()) return Result::Fail(T(u"That slide isn't in the presentation."));
+  if (!m.Root(part)) return Result::Fail(T(u"The slide can't be read."));
   return {};
 }
 
 Result CheckEffects(const std::vector<size_t>& effects, size_t count) {
-  if (effects.empty()) return Result::Fail(u"No animations are selected.");
+  if (effects.empty()) return Result::Fail(T(u"No animations are selected."));
   std::set<size_t> seen;
   for (size_t e : effects) {
-    if (e >= count) return Result::Fail(u"That animation isn't on the slide.");
-    if (!seen.insert(e).second) return Result::Fail(u"An animation is selected twice.");
+    if (e >= count) return Result::Fail(T(u"That animation isn't on the slide."));
+    if (!seen.insert(e).second) return Result::Fail(T(u"An animation is selected twice."));
   }
   return {};
 }
@@ -1222,15 +1223,15 @@ TransitionInfo GetTransition(const Editor& ed, size_t slide) {
 }
 
 Result SetTransition(Editor& ed, const std::vector<size_t>& slides, const TransitionPatch& patch) {
-  Call call(ed, u"Transition");
+  Call call(ed, T(u"Transition"));
   Editor::Impl& m = ed.Internals();
   if (Result r = m.CheckSlides(slides, m.SlideList().size()); !r) return call.End(r);
-  if (patch.effect == TransitionEffect::Other) return call.End(Result::Fail(u"Pick a transition from the gallery."));
+  if (patch.effect == TransitionEffect::Other) return call.End(Result::Fail(T(u"Pick a transition from the gallery.")));
   if (patch.durationMs && !(*patch.durationMs >= 10 && *patch.durationMs <= 59000))
-    return call.End(Result::Fail(u"The duration must be between 0.01 and 59 seconds."));
+    return call.End(Result::Fail(T(u"The duration must be between 0.01 and 59 seconds.")));
   if (patch.advanceAfterMs && *patch.advanceAfterMs > 86400000)
-    return call.End(Result::Fail(u"A slide can advance after at most 24 hours."));
-  if (patch.advanceAfterMs && std::isnan(*patch.advanceAfterMs)) return call.End(Result::Fail(u"That time isn't a number."));
+    return call.End(Result::Fail(T(u"A slide can advance after at most 24 hours.")));
+  if (patch.advanceAfterMs && std::isnan(*patch.advanceAfterMs)) return call.End(Result::Fail(T(u"That time isn't a number.")));
   for (size_t i : std::set<size_t>(slides.begin(), slides.end())) {
     if (Result r = SetOneTransition(m, m.SlidePart(i), patch); !r) return call.End(r);
   }
@@ -1238,11 +1239,11 @@ Result SetTransition(Editor& ed, const std::vector<size_t>& slides, const Transi
 }
 
 Result ApplyTransitionToAll(Editor& ed, size_t from) {
-  Call call(ed, u"Apply To All");
+  Call call(ed, T(u"Apply To All"));
   Editor::Impl& m = ed.Internals();
   std::vector<Editor::Impl::SlideEntry> list = m.SlideList();
-  if (from >= list.size()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  if (!m.Root(list[from].part)) return call.End(Result::Fail(u"The slide can't be read."));
+  if (from >= list.size()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
+  if (!m.Root(list[from].part)) return call.End(Result::Fail(T(u"The slide can't be read.")));
   // What the slide plays: its own transition, or its layout's.
   std::string srcPart;
   auto source = [&] {
@@ -1270,11 +1271,11 @@ Result ApplyTransitionToAll(Editor& ed, size_t from) {
     pugi::xml_node place = here.node ? here.node : TransitionPlace(root);
     if (node) {
       if (!CopyTransition(m, srcPart, node, list[i].part, root, place))
-        return call.End(Result::Fail(u"The transition's sound can't be copied to the other slides."));
+        return call.End(Result::Fail(T(u"The transition's sound can't be copied to the other slides.")));
     } else if (layoutHas) {
       // None over a layout's transition: an empty one of the slide's own.
       pugi::xml_document doc;
-      if (!Fragment(TransitionXml(TransTarget{}, false), doc)) return call.End(Result::Fail(u"The transition can't be written."));
+      if (!Fragment(TransitionXml(TransTarget{}, false), doc)) return call.End(Result::Fail(T(u"The transition can't be written.")));
       InsertCopy(root, doc.document_element().first_child(), place);
     }
     if (here.node) root.remove_child(here.node);
@@ -1292,7 +1293,7 @@ AnimClass ClassOf(Anim anim) {
 
 const char16_t* AnimName(Anim anim) {
   const AnimDef* d = AnimDefOf(anim);
-  return d ? d->name : u"Custom";
+  return d ? static_cast<const char16_t*>(d->name) : T(u"Custom");
 }
 
 std::vector<std::u16string> AnimOptions(Anim anim) {
@@ -1347,30 +1348,30 @@ std::vector<AnimEffect> MainSequence(const Editor& ed, size_t slide, std::u16str
 }
 
 Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& spec, int at, size_t* index) {
-  Call call(ed, u"Add Animation");
+  Call call(ed, T(u"Add Animation"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
   const AnimDef* def = AnimDefOf(spec.anim);
-  if (!def) return call.End(Result::Fail(u"Pick an animation from the gallery."));
+  if (!def) return call.End(Result::Fail(T(u"Pick an animation from the gallery.")));
   int option = spec.option < 0 ? def->defaultOption : spec.option;
-  if (option >= std::max(def->count, 1)) return call.End(Result::Fail(u"That effect option isn't available."));
+  if (option >= std::max(def->count, 1)) return call.End(Result::Fail(T(u"That effect option isn't available.")));
   double ms = spec.durationMs ? std::round(*spec.durationMs) : def->ms;
-  if (def->ms > 0 && !(ms >= 10 && ms <= 59000)) return call.End(Result::Fail(u"The duration must be between 0.01 and 59 seconds."));
-  if (!(spec.delayMs >= 0 && spec.delayMs <= 59000)) return call.End(Result::Fail(u"The delay must be between 0 and 59 seconds."));
+  if (def->ms > 0 && !(ms >= 10 && ms <= 59000)) return call.End(Result::Fail(T(u"The duration must be between 0.01 and 59 seconds.")));
+  if (!(spec.delayMs >= 0 && spec.delayMs <= 59000)) return call.End(Result::Fail(T(u"The delay must be between 0 and 59 seconds.")));
   if (def->ms == 0) ms = 0;
 
   pugi::xml_node look = m.Root(part);
   pugi::xml_node el = Editor::Impl::FindShape(look, shape);
-  if (!el) return call.End(Result::Fail(u"That shape isn't on the slide."));
+  if (!el) return call.End(Result::Fail(T(u"That shape isn't on the slide.")));
   pugi::xml_node parent = el.parent();
   while (parent && (Is(parent, kMc, "Choice") || Is(parent, kMc, "Fallback"))) parent = parent.parent().parent();
-  if (!IsP(parent, "spTree")) return call.End(Result::Fail(u"A shape inside a group can't be animated on its own; animate the group."));
+  if (!IsP(parent, "spTree")) return call.End(Result::Fail(T(u"A shape inside a group can't be animated on its own; animate the group.")));
   bool sp = IsP(el, "sp");
   // The paragraph ranges: each first-level paragraph with the deeper ones after it, empty ones left out.
   std::vector<std::pair<int, int>> ranges;
   if (spec.byParagraph) {
-    if (!sp || !HasText(el)) return call.End(Result::Fail(u"Only a shape with text can be animated by paragraph."));
+    if (!sp || !HasText(el)) return call.End(Result::Fail(T(u"Only a shape with text can be animated by paragraph.")));
     int i = 0;
     ForElements(PChild(el, "txBody"), [&](pugi::xml_node para) {
       if (!Is(para, kA, "p")) return;
@@ -1385,7 +1386,7 @@ Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& sp
 
   MainSeq s0 = ReadMainSeq(look);
   if (!s0.ok) return call.End(Result::Fail(kOdd));
-  if (at > static_cast<int>(s0.entries.size())) return call.End(Result::Fail(u"That place isn't in the animation order."));
+  if (at > static_cast<int>(s0.entries.size())) return call.End(Result::Fail(T(u"That place isn't in the animation order.")));
   size_t pos = at < 0 ? s0.entries.size() : static_cast<size_t>(at);
 
   pugi::xml_node root = m.Edit(part);
@@ -1426,7 +1427,7 @@ Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& sp
             Behaviors(*def, option, ms, tgt, ids), "</p:childTnLst></p:cTn></p:par>"});
   }
   pugi::xml_document doc;
-  if (!Fragment(x, doc)) return call.End(Result::Fail(u"The animation can't be written."));
+  if (!Fragment(x, doc)) return call.End(Result::Fail(T(u"The animation can't be written.")));
   // New effects wait in the sequence's list until Rebuild moves them into their groups.
   std::vector<Entry> entries = s.entries;
   std::vector<Entry> added;
@@ -1459,31 +1460,31 @@ Result AddAnimation(Editor& ed, size_t slide, uint32_t shape, const AnimSpec& sp
 }
 
 Result ChangeAnimation(Editor& ed, size_t slide, const std::vector<size_t>& effects, Anim anim) {
-  Call call(ed, u"Change Animation");
+  Call call(ed, T(u"Change Animation"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
   const AnimDef* def = AnimDefOf(anim);
-  if (!def) return call.End(Result::Fail(u"Pick an animation from the gallery."));
+  if (!def) return call.End(Result::Fail(T(u"Pick an animation from the gallery.")));
   pugi::xml_node root;
   MainSeq s;
   if (Result r = EditSeq(m, part, root, s); !r) return call.End(r);
   if (Result r = CheckEffects(effects, s.entries.size()); !r) return call.End(r);
   for (size_t i : effects) {
     Classified c = Classify(s.entries[i].cTn);
-    if (!c.target.simple) return call.End(Result::Fail(u"This animation can't be changed in Featherweight."));
+    if (!c.target.simple) return call.End(Result::Fail(T(u"This animation can't be changed in Featherweight.")));
   }
   for (size_t i : effects) {
     Classified c = Classify(s.entries[i].cTn);
     if (!Regenerate(s.timing, s.entries[i].cTn, *def, def->defaultOption, def->ms, c.target))
-      return call.End(Result::Fail(u"The animation can't be written."));
+      return call.End(Result::Fail(T(u"The animation can't be written.")));
   }
   Rebuild(root, s, s.entries);  // time groups after a changed length move
   return call.End({});
 }
 
 Result SetAnimationOption(Editor& ed, size_t slide, const std::vector<size_t>& effects, int option) {
-  Call call(ed, u"Effect Options");
+  Call call(ed, T(u"Effect Options"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
@@ -1493,8 +1494,8 @@ Result SetAnimationOption(Editor& ed, size_t slide, const std::vector<size_t>& e
   if (Result r = CheckEffects(effects, s.entries.size()); !r) return call.End(r);
   for (size_t i : effects) {
     Classified c = Classify(s.entries[i].cTn);
-    if (!c.def || !c.editable) return call.End(Result::Fail(u"This animation's options can't be changed in Featherweight."));
-    if (option < 0 || option >= std::max(c.def->count, 1)) return call.End(Result::Fail(u"That effect option isn't available."));
+    if (!c.def || !c.editable) return call.End(Result::Fail(T(u"This animation's options can't be changed in Featherweight.")));
+    if (option < 0 || option >= std::max(c.def->count, 1)) return call.End(Result::Fail(T(u"That effect option isn't available.")));
   }
   for (size_t i : effects) {
     Classified c = Classify(s.entries[i].cTn);
@@ -1502,20 +1503,20 @@ Result SetAnimationOption(Editor& ed, size_t slide, const std::vector<size_t>& e
     double ms = Length(s.entries[i].cTn);
     if (ms <= 0) ms = c.def->ms;
     if (!Regenerate(s.timing, s.entries[i].cTn, *c.def, option, c.def->ms ? ms : 0, c.target))
-      return call.End(Result::Fail(u"The animation can't be written."));
+      return call.End(Result::Fail(T(u"The animation can't be written.")));
   }
   return call.End({});
 }
 
 Result SetAnimationTiming(Editor& ed, size_t slide, const std::vector<size_t>& effects, const AnimTimingPatch& patch) {
-  Call call(ed, u"Animation Timing");
+  Call call(ed, T(u"Animation Timing"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
   if (patch.durationMs && !(*patch.durationMs >= 10 && *patch.durationMs <= 59000))
-    return call.End(Result::Fail(u"The duration must be between 0.01 and 59 seconds."));
+    return call.End(Result::Fail(T(u"The duration must be between 0.01 and 59 seconds.")));
   if (patch.delayMs && !(*patch.delayMs >= 0 && *patch.delayMs <= 59000))
-    return call.End(Result::Fail(u"The delay must be between 0 and 59 seconds."));
+    return call.End(Result::Fail(T(u"The delay must be between 0 and 59 seconds.")));
   pugi::xml_node root;
   MainSeq s;
   if (Result r = EditSeq(m, part, root, s); !r) return call.End(r);
@@ -1523,7 +1524,7 @@ Result SetAnimationTiming(Editor& ed, size_t slide, const std::vector<size_t>& e
   if (patch.durationMs) {
     for (size_t i : effects) {
       Classified c = Classify(s.entries[i].cTn);
-      if (!c.def || !c.editable) return call.End(Result::Fail(u"This animation's duration can't be changed in Featherweight."));
+      if (!c.def || !c.editable) return call.End(Result::Fail(T(u"This animation's duration can't be changed in Featherweight.")));
     }
   }
   for (size_t i : effects) {
@@ -1540,7 +1541,7 @@ Result SetAnimationTiming(Editor& ed, size_t slide, const std::vector<size_t>& e
 }
 
 Result MoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects, size_t to) {
-  Call call(ed, u"Reorder Animation");
+  Call call(ed, T(u"Reorder Animation"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
@@ -1553,14 +1554,14 @@ Result MoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effec
   std::vector<Entry> rest, block;
   for (size_t i = 0; i < s.entries.size(); ++i)
     (std::binary_search(moved.begin(), moved.end(), i) ? block : rest).push_back(s.entries[i]);
-  if (to > rest.size()) return call.End(Result::Fail(u"That place isn't in the animation order."));
+  if (to > rest.size()) return call.End(Result::Fail(T(u"That place isn't in the animation order.")));
   rest.insert(rest.begin() + static_cast<std::ptrdiff_t>(to), block.begin(), block.end());
   Rebuild(root, s, rest);
   return call.End({});
 }
 
 Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& effects) {
-  Call call(ed, u"Remove Animation");
+  Call call(ed, T(u"Remove Animation"));
   Editor::Impl& m = ed.Internals();
   std::string part;
   if (Result r = Check(m, slide, part); !r) return call.End(r);
@@ -1590,9 +1591,9 @@ Result RemoveAnimations(Editor& ed, size_t slide, const std::vector<size_t>& eff
 
 Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byParagraph) {
   const std::vector<AnimEffect> seq = MainSequence(ed, slide);
-  if (effect >= seq.size()) return Result::Fail(u"That animation isn't on the slide.");
+  if (effect >= seq.size()) return Result::Fail(T(u"That animation isn't on the slide."));
   const AnimEffect a = seq[effect];
-  if (!a.editable) return Result::Fail(u"This animation's options can't be changed in Featherweight.");
+  if (!a.editable) return Result::Fail(T(u"This animation's options can't be changed in Featherweight."));
   auto same = [&](size_t k) { return seq[k].shape == a.shape && seq[k].paragraph >= 0 && seq[k].anim == a.anim; };
   size_t first = effect, last = effect;
   if (a.paragraph >= 0) {
@@ -1600,7 +1601,7 @@ Result SetAnimationSequence(Editor& ed, size_t slide, size_t effect, bool byPara
     while (last + 1 < seq.size() && same(last + 1)) ++last;
   }
   if ((a.paragraph >= 0) == byParagraph) return {};
-  EditGroup group(ed, u"Effect Options");
+  EditGroup group(ed, T(u"Effect Options"));
   AnimSpec s;
   s.anim = a.anim;
   s.option = a.option;
