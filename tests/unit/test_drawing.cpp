@@ -1168,7 +1168,8 @@ TEST(Shapes_OutlinesInDirectWriteFromMemory) {
   wchar_t dir[MAX_PATH] = {};
   GetWindowsDirectoryW(dir, MAX_PATH);
   std::vector<uint8_t> arial;
-  if (FILE* f = _wfopen((std::wstring(dir) + L"\\Fonts\\arial.ttf").c_str(), L"rb")) {
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, (std::wstring(dir) + L"\\Fonts\\arial.ttf").c_str(), L"rb") == 0 && f) {
     std::fseek(f, 0, SEEK_END);
     arial.resize(static_cast<size_t>(std::ftell(f)));
     std::fseek(f, 0, SEEK_SET);

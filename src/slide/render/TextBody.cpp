@@ -458,21 +458,21 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     // points before a centred "Magnifying glass").
     if (para.bullet && pp.indent < 0 && !pp.rtl && (f.alignment == Alignment::Center || f.alignment == Alignment::End) &&
         !para.lines.empty()) {
-      text::Line& first = para.lines.front();
+      text::Line& firstLine = para.lines.front();
       float textX = std::numeric_limits<float>::infinity(), bulletX = textX;
-      for (const text::GlyphPiece& g : first.pieces) {
+      for (const text::GlyphPiece& g : firstLine.pieces) {
         float& at = g.run == 0 ? bulletX : textX;
         at = std::min(at, g.x);
       }
-      for (const text::InlineObject& o : first.objects) {
+      for (const text::InlineObject& o : firstLine.objects) {
         float& at = o.run == 0 ? bulletX : textX;
         at = std::min(at, o.x);
       }
       if (std::isfinite(textX) && std::isfinite(bulletX)) {
         const float shift = textX + pp.indent - bulletX;
-        for (text::GlyphPiece& g : first.pieces)
+        for (text::GlyphPiece& g : firstLine.pieces)
           if (g.run == 0) g.x += shift;
-        for (text::InlineObject& o : first.objects)
+        for (text::InlineObject& o : firstLine.objects)
           if (o.run == 0) o.x += shift;
       }
     }

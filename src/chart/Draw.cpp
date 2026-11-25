@@ -1540,20 +1540,21 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
       // moves over where there's room for them, else it's narrowed to just fit.
       const float valueRoom = vw > 0 ? std::min(vw, maxSide) + valueGap : 0, secondRoom = sw > 0 ? std::min(sw, maxSide) + valueGap : 0;
       const float leftNeed = 1.45f + (high ? 0 : valueRoom), rightNeed = 1.45f + std::max(secondRoom, high ? valueRoom : 0.0f);
-      float lo = leftNeed, hi = W - rightNeed;
+      float minLeft = leftNeed, maxRight = W - rightNeed;
       if (!clabels.empty() && cats.n > 0) {
         const size_t skip = ch.category.labelSkip > 0 ? static_cast<size_t>(ch.category.labelSkip) : 1;
         const size_t last = std::min(clabels.size(), cats.n) - 1;
         const float span = p.r.right - p.r.left;
-        lo = std::max(lo, 5.65f + clabels.front().width / 2 - static_cast<float>(cats.Center(0)) * span);
-        hi = std::min(hi, W - 5.65f - clabels[last / skip * skip].width / 2 + static_cast<float>(1 - cats.Center(last / skip * skip)) * span);
+        minLeft = std::max(minLeft, 5.65f + clabels.front().width / 2 - static_cast<float>(cats.Center(0)) * span);
+        maxRight = std::min(maxRight, W - 5.65f - clabels[last / skip * skip].width / 2 +
+                                          static_cast<float>(1 - cats.Center(last / skip * skip)) * span);
       }
-      if (lo < hi) {
-        if (p.r.right - p.r.left <= hi - lo) {
-          const float shift = p.r.left < lo ? lo - p.r.left : p.r.right > hi ? hi - p.r.right : 0;
+      if (minLeft < maxRight) {
+        if (p.r.right - p.r.left <= maxRight - minLeft) {
+          const float shift = p.r.left < minLeft ? minLeft - p.r.left : p.r.right > maxRight ? maxRight - p.r.right : 0;
           p.r.left += shift, p.r.right += shift;
         } else {
-          p.r.left = lo, p.r.right = hi;
+          p.r.left = minLeft, p.r.right = maxRight;
         }
       }
     }

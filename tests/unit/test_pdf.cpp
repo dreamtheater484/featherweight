@@ -352,7 +352,7 @@ TEST(Pdf_SlidePicturesAsPowerPointWritesThem) {
   if (at == std::string::npos) return;
   const size_t from = streams.rfind("q ", at);
   double w = 0, b = 0, c = 0, h = 0, x = 0, y = 0;
-  CHECK(std::sscanf(streams.c_str() + from, "q %lf %lf %lf %lf %lf %lf cm", &w, &b, &c, &h, &x, &y) == 6);
+  CHECK(sscanf_s(streams.c_str() + from, "q %lf %lf %lf %lf %lf %lf cm", &w, &b, &c, &h, &x, &y) == 6);
   CHECK_NEAR(w, 960.12, 0.0002);
   CHECK_NEAR(h, -465.4, 0.0002);
   CHECK_NEAR(x, 1.2257, 0.00002);
