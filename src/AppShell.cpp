@@ -82,6 +82,20 @@ CommandState App::QueryCommand(int cmd) {
   const bool ready = v && v->Ready();
   CommandState s = ready ? v->QueryCommand(cmd) : CommandState{};
   const AppCommand* own = FindAppCommand(cmd);
+  // File > Options > Language (f1-lang): each language by its own name; a change applies at the next start.
+  if (cmd == CmdLanguageWindows || (cmd >= CmdLanguage0 && cmd < CmdLanguage0 + 9)) {
+    const auto& all = fw::lang::Languages();
+    const std::wstring code = cmd == CmdLanguageWindows ? fw::lang::WindowsLanguage()
+                              : static_cast<size_t>(cmd - CmdLanguage0) < all.size() ? all[cmd - CmdLanguage0].code
+                                                                                    : L"";
+    CommandState l;
+    l.visible = l.enabled = !code.empty();
+    for (const fw::lang::Language& lang : all)
+      if (code == lang.code)
+        l.label = cmd == CmdLanguageWindows ? std::wstring(T(L"Windows' language")) + L" (" + lang.name + L")" : lang.name;
+    l.checked = cmd == CmdLanguageWindows ? settings_.language.empty() : settings_.language == code;
+    return l;
+  }
   if (!own) return s;
   if (s.label.empty()) {
     s.label = own->label;

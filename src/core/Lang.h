@@ -21,10 +21,12 @@
 #include <string_view>
 #include <vector>
 
-const wchar_t* T(const wchar_t* en);
-const wchar_t* T(const wchar_t* en, const wchar_t* context);
-const char16_t* T(const char16_t* en);
-const char* T(const char* en);  // UTF-8 in, UTF-8 out
+// Never inlined: called from some 5,500 places, each call is a few bytes (an inlined copy would be
+// a hundred).
+__declspec(noinline) const wchar_t* T(const wchar_t* en);
+__declspec(noinline) const wchar_t* T(const wchar_t* en, const wchar_t* context);
+__declspec(noinline) const char16_t* T(const char16_t* en);
+__declspec(noinline) const char* T(const char* en);  // UTF-8 in, UTF-8 out
 
 // Marks a string for the catalog where T() can't run yet (constexpr tables, namespace scope).
 #define N_(s) s

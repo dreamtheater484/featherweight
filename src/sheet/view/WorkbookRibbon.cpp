@@ -333,9 +333,10 @@ const char* Turned(int cmd, const CommandState& q) {
 // Excel's KeyTips for the ↘ launchers, by group (the ribbon's own lead with the group's letter, and
 // Number's clashed with its box, N).
 const wchar_t* LauncherKey(const char* group) {
+  // The groups by their English names (Spec::label.en): the keys don't change with the language.
   static constexpr std::pair<const char*, const wchar_t*> kKeys[] = {
-      {"Font", L"FN"},       {"Alignment", L"FA"},    {"Number", L"FM"},         {"Charts", L"K"},
-      {"Page Setup", L"SP"}, {"Scale to Fit", L"SC"}, {"Picture Styles", L"O"}, {"Shape Styles", L"O"}};
+      {"Font", L"FN"},       {"Alignment", L"FA"},    {"Number", L"FM"},         {"Charts", L"K"},  // lang: no
+      {"Page Setup", L"SP"}, {"Scale to Fit", L"SC"}, {"Picture Styles", L"O"}, {"Shape Styles", L"O"}};  // lang: no
   for (const auto& [name, key] : kKeys)
     if (std::strcmp(name, group) == 0) return key;
   return L"";
@@ -368,7 +369,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         group.glyph = s.glyph;
         group.rows = s.size;
         group.launcher = s.launcher;
-        if (s.launcher) group.launcherKeyTip = LauncherKey(s.label);
+        if (s.launcher) group.launcherKeyTip = LauncherKey(s.label.en);
         group.shrinkFirst = s.flags;  // a group's flags: how early it shrinks
         continue;
       }

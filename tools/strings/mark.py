@@ -287,6 +287,8 @@ def main():
     ap.add_argument('--apply', action='store_true')
     ap.add_argument('--all', action='store_true', help='report unmarked literals too')
     ap.add_argument('--conflicts', help='texts marked in one place and used as data in another')
+    ap.add_argument('--check', action='store_true',
+                    help='the catalog check (ctest strings_marked): fail if any string would be marked')
     ap.add_argument('paths', nargs='*')
     a = ap.parse_args()
     paths = a.paths or ['src']
@@ -353,9 +355,21 @@ def main():
             for t in sorted(set(marked_at) & set(data_at)):
                 f.write(f'{t!r}\n  marked: {", ".join(marked_at[t][:6])}\n  data:   {", ".join(data_at[t][:6])}\n')
     marked = sum(1 for row in rows if row[2] != '-')
+    if a.check:
+        for row in rows:
+            if row[2] != '-':
+                print(f'{row[0]}:{row[1]}: "{row[6]}" isn\'t marked ({"N_() or a UiText table" if row[2] == "N" else "T()"})')
+        if marked:
+            print(f'\n{marked} strings a person reads don\'t go through the catalog (docs/f1-plan.md, Rules: every new '
+                  'UI string goes through T()).\nWrap them (python tools/strings/mark.py --apply <files> does it), or, '
+                  'for data that only looks like words, end the line with // lang: no.')
+            return 1
+        print('every string is marked')
+        return 0
     print(f'{marked} strings to mark in {len({row[0] for row in rows if row[2] != "-"})} files'
           + (f'; {changed} files changed' if a.apply else ''))
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

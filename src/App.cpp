@@ -81,6 +81,11 @@ int App::Run(const AppOptions& opts) {
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
+  // The interface's language (f1-lang): --lang, else File > Options' choice, else Windows' display
+  // language. Snapshots and the widget gallery (the screen tests) are in English unless --lang names one.
+  fw::lang::Init(!opts.language.empty() ? opts.language
+                 : snapshot_ || opts.widgetGallery ? std::wstring(L"en")
+                                                   : settings_.language);
   if (!opts.showPath.empty())
     return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture, opts.showWindowed, opts.showPresenter,
                                            opts.showMediaReport);
@@ -1671,6 +1676,23 @@ void App::Execute(int cmd) {
       Layout();
       break;
     case CmdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
+    case CmdLanguageWindows:
+    case CmdLanguage0:
+    case CmdLanguage0 + 1:
+    case CmdLanguage0 + 2:
+    case CmdLanguage0 + 3:
+    case CmdLanguage0 + 4:
+    case CmdLanguage0 + 5: {
+      // f1-lang: the interface's language, from the next start (as Office).
+      const auto& all = fw::lang::Languages();
+      const size_t i = static_cast<size_t>(cmd - CmdLanguage0);
+      const std::wstring code = cmd == CmdLanguageWindows ? L"" : i < all.size() ? all[i].code : settings_.language;
+      if (code == settings_.language) break;
+      settings_.language = code;
+      if (!snapshot_) settings_.Save();
+      banner_.Show(BannerKind::Info, T(L"Featherweight changes its language the next time it starts."));
+      break;
+    }
     default:
       // Everything else belongs to the tab: pages, zoom, selection, highlights, notes.
       if (ready) v->Execute(cmd);

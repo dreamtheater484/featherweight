@@ -1,15 +1,17 @@
 #pragma once
 
 // The compiled catalogs' format (F1, f1-lang), shared by the app (src/core/Lang.cpp), the catalog
-// compiler (tools/strings) and the fuzzer (tests/fuzz/fuzz_catalog.cpp).
+// compiler (tools/strings/fwstrings.cpp) and the fuzzer (tests/fuzz/fuzz_catalog.cpp).
 //
 // Two kinds of resource (RCDATA):
-//   LANG_KEYS: "FWLK", version 1, seed, count, then count hashes of the template's keys, ascending.
-//              A key's hash is its index; one table serves every language.
+//   LANG_KEYS: "FWLK", version 1, seed, count, then count hashes of the template's keys, ascending,
+//              then for each hash (as a 16-bit number) the key's place in the template. One table
+//              serves every language.
 //   LANG_<CODE> (LANG_DE): "FWLZ", the inflated size, then raw deflate of
 //              "FWLT", version 1, count, the keys' check (KeysCheck), then count UTF-8 texts in the
-//              keys' order, each ended by a 0 (empty: not translated, English shows).
-// All numbers are 32-bit little-endian.
+//              template's order (sorted by their English, which compresses best), each ended by a 0
+//              (empty: not translated, English shows).
+// All numbers are little-endian; the ones in the headers 32-bit.
 
 #include <cstddef>
 #include <cstdint>
@@ -22,19 +24,25 @@ namespace fw::lang::catalog {
 // then a 4 (gettext's separator), then the English text's.
 uint32_t Hash(uint32_t seed, const wchar_t* context, const wchar_t* en);
 
+struct Keys {
+  uint32_t seed = 0;
+  uint32_t count = 0;
+  const uint32_t* hashes = nullptr;  // ascending
+  const uint16_t* places = nullptr;  // per hash: the key's place in the template
+};
+
 // A check of the key table, stored with each language so a language from another build is refused.
-uint32_t KeysCheck(const uint32_t* hashes, uint32_t count);
+uint32_t KeysCheck(const Keys& k);
 
-// LANG_KEYS: false unless the header is right and the hashes strictly ascend.
-bool ReadKeys(const uint8_t* p, size_t n, uint32_t& seed, const uint32_t*& hashes, uint32_t& count);
+// LANG_KEYS: false unless the header is right, the hashes strictly ascend and the places are in range.
+bool ReadKeys(const uint8_t* p, size_t n, Keys& keys);
 
-// An inflated language: its texts as UTF-16, each ended by a 0, and per key the offset of its text
+// An inflated language: its texts as UTF-16, each ended by a 0, and per place the offset of its text
 // (UINT32_MAX when empty). False unless it matches the keys and every text is valid UTF-8.
-bool ReadTexts(const uint8_t* p, size_t n, const uint32_t* hashes, uint32_t count, std::vector<wchar_t>& text,
-               std::vector<uint32_t>& offsets);
+bool ReadTexts(const uint8_t* p, size_t n, const Keys& keys, std::vector<wchar_t>& text, std::vector<uint32_t>& offsets);
 
-// The writers (tools/strings).
-std::vector<uint8_t> WriteKeys(uint32_t seed, const std::vector<uint32_t>& sortedHashes);
-std::vector<uint8_t> WriteTexts(const std::vector<uint32_t>& sortedHashes, const std::vector<std::string>& texts);
+// The writers (tools/strings). `hashes` in the template's order; WriteKeys sorts them.
+std::vector<uint8_t> WriteKeys(uint32_t seed, const std::vector<uint32_t>& hashes);
+std::vector<uint8_t> WriteTexts(const Keys& keys, const std::vector<std::string>& texts);
 
 }  // namespace fw::lang::catalog

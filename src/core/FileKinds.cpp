@@ -17,11 +17,11 @@ constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".pot
 const FileKindInfo kKinds[] = {
     {FileKind::Pdf, L"PDF", L"PDF", L"PDFs", L"Featherweight.PDF", N_(L"PDF Document"), N_(L"PDF documents"), kPdf, {}, 0,
      true, false},
-    {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", N_(L"Document"), N_(L"Documents"),
+    {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", N_(L"Document"), N_(L"Documents"),  // lang: no (the name: a key)
      kDocument, kDocumentLater, 1, true, true},
-    {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", N_(L"Spreadsheet"),
+    {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", N_(L"Spreadsheet"),  // lang: no
      N_(L"Spreadsheets"), kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
-    {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
+    {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",  // lang: no
      N_(L"Presentation"), N_(L"Presentations"), kPresentation, {}, 3, true, true},  // the viewer in 3.1 (P1), the editor in 4.0 (P2, P3)
 };
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kFileKindCount);

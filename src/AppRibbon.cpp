@@ -345,6 +345,14 @@ ui::FilePage::Model App::CurrentFilePage() {
     e.label = cmd == CmdThemeSystem ? T(L"Use Windows setting") : cmd == CmdThemeLight ? T(L"Light") : T(L"Dark");
     opt.push_back(e);
   }
+  // f1-lang: the interface's language.
+  opt.push_back(heading(T(L"Language")));
+  for (int cmd = CmdLanguageWindows; cmd < CmdLanguage0 + 9; ++cmd)
+    if (QueryCommand(cmd).visible) {
+      FP::Entry e = command(cmd);
+      e.radio = true;
+      opt.push_back(e);
+    }
   opt.push_back(heading(T(L"Reading")));
   opt.push_back(command(CmdToggleInvert, 0, {}, true));
   opt.push_back(command(CmdToggleHighlight, 0, {}, true));

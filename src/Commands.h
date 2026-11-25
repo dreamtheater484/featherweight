@@ -647,4 +647,7 @@ enum Cmd : int {
   CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
   CmdRecentRemove,            // Remove from list
   CmdRecentLocation,          // Open file location
+  // F1, f1-lang: the interface's language, 4020-4039.
+  CmdLanguageWindows = 4020,  // File > Options: the language Windows shows its own interface in
+  CmdLanguage0 = 4021,        // ... + i: fw::lang::Languages()[i] (English, Nederlands, ...; up to 4029)
 };
