@@ -17,4 +17,8 @@ if(FW_BUILD_TESTS)
   # be set up where fw_tests is made).
   target_compile_definitions(fw_tests PRIVATE "FW_PDFIUM_DLL=\"${FW_PDFIUM_DIR}/bin/pdfium.dll\""
     "FW_F1PDF_TESTDATA=\"${PROJECT_SOURCE_DIR}/tests/pdfs\"")
+  # The tools in the app, end to end (tests/screens/pdftools.cmake): the files they write.
+  add_test(NAME pdf_tools COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
+           "-DPDFS=${PROJECT_SOURCE_DIR}/tests/pdfs" "-DOUT=${CMAKE_BINARY_DIR}/screens/pdftools"
+           -P "${PROJECT_SOURCE_DIR}/tests/screens/pdftools.cmake")
 endif()
