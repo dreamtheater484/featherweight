@@ -56,7 +56,9 @@ class File {
   const Obj& Trailer() const { return trailer_; }  // the newest trailer (or xref stream) dictionary
   size_t LastXref() const { return lastXref_; }
   bool LastXrefIsStream() const { return lastIsStream_; }
-  int Size() const { return size_; }  // the trailer's /Size: the next free object number
+  // The next free object number: the trailer's /Size, or past the highest number any section lists
+  // when /Size is less.
+  int Size() const { return size_; }
 
   // Object `num` as the newest revision has it, with its generation. False if it's free or unreadable.
   bool Get(int num, Obj& out, int* gen = nullptr);
@@ -76,13 +78,20 @@ class File {
 
  private:
   struct Entry {
-    uint8_t type = 0;  // 1: in the file at `a` with generation `b`; 2: in object stream `a`, index `b`
     uint64_t a = 0;
     uint32_t b = 0;
+    uint8_t type = 0;      // 0: not listed yet; 1: in the file at `a` with generation `b`; 2: in object stream
+                           // `a`, index `b`; 3: free
+    uint16_t section = 0;  // the cross-reference section that listed it (newest first)
   };
   bool ReadSection(size_t offset, int depth);
   bool ReadTable(size_t& at, Obj& trailer);
-  bool ReadXrefStream(const Obj& stream, std::string_view data);
+  // `hybrid`: the stream of a table section's /XRefStm, which fills in what the table lists as free.
+  bool ReadXrefStream(const Obj& stream, std::string_view data, bool hybrid = false);
+  // Entry `num`, made room for: null past what the file's size allows (one object per 8 bytes, at
+  // least 2 million). An entry listed by a newer section stays as it is.
+  Entry* Slot(long long num);
+  const Entry* Find(int num) const;  // null when no section lists it
   bool StreamData(const Obj& stream, std::string_view source, std::string& out);
   bool ObjectAt(size_t offset, int num, Obj& out, int* gen);
   bool FromObjectStream(int stream, uint32_t index, int num, Obj& out);
@@ -90,7 +99,7 @@ class File {
   int FirstLeaf(int num, int depth, std::set<int>& seen);
 
   std::string_view data_;
-  std::map<int, Entry> xref_;
+  std::vector<Entry> xref_;  // by object number: 16 bytes each
   struct ObjStream {
     std::string data;
     long long n = 0, first = 0;

@@ -18,7 +18,10 @@ constexpr int kMaxDepth = 32;
 constexpr size_t kMaxItems = 1u << 20;
 constexpr int kMaxObjects = 10'000'000;
 constexpr size_t kMaxStream = size_t{64} << 20;
-constexpr size_t kMaxEntries = 2'000'000;            // cross-reference entries kept, all sections together
+// Object numbers the cross-reference keeps: at least this many, and one per 8 bytes of a larger file
+// (Office's PDF of a 16,000-page workbook, 287 MB, numbers 6.85 million objects). At 16 bytes an
+// entry that's at most twice the file, which is in memory already, and never past kMaxObjects.
+constexpr size_t kMinEntries = 2'000'000;
 constexpr size_t kMaxInflated = size_t{256} << 20;   // stream data inflated, all streams together
 
 bool IsWhite(char c) { return c == 0 || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' '; }
@@ -330,7 +333,7 @@ bool Inflate(std::string_view in, std::string& out, size_t limit) {
 
 bool File::Open(std::string_view bytes) {
   data_ = bytes;
-  xref_.clear();
+  xref_ = {};
   objStreams_.clear();
   sections_ = 0;
   inflated_ = 0;
@@ -345,12 +348,38 @@ bool File::Open(std::string_view bytes) {
   if (!ReadSection(lastXref_, 0)) return false;
   const Obj* size = trailer_.Get("Size");
   size_ = size ? static_cast<int>(std::clamp<long long>(size->Int(0), 0, kMaxObjects)) : 0;
-  return size_ > 0 && trailer_.Get("Root") && trailer_.Get("Root")->type == Obj::Ref;
+  if (size_ <= 0) return false;
+  // A /Size below a number the file lists (a writer's mistake): what's added goes past every listed
+  // object, or it would replace one still in use.
+  size_t listed = xref_.size();
+  while (listed > 0 && xref_[listed - 1].type == 0) --listed;
+  size_ = std::max(size_, static_cast<int>(listed));
+  return trailer_.Get("Root") && trailer_.Get("Root")->type == Obj::Ref;
+}
+
+File::Entry* File::Slot(long long num) {
+  static_assert(sizeof(Entry) == 16);
+  if (num < 0 || num >= kMaxObjects) return nullptr;
+  const size_t n = static_cast<size_t>(num);
+  if (n >= xref_.size()) {
+    const size_t cap = std::clamp(data_.size() / 8, kMinEntries, static_cast<size_t>(kMaxObjects));
+    if (n >= cap) return nullptr;
+    // Exactly what's asked for (a section's whole range at once), else half as much again.
+    const size_t grown = std::min(cap, std::max(n + 1, xref_.size() + xref_.size() / 2));
+    xref_.reserve(grown);
+    xref_.resize(grown);
+  }
+  return &xref_[n];
+}
+
+const File::Entry* File::Find(int num) const {
+  if (num < 0 || static_cast<size_t>(num) >= xref_.size() || xref_[num].type == 0) return nullptr;
+  return &xref_[num];
 }
 
 bool File::ReadTable(size_t& at, Obj& trailer) {
   at += 4;  // "xref"
-  std::map<int, Entry> local;
+  const auto section = static_cast<uint16_t>(sections_);
   for (;;) {
     SkipWhite(data_, at);
     if (data_.substr(at, 7) == "trailer") {
@@ -362,20 +391,28 @@ bool File::ReadTable(size_t& at, Obj& trailer) {
     if (!ReadInt(data_, at, first) || !ReadInt(data_, at, count) || first < 0 || count < 0 ||
         first + count > kMaxObjects)
       return false;
+    // Room for the entries the rest of the file can hold, 20 bytes each.
+    const long long fit = std::min(count, static_cast<long long>((data_.size() - std::min(at, data_.size())) / 20));
+    if (fit > 0 && !Slot(first + fit - 1)) return false;
     for (long long i = 0; i < count; ++i) {
       long long offset = 0, gen = 0;
       if (!ReadInt(data_, at, offset) || !ReadInt(data_, at, gen)) return false;
       SkipWhite(data_, at);
       if (at >= data_.size() || (data_[at] != 'n' && data_[at] != 'f')) return false;
-      Entry e;
-      if (data_[at] == 'n') {
-        e.type = 1;
-        e.a = static_cast<uint64_t>(std::max(0ll, offset));
-        e.b = static_cast<uint32_t>(std::clamp(gen, 0ll, 65535ll));
+      Entry* slot = Slot(first + i);
+      if (!slot) return false;
+      Entry& e = *slot;
+      if (e.type == 0) {
+        e = Entry{};
+        e.type = 3;
+        e.section = section;
+        if (data_[at] == 'n') {
+          e.type = 1;
+          e.a = static_cast<uint64_t>(std::max(0ll, offset));
+          e.b = static_cast<uint32_t>(std::clamp(gen, 0ll, 65535ll));
+        }
       }
       ++at;
-      if (local.size() >= kMaxEntries) return false;
-      local.emplace(static_cast<int>(first + i), e);
     }
   }
   // A hybrid file: the stream lists the objects in object streams, which the table shows as free.
@@ -385,18 +422,9 @@ bool File::ReadTable(size_t& at, Obj& trailer) {
     long long n = 0, g = 0;
     Obj xs;
     if (ReadInt(data_, p, n) && ReadInt(data_, p, g) && Keyword(data_, p, "obj") && ParseObject(data_, p, xs) &&
-        xs.type == Obj::Stream) {
-      std::map<int, Entry> saved;
-      saved.swap(xref_);
-      ReadXrefStream(xs, data_);
-      for (auto& [num, e] : xref_) {
-        auto it = local.find(num);
-        if (it == local.end() || it->second.type == 0) local[num] = e;
-      }
-      xref_.swap(saved);
-    }
+        xs.type == Obj::Stream)
+      ReadXrefStream(xs, data_, true);
   }
-  for (auto& [num, e] : local) xref_.emplace(num, e);
   return true;
 }
 
@@ -498,7 +526,8 @@ bool File::StreamData(const Obj& stream, std::string_view source, std::string& o
   return true;
 }
 
-bool File::ReadXrefStream(const Obj& stream, std::string_view data) {
+bool File::ReadXrefStream(const Obj& stream, std::string_view data, bool hybrid) {
+  const auto section = static_cast<uint16_t>(sections_);
   std::string rows;
   if (!StreamData(stream, data, rows)) return false;
   const Obj* w = stream.Get("W");
@@ -527,17 +556,25 @@ bool File::ReadXrefStream(const Obj& stream, std::string_view data) {
   };
   for (const auto& [first, count] : ranges) {
     if (first < 0 || count < 0 || first + count > kMaxObjects) return false;
+    // Room for the rows the data has (no more: a range can claim millions in a few bytes).
+    const long long rowsLeft = static_cast<long long>((rows.size() - std::min(at, rows.size())) / rowLen);
+    if (std::min(count, rowsLeft) > 0 && !Slot(first + std::min(count, rowsLeft) - 1)) return false;
     for (long long i = 0; i < count; ++i) {
       if (at + rowLen > rows.size()) return false;
-      Entry e;
       const uint64_t type = field(widths[0], 1), a = field(widths[1], 0), b = field(widths[2], 0);
+      Entry* slot = Slot(first + i);
+      if (!slot) return false;
+      Entry& e = *slot;
+      // Newer sections keep theirs; a hybrid's stream fills in what its own table lists as free.
+      if (e.type != 0 && !(hybrid && e.section == section && e.type == 3)) continue;
+      e = Entry{};
+      e.type = 3;
+      e.section = section;
       if (type == 1 || type == 2) {
         e.type = static_cast<uint8_t>(type);
         e.a = a;
         e.b = static_cast<uint32_t>(std::min<uint64_t>(b, UINT32_MAX));
       }
-      if (xref_.size() >= kMaxEntries) return false;
-      xref_.emplace(static_cast<int>(first + i), e);
     }
   }
   return true;
@@ -555,10 +592,10 @@ bool File::ObjectAt(size_t offset, int num, Obj& out, int* gen) {
 bool File::FromObjectStream(int stream, uint32_t index, int num, Obj& out) {
   auto cached = objStreams_.find(stream);
   if (cached == objStreams_.end()) {
-    auto it = xref_.find(stream);
+    const Entry* it = Find(stream);
     Obj s;
     auto decoded = std::make_shared<ObjStream>();
-    if (it == xref_.end() || it->second.type != 1 || !ObjectAt(static_cast<size_t>(it->second.a), stream, s, nullptr) ||
+    if (!it || it->type != 1 || !ObjectAt(static_cast<size_t>(it->a), stream, s, nullptr) ||
         s.type != Obj::Stream || !s.Get("Type") || !s.Get("Type")->IsName("ObjStm") ||
         !StreamData(s, data_, decoded->data))
       return false;
@@ -584,12 +621,12 @@ bool File::FromObjectStream(int stream, uint32_t index, int num, Obj& out) {
 }
 
 bool File::Get(int num, Obj& out, int* gen) {
-  auto it = xref_.find(num);
-  if (it == xref_.end() || it->second.type == 0) return false;
-  if (it->second.type == 1) return ObjectAt(static_cast<size_t>(it->second.a), num, out, gen);
+  const Entry* e = Find(num);
+  if (!e || (e->type != 1 && e->type != 2)) return false;
+  if (e->type == 1) return ObjectAt(static_cast<size_t>(e->a), num, out, gen);
   if (gen) *gen = 0;
-  if (it->second.a >= static_cast<uint64_t>(kMaxObjects)) return false;
-  return FromObjectStream(static_cast<int>(it->second.a), it->second.b, num, out);
+  if (e->a >= static_cast<uint64_t>(kMaxObjects)) return false;
+  return FromObjectStream(static_cast<int>(e->a), e->b, num, out);
 }
 
 bool File::Resolve(const Obj& o, Obj& out) {
@@ -646,9 +683,9 @@ bool File::RawStream(const Obj& stream, std::string_view& out) {
 }
 
 bool File::ObjectText(int num, std::string_view& out) {
-  auto it = xref_.find(num);
-  if (it == xref_.end() || it->second.type != 1 || it->second.a >= data_.size()) return false;
-  size_t at = static_cast<size_t>(it->second.a);
+  const Entry* e = Find(num);
+  if (!e || e->type != 1 || e->a >= data_.size()) return false;
+  size_t at = static_cast<size_t>(e->a);
   long long n = 0, g = 0;
   if (!ReadInt(data_, at, n) || n != num || !ReadInt(data_, at, g) || !Keyword(data_, at, "obj")) return false;
   const size_t start = at;
@@ -671,8 +708,8 @@ bool File::ObjectText(int num, std::string_view& out) {
 
 std::vector<int> File::InUse() const {
   std::vector<int> nums;
-  for (const auto& [num, e] : xref_)
-    if (num > 0 && e.type != 0) nums.push_back(num);
+  for (size_t num = 1; num < xref_.size(); ++num)
+    if (xref_[num].type == 1 || xref_[num].type == 2) nums.push_back(static_cast<int>(num));
   return nums;
 }
 
