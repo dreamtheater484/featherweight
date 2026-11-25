@@ -223,8 +223,9 @@ float Canvas::TextWrapped(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COL
 #if FW_TEST_SCREENS
   if (g_clipped && draw) {
     if (m.height > maxH + 0.5f) g_clipped->push_back({std::wstring(text), m.height, maxH});
-    else if (m.widthIncludingTrailingWhitespace > Width(r) + 0.5f)
-      g_clipped->push_back({std::wstring(text), m.widthIncludingTrailingWhitespace, Width(r)});
+    // A word wider than the box. Not the trailing space a line wraps after: it hangs past the edge unseen.
+    else if (m.width > Width(r) + 0.5f)
+      g_clipped->push_back({std::wstring(text), m.width, Width(r)});
   }
 #endif
   if (draw && dc_) dc_->DrawTextLayout({r.left, r.top}, layout.Get(), Brush(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);

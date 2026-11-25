@@ -740,3 +740,23 @@ TEST(F1PdfSignsAfterTheFirstBranchIsEmptied) {
   CHECK(ed.Bytes(bytes));
   CHECK(Check(bytes).verdict.kind == pdfsign::Verdict::Untrusted);
 }
+
+// fuzz_pdfpages' regressions (tests/fuzz/regressions/pdfpages): every object compares as the same as
+// itself, keys written twice and numbers past a double's range included.
+TEST(F1PdfSameObjectMatchesItself) {
+  auto same = [](const std::string& x, const std::string& y) {
+    pdfobj::Obj a, b;
+    size_t i = 0, j = 0;
+    if (!pdfobj::ParseObject(x, i, a) || !pdfobj::ParseObject(y, j, b)) return false;
+    pdfobj::File none;
+    return pdfobj::SameObject(none, a, none, b);
+  };
+  CHECK(same("<</A 1/A [2]>>", "<</A 1/A [2]>>"));
+  CHECK(!same("<</A 1/A [2]>>", "<</A [2]/A 1>>"));
+  CHECK(!same("<</A 1/A [2]>>", "<</A 1>>"));
+  CHECK(same("<</A 1/B 2/A 3>>", "<</B 2/A 1/A 3>>"));
+  CHECK(same("<</A 1/B (x)>>", "<</B <78>/A 1.00001>>"));
+  const std::string huge = "1" + std::string(400, '0');
+  CHECK(same("[" + huge + "]", "[" + huge + "]"));
+  CHECK(!same("[" + huge + "]", "[2" + huge.substr(1) + "]"));
+}

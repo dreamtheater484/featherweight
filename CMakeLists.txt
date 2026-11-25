@@ -236,7 +236,8 @@ if(FW_BUILD_TESTS)
   # every ribbon tab and File page section drawn, no label cut (tests/screens/lang.cmake).
   if(FW_TEST_SCREENS)
     add_test(NAME lang_clipping COMMAND ${CMAKE_COMMAND} "-DEXE=$<TARGET_FILE:Featherweight>"
-             "-DFILES=${_fw_office}/generated" "-DOUT=${CMAKE_BINARY_DIR}/screens/lang" -P "${CMAKE_SOURCE_DIR}/tests/screens/lang.cmake")
+             "-DFILES=${_fw_office}/generated" "-DPDF=${CMAKE_SOURCE_DIR}/tests/pdfs/mixed-sizes.pdf"
+             "-DOUT=${CMAKE_BINARY_DIR}/screens/lang" -P "${CMAKE_SOURCE_DIR}/tests/screens/lang.cmake")
   endif()
   # f1-lang, the catalog check: every string a person reads goes through T() (docs/f1-plan.md, Rules).
   find_package(Python3 COMPONENTS Interpreter QUIET)

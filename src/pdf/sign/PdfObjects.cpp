@@ -762,7 +762,10 @@ bool SameValue(const Obj& a, const Obj& b, bool streamDict) {
     case Obj::Null: return true;
     case Obj::Bool: return a.text == b.text;
     case Obj::Number: {
+      if (a.text == b.text) return true;
+      // A number past a double's range (400 digits) reads as infinity: only its own text matches it.
       const double x = std::strtod(a.text.c_str(), nullptr), y = std::strtod(b.text.c_str(), nullptr);
+      if (!std::isfinite(x) || !std::isfinite(y)) return false;
       return std::fabs(x - y) <= 1e-4 * std::max(1.0, std::fabs(x));
     }
     case Obj::Name: return NameBytes(a.text) == NameBytes(b.text);
@@ -780,19 +783,24 @@ bool SameValue(const Obj& a, const Obj& b, bool streamDict) {
         const std::string k = NameBytes(key);
         return k == "Length" || k == "Filter" || k == "DecodeParms";
       };
-      size_t mine = 0, theirs = 0;
-      for (const auto& [key, value] : a.dict) {
-        if (skip(key)) continue;
-        ++mine;
-        const std::string name = NameBytes(key);
-        const Obj* other = nullptr;
-        for (const auto& [k, v] : b.dict)
-          if (NameBytes(k) == name) other = &v;
-        if (!other || !SameValue(value, *other, false)) return false;
-      }
-      for (const auto& entry : b.dict)
-        if (!skip(entry.first)) ++theirs;
-      return mine == theirs;
+      // Keys in any order. A key written twice (which readers take differently) pairs by occurrence:
+      // its first with the other's first, its second with the other's second.
+      struct Entry {
+        std::string name;
+        const Obj* value;
+      };
+      auto entries = [&skip](const Obj& o) {
+        std::vector<Entry> out;
+        for (const auto& [key, value] : o.dict)
+          if (!skip(key)) out.push_back({NameBytes(key), &value});
+        std::stable_sort(out.begin(), out.end(), [](const Entry& x, const Entry& y) { return x.name < y.name; });
+        return out;
+      };
+      const std::vector<Entry> mine = entries(a), theirs = entries(b);
+      if (mine.size() != theirs.size()) return false;
+      for (size_t i = 0; i < mine.size(); ++i)
+        if (mine[i].name != theirs[i].name || !SameValue(*mine[i].value, *theirs[i].value, false)) return false;
+      return true;
     }
     default: return false;
   }

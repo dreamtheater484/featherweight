@@ -320,15 +320,28 @@ DocView::ReviewPanel::ReviewPanel(DocView& view) : v_(view) {
 
 std::vector<Control*> DocView::ReviewPanel::Layout(const D2D1_RECT_F& body, float ui) {
   Refresh();
-  std::vector<Control*> out = LayOutRows({{L"", {&track_}},
-                                          {T(L"Show"), {&markup_}},
-                                          {T(L"Changes"), {&prev_, &next_, &accept_, &reject_}},
-                                          {L"", {&acceptAll_, &rejectAll_}},
-                                          {T(L"Your name"), {&name_}},
-                                          {T(L"Comments"), {&box_}},
-                                          {L"", {&post_, &reply_}},
-                                          {L"", {&edit_, &resolve_, &delete_}}},
-                                         body, ui);
+  // On a short window the comment cards get the room: the markup and changes rows, all on the
+  // Review tab too, give way when not even one card's head would show (f1-gate: at 1072x686 the
+  // pane showed no card at all). The cards scroll with the wheel.
+  std::vector<Control*> out;
+  for (int pass = 0; pass < 2; ++pass) {
+    const bool changes = pass == 0;
+    markup_.visible = prev_.visible = next_.visible = accept_.visible = reject_.visible = changes;
+    acceptAll_.visible = rejectAll_.visible = changes;
+    std::vector<Row> rows;
+    rows.push_back({L"", {&track_}});
+    if (changes) {
+      rows.push_back({T(L"Show"), {&markup_}});
+      rows.push_back({T(L"Changes"), {&prev_, &next_, &accept_, &reject_}});
+      rows.push_back({L"", {&acceptAll_, &rejectAll_}});
+    }
+    rows.push_back({T(L"Your name"), {&name_}});
+    rows.push_back({T(L"Comments"), {&box_}});
+    rows.push_back({L"", {&post_, &reply_}});
+    rows.push_back({L"", {&edit_, &resolve_, &delete_}});
+    out = LayOutRows(rows, body, ui);
+    if (body.bottom - (noteRc_.bottom + 4 * ui) >= 28 * ui) break;  // a card's head: 10 + 18
+  }
   list_ = RectF(body.left, noteRc_.bottom + 4 * ui, body.right, body.bottom);
   PlaceCards();
   return out;
@@ -502,7 +515,7 @@ void DocView::ReviewPanel::StartComment() {
   editing_.clear();
   replying_ = false;
   Refresh();
-  box_.SetText(L"");
+  box_.ReplaceText(L"");
   focusWanted_ = &box_;
   v_.host_.ViewInvalidate();
 }
@@ -533,13 +546,13 @@ void DocView::ReviewPanel::Post() {
     const edit::Result r = edit::EditComment(*v_.editor_, editing_, U16(text));
     if (r) {
       editing_.clear();
-      box_.SetText(L"");
+      box_.ReplaceText(L"");
     }
     Done(r, T(L"Saved."));
     return;
   }
   const edit::Result r = edit::AddComment(*v_.editor_, v_.SelFrom(), v_.SelTo(), U16(text));
-  if (r) box_.SetText(L"");
+  if (r) box_.ReplaceText(L"");
   Done(r, T(L"Comment added."));
   if (r) {
     const auto all = v_.doc_->Comments();
@@ -552,14 +565,27 @@ void DocView::ReviewPanel::Reply() {
   if (!v_.editor_ || picked_.empty()) return;
   v_.editor_->SetAuthor(v_.ReviewerName());
   const edit::Result r = edit::ReplyToComment(*v_.editor_, picked_, U16(Trim(box_.Text())));
-  if (r) box_.SetText(L"");
+  // ReplaceText: the box has the keyboard, where SetText leaves it as typed, and a second Enter
+  // posted the same reply again (f1-gate, as p3-review found for slides).
+  if (r) box_.ReplaceText(L"");
   Done(r, T(L"Reply added."));
 }
 
 void DocView::ReviewPanel::Edit() {
   if (picked_.empty()) return;
-  for (const auto& c : v_.doc_->Comments())
-    if (c.id == picked_) box_.SetText(W(edit::CommentText(*v_.doc_, c)));
+  for (const auto& c : v_.doc_->Comments()) {
+    if (c.id != picked_) continue;
+    // The box holds one line of up to 256 characters: a longer comment, or one with more than one
+    // paragraph or line, would lose text when saved from it, so it isn't edited here (never damage
+    // a file), as in slides.
+    const std::wstring text = W(edit::CommentText(*v_.doc_, c));
+    if (text.size() > 256 || text.find(L'\n') != std::wstring::npos) {
+      note_ = T(L"This comment is too long to edit here: reply to it instead.");
+      v_.host_.ViewInvalidate();
+      return;
+    }
+    box_.ReplaceText(text);
+  }
   editing_ = picked_;
   Refresh();
   focusWanted_ = &box_;
