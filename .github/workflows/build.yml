@@ -32,6 +32,10 @@ jobs:
       - name: SBOM and notices match
         run: python tools/sbom/make_sbom.py --check-notices --out build/sbom.cdx.json
 
+      - name: Release scan script, offline (canned answers in tests/scan)
+        shell: pwsh
+        run: scripts/scan-release.ps1 -Files tests/pdfs/text.pdf -Offline tests/scan -Report build/scan.md -Json build/scan.json
+
       - name: Round-trip and check the office corpus (fwtool)
         shell: pwsh
         run: |
