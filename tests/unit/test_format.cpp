@@ -1504,3 +1504,28 @@ TEST(Styles_BlankGalleryReachesTitleAndShowsTheNextHeading) {
   edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Heading 2");
   CHECK(has(names(), "Heading 3"));
 }
+
+TEST(Styles_ATrackedStyleOnAnEmptyMarkKeepsItsRecordLast) {
+  // f1-gate's torture (acuk-example-cv): a character style applied with Track Changes on to an empty
+  // paragraph's mark, whose w:rPr ends in an extension (w14:ligatures). The w:rPrChange record must
+  // stay the w:rPr's last child; it was written before the extension, which Word's schema refuses.
+  Fixture f;
+  f.styles =
+      "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+      "<w:style w:type=\"character\" w:styleId=\"Strong\"><w:name w:val=\"Strong\"/><w:rPr><w:b/></w:rPr></w:style>";
+  f.body = "<w:p><w:pPr><w:rPr><w:sz w:val=\"6\"/><w:lang w:eastAsia=\"en-GB\"/><w14:ligatures w14:val=\"none\"/>"
+           "</w:rPr></w:pPr></w:p><w:p><w:r><w:t>after</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  edit::Editor editor(*doc);
+  CHECK(editor.SetTracking(true));
+  edit::TreeEdit ed(editor);
+  const uint32_t p = MainParas(*doc)[0];
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Strong");
+  const std::string xml = MainXml(*doc);
+  const size_t lig = xml.find("<w14:ligatures"), record = xml.find("<w:rPrChange"), end = xml.find("</w:rPr></w:pPr>");
+  CHECK(lig != std::string::npos && record != std::string::npos && end != std::string::npos);
+  CHECK(lig < record && record < end);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}

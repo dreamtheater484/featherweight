@@ -133,6 +133,9 @@ class Writer {
   // shared with the writers of the text boxes' stories.
   int64_t ownNextBookmark_ = -1;
   int64_t* nextBookmark_ = &ownNextBookmark_;
+  // Change records being written, and the property containers they end: their kept content after
+  // the record, and the container's at its end, went before the record.
+  std::vector<ElemId> endWritten_;
 };
 
 std::string Writer::QName(Ns ns, std::string_view local) const {
@@ -287,6 +290,22 @@ void Writer::Open(ElemId id) {
   const pkg::RoundTripStore& store = doc_.store_;
   const Elem& e = t.elems[id];
   const ElemDef& def = s.Elem(e.def);
+  // A property container's change record (w:rPrChange, w:pPrChange...) is its last child: content
+  // kept at the container's end, or after the record (an extension such as w14:ligatures, which an
+  // edit beside it can leave there), goes before it. A tracked character style on an empty
+  // paragraph's mark wrote w14:ligatures after w:rPrChange, which the Open XML SDK refuses
+  // (f1-gate's torture, acuk-example-cv; 4.0 too, given the same edits).
+  static constexpr std::string_view kRecords[] = {"rPrChange",   "pPrChange",  "sectPrChange", "tblPrChange",
+                                                  "tblPrExChange", "trPrChange", "tcPrChange"};
+  if (def.ns == Ns::W && e.parent != kNoElem &&
+      std::find(std::begin(kRecords), std::end(kRecords), def.local) != std::end(kRecords)) {
+    if (std::find(endWritten_.begin(), endWritten_.end(), e.parent) == endWritten_.end()) {
+      Fragments(t.elems[e.parent].node, pkg::Slot::End);
+      endWritten_.push_back(e.parent);
+    }
+    Fragments(e.node, pkg::Slot::After);  // kept after the record: an edit moved it there
+    endWritten_.push_back(id);
+  }
   Fragments(e.node, pkg::Slot::Before);
   w_.StartElement(QName(def.ns, def.local));
   for (uint32_t i = 0; i < e.attrCount; ++i) {
@@ -311,9 +330,14 @@ void Writer::Open(ElemId id) {
 
 void Writer::Close(ElemId id) {
   const Elem& e = doc_.tree_.elems[id];
-  Fragments(e.node, pkg::Slot::End);
+  const auto it = std::find(endWritten_.begin(), endWritten_.end(), id);
+  const bool early = it != endWritten_.end();  // a change record, or the container it ends
+  if (early) endWritten_.erase(it);
+  const bool record = early && e.parent != kNoElem &&
+                      std::find(endWritten_.begin(), endWritten_.end(), e.parent) != endWritten_.end();
+  if (!early || record) Fragments(e.node, pkg::Slot::End);
   w_.EndElement();
-  Fragments(e.node, pkg::Slot::After);
+  if (!record) Fragments(e.node, pkg::Slot::After);
 }
 
 void Writer::Walk(ElemId root) {

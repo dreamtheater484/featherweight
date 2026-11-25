@@ -3126,7 +3126,73 @@ struct EditorState {
     }
     return out;
   }
-  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId inPlaceOf = kNoElem) {
+  // The last paragraph before `id` in reading order, inside `scope` (a table), not in `skip`; kNoElem
+  // if none.
+  ElemId ParaBeforeIn(ElemId id, ElemId scope, const std::vector<ElemId>& skip) {
+    for (ElemId at = id; at != kNoElem && at != scope; at = E(at).parent)
+      for (ElemId c = PrevSibling(at); c != kNoElem; c = PrevSibling(c)) {
+        if (std::find(skip.begin(), skip.end(), c) != skip.end()) continue;
+        std::vector<ElemId> ps;
+        ParasIn(c, ps);
+        if (!ps.empty()) return ps.back();
+      }
+    return kNoElem;
+  }
+  // The first paragraph after `id` in reading order, inside `scope`, not in `skip`; kNoElem if none.
+  ElemId ParaAfterIn(ElemId id, ElemId scope, const std::vector<ElemId>& skip) {
+    for (ElemId at = id; at != kNoElem && at != scope; at = E(at).parent)
+      for (ElemId c = E(at).next; c != kNoElem; c = E(c).next) {
+        if (std::find(skip.begin(), skip.end(), c) != skip.end()) continue;
+        std::vector<ElemId> ps;
+        ParasIn(c, ps);
+        if (!ps.empty()) return ps.front();
+      }
+    return kNoElem;
+  }
+  // With `scope` (the table cells or rows are deleted from), a range's end whose start stays goes to
+  // the end of the last paragraph before `gone`, and a start whose end stays to the start of the first
+  // paragraph after it, each in the table where there is one: at the heir's start, an end could come
+  // before its start in the heir's own cell or row (f1-gate's torture: delete columns, a bookmark
+  // from the cell on their left into them). `skip`: everything else the edit deletes (no marker goes
+  // there). The paragraphs given markers are added to `landed`.
+  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId scope,
+                const std::vector<ElemId>& skip, std::vector<ElemId>& landed) {
+    if (gone.empty()) return true;
+    const ElemId before = ParaBeforeIn(gone.front(), scope, skip), after = ParaAfterIn(gone.back(), scope, skip);
+    if (before == kNoElem && after == kNoElem) {
+      if (heir != kNoElem) landed.push_back(heir);
+      return Evacuate(gone, heir, why);
+    }
+    std::vector<ElemId> keep;
+    if (!KeptMarkers(gone, keep, why)) return false;
+    const auto& pairs = RangePairs();
+    std::vector<ElemId> ends, starts;
+    for (ElemId m : keep) {
+      bool isEnd = false;
+      for (const auto& pr : pairs) isEnd = isEnd || NameOf(m) == pr.second;
+      (isEnd ? ends : starts).push_back(m);
+    }
+    if ((before == kNoElem && !ends.empty()) || (after == kNoElem && !starts.empty())) {
+      // What has no place before or after goes to the heir, which is then on that side.
+      if (heir == kNoElem) return why = T(u"A bookmark or comment range starts or ends here, so this can't be deleted yet."), false;
+    }
+    auto place = [&](const std::vector<ElemId>& ms, ElemId para, bool atEnd) {
+      if (ms.empty()) return;
+      ElemId prev = atEnd ? LastChild(para) : Child(para, kPPr);
+      for (ElemId m : ms) {
+        Unlink(m);
+        LinkAfter(para, prev, m);
+        prev = m;
+      }
+      landed.push_back(para);
+    };
+    place(ends, before != kNoElem ? before : heir, before != kNoElem);
+    place(starts, after != kNoElem ? after : heir, false);
+    return true;
+  }
+  // The range markers in `gone` whose other end is outside it, in document order; false (with `why`)
+  // when `gone` can't go.
+  bool KeptMarkers(const std::vector<ElemId>& gone, std::vector<ElemId>& keep, std::u16string& why) {
     const auto& pairs = RangePairs();
     std::vector<ElemId> markers;
     std::map<std::pair<uint32_t, std::string>, int> inside;  // (pair kind, id) -> ends inside
@@ -3155,13 +3221,17 @@ struct EditorState {
       std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(at), stack.end());
     }
     if (fields != 0) return why = T(u"A field runs into these cells. Delete the field first."), false;
-    std::vector<ElemId> keep;
     for (ElemId m : markers) {
       uint32_t n = NameOf(m);
       for (size_t k = 0; k < pairs.size(); ++k)
         if (n == pairs[k].first || n == pairs[k].second)
           if (inside[{static_cast<uint32_t>(k), std::string(Attr(m, kId).value_or(""))}] < 2) keep.push_back(m);
     }
+    return true;
+  }
+  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId inPlaceOf = kNoElem) {
+    std::vector<ElemId> keep;
+    if (!KeptMarkers(gone, keep, why)) return false;
     if (keep.empty()) return true;
     if (heir == kNoElem && inPlaceOf == kNoElem)
       return why = T(u"A bookmark or comment range starts or ends here, so this can't be deleted yet."), false;
@@ -4870,7 +4940,7 @@ Result Editor::DeleteRows(Pos from, Pos to) {
     std::vector<ElemId> ps;
     s.ParasIn(g.rows[heirRow].cells[i].tc, ps);
     ElemId heir = ps.empty() ? kNoElem : ps.front();
-    if (!s.Evacuate(gone, heir, o.why)) return false;
+    if (!s.Evacuate(gone, heir, o.why, o.tbl, gone, o.touched)) return false;
     for (ElemId tr : gone) s.Drop(tr);
     s.FixMerges(o.tbl);
     o.touched.push_back(heir);
@@ -4916,13 +4986,18 @@ Result Editor::DeleteColumns(Pos from, Pos to) {
       if (p.heir != kNoElem && anyHeir == kNoElem) anyHeir = p.heir;
       plans.push_back(std::move(p));
     }
+    std::vector<ElemId> skip;  // what goes: whole rows, or cells
+    for (const Plan& p : plans) {
+      if (p.gone.size() == p.row->cells.size()) skip.push_back(p.row->tr);
+      else skip.insert(skip.end(), p.gone.begin(), p.gone.end());
+    }
     for (Plan& p : plans) {
       if (p.gone.size() == p.row->cells.size()) {
-        if (!s.Evacuate({p.row->tr}, anyHeir, o.why)) return false;
+        if (!s.Evacuate({p.row->tr}, anyHeir, o.why, o.tbl, skip, o.touched)) return false;
         rowsGone.push_back(p.row->tr);
         continue;
       }
-      if (!s.Evacuate(p.gone, p.heir, o.why)) return false;
+      if (!s.Evacuate(p.gone, p.heir, o.why, o.tbl, skip, o.touched)) return false;
       if (p.heir != kNoElem) o.touched.push_back(p.heir);
       for (ElemId tc : p.gone) s.Drop(tc);
       const GridRow& row = *p.row;
