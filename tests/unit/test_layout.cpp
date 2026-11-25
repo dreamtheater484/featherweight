@@ -309,6 +309,22 @@ TEST(Layout_NoAutomaticSpacingWithoutHTMLSpacing) {
   CHECK_NEAR(b2->top - (a2->top + a2->height), 11.0f, 0.05f);
 }
 
+TEST(Layout_NoAutomaticSpaceBelowACellsLastParagraph) {
+  // HTML's automatic space after isn't left below a cell's last paragraph, as a <p>'s margin
+  // doesn't show at the bottom of a <td> (govuk-revised-methodology's tables): a row with it is as
+  // tall as one without.
+  auto table = [](const std::string& spacing) {
+    return "<w:tbl><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc>" + P("cell", spacing) +
+           "</w:tc></w:tr></w:tbl>" + P("after");
+  };
+  Doc plain = Make(table("<w:spacing w:after=\"0\"/>"));
+  Doc autoAfter = Make(table("<w:spacing w:after=\"0\" w:afterAutospacing=\"1\"/>"));
+  REQUIRE(plain.layout && autoAfter.layout);
+  const LineBox *a = Find(plain, u"after"), *b = Find(autoAfter, u"after");
+  REQUIRE(a && b);
+  CHECK_NEAR(b->top, a->top, 0.05f);
+}
+
 TEST(Layout_AColumnBreakNeedNotFitItsColumn) {
   // Column one full to the last line, then a paragraph that starts with a column break: the
   // break's empty line stays in column one, and the text after it starts column two.
