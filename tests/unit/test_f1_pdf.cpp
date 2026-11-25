@@ -415,6 +415,13 @@ TEST(F1PdfSignsAndCatchesChanges) {
   FPDF_CloseDocument(again);
   CHECK(changed.size() > signedPdf.size() && changed.compare(0, signedPdf.size(), signedPdf) == 0);
   CHECK(Check(changed).verdict.kind == pdfsign::Verdict::Changed);
+  // Only what changed is written after the signature: the turned page, not the form, the
+  // signature field or the signature (f1-gate's finding 9; PDFium alone wrote them all again).
+  const std::string update = changed.substr(signedPdf.size());
+  CHECK(update.find("/ByteRange") == std::string::npos && update.find("/SigFlags") == std::string::npos);
+  size_t written = 0;
+  for (size_t at = update.find(" obj"); at != std::string::npos; at = update.find(" obj", at + 4)) ++written;
+  CHECK_EQ(written, size_t{1});
 
   // Signing again adds a second signature after the first; a file with a cross-reference stream
   // gets one too.

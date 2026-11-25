@@ -84,6 +84,10 @@ bool SaveBytes(FPDF_DOCUMENT doc, bool incremental, std::string& out);
 // of its own stream (ISO 32000-1 table 17 requires it): it's added. `loadedSize` is the size of the
 // bytes the document was loaded from (nothing before it is ever touched).
 bool SaveDocument(FPDF_DOCUMENT doc, size_t loadedSize, std::string& out);
+// `original` with an incremental update of only the objects `saved` (PDFium's incremental save of
+// it) really changed, compared object by object (pdfobj::SameObject); `original` itself when none
+// did. False when either can't be read strictly, or `original` is encrypted.
+bool MinimalUpdate(std::string_view original, std::string_view saved, std::string& out);
 // Adds /Type /XRef to the cross-reference stream `bytes` end with, when it starts at or after
 // `from` and lacks it. Exposed for the tests.
 bool TypeLastXrefStream(std::string& bytes, size_t from);

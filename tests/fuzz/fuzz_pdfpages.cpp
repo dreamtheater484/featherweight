@@ -23,6 +23,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       pdfobj::Obj back;
       if (o.type != pdfobj::Obj::Stream && (!pdfobj::ParseObject(written, again, back) || pdfobj::Write(back) != written))
         std::abort();
+      // And compares as the same object (how signed PDFs' updates keep only what changed).
+      pdfobj::File none;
+      if (o.type != pdfobj::Obj::Stream && !pdfobj::SameObject(none, o, none, back)) std::abort();
     }
   }
   pdfobj::File f;

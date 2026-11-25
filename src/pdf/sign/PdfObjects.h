@@ -62,6 +62,14 @@ class File {
   bool Get(int num, Obj& out, int* gen = nullptr);
   // `o` itself, or the object it refers to.
   bool Resolve(const Obj& o, Obj& out);
+  // Object `num` as written in the newest revision, between "num gen obj" and "endobj" (a stream's
+  // data included). False for one kept in an object stream, or one that can't be read.
+  bool ObjectText(int num, std::string_view& out);
+  // A stream's data as stored in the file, and decoded (no filter or FlateDecode only).
+  bool RawStream(const Obj& stream, std::string_view& out);
+  bool DecodedStream(const Obj& stream, std::string& out) { return StreamData(stream, data_, out); }
+  // The object numbers in use in the newest revision.
+  std::vector<int> InUse() const;
   // The first page's object number (through the page tree, in order, past branches left empty
   // when their pages were deleted). -1 when there's none or the tree can't be read.
   int FirstPage();
@@ -95,6 +103,11 @@ class File {
   int sections_ = 0;
   size_t inflated_ = 0;
 };
+
+// Whether `a` (read from `fa`) and `b` (from `fb`) are the same object however each is written:
+// numbers by value, strings and names by their bytes, dictionaries in any key order, streams by
+// their dictionary (less how the data is stored) and their data.
+bool SameObject(File& fa, const Obj& a, File& fb, const Obj& b);
 
 // Inflates zlib data (FlateDecode), at most `limit` bytes out.
 bool Inflate(std::string_view in, std::string& out, size_t limit);

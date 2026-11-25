@@ -330,8 +330,46 @@ bool SaveBytes(FPDF_DOCUMENT doc, bool incremental, std::string& out) {
 bool SaveDocument(FPDF_DOCUMENT doc, size_t loadedSize, std::string& out) {
   if (FPDF_GetSignatureCount(doc) <= 0) return SaveBytes(doc, false, out);
   if (!SaveBytes(doc, true, out)) return false;
-  if (loadedSize > 0 && out.size() > loadedSize) TypeLastXrefStream(out, loadedSize);
+  if (loadedSize == 0 || out.size() <= loadedSize) return true;
+  // PDFium's update writes every object it loaded again, so a validator sees the fields, the form
+  // and the signature itself as changed after signing (f1-gate's finding 9): only what changed is
+  // kept, after the signed file as it was.
+  std::string minimal;
+  if (MinimalUpdate(std::string_view(out).substr(0, loadedSize), out, minimal)) {
+    out.swap(minimal);
+    return true;
+  }
+  TypeLastXrefStream(out, loadedSize);  // PDFium's whole update, then, with its stream typed
   return true;
+}
+
+bool MinimalUpdate(std::string_view original, std::string_view saved, std::string& out) {
+  pdfobj::File before, after;
+  if (!before.Open(original) || before.Trailer().Get("Encrypt") || !after.Open(saved)) return false;
+  std::vector<pdfobj::Update> changed;
+  for (int num : after.InUse()) {
+    pdfobj::Obj now, was;
+    int genNow = 0, genWas = 0;
+    if (!after.Get(num, now, &genNow)) return false;
+    // The update's own cross-reference and object streams: AppendUpdate writes its own.
+    if (now.type == pdfobj::Obj::Stream && now.Get("Type") &&
+        (now.Get("Type")->IsName("XRef") || now.Get("Type")->IsName("ObjStm")))
+      continue;
+    if (before.Get(num, was, &genWas) && genWas == genNow && pdfobj::SameObject(after, now, before, was)) continue;
+    std::string_view text;
+    if (after.ObjectText(num, text)) {
+      changed.push_back({num, genNow, std::string(text)});
+    } else if (now.type != pdfobj::Obj::Stream) {
+      changed.push_back({num, genNow, pdfobj::Write(now)});  // from one of PDFium's object streams
+    } else {
+      return false;
+    }
+  }
+  if (changed.empty()) {
+    out.assign(original);  // nothing changed: the file as signed
+    return true;
+  }
+  return pdfobj::AppendUpdate(original, before, changed, std::max(after.Size(), before.Size()), out);
 }
 
 bool TypeLastXrefStream(std::string& bytes, size_t from) {

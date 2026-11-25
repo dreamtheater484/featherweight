@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <set>
 
@@ -623,6 +625,190 @@ int File::FirstLeaf(int num, int depth, std::set<int>& seen) {
     if (leaf != -1) return leaf;  // a page, or a failure
   }
   return -1;
+}
+
+bool File::RawStream(const Obj& stream, std::string_view& out) {
+  size_t len = stream.streamLen;
+  if (const Obj* l = stream.Get("Length"); l && l->type == Obj::Ref) {
+    Obj v;
+    len = Get(l->num, v) && v.Int(-1) >= 0 ? static_cast<size_t>(v.Int()) : 0;
+  }
+  const size_t from = stream.streamAt;
+  if (from > data_.size()) return false;
+  if (len == 0 || from + len > data_.size() || len > kMaxStream) {
+    const size_t end = data_.find("endstream", from);
+    if (end == std::string_view::npos) return false;
+    len = end - from;
+    while (len > 0 && (data_[from + len - 1] == '\n' || data_[from + len - 1] == '\r')) --len;
+  }
+  out = data_.substr(from, len);
+  return true;
+}
+
+bool File::ObjectText(int num, std::string_view& out) {
+  auto it = xref_.find(num);
+  if (it == xref_.end() || it->second.type != 1 || it->second.a >= data_.size()) return false;
+  size_t at = static_cast<size_t>(it->second.a);
+  long long n = 0, g = 0;
+  if (!ReadInt(data_, at, n) || n != num || !ReadInt(data_, at, g) || !Keyword(data_, at, "obj")) return false;
+  const size_t start = at;
+  size_t end = at;
+  Obj o;
+  if (!ParseObject(data_, end, o)) return false;
+  if (o.type == Obj::Stream) {
+    std::string_view raw;
+    if (!RawStream(o, raw)) return false;
+    end = o.streamAt + raw.size();
+  }
+  const size_t close = data_.find("endobj", end);
+  if (close == std::string_view::npos) return false;
+  std::string_view text = data_.substr(start, close - start);
+  while (!text.empty() && IsWhite(text.front())) text.remove_prefix(1);
+  while (!text.empty() && IsWhite(text.back())) text.remove_suffix(1);
+  out = text;
+  return true;
+}
+
+std::vector<int> File::InUse() const {
+  std::vector<int> nums;
+  for (const auto& [num, e] : xref_)
+    if (num > 0 && e.type != 0) nums.push_back(num);
+  return nums;
+}
+
+namespace {
+
+int HexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// A string's bytes, however it's written (ISO 32000-1, 7.3.4).
+std::string StringBytes(const Obj& o) {
+  std::string out;
+  const std::string& t = o.text;
+  if (o.type == Obj::HexString) {
+    int hi = -1;
+    for (char c : t) {
+      const int v = HexValue(c);
+      if (v < 0) continue;
+      if (hi < 0) {
+        hi = v;
+      } else {
+        out += static_cast<char>(hi * 16 + v);
+        hi = -1;
+      }
+    }
+    if (hi >= 0) out += static_cast<char>(hi * 16);
+    return out;
+  }
+  for (size_t i = 0; i < t.size(); ++i) {
+    char c = t[i];
+    if (c == '\r') {  // an end of line in a literal string is a line feed
+      if (i + 1 < t.size() && t[i + 1] == '\n') ++i;
+      out += '\n';
+      continue;
+    }
+    if (c != '\\' || i + 1 >= t.size()) {
+      out += c;
+      continue;
+    }
+    c = t[++i];
+    switch (c) {
+      case 'n': out += '\n'; break;
+      case 'r': out += '\r'; break;
+      case 't': out += '\t'; break;
+      case 'b': out += '\b'; break;
+      case 'f': out += '\f'; break;
+      case '\r':  // a line continued
+        if (i + 1 < t.size() && t[i + 1] == '\n') ++i;
+        break;
+      case '\n': break;
+      default:
+        if (c >= '0' && c <= '7') {
+          int v = c - '0';
+          for (int k = 0; k < 2 && i + 1 < t.size() && t[i + 1] >= '0' && t[i + 1] <= '7'; ++k) v = v * 8 + (t[++i] - '0');
+          out += static_cast<char>(v & 0xFF);
+        } else {
+          out += c;  // the escaped parentheses and backslash, and any other: the character itself
+        }
+    }
+  }
+  return out;
+}
+
+// A name's bytes, #xx decoded.
+std::string NameBytes(const std::string& t) {
+  std::string out;
+  for (size_t i = 0; i < t.size(); ++i) {
+    if (t[i] == '#' && i + 2 < t.size() && HexValue(t[i + 1]) >= 0 && HexValue(t[i + 2]) >= 0) {
+      out += static_cast<char>(HexValue(t[i + 1]) * 16 + HexValue(t[i + 2]));
+      i += 2;
+    } else {
+      out += t[i];
+    }
+  }
+  return out;
+}
+
+bool SameValue(const Obj& a, const Obj& b, bool streamDict) {
+  const bool aString = a.type == Obj::String || a.type == Obj::HexString;
+  const bool bString = b.type == Obj::String || b.type == Obj::HexString;
+  if (aString || bString) return aString && bString && StringBytes(a) == StringBytes(b);
+  if (a.type != b.type) return false;
+  switch (a.type) {
+    case Obj::Null: return true;
+    case Obj::Bool: return a.text == b.text;
+    case Obj::Number: {
+      const double x = std::strtod(a.text.c_str(), nullptr), y = std::strtod(b.text.c_str(), nullptr);
+      return std::fabs(x - y) <= 1e-4 * std::max(1.0, std::fabs(x));
+    }
+    case Obj::Name: return NameBytes(a.text) == NameBytes(b.text);
+    case Obj::Ref: return a.num == b.num && a.gen == b.gen;
+    case Obj::Array:
+      if (a.items.size() != b.items.size()) return false;
+      for (size_t i = 0; i < a.items.size(); ++i)
+        if (!SameValue(a.items[i], b.items[i], false)) return false;
+      return true;
+    case Obj::Dict:
+    case Obj::Stream: {
+      // A stream's /Length, /Filter and /DecodeParms say how its data is stored, not what it is.
+      auto skip = [streamDict](const std::string& key) {
+        if (!streamDict) return false;
+        const std::string k = NameBytes(key);
+        return k == "Length" || k == "Filter" || k == "DecodeParms";
+      };
+      size_t mine = 0, theirs = 0;
+      for (const auto& [key, value] : a.dict) {
+        if (skip(key)) continue;
+        ++mine;
+        const std::string name = NameBytes(key);
+        const Obj* other = nullptr;
+        for (const auto& [k, v] : b.dict)
+          if (NameBytes(k) == name) other = &v;
+        if (!other || !SameValue(value, *other, false)) return false;
+      }
+      for (const auto& entry : b.dict)
+        if (!skip(entry.first)) ++theirs;
+      return mine == theirs;
+    }
+    default: return false;
+  }
+}
+
+}  // namespace
+
+bool SameObject(File& fa, const Obj& a, File& fb, const Obj& b) {
+  if ((a.type == Obj::Stream) != (b.type == Obj::Stream)) return false;
+  if (a.type != Obj::Stream) return SameValue(a, b, false);
+  if (!SameValue(a, b, true)) return false;
+  std::string_view ra, rb;
+  if (!fa.RawStream(a, ra) || !fb.RawStream(b, rb)) return false;
+  if (ra == rb && SameValue(a, b, false)) return true;  // stored the same way
+  std::string da, db;
+  return fa.DecodedStream(a, da) && fb.DecodedStream(b, db) && da == db;
 }
 
 bool AppendUpdate(std::string_view file, const File& f, const std::vector<Update>& objects, int size, std::string& out,
