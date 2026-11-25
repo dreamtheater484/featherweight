@@ -104,8 +104,9 @@ add_subdirectory(src/slide/show)
 add_subdirectory(src/slide/objects)  # p2-objects: objects on slides
 add_subdirectory(src/slide/odp)  # p3-files: OpenDocument presentations
 add_subdirectory(src/slide/view)  # p1-view: the presentation tab
+add_subdirectory(src/pdf)  # f1-pdf: the PDF tab's page tools, OCR and signing
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview)
+target_link_libraries(Featherweight PRIVATE fwdraw fwchart fwdoclayout fwproof fwpictures fwsheetview fwslideview fwpdftools)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)

@@ -105,7 +105,25 @@ class Document {
   // Focused form field, if any.
   bool FocusedField(int& page) const;
 
+  // Saves through FileSession's safe save: the original goes to the backups the first time the
+  // file opened is replaced, and the file is written to a temporary file first. Unedited, it's the
+  // file as it is, byte for byte.
   bool Save(const std::wstring& path, std::wstring& error);
+  // ---- The whole document (f1-pdf: page tools, undo, signing) ----
+  // The document as a save writes it now: the file as opened while nothing changed, otherwise the
+  // file with PDFium's incremental update after it. False when it couldn't be written.
+  bool CurrentBytes(std::string& out);
+  // Opens `bytes` in place of the document: the same object, so the view's references stay. Every
+  // page and the form start again, without running the document's open scripts. The view drops
+  // what it holds of the pages first (RenderCache::Clear).
+  bool Reload(std::string bytes, bool modified);
+  // Before pages are added, removed, moved or rotated: every page handle closed.
+  void CloseAllPages();
+  // After: the page sizes read again, and the document marked changed.
+  void PagesChanged();
+  bool InMemory() const { return file_ == INVALID_HANDLE_VALUE; }
+  bool Encrypted() const;
+  int SignatureCount() const;
   // Export PDF: a copy at `path` with filled-in form fields, highlights and notes made part of
   // the pages, as printing them would; the document itself stays as it is. Not for protected or
   // XFA documents.
@@ -132,8 +150,14 @@ class Document {
   void ClosePage(int index);
   LinkTarget DestToTarget(FPDF_DEST dest);
 
+  void InitForm(bool openActions);
+
   std::wstring path_;
   std::string memory_;  // the whole file, for files that fit comfortably in memory
+  std::string password_;  // as PDFium took it, for Reload
+  bool backedUp_ = false;  // the original is in the backups (or there was none to keep)
+  bool savedEdits_ = false;  // saved since memory_ was read: the document is memory_ and its changes
+  bool highlight_ = false;
   HANDLE file_ = INVALID_HANDLE_VALUE;
   FPDF_FILEACCESS access_{};
   FPDF_DOCUMENT doc_ = nullptr;

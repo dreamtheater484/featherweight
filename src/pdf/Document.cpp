@@ -4,10 +4,12 @@
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
 #include <fpdf_save.h>
+#include <fpdf_signature.h>
 
 #include <algorithm>
 #include <cmath>
 
+#include "FileSession.h"
 #include "Util.h"
 #include "core/Strings.h"
 #include "pdf/FormFill.h"
@@ -183,13 +185,15 @@ OpenResult Document::Open(const std::wstring& path, const std::wstring& password
     return FPDF_LoadCustomDocument(&d->access_, p);
   };
 
-  d->doc_ = load(fw::WideToUtf8(password));
+  d->password_ = fw::WideToUtf8(password);
+  d->doc_ = load(d->password_);
   unsigned long err = d->doc_ ? FPDF_ERR_SUCCESS : FPDF_GetLastError();
   if (!d->doc_ && err == FPDF_ERR_PASSWORD && !password.empty()) {
     std::string legacy = Latin1(password);  // older encryption expects Latin-1 passwords
-    if (legacy != fw::WideToUtf8(password)) {
+    if (legacy != d->password_) {
       d->doc_ = load(legacy);
       err = d->doc_ ? FPDF_ERR_SUCCESS : FPDF_GetLastError();
+      if (d->doc_) d->password_ = legacy;
     }
   }
   if (!d->doc_) {
@@ -241,7 +245,12 @@ Document::~Document() {
 
 void Document::AttachHost(DocumentHost* host, bool highlightFields) {
   host_ = host;
+  highlight_ = highlightFields;
   if (form_) return;
+  InitForm(true);
+}
+
+void Document::InitForm(bool openActions) {
   env_ = std::make_unique<FormEnv>(this);
   form_ = FPDFDOC_InitFormFillEnvironment(doc_, env_.get());
   int type = FPDF_GetFormType(doc_);
@@ -253,12 +262,14 @@ void Document::AttachHost(DocumentHost* host, bool highlightFields) {
   }
 #endif
   if (!form_) return;
-  SetHighlightFields(highlightFields);
+  SetHighlightFields(highlight_);
+  if (!openActions) return;
   FORM_DoDocumentJSAction(form_);
   FORM_DoDocumentOpenAction(form_);
 }
 
 void Document::SetHighlightFields(bool on) {
+  highlight_ = on;
   if (!form_) return;
   if (on) {
     // PDFium takes this color as 0x00BBGGRR; this is a soft blue (#D6E4FF).
@@ -446,8 +457,99 @@ bool Document::FocusedField(int& page) const {
 
 int Document::CurrentPageForForm() const { return host_ ? host_->OnFormCurrentPage() : 0; }
 
+bool Document::CurrentBytes(std::string& out) {
+  if (form_) FORM_ForceToKillFocus(form_);
+  if (!modified_ && !savedEdits_ && InMemory() && !memory_.empty()) {
+    out = memory_;
+    return true;
+  }
+  struct MemoryWriter : FPDF_FILEWRITE {
+    std::string* bytes;
+  } w;
+  w.version = 1;
+  w.bytes = &out;
+  w.WriteBlock = [](FPDF_FILEWRITE* self, const void* data, unsigned long size) -> int {
+    static_cast<MemoryWriter*>(self)->bytes->append(static_cast<const char*>(data), size);
+    return 1;
+  };
+  out.clear();
+  if (FPDF_SaveAsCopy(doc_, &w, FPDF_INCREMENTAL)) return true;
+  out.clear();
+  return FPDF_SaveAsCopy(doc_, &w, FPDF_NO_INCREMENTAL) != FALSE;
+}
+
+void Document::CloseAllPages() {
+  for (int i = 0; i < static_cast<int>(pages_.size()); ++i) ClosePage(i);
+}
+
+void Document::PagesChanged() {
+  CloseAllPages();
+  RefreshPageSizes();
+  modified_ = true;
+}
+
+bool Document::Encrypted() const { return doc_ && FPDF_GetSecurityHandlerRevision(doc_) >= 0; }
+
+int Document::SignatureCount() const { return doc_ ? std::max(0, FPDF_GetSignatureCount(doc_)) : 0; }
+
+bool Document::Reload(std::string bytes, bool modified) {
+  if (bytes.empty()) return false;
+  FPDF_DOCUMENT fresh =
+      FPDF_LoadMemDocument64(bytes.data(), bytes.size(), password_.empty() ? nullptr : password_.c_str());
+  if (!fresh) return false;
+  CloseAllPages();
+  if (form_) {
+    FPDFDOC_ExitFormFillEnvironment(form_);
+    form_ = nullptr;
+  }
+  env_.reset();
+  FPDF_CloseDocument(doc_);
+  doc_ = fresh;
+  memory_ = std::move(bytes);  // after the old document is closed: it read from the old bytes
+  savedEdits_ = false;
+  if (file_ != INVALID_HANDLE_VALUE) {
+    CloseHandle(file_);
+    file_ = INVALID_HANDLE_VALUE;
+    access_ = {};
+  }
+  RefreshPageSizes();
+  if (host_) InitForm(false);
+  modified_ = modified;
+  return true;
+}
+
 bool Document::Save(const std::wstring& path, std::wstring& error) {
   if (form_) FORM_ForceToKillFocus(form_);
+  const bool samePath = fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_));
+  if (InMemory()) {
+    // Unedited: the file as it is (Save as makes an exact copy).
+    std::string bytes;
+    const bool copied = !modified_ && !samePath && util::ReadFileBytes(path_, bytes, size_t{1} << 31);
+    if (!copied && !CurrentBytes(bytes)) {
+      error = L"The file couldn't be saved: the PDF couldn't be written.";
+      return false;
+    }
+    FileSession::SaveJob job;
+    job.target = path;
+    job.name = fw::FileNameOf(path);
+    job.backups = FileSession::Config().backups;
+    job.opened = path_;
+    const bool exists = util::FileExists(path);
+    job.keepOriginal = samePath && exists && !backedUp_;
+    job.keepExisting = !samePath && exists;
+    const fw::pkg::SaveResult r =
+        FileSession::WriteSave(job, std::vector<uint8_t>(bytes.begin(), bytes.end()), nullptr);
+    if (!r.Ok()) {
+      error = fw::Utf8ToWide(r.message);
+      return false;
+    }
+    backedUp_ = true;  // the original is kept, or this is our own file: later saves replace what we wrote
+    if (!copied && modified_) savedEdits_ = true;  // memory_ is no longer what the document is
+    path_ = path;
+    modified_ = false;
+    return true;
+  }
+  // Files too large to keep in memory are written straight from PDFium to a temporary file.
   const std::wstring dir = fw::DirOf(path);
   const std::wstring tmp = dir + L"\\~" + fw::FileNameOf(path) + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
 
@@ -473,7 +575,6 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
   }
 
   bool replaced = false;
-  const bool samePath = fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_));
   if (util::FileExists(path)) {
     if (file_ == INVALID_HANDLE_VALUE || !samePath) {
       replaced = ReplaceFileW(path.c_str(), tmp.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
