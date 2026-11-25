@@ -7,6 +7,7 @@
 #include "Commands.h"
 #include "Util.h"
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Backups.h"
 #include "pkg/Recovery.h"
@@ -120,9 +121,9 @@ void App::OfferRecovery() {
   if (orphans_.empty()) return;
   const std::wstring text =
       orphans_.size() == 1
-          ? L"Featherweight closed before “" + orphans_.front().title + L"” was saved."
-          : L"Featherweight closed before " + std::to_wstring(orphans_.size()) + L" documents were saved.";
-  banner_.Show(BannerKind::Warning, text, {{kActRecover, L"Recover", true}, {kActDiscard, L"Discard"}});
+          ? T(L"Featherweight closed before “") + orphans_.front().title + T(L"” was saved.")
+          : T(L"Featherweight closed before ") + std::to_wstring(orphans_.size()) + T(L" documents were saved.");
+  banner_.Show(BannerKind::Warning, text, {{kActRecover, T(L"Recover"), true}, {kActDiscard, T(L"Discard")}});
 }
 
 void App::RecoverDocuments(bool open) {
@@ -185,11 +186,11 @@ void App::RecoverDocuments(bool open) {
   }
   if (toActivate >= 0) ActivateTab(toActivate);
   if (failed)
-    banner_.Show(BannerKind::Error, failed == 1 ? L"A document couldn’t be recovered." :
-                                                  std::to_wstring(failed) + L" documents couldn’t be recovered.",
+    banner_.Show(BannerKind::Error, failed == 1 ? T(L"A document couldn’t be recovered.") :
+                                                  std::to_wstring(failed) + T(L" documents couldn’t be recovered."),
                  {}, 8000);
   else if (partial)
-    banner_.Show(BannerKind::Warning, L"The last changes to a recovered file couldn’t all be made again. Check it before you save.",
+    banner_.Show(BannerKind::Warning, T(L"The last changes to a recovered file couldn’t all be made again. Check it before you save."),
                  {}, 8000);
   UpdateAutosaveTimer();
   Layout();
@@ -210,11 +211,11 @@ void App::ShowFileNotice(TabContent* v, FileChange change) {
   fileNotice_ = change;
   if (change == FileChange::Changed)
     banner_.Show(BannerKind::Warning,
-                 v->Title() + L" was changed by another program." +
-                     (v->Modified() ? L" Reloading it discards your changes here." : L""),
-                 {{kActReload, L"Reload", true}, {kActNotNow, L"Keep this version"}}, 0, v);
+                 v->Title() + T(L" was changed by another program.") +
+                     (v->Modified() ? T(L" Reloading it discards your changes here.") : L""),
+                 {{kActReload, T(L"Reload"), true}, {kActNotNow, T(L"Keep this version")}}, 0, v);
   else if (change == FileChange::Missing)
-    banner_.Show(BannerKind::Warning, v->Title() + L" was moved or deleted. Save it again to keep it.", {}, 0, v);
+    banner_.Show(BannerKind::Warning, v->Title() + T(L" was moved or deleted. Save it again to keep it."), {}, 0, v);
 }
 
 void App::ReloadActive() {
@@ -238,7 +239,7 @@ void App::ReloadActive() {
   active_ = -1;
   ActivateTab(index);
   UpdateAutosaveTimer();
-  banner_.Show(BannerKind::Success, L"Reloaded", {}, 1600);
+  banner_.Show(BannerKind::Success, T(L"Reloaded"), {}, 1600);
 }
 
 std::wstring App::LatestBackup() const {
@@ -251,7 +252,7 @@ void App::RestoreOriginal() {
   const std::wstring backup = LatestBackup();
   std::string data;
   if (backup.empty() || !util::ReadFileBytes(backup, data, 1u << 30)) {
-    banner_.Show(BannerKind::Error, L"The original couldn’t be found in the backups.", {}, 6000);
+    banner_.Show(BannerKind::Error, T(L"The original couldn’t be found in the backups."), {}, 6000);
     return;
   }
   // Opened as a copy beside the file, so nothing is replaced until you choose to.
@@ -272,8 +273,8 @@ void App::RestoreOriginal() {
 void App::DeleteBackups() {
   const size_t n = backups::DeleteAll(DocFile::Config().backups);
   banner_.Show(BannerKind::Success,
-               n == 0 ? std::wstring(L"There are no backups.")
-                      : n == 1 ? std::wstring(L"Deleted 1 backup") : L"Deleted " + std::to_wstring(n) + L" backups",
+               n == 0 ? std::wstring(T(L"There are no backups."))
+                      : n == 1 ? std::wstring(T(L"Deleted 1 backup")) : T(L"Deleted ") + std::to_wstring(n) + L" backups",
                {}, 2400);
 }
 

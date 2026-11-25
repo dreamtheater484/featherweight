@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -50,17 +51,17 @@ void NoteEditor::Create(HWND parent) {
   SetWindowSubclass(edit_, EditProc, 1, reinterpret_cast<DWORD_PTR>(this));
   SendMessageW(edit_, EM_SETLIMITTEXT, 8000, 0);
   save_.id = kSave;
-  save_.text = L"Save";
+  save_.text = T(L"Save");
   save_.style = ButtonStyle::Primary;
-  save_.tooltip = L"Save note (Ctrl+Enter)";
+  save_.tooltip = T(L"Save note (Ctrl+Enter)");
   cancel_.id = kCancel;
-  cancel_.text = L"Cancel";
+  cancel_.text = T(L"Cancel");
   cancel_.style = ButtonStyle::Standard;
-  cancel_.tooltip = L"Close without saving (Esc)";
+  cancel_.tooltip = T(L"Close without saving (Esc)");
   delete_.id = kDelete;
   delete_.glyph = icon::Delete;
   delete_.glyphSize = 14;
-  delete_.tooltip = L"Delete note";
+  delete_.tooltip = T(L"Delete note");
   set_.Add(&save_);
   set_.Add(&cancel_);
   set_.Add(&delete_);
@@ -155,7 +156,7 @@ void NoteEditor::Draw(Canvas& c) {
   D2D1_RECT_F badge = RectF(card_.left + 12 * u, card_.top + 11 * u, card_.left + 32 * u, card_.top + 31 * u);
   c.FillRound(badge, 5 * u, Rgb(0xFFB900));
   c.Icon(icon::Comment, badge, Rgb(0x1B1B1B), 11 * u);
-  c.Text(note_.index >= 0 ? L"Note" : L"New note",
+  c.Text(note_.index >= 0 ? T(L"Note") : T(L"New note"),
          RectF(card_.left + 38 * u, card_.top + 8 * u, card_.right - 12 * u, card_.top + 34 * u), p.text, 14 * u,
          DWRITE_FONT_WEIGHT_SEMI_BOLD);
   // Text area: same colors as the edit control inside it, with the accent line of a focused field.
@@ -228,7 +229,7 @@ LRESULT CALLBACK NoteEditor::EditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 
 void NoteEditor::Describe(uia::Tree& t, int parent, const std::function<void(Action)>& act) const {
   if (!IsOpen()) return;
-  int card = t.Add(parent, 7, UIA_PaneControlTypeId, note_.index >= 0 ? L"Note" : L"New note", card_);
+  int card = t.Add(parent, 7, UIA_PaneControlTypeId, note_.index >= 0 ? T(L"Note") : T(L"New note"), card_);
   t[card].layer = 1;
   for (const Button* b : {&save_, &cancel_, &delete_}) {
     if (!b->visible) continue;

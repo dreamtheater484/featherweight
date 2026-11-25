@@ -14,6 +14,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -103,7 +104,7 @@ void DocView::InsertShape(edit::ShapeKind kind) {
   // On the page where its paragraph starts (it's anchored there), below the caret's line there.
   const auto caret = pagination_->CaretAt({at.para, 0});
   if (!caret || caret->page >= sizes_.size()) {
-    host_.ViewMessage(BannerKind::Info, L"Put the caret where the shape goes on a page.");
+    host_.ViewMessage(BannerKind::Info, T(L"Put the caret where the shape goes on a page."));
     return;
   }
   using K = edit::ShapeKind;
@@ -167,8 +168,8 @@ bool DocView::TypeIntoShape(std::u16string_view text) {
 bool DocView::PickPictureFile(std::vector<uint8_t>& bytes, const wchar_t* title) {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return false;
-  COMDLG_FILTERSPEC filters[] = {{L"Pictures", L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff"},
-                                 {L"All files", L"*.*"}};
+  COMDLG_FILTERSPEC filters[] = {{T(L"Pictures"), L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff"},
+                                 {T(L"All files"), L"*.*"}};
   dlg->SetFileTypes(2, filters);
   dlg->SetTitle(title);
   DWORD opts = 0;
@@ -182,7 +183,7 @@ bool DocView::PickPictureFile(std::vector<uint8_t>& bytes, const wchar_t* title)
   CoTaskMemFree(path);
   std::string data;
   if (!util::ReadFileBytes(file, data, kMaxPictureFile)) {
-    host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(file) + L"” couldn't be read, or is too big to add.");
+    host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(file) + T(L"” couldn't be read, or is too big to add."));
     return false;
   }
   bytes.assign(data.begin(), data.end());
@@ -259,7 +260,7 @@ bool DocView::ExecuteShape(int cmd) {
         };
         a.picture = [this](bool washout) {
           std::vector<uint8_t> bytes;
-          if (PickPictureFile(bytes, L"Watermark picture")) ApplyPageChange(edit::SetPictureWatermark(*editor_, bytes, washout), false);
+          if (PickPictureFile(bytes, T(L"Watermark picture"))) ApplyPageChange(edit::SetPictureWatermark(*editor_, bytes, washout), false);
           watermarkShown_ = UINT64_MAX;  // shows what there is, chosen or not
           SyncShapePanels();
         };
@@ -285,7 +286,7 @@ void DocView::SyncShapePanels() {
     const uint64_t key = d == kNone ? UINT64_MAX - 1 : (static_cast<uint64_t>(edits_) << 32) | d;
     if (key != shapeShown_) {
       shapeShown_ = key;
-      if (d == kNone) shapePanel_->Show(std::nullopt, L"Select a shape or text box to change how it looks.");
+      if (d == kNone) shapePanel_->Show(std::nullopt, T(L"Select a shape or text box to change how it looks."));
       else if (!ShapeInfoOf(d).shape) shapePanel_->Show(std::nullopt, Wide(ShapeInfoOf(d).why));
       else shapePanel_->Show(ShapeInfoOf(d));
     }
@@ -354,8 +355,8 @@ void RowsPanel::Draw(Canvas& c) {
 ShapePanel::ShapePanel(Actions actions) : actions_(std::move(actions)) {
   wchar_t measure[4] = {};
   metric_ = !(GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IMEASURE, measure, 4) > 0 && measure[0] == L'1');
-  wrap_.items = {L"In line with text", L"Square", L"Tight", L"Top and bottom", L"Behind text", L"In front of text"};
-  wrap_.label = L"Wrap text";
+  wrap_.items = {T(L"In line with text"), T(L"Square"), T(L"Tight"), T(L"Top and bottom"), T(L"Behind text"), T(L"In front of text")};
+  wrap_.label = T(L"Wrap text");
   wrap_.onChange = [this](int i) {
     if (i >= 0 && i < 6 && actions_.wrap) actions_.wrap(static_cast<fw::doc::edit::Wrap>(i));
   };
@@ -366,8 +367,8 @@ ShapePanel::ShapePanel(Actions actions) : actions_(std::move(actions)) {
     s->maxValue = metric_ ? 55.88 : 22;
     s->unit = metric_ ? L" cm" : L"″";
   }
-  width_.label = L"Width";
-  height_.label = L"Height";
+  width_.label = T(L"Width");
+  height_.label = T(L"Height");
   width_.onChange = [this](double v) {
     if (actions_.size) actions_.size(FromUnit(v), FromUnit(height_.value));
   };
@@ -378,17 +379,17 @@ ShapePanel::ShapePanel(Actions actions) : actions_(std::move(actions)) {
   rotation_.maxValue = 359;
   rotation_.step = 15;
   rotation_.unit = L"°";
-  rotation_.label = L"Rotation";
+  rotation_.label = T(L"Rotation");
   rotation_.onChange = [this](double v) {
     if (actions_.rotate) actions_.rotate(v);
   };
-  fill_.label = L"Fill";
-  fill_.automaticLabel = L"No fill";
+  fill_.label = T(L"Fill");
+  fill_.automaticLabel = T(L"No fill");
   fill_.onChange = [this](D2D1_COLOR_F c, bool none) {
     if (actions_.fill) actions_.fill(none ? std::nullopt : std::optional<uint32_t>(Rgb(c)));
   };
-  outline_.label = L"Outline";
-  outline_.automaticLabel = L"No outline";
+  outline_.label = T(L"Outline");
+  outline_.automaticLabel = T(L"No outline");
   outline_.onChange = [this](D2D1_COLOR_F c, bool none) {
     if (actions_.outline) actions_.outline(none ? std::nullopt : std::optional<uint32_t>(Rgb(c)), 0);
   };
@@ -397,20 +398,20 @@ ShapePanel::ShapePanel(Actions actions) : actions_(std::move(actions)) {
   weight_.maxValue = 20;
   weight_.step = 0.25;
   weight_.unit = L" pt";
-  weight_.label = L"Outline weight";
+  weight_.label = T(L"Outline weight");
   weight_.onChange = [this](double v) {
     // A weight on its own keeps the color it has (or black, when it had none Featherweight can read).
     if (actions_.outline) actions_.outline(outlineColor_ ? outlineColor_ : std::optional<uint32_t>(0), v);
   };
-  addText_.text = L"Add text";
+  addText_.text = T(L"Add text");
   addText_.glyph = icon::Add;
-  addText_.label = L"Add text";
+  addText_.label = T(L"Add text");
   addText_.onInvoke = [this] {
     if (actions_.addText) actions_.addText();
   };
-  rows_ = {{L"Layout", nullptr},     {L"Wrap text", &wrap_}, {L"Size", nullptr},         {L"Width", &width_},
-           {L"Height", &height_},    {L"Rotation", &rotation_}, {L"Look", nullptr},     {L"Fill", &fill_},
-           {L"Outline", &outline_},  {L"Weight", &weight_}, {L"", &addText_}};
+  rows_ = {{T(L"Layout"), nullptr},     {T(L"Wrap text"), &wrap_}, {T(L"Size"), nullptr},         {T(L"Width"), &width_},
+           {T(L"Height"), &height_},    {T(L"Rotation"), &rotation_}, {T(L"Look"), nullptr},     {T(L"Fill"), &fill_},
+           {T(L"Outline"), &outline_},  {T(L"Weight"), &weight_}, {L"", &addText_}};
 }
 
 double ShapePanel::ToUnit(int64_t emu) const { return emu / (metric_ ? 360000.0 : 914400.0); }
@@ -448,8 +449,8 @@ std::vector<Control*> ShapePanel::Layout(const D2D1_RECT_F& body, float ui) {
 // ---- Watermark
 
 WatermarkPanel::WatermarkPanel(Actions actions) : actions_(std::move(actions)) {
-  kindBox_.items = {L"None", L"Text", L"Picture"};
-  kindBox_.label = L"Watermark";
+  kindBox_.items = {T(L"None"), T(L"Text"), T(L"Picture")};
+  kindBox_.label = T(L"Watermark");
   kindBox_.onChange = [this](int i) {
     if (i == 0 && actions_.remove) actions_.remove();
     if (i == 1) ApplyText();
@@ -457,41 +458,41 @@ WatermarkPanel::WatermarkPanel(Actions actions) : actions_(std::move(actions)) {
   };
   text_.items = {L"DRAFT", L"CONFIDENTIAL", L"DO NOT COPY", L"SAMPLE", L"URGENT", L"ASAP"};
   text_.autoComplete = false;
-  text_.label = L"Text";
+  text_.label = T(L"Text");
   text_.onCommit = [this](const std::wstring&, int) { ApplyText(); };
   font_.items = {L"Calibri", L"Arial", L"Times New Roman", L"Segoe UI", L"Georgia", L"Verdana"};
   font_.autoComplete = true;
-  font_.label = L"Font";
+  font_.label = T(L"Font");
   font_.onCommit = [this](const std::wstring&, int) { ApplyText(); };
-  color_.label = L"Color";
+  color_.label = T(L"Color");
   color_.color = Color(0xC0C0C0);
   color_.onChange = [this](D2D1_COLOR_F, bool) { ApplyText(); };
-  layout_.items = {L"Diagonal", L"Horizontal"};
-  layout_.label = L"Layout";
+  layout_.items = {T(L"Diagonal"), T(L"Horizontal")};
+  layout_.label = T(L"Layout");
   layout_.selected = 0;
   layout_.onChange = [this](int) { ApplyText(); };
-  look_.items = {L"Semitransparent", L"Solid"};
-  look_.label = L"Look";
+  look_.items = {T(L"Semitransparent"), T(L"Solid")};
+  look_.label = T(L"Look");
   look_.selected = 0;
   look_.onChange = [this](int) { ApplyText(); };
-  picture_.text = L"Choose picture…";
+  picture_.text = T(L"Choose picture…");
   picture_.glyph = icon::Picture;
-  picture_.label = L"Choose picture";
+  picture_.label = T(L"Choose picture");
   picture_.onInvoke = [this] {
     if (actions_.picture) actions_.picture(washOut_);
   };
-  washout_.items = {L"Washout", L"Original colors"};
-  washout_.label = L"Picture look";
+  washout_.items = {T(L"Washout"), T(L"Original colors")};
+  washout_.label = T(L"Picture look");
   washout_.selected = 0;
   washout_.onChange = [this](int i) { washOut_ = i == 0; };
-  remove_.text = L"Remove watermark";
+  remove_.text = T(L"Remove watermark");
   remove_.glyph = icon::Delete;
-  remove_.label = L"Remove watermark";
+  remove_.label = T(L"Remove watermark");
   remove_.onInvoke = [this] {
     if (actions_.remove) actions_.remove();
   };
-  rows_ = {{L"Watermark", nullptr}, {L"Kind", &kindBox_}, {L"Text", &text_},     {L"Font", &font_},
-           {L"Color", &color_},     {L"Layout", &layout_}, {L"Look", &look_},    {L"Picture", &washout_},
+  rows_ = {{T(L"Watermark"), nullptr}, {T(L"Kind"), &kindBox_}, {T(L"Text"), &text_},     {T(L"Font"), &font_},
+           {T(L"Color"), &color_},     {T(L"Layout"), &layout_}, {T(L"Look"), &look_},    {T(L"Picture"), &washout_},
            {L"", &picture_},        {L"", &remove_}};
 }
 
@@ -513,7 +514,7 @@ void WatermarkPanel::ApplyText() {
 void WatermarkPanel::Show(const fw::doc::edit::WatermarkInfo& info, bool editable) {
   using Kind = fw::doc::edit::WatermarkInfo::Kind;
   shown_ = editable;
-  why_ = editable ? L"" : L"This document can't be changed.";
+  why_ = editable ? L"" : T(L"This document can't be changed.");
   kind_ = info.kind;
   kindBox_.selected = static_cast<int>(info.kind);
   if (info.kind == Kind::Text) {

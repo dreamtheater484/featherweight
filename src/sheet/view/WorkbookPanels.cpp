@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "sheet/calc/Typing.h"
@@ -27,7 +28,7 @@ bool SameText(std::wstring_view a, std::wstring_view b) {
 // Row height and column width
 
 WorkbookView::SizePanel::SizePanel(WorkbookView& view) : v_(view) {
-  size_.label = L"Size";
+  size_.label = T(L"Size");
   size_.onChange = [this](double value) { v_.SetSizes(rows_, value); };
   size_.onEnter = [this] { v_.host_.ViewFocusPage(); };  // the panel stays open, as Format Cells
 }
@@ -43,8 +44,8 @@ std::vector<Control*> WorkbookView::SizePanel::Layout(const D2D1_RECT_F& body, f
 
 void WorkbookView::SizePanel::Draw(Canvas& c) {
   const Palette& p = theme::P();
-  c.Text(rows_ ? L"Height of the selected rows" : L"Width of the selected columns", labelRc_, p.textSecondary, 12 * ui_);
-  c.TextWrapped(rows_ ? L"In points. 0 hides the rows." : L"In characters of the default font. 0 hides the columns.",
+  c.Text(rows_ ? T(L"Height of the selected rows") : T(L"Width of the selected columns"), labelRc_, p.textSecondary, 12 * ui_);
+  c.TextWrapped(rows_ ? T(L"In points. 0 hides the rows.") : T(L"In characters of the default font. 0 hides the columns."),
                 noteRc_, p.textSecondary, 12 * ui_, 2);
   if (focusWanted_) {
     size_.TakeFocus();
@@ -67,15 +68,15 @@ void WorkbookView::SizePanel::Open(bool rows) {
 // Go to
 
 WorkbookView::GoToPanel::GoToPanel(WorkbookView& view) : v_(view) {
-  ref_.label = L"Reference";
-  ref_.tooltip = L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name; a new name names the selection";
+  ref_.label = T(L"Reference");
+  ref_.tooltip = T(L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name; a new name names the selection");
   ref_.onEnter = [this] {
     if (v_.GoTo(ref_.Text())) {
       note_.clear();
       v_.host_.ViewShowPanel(nullptr);
       v_.host_.ViewFocusPage();
     } else {
-      note_ = L"There's no cell, range or name like that.";
+      note_ = T(L"There's no cell, range or name like that.");
       v_.host_.ViewInvalidate();
     }
   };
@@ -92,8 +93,8 @@ std::vector<Control*> WorkbookView::GoToPanel::Layout(const D2D1_RECT_F& body, f
 
 void WorkbookView::GoToPanel::Draw(Canvas& c) {
   const Palette& p = theme::P();
-  c.Text(L"Reference or name", labelRc_, p.textSecondary, 12 * ui_);
-  c.TextWrapped(note_.empty() ? L"Enter goes there." : note_, noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 2);
+  c.Text(T(L"Reference or name"), labelRc_, p.textSecondary, 12 * ui_);
+  c.TextWrapped(note_.empty() ? T(L"Enter goes there.") : note_, noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 2);
   if (focusWanted_) {
     ref_.TakeFocus();
     focusWanted_ = false;
@@ -166,8 +167,8 @@ void WorkbookView::ApplySize(bool rows, uint32_t first, uint32_t last, double va
 
 void WorkbookView::SetSizes(bool rows, double value) {
   const Range sel = Selected();
-  if (rows) ApplySize(true, sel.firstRow, sel.lastRow, value, u"Row Height");
-  else ApplySize(false, sel.firstCol, sel.lastCol, FileWidth(value), u"Column Width");
+  if (rows) ApplySize(true, sel.firstRow, sel.lastRow, value, T(u"Row Height"));
+  else ApplySize(false, sel.firstCol, sel.lastCol, FileWidth(value), T(u"Column Width"));
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +228,8 @@ void WorkbookView::FinishSizing() {
     first = sel.firstCol;
     last = sel.lastCol;
   }
-  if (e.rows) ApplySize(true, first, last, px * 0.75, u"Row Height");
-  else ApplySize(false, first, last, FileWidth(DisplayWidth(px)), u"Column Width");
+  if (e.rows) ApplySize(true, first, last, px * 0.75, T(u"Row Height"));
+  else ApplySize(false, first, last, FileWidth(DisplayWidth(px)), T(u"Column Width"));
 }
 
 void WorkbookView::FitAtEdge(const SizeEdge& e) {
@@ -283,7 +284,7 @@ void WorkbookView::AutoFit(bool rows, uint32_t first, uint32_t last, const Range
   });
   text_->Clear();  // laid out at other widths
   const int sheet = static_cast<int>(sheet_);
-  edit::EditGroup group(Ed(), rows ? u"AutoFit Row Height" : u"AutoFit Column Width");
+  edit::EditGroup group(Ed(), rows ? T(u"AutoFit Row Height") : T(u"AutoFit Column Width"));
   const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   edit::Result res;
   for (uint32_t i = first; i <= last && res; ++i) {
@@ -318,12 +319,12 @@ void WorkbookView::DrawSizeGuide(gfx::Canvas& c) {
   D2D1_POINT_2F at{};
   if (e.rows) {
     c.Fill({rowHeader_.left, to - 0.5f * u, cells_.right, to + 0.5f * u}, p.text);
-    label = L"Height: " + FormatGeneral(px * 0.75, 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
+    label = T(L"Height: ") + FormatGeneral(px * 0.75, 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
     at = {rowHeader_.right + 4 * u, to - 26 * u};
   } else {
     const float x = Mirror(to);
     c.Fill({x - 0.5f * u, colHeader_.top, x + 0.5f * u, cells_.bottom}, p.text);
-    label = L"Width: " + FormatGeneral(DisplayWidth(px), 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
+    label = T(L"Width: ") + FormatGeneral(DisplayWidth(px), 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
     at = {x + 4 * u, colHeader_.top - 24 * u};
   }
   const float size = 12 * u, pad = 6 * u;

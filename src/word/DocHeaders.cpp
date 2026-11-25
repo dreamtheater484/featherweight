@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Inline.h"
@@ -140,12 +141,12 @@ std::wstring DocView::HeaderFooterLabel(int page, bool footer) const {
   const layout::Page& p = pagination_->GetPage(page);
   const bool first = page == 0 || pagination_->GetPage(page - 1).section != p.section;
   const HdrFtrType type = edit::PageType(*doc_, p.section, first, p.number);
-  std::wstring label = type == HdrFtrType::First ? L"First page "
-                       : type == HdrFtrType::Even ? L"Even page "
-                       : doc_->Settings().evenAndOddHeaders ? L"Odd page "
+  std::wstring label = type == HdrFtrType::First ? T(L"First page ")
+                       : type == HdrFtrType::Even ? T(L"Even page ")
+                       : doc_->Settings().evenAndOddHeaders ? T(L"Odd page ")
                                                             : L"";
-  label += footer ? (label.empty() ? L"Footer" : L"footer") : (label.empty() ? L"Header" : L"header");
-  if (doc_->Sections().size() > 1) label += L" – Section " + std::to_wstring(p.section + 1);
+  label += footer ? (label.empty() ? T(L"Footer") : L"footer") : (label.empty() ? T(L"Header") : L"header");
+  if (doc_->Sections().size() > 1) label += T(L" – Section ") + std::to_wstring(p.section + 1);
   return label;
 }
 
@@ -174,7 +175,7 @@ void DocView::DrawHeaderFooterMode(Canvas& c, int page) {
     c.FillRound(box, 3 * u, pal.accent);
     c.Text(label, RectF(box.left + 6 * u, box.top, box.right, box.bottom), pal.onAccent, 11 * u);
     if (p.section > 0 && edit::LinkedToPrevious(*doc_, p.section, footer, hf_->type)) {
-      const std::wstring same = L"Same as previous";
+      const std::wstring same = T(L"Same as previous");
       const float sw = c.MeasureText(same, 11 * u) + 12 * u;
       const D2D1_RECT_F sb = RectF(line.right - 8 * u - sw, top, line.right - 8 * u, top + h);
       c.FillRound(sb, 3 * u, pal.accent);
@@ -295,35 +296,35 @@ std::optional<CommandState> DocView::QueryD3(int cmd) {
   CommandState s;
   const bool edit = Editing();
   switch (cmd) {
-    case CmdEditHeader: s = {edit && !hf_, false}; s.label = L"Edit header"; break;
-    case CmdEditFooter: s = {edit && !hf_, false}; s.label = L"Edit footer"; break;
-    case CmdCloseHeaderFooter: s = {edit && hf_.has_value(), false}; s.label = L"Close header and footer"; s.shortcut = L"Esc"; break;
+    case CmdEditHeader: s = {edit && !hf_, false}; s.label = T(L"Edit header"); break;
+    case CmdEditFooter: s = {edit && !hf_, false}; s.label = T(L"Edit footer"); break;
+    case CmdCloseHeaderFooter: s = {edit && hf_.has_value(), false}; s.label = T(L"Close header and footer"); s.shortcut = L"Esc"; break;
     case CmdDifferentFirstPage:
       s = {edit && hf_.has_value(), hf_ && edit::DifferentFirstPage(*doc_, hf_->section)};
-      s.label = L"Different first page";
+      s.label = T(L"Different first page");
       break;
     case CmdDifferentOddEven:
       s = {edit && hf_.has_value(), doc_ && doc_->Settings().evenAndOddHeaders};
-      s.label = L"Different odd and even pages";
+      s.label = T(L"Different odd and even pages");
       break;
     case CmdLinkToPrevious:
       s = {edit && hf_ && hf_->section > 0, hf_ && edit::LinkedToPrevious(*doc_, hf_->section, hf_->footer, hf_->type)};
-      s.label = L"Link to previous";
+      s.label = T(L"Link to previous");
       break;
-    case CmdPageNumber: s = {edit, false}; s.label = L"Page numbers…"; break;
+    case CmdPageNumber: s = {edit, false}; s.label = T(L"Page numbers…"); break;
     case CmdInsertLink:
       s = {edit, false};
-      s.label = edit && edit::LinkAt(*doc_, ToDoc(focus_)) ? L"Edit link…" : L"Insert link…";
+      s.label = edit && edit::LinkAt(*doc_, ToDoc(focus_)) ? T(L"Edit link…") : T(L"Insert link…");
       s.shortcut = L"Ctrl+K";
       break;
-    case CmdRemoveLink: s = {edit && edit::LinkAt(*doc_, ToDoc(focus_)).has_value(), false}; s.label = L"Remove link"; break;
-    case CmdOpenLink: s = {Ready() && doc_ && edit::LinkAt(*doc_, ToDoc(focus_)).has_value(), false}; s.label = L"Open link"; break;
-    case CmdBookmark: s = {edit, false}; s.label = L"Bookmarks…"; s.shortcut = L"Ctrl+Shift+F5"; break;
+    case CmdRemoveLink: s = {edit && edit::LinkAt(*doc_, ToDoc(focus_)).has_value(), false}; s.label = T(L"Remove link"); break;
+    case CmdOpenLink: s = {Ready() && doc_ && edit::LinkAt(*doc_, ToDoc(focus_)).has_value(), false}; s.label = T(L"Open link"); break;
+    case CmdBookmark: s = {edit, false}; s.label = T(L"Bookmarks…"); s.shortcut = L"Ctrl+Shift+F5"; break;
     case CmdNavigationPane:
       s = {Ready(), navPanel_ && host_.ViewShownPanel() == navPanel_.get()};
-      s.label = L"Navigation pane";
+      s.label = T(L"Navigation pane");
       break;
-    case CmdShowMarks: s = {Ready(), marks_}; s.label = L"Show formatting marks"; s.shortcut = L"Ctrl+Shift+8"; break;
+    case CmdShowMarks: s = {Ready(), marks_}; s.label = T(L"Show formatting marks"); s.shortcut = L"Ctrl+Shift+8"; break;
     default: return std::nullopt;
   }
   return s;
@@ -408,13 +409,13 @@ void DocView::FillD3Menu(HMENU m, int x, int y) {
   if (Editing()) {
     const bool link = edit::LinkAt(*doc_, ToDoc(focus_)).has_value();
     if (link) {
-      AppendItem(m, CmdInsertLink, L"Edit link…\tCtrl+K");
-      AppendItem(m, CmdOpenLink, L"Open link");
-      AppendItem(m, CmdRemoveLink, L"Remove link");
+      AppendItem(m, CmdInsertLink, T(L"Edit link…\tCtrl+K"));
+      AppendItem(m, CmdOpenLink, T(L"Open link"));
+      AppendItem(m, CmdRemoveLink, T(L"Remove link"));
     } else {
-      AppendItem(m, CmdInsertLink, L"Link…\tCtrl+K");
+      AppendItem(m, CmdInsertLink, T(L"Link…\tCtrl+K"));
     }
-    if (hf_) AppendItem(m, CmdCloseHeaderFooter, L"Close header and footer\tEsc");
+    if (hf_) AppendItem(m, CmdCloseHeaderFooter, T(L"Close header and footer\tEsc"));
     AppendSeparator(m);
   }
 }

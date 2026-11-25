@@ -4,6 +4,7 @@
 #include <charconv>
 #include <string>
 
+#include "core/Lang.h"
 #include "doc/edit/Inline.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
@@ -44,14 +45,14 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  const std::u16string what = endnote ? u"An endnote" : u"A footnote";
+  const std::u16string what = endnote ? T(u"An endnote") : T(u"A footnote");
   if (at.para >= doc.Paragraphs().size() || at.offset > doc.Para(at.para).text.size())
-    return Fail(u"That place isn't in the document.");
+    return Fail(T(u"That place isn't in the document."));
   if (doc.Para(at.para).story != doc.MainStory())
-    return Fail(what + u" goes in the document's text, not in a header, a footer, a note, a comment or a text box.");
-  if (InsideField(doc, at)) return Fail(what + u" can't go inside a field.");
+    return Fail(what + T(u" goes in the document's text, not in a header, a footer, a note, a comment or a text box."));
+  if (InsideField(doc, at)) return Fail(what + T(u" can't go inside a field."));
   const StoryKind kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
-  const std::u16string name = endnote ? u"Endnote" : u"Footnote";
+  const std::u16string name = endnote ? T(u"Endnote") : T(u"Footnote");
   const std::string tag = endnote ? "endnote" : "footnote";
 
   TreeEdit parts(editor, at);
@@ -63,9 +64,9 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const std::string id = NewId(doc, kind);
   Result r = editor.InsertRuns(at, "<w:r><w:" + tag + "Reference w:id=\"" + id + "\"/></w:r>", name);
   if (!r) return r;
-  if (parts.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
+  if (parts.EnsurePart(PartKind::Styles) == kNoElem) return Fail(T(u"This document's styles can't change."));
   const ElemId root = parts.EnsurePart(endnote ? PartKind::Endnotes : PartKind::Footnotes);
-  if (root == kNoElem) return Fail(what + u" can't be added to this document.");
+  if (root == kNoElem) return Fail(what + T(u" can't be added to this document."));
 
   // Then the styles, the reference's, and the note, its paragraph after every other: the caret goes
   // after its number and space. The notes after it number again from the reference's page.
@@ -84,12 +85,12 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const uint32_t story = te.AddNote(root, endnote, id, textStyle, markStyle);
   if (story == kNone) {
     te.Abort();
-    return Fail(what + u" can't be added to this document.");
+    return Fail(what + T(u" can't be added to this document."));
   }
   te.Commit();
   if (!te.Refused().empty()) return Fail(te.Refused());
   const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
-  if (paras.empty()) return Fail(what + u" can't be added to this document.");
+  if (paras.empty()) return Fail(what + T(u" can't be added to this document."));
   group.done = true;
   Result out;
   out.caret = {paras.front(), std::min<uint32_t>(2, static_cast<uint32_t>(doc.Para(paras.front()).text.size()))};
@@ -138,11 +139,11 @@ Result DeleteNote(Editor& editor, uint32_t story) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   if (story >= doc.Stories().size() || !IsNote(doc.Stories()[story].kind) || doc.Stories()[story].root == kNoElem)
-    return Fail(u"There's no note here.");
+    return Fail(T(u"There's no note here."));
   // Through its reference: a note the text doesn't refer to (Word's separators, which settings.xml
   // names) isn't one a person can reach, and stays (torture finding 34).
   std::optional<Pos> ref = NoteReference(doc, story);
-  if (!ref) return Fail(u"This note isn't referred to in the text, so it can't be deleted.");
+  if (!ref) return Fail(T(u"This note isn't referred to in the text, so it can't be deleted."));
   Result r = editor.Delete(*ref, {ref->para, ref->offset + 1});
   if (r) r.caret = *ref;
   return r;

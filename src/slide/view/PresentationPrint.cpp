@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Pdf.h"
@@ -115,7 +116,7 @@ PrintOutcome PresentationView::Print(HWND owner, const std::function<void(int, i
   if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT || !pd.hDevNames) {
     cleanup();
     if (FAILED(hr)) {
-      message = L"The print dialog couldn’t be opened. Is a printer installed?";
+      message = T(L"The print dialog couldn’t be opened. Is a printer installed?");
       return PrintOutcome::Failed;
     }
     return PrintOutcome::Cancelled;
@@ -147,7 +148,7 @@ PrintOutcome PresentationView::PrintToFile(const std::wstring& path, std::wstrin
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {
-    message = L"Couldn't create " + path;
+    message = T(L"Couldn't create ") + path;
     return PrintOutcome::Failed;
   }
   return PrintTo(L"Microsoft Print to PDF", nullptr, {-1}, stream.Get(), {}, message);
@@ -165,7 +166,7 @@ PrintOutcome PresentationView::PrintTo(const std::wstring& printer, const DEVMOD
       if (s >= 0 && static_cast<size_t>(s) < SlideCount()) slides.push_back(static_cast<size_t>(s));
   }
   if (slides.empty()) {
-    message = L"There are no slides to print. Hidden slides print when Print hidden slides is on.";
+    message = T(L"There are no slides to print. Hidden slides print when Print hidden slides is on.");
     return PrintOutcome::Failed;
   }
   const draw::Size slide = deck_->SlideSize();
@@ -188,17 +189,17 @@ PrintOutcome PresentationView::PrintTo(const std::wstring& printer, const DEVMOD
   }
   if (SUCCEEDED(hr)) hr = job.Finish();
   if (FAILED(hr)) {
-    message = L"Printing stopped because the printer reported an error.";
+    message = T(L"Printing stopped because the printer reported an error.");
     return PrintOutcome::Failed;
   }
   switch (job.Wait(120000)) {
-    case draw::PrintJob::Outcome::Canceled: message = L"Printing was canceled."; return PrintOutcome::Cancelled;
+    case draw::PrintJob::Outcome::Canceled: message = T(L"Printing was canceled."); return PrintOutcome::Cancelled;
     case draw::PrintJob::Outcome::Failed:
-      message = L"Printing stopped because the printer reported an error.";
+      message = T(L"Printing stopped because the printer reported an error.");
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? L"Sent 1 page to the printer" : L"Sent " + std::to_wstring(done) + L" pages to the printer";
+  message = done == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(done) + T(L" pages to the printer");
   return PrintOutcome::Printed;
 }
 
@@ -210,7 +211,7 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
   if (!CanExportPdf()) return false;
   const std::vector<PrintPage> pages = Pages(deck_->SlideSize(), deck_->NotesSize());
   if (pages.empty()) {
-    message = L"There are no slides to export. Hidden slides export when Print hidden slides is on.";
+    message = T(L"There are no slides to export. Hidden slides export when Print hidden slides is on.");
     return false;
   }
   draw::PdfDocument pdf;
@@ -244,11 +245,11 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
   pdf.SetInfo(std::u16string(title.begin(), title.end()), u"");
   const std::vector<uint8_t> bytes = pdf.Finish();
   if (!util::WriteFileAtomic(path, std::string(bytes.begin(), bytes.end()))) {
-    message = L"The PDF couldn't be saved.";
+    message = T(L"The PDF couldn't be saved.");
     return false;
   }
-  message = pages.size() == 1 ? L"Exported 1 page to " + FileNameOf(path)
-                              : L"Exported " + std::to_wstring(pages.size()) + L" pages to " + FileNameOf(path);
+  message = pages.size() == 1 ? T(L"Exported 1 page to ") + FileNameOf(path)
+                              : T(L"Exported ") + std::to_wstring(pages.size()) + L" pages to " + FileNameOf(path);
   return true;
 }
 
@@ -288,7 +289,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
         96.f, 96.f);
     if (FAILED(gfx::WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) ||
         FAILED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc))) {
-      fail(L"has no bitmap to draw on");
+      fail(T(L"has no bitmap to draw on"));
       continue;
     }
     const HRESULT drawn = draw::DrawFrame(dc.Get(), [&](bool fallback) {
@@ -300,7 +301,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
       PaintPage(*deck_, page, print_, PageFonts(), painter);
     });
     if (FAILED(drawn)) {
-      fail(L"failed to draw");
+      fail(T(L"failed to draw"));
       continue;
     }
     const std::wstring file = dir + L"\\page-" + std::to_wstring(number) + L".png";
@@ -312,7 +313,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
         FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
         FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
         FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
-      fail(L"couldn't be written");
+      fail(T(L"couldn't be written"));
       continue;
     }
     ++written;

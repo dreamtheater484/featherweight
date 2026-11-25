@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Case.h"
 #include "draw/Xml.h"
@@ -141,24 +142,24 @@ std::string SizeValue(float points) { return std::to_string(std::lround(std::cla
 }  // namespace
 
 bool Bold(TextSession& s, bool on) {
-  return Runs(s, u"Bold", [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "b", on ? "1" : "0"); });
+  return Runs(s, ::T(u"Bold"), [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "b", on ? "1" : "0"); });
 }
 
 bool Italic(TextSession& s, bool on) {
-  return Runs(s, u"Italic", [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "i", on ? "1" : "0"); });
+  return Runs(s, ::T(u"Italic"), [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "i", on ? "1" : "0"); });
 }
 
 bool Underline(TextSession& s, bool on) {
-  return Runs(s, u"Underline", [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "u", on ? "sng" : "none"); });
+  return Runs(s, ::T(u"Underline"), [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "u", on ? "sng" : "none"); });
 }
 
 bool Strike(TextSession& s, bool on) {
-  return Runs(s, u"Strikethrough",
+  return Runs(s, ::T(u"Strikethrough"),
               [on](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "strike", on ? "sngStrike" : "noStrike"); });
 }
 
 bool Baseline(TextSession& s, int which) {
-  return Runs(s, which > 0 ? u"Superscript" : which < 0 ? u"Subscript" : u"Baseline", [which](TextDoc&, pugi::xml_node r, const RunProps&) {
+  return Runs(s, which > 0 ? ::T(u"Superscript") : which < 0 ? ::T(u"Subscript") : ::T(u"Baseline"), [which](TextDoc&, pugi::xml_node r, const RunProps&) {
     if (which == 0) r.remove_attribute("baseline");
     else Set(r, "baseline", which > 0 ? "30000" : "-25000");
   });
@@ -166,11 +167,11 @@ bool Baseline(TextSession& s, int which) {
 
 bool Size(TextSession& s, float points) {
   if (!(points >= 1 && points <= 4000)) return false;
-  return Runs(s, u"Font Size", [points](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "sz", SizeValue(points)); });
+  return Runs(s, ::T(u"Font Size"), [points](TextDoc&, pugi::xml_node r, const RunProps&) { Set(r, "sz", SizeValue(points)); });
 }
 
 bool Grow(TextSession& s, bool grow, bool step) {
-  return Runs(s, grow ? u"Increase Font Size" : u"Decrease Font Size", [grow, step](TextDoc&, pugi::xml_node r, const RunProps& now) {
+  return Runs(s, grow ? ::T(u"Increase Font Size") : ::T(u"Decrease Font Size"), [grow, step](TextDoc&, pugi::xml_node r, const RunProps& now) {
     float next = now.size;
     if (step) {
       next = std::clamp(now.size + (grow ? 1.f : -1.f), 1.f, 4000.f);
@@ -197,7 +198,7 @@ bool Grow(TextSession& s, bool grow, bool step) {
 bool Font(TextSession& s, const std::wstring& typeface) {
   if (typeface.empty()) return false;
   const std::string face = WideToUtf8(typeface);
-  return Runs(s, u"Font", [&face](TextDoc& d, pugi::xml_node r, const RunProps&) {
+  return Runs(s, ::T(u"Font"), [&face](TextDoc& d, pugi::xml_node r, const RunProps&) {
     // The face's own description (panose, charset) belongs to the old one.
     if (pugi::xml_node old = d.RunChild(r, "latin", false)) r.remove_child(old);
     d.RunChild(r, "latin", true).append_attribute("typeface") = face.c_str();
@@ -205,7 +206,7 @@ bool Font(TextSession& s, const std::wstring& typeface) {
 }
 
 bool Color(TextSession& s, const std::optional<draw::Color>& color) {
-  return Runs(s, u"Font Color", [&color](TextDoc& d, pugi::xml_node r, const RunProps&) {
+  return Runs(s, ::T(u"Font Color"), [&color](TextDoc& d, pugi::xml_node r, const RunProps&) {
     TextDoc::RemoveFills(r);
     if (!color) return;
     pugi::xml_node fill = d.RunChild(r, "solidFill", true);
@@ -214,7 +215,7 @@ bool Color(TextSession& s, const std::optional<draw::Color>& color) {
 }
 
 bool Highlight(TextSession& s, const std::optional<draw::Color>& color) {
-  return Runs(s, u"Highlight", [&color](TextDoc& d, pugi::xml_node r, const RunProps&) {
+  return Runs(s, ::T(u"Highlight"), [&color](TextDoc& d, pugi::xml_node r, const RunProps&) {
     if (pugi::xml_node old = d.RunChild(r, "highlight", false)) r.remove_child(old);
     if (!color) return;
     d.RunChild(r, "highlight", true).append_child((d.Prefix() + "srgbClr").c_str()).append_attribute("val") = Hex(*color).c_str();
@@ -222,7 +223,7 @@ bool Highlight(TextSession& s, const std::optional<draw::Color>& color) {
 }
 
 bool ClearCharacter(TextSession& s) {
-  return Runs(s, u"Clear Formatting", [](TextDoc&, pugi::xml_node r, const RunProps&) {
+  return Runs(s, ::T(u"Clear Formatting"), [](TextDoc&, pugi::xml_node r, const RunProps&) {
     for (pugi::xml_attribute a = r.first_attribute(); a;) {
       pugi::xml_attribute next = a.next_attribute();
       const std::string_view k = a.name();
@@ -245,7 +246,7 @@ bool ChangeCase(TextSession& s) {
   const std::wstring all = s.Doc().Text(from, to);
   const fw::doc::edit::TextCase c = fw::doc::edit::NextCase(std::u16string(all.begin(), all.end()));
   const TextPos caret = s.Caret(), anchor = s.Anchor();
-  const bool ok = s.Edit(u"Change Case", [&](TextDoc& d) {
+  const bool ok = s.Edit(::T(u"Change Case"), [&](TextDoc& d) {
     bool changed = false;
     for (uint32_t p = from.para; p <= to.para; ++p) {
       const uint32_t a = p == from.para ? from.offset : 0, b = p == to.para ? to.offset : d.Length(p);
@@ -263,7 +264,7 @@ bool ChangeCase(TextSession& s) {
 
 bool ApplyLook(TextSession& s, pugi::xml_node look) {
   if (!look) return false;
-  return Runs(s, u"Paste Formatting", [look](TextDoc&, pugi::xml_node r, const RunProps&) {
+  return Runs(s, ::T(u"Paste Formatting"), [look](TextDoc&, pugi::xml_node r, const RunProps&) {
     // The look comes over; the text keeps its links.
     std::vector<pugi::xml_node> keep;
     for (pugi::xml_node c = r.first_child(); c; c = c.next_sibling())
@@ -309,7 +310,7 @@ bool Align(TextSession& s, TextAlign align) {
                   : align == TextAlign::Justify ? "just"
                   : align == TextAlign::Distributed ? "dist"
                                                     : "l";
-  return s.FormatParagraphs(u"Alignment", [v](TextDoc&, pugi::xml_node p) { Set(p, "algn", v); });
+  return s.FormatParagraphs(::T(u"Alignment"), [v](TextDoc&, pugi::xml_node p) { Set(p, "algn", v); });
 }
 
 namespace {
@@ -328,7 +329,7 @@ void ClearBulletKinds(TextDoc& d, pugi::xml_node pPr) {
 
 bool List(TextSession& s, bool on, bool numbers) {
   const uint32_t first = s.SelFrom().para, last = s.SelTo().para;
-  return s.Edit(numbers ? u"Numbering" : u"Bullets", [&](TextDoc& d) {
+  return s.Edit(numbers ? ::T(u"Numbering") : ::T(u"Bullets"), [&](TextDoc& d) {
     if (!on) {
       // PowerPoint's way: no bullet, and no hanging indent left for it.
       d.EditParagraphs(first, last, [&](pugi::xml_node pPr) {
@@ -376,15 +377,15 @@ bool List(TextSession& s, bool on, bool numbers) {
 }  // namespace
 
 bool LineSpacing(TextSession& s, float multiple) {
-  return s.FormatParagraphs(u"Line Spacing", [multiple](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "lnSpc", true, multiple); });
+  return s.FormatParagraphs(::T(u"Line Spacing"), [multiple](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "lnSpc", true, multiple); });
 }
 
 bool SpaceBefore(TextSession& s, float points) {
-  return s.FormatParagraphs(u"Paragraph Spacing", [points](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "spcBef", false, points); });
+  return s.FormatParagraphs(::T(u"Paragraph Spacing"), [points](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "spcBef", false, points); });
 }
 
 bool SpaceAfter(TextSession& s, float points) {
-  return s.FormatParagraphs(u"Paragraph Spacing", [points](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "spcAft", false, points); });
+  return s.FormatParagraphs(::T(u"Paragraph Spacing"), [points](TextDoc& d, pugi::xml_node p) { Spacing(d, p, "spcAft", false, points); });
 }
 
 bool Bullets(TextSession& s, bool on) { return List(s, on, false); }
@@ -392,7 +393,7 @@ bool Numbering(TextSession& s, bool on) { return List(s, on, true); }
 
 bool Level(TextSession& s, bool deeper) {
   const uint32_t first = s.SelFrom().para, last = s.SelTo().para;
-  return s.Edit(deeper ? u"Demote" : u"Promote", [&](TextDoc& d) {
+  return s.Edit(deeper ? ::T(u"Demote") : ::T(u"Promote"), [&](TextDoc& d) {
     bool changed = false;
     for (uint32_t p = first; p <= last && p < d.Resolved().paragraphs.size(); ++p) {
       const int level = d.Resolved().paragraphs[p].props.level;
@@ -471,7 +472,7 @@ bool SetLink(TextSession& s, const std::string& rel, bool slideJump, const std::
     s.Select(from, to);
   }
   const std::string tip = WideToUtf8(tooltip);
-  return s.FormatRuns(rel.empty() ? u"Remove Hyperlink" : u"Hyperlink", [&](TextDoc& d, pugi::xml_node r, const RunProps&) {
+  return s.FormatRuns(rel.empty() ? ::T(u"Remove Hyperlink") : ::T(u"Hyperlink"), [&](TextDoc& d, pugi::xml_node r, const RunProps&) {
     if (pugi::xml_node old = d.RunChild(r, "hlinkClick", false)) r.remove_child(old);
     if (rel.empty()) return;
     pugi::xml_node h = d.RunChild(r, "hlinkClick", true);

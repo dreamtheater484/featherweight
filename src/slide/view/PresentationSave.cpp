@@ -5,6 +5,7 @@
 
 #include <windows.h>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "slide/edit/Edit.h"
 #include "slide/edit/Journal.h"
@@ -17,12 +18,12 @@ namespace fw::slide::view {
 namespace {
 
 const SaveFormat kFormats[] = {
-    {L"PowerPoint presentation", L"*.pptx", L"pptx"},
-    {L"PowerPoint macro-enabled presentation", L"*.pptm", L"pptm"},
-    {L"PowerPoint template", L"*.potx", L"potx"},
-    {L"PowerPoint macro-enabled template", L"*.potm", L"potm"},
-    {L"PowerPoint slide show", L"*.ppsx", L"ppsx"},
-    {L"PowerPoint macro-enabled slide show", L"*.ppsm", L"ppsm"},
+    {N_(L"PowerPoint presentation"), L"*.pptx", L"pptx"},
+    {N_(L"PowerPoint macro-enabled presentation"), L"*.pptm", L"pptm"},
+    {N_(L"PowerPoint template"), L"*.potx", L"potx"},
+    {N_(L"PowerPoint macro-enabled template"), L"*.potm", L"potm"},
+    {N_(L"PowerPoint slide show"), L"*.ppsx", L"ppsx"},
+    {N_(L"PowerPoint macro-enabled slide show"), L"*.ppsm", L"ppsm"},
 };
 
 }  // namespace
@@ -78,7 +79,7 @@ bool PresentationView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
   edit::Editor* ed = deck_->Editor();
   if (!ed) {
-    error = Title() + L" can't be saved.";
+    error = Title() + T(L" can't be saved.");
     return false;
   }
   // What is being typed is part of what's saved: notes still in the notes pane go to the slide (the

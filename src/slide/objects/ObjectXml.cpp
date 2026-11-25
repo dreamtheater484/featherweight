@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 
+#include "core/Lang.h"
 #include "draw/Xml.h"
 #include "slide/edit/TableGrid.h"
 
@@ -837,7 +838,7 @@ const std::vector<ShapePreset>& ShapeGallery() {
       {"star8", "Star: 8 Points"},
       {"wave", "Wave"},
       {"wedgeRectCallout", "Speech Bubble: Rectangle"},
-      {"wedgeRoundRectCallout", "Speech Bubble: Rectangle with Corners Rounded"},
+      {"wedgeRoundRectCallout", T("Speech Bubble: Rectangle with Corners Rounded")},
       {"wedgeEllipseCallout", "Speech Bubble: Oval"},
       {"cloudCallout", "Thought Bubble: Cloud"},
   };

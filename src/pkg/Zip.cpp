@@ -8,6 +8,7 @@
 #include <numeric>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "pkg/Snapshot.h"
 
 namespace fw::pkg {
@@ -46,7 +47,7 @@ void Put64(std::string& s, uint64_t v) {
 }
 
 Status NotAZip() {
-  return Status::Fail(Status::Code::Damaged, "This isn't an Office file, or it's damaged: its zip structure can't be read.");
+  return Status::Fail(Status::Code::Damaged, T("This isn't an Office file, or it's damaged: its zip structure can't be read."));
 }
 
 Status DamagedEntry(const std::string& name) {
@@ -179,10 +180,10 @@ Status ZipReader::Open(const Snapshot& snapshot, const Limits& limits) {
     }
   }
   if (multiDisk)
-    return Status::Fail(Status::Code::Unsupported, "This file is split across several files, which Office files never are.");
+    return Status::Fail(Status::Code::Unsupported, T("This file is split across several files, which Office files never are."));
   if (count > limits.maxEntries)
-    return Status::Fail(Status::Code::TooLarge, "This file has more than " + std::to_string(limits.maxEntries) +
-                                                    " parts, which is more than Featherweight allows.");
+    return Status::Fail(Status::Code::TooLarge, T("This file has more than ") + std::to_string(limits.maxEntries) +
+                                                    T(" parts, which is more than Featherweight allows."));
   if (cdOffset > cdLimit || cdSize > cdLimit - cdOffset) return NotAZip();
 
   std::vector<uint8_t> cd;
@@ -221,32 +222,32 @@ Status ZipReader::Open(const Snapshot& snapshot, const Limits& limits) {
     p += 46 + nameLen + extraLen + commentLen;
 
     if (diskStart != 0 && diskStart != kMax16)
-      return Status::Fail(Status::Code::Unsupported, "This file is split across several files, which Office files never are.");
+      return Status::Fail(Status::Code::Unsupported, T("This file is split across several files, which Office files never are."));
     if (z.flags & (kFlagEncrypted | kFlagStrongEncryption))
       return Status::Fail(Status::Code::Unsupported,
-                          "This file uses zip encryption, which Office files never use. Featherweight can't open it.");
+                          T("This file uses zip encryption, which Office files never use. Featherweight can't open it."));
     if (z.method != 0 && z.method != 8)
       return Status::Fail(Status::Code::Unsupported,
-                          "Part " + z.name + " uses a kind of compression that Office files don't use.");
+                          "Part " + z.name + T(" uses a kind of compression that Office files don't use."));
     if (z.method == 0 && z.compressedSize != z.uncompressedSize) return DamagedEntry(z.name);
     if (z.uncompressedSize > limits.maxEntrySize)
-      return Status::Fail(Status::Code::TooLarge, "Part " + z.name + " unpacks to more than " +
+      return Status::Fail(Status::Code::TooLarge, "Part " + z.name + T(" unpacks to more than ") +
                                                       FormatBytes(limits.maxEntrySize) +
-                                                      ", which is more than Featherweight allows.");
+                                                      T(", which is more than Featherweight allows."));
     total += z.uncompressedSize;
     if (total > limits.maxTotalSize)
-      return Status::Fail(Status::Code::TooLarge, "This file unpacks to more than " + FormatBytes(limits.maxTotalSize) +
-                                                      ", which is more than Featherweight allows.");
+      return Status::Fail(Status::Code::TooLarge, T("This file unpacks to more than ") + FormatBytes(limits.maxTotalSize) +
+                                                      T(", which is more than Featherweight allows."));
     if (z.uncompressedSize > limits.ratioGraceSize &&
         z.uncompressedSize / std::max<uint64_t>(z.compressedSize, 1) > limits.maxCompressionRatio)
       return Status::Fail(Status::Code::TooLarge,
-                          "This file is packed far more tightly than real documents are, the way harmful files "
-                          "(\"zip bombs\") are made. Featherweight won't open it.");
+                          T("This file is packed far more tightly than real documents are, the way harmful files "
+                          "(\"zip bombs\") are made. Featherweight won't open it."));
     entries_.push_back(std::move(z));
   }
   for (const auto& z : entries_) {
     if (!names.insert(z.name).second)
-      return Status::Fail(Status::Code::Damaged, "This file contains two parts named " + z.name + ".");
+      return Status::Fail(Status::Code::Damaged, T("This file contains two parts named ") + z.name + ".");
   }
 
   // Local headers: each must agree with its central record, and say where the data starts.
@@ -303,8 +304,8 @@ Status ZipReader::Open(const Snapshot& snapshot, const Limits& limits) {
     uint64_t next = i + 1 < order.size() ? entries_[order[i + 1]].localOffset : cdOffset;
     if (end > next)
       return Status::Fail(Status::Code::Rejected,
-                          "This file's parts overlap each other, the way harmful files (\"zip bombs\") are made. "
-                          "Featherweight won't open it.");
+                          T("This file's parts overlap each other, the way harmful files (\"zip bombs\") are made. "
+                          "Featherweight won't open it."));
   }
   return Status{};
 }
@@ -390,7 +391,7 @@ bool ZipWriter::Put(const void* data, size_t size) {
 }
 
 static Status WriteFailed() {
-  return Status::Fail(Status::Code::IoError, "The file couldn't be written. The disk may be full.");
+  return Status::Fail(Status::Code::IoError, T("The file couldn't be written. The disk may be full."));
 }
 
 Status ZipWriter::CopyRaw(const ZipReader& reader, const ZipEntry& entry) {

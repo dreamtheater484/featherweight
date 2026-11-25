@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <unordered_map>
 
+#include "core/Lang.h"
 #include "pkg/XmlDom.h"
 #include "pkg/XmlPull.h"
 #include "pkg/XmlWriter.h"
@@ -184,7 +185,7 @@ std::unique_ptr<Package> Package::Open(std::unique_ptr<Snapshot> snapshot, const
     part.name = "/" + entries[i].name;
     part.entry = i;
     if (!pkg->index_.emplace(PartKey(part.name), pkg->parts_.size()).second) {
-      status = Status::Fail(Status::Code::Damaged, "This file contains two parts named " + entries[i].name + ".");
+      status = Status::Fail(Status::Code::Damaged, T("This file contains two parts named ") + entries[i].name + ".");
       return nullptr;
     }
     pkg->entryToPart_[i] = pkg->parts_.size();

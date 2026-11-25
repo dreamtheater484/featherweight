@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/Lang.h"
 #include "pkg/Formula.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Engine.h"
@@ -119,7 +120,7 @@ std::vector<NameRow> ListNames(const Workbook& book, WorkbookCalc& calc, const F
 }
 
 std::u16string CheckName(const Workbook& book, std::string_view name, int scope, std::string_view oldName) {
-  const std::u16string invalid = u"The name that you entered is not valid.";
+  const std::u16string invalid = T(u"The name that you entered is not valid.");
   if (name.empty() || name.size() > 255) return invalid;
   char first = name[0];
   if (!(AsciiLetter(first) || first == '_' || first == '\\' || static_cast<unsigned char>(first) >= 0x80)) return invalid;
@@ -130,7 +131,7 @@ std::u16string CheckName(const Workbook& book, std::string_view name, int scope,
   if (LooksLikeA1(name) || LooksLikeR1C1(name)) return invalid;
   if (!oldName.empty() && NameEqualsNoCase(name, oldName)) return {};
   for (const DefinedName& d : book.Names())
-    if (d.sheet == scope && NameEqualsNoCase(d.name, name)) return u"The name entered already exists. Enter a unique name.";
+    if (d.sheet == scope && NameEqualsNoCase(d.name, name)) return T(u"The name entered already exists. Enter a unique name.");
   return {};
 }
 

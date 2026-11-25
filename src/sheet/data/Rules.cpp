@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <random>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Formula.h"
 #include "pkg/XmlWriter.h"
@@ -530,28 +531,28 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region) {
   if (t == "cellIs") {
     static constexpr const wchar_t* kWords[] = {L"between", L"not between", L"=", L"<>", L">", L"<", L">=", L"<="};
     const CfOp op = OpOf(AttrOf(r, "operator"));
-    std::wstring s = L"Cell Value " + std::wstring(kWords[static_cast<size_t>(op)]) + L" " + formula(0);
+    std::wstring s = T(L"Cell Value ") + std::wstring(kWords[static_cast<size_t>(op)]) + L" " + formula(0);
     if (op == CfOp::Between || op == CfOp::NotBetween) s += L" and " + formula(1);
     return s;
   }
   if (t == "expression") return L"Formula: =" + formula(0);
   const std::wstring text = Utf8ToWide(AttrOf(r, "text"));
-  if (t == "containsText") return L"Cell Value contains \"" + text + L"\"";
-  if (t == "notContainsText") return L"Cell Value does not contain \"" + text + L"\"";
-  if (t == "beginsWith") return L"Cell Value begins with \"" + text + L"\"";
-  if (t == "endsWith") return L"Cell Value ends with \"" + text + L"\"";
+  if (t == "containsText") return T(L"Cell Value contains \"") + text + L"\"";
+  if (t == "notContainsText") return T(L"Cell Value does not contain \"") + text + L"\"";
+  if (t == "beginsWith") return T(L"Cell Value begins with \"") + text + L"\"";
+  if (t == "endsWith") return T(L"Cell Value ends with \"") + text + L"\"";
   if (t == "timePeriod") {
     static constexpr const char* kPeriods[] = {"yesterday", "today",    "tomorrow",  "last7Days", "lastWeek",
                                                "thisWeek",  "nextWeek", "lastMonth", "thisMonth", "nextMonth"};
     const std::string p = AttrOf(r, "timePeriod");
     for (size_t i = 0; i < std::size(kPeriods); ++i)
-      if (p == kPeriods[i]) return kCfPeriods[i];
-    return L"A date occurring";
+      if (p == kPeriods[i]) return std::wstring(kCfPeriods[i]);
+    return T(L"A date occurring");
   }
-  if (t == "duplicateValues") return L"Duplicate Values";
-  if (t == "uniqueValues") return L"Unique Values";
+  if (t == "duplicateValues") return T(L"Duplicate Values");
+  if (t == "uniqueValues") return T(L"Unique Values");
   if (t == "top10") {
-    std::wstring s = BoolOf(r, "bottom", false) ? L"Bottom " : L"Top ";
+    std::wstring s = BoolOf(r, "bottom", false) ? T(L"Bottom ") : T(L"Top ");
     s += Utf8ToWide(AttrOf(r, "rank").empty() ? std::string("10") : AttrOf(r, "rank"));
     if (BoolOf(r, "percent", false)) s += L"%";
     return s;
@@ -559,16 +560,16 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region) {
   if (t == "aboveAverage") {
     const bool above = BoolOf(r, "aboveAverage", true), equal = BoolOf(r, "equalAverage", false);
     const std::string sd = AttrOf(r, "stdDev");
-    if (!sd.empty()) return Utf8ToWide(sd) + (above ? L" std dev above Average" : L" std dev below Average");
-    return std::wstring(above ? L"Above Average" : L"Below Average") + (equal ? L" or equal" : L"");
+    if (!sd.empty()) return Utf8ToWide(sd) + (above ? T(L" std dev above Average") : T(L" std dev below Average"));
+    return std::wstring(above ? T(L"Above Average") : T(L"Below Average")) + (equal ? L" or equal" : L"");
   }
-  if (t == "colorScale") return L"Graded Color Scale";
-  if (t == "dataBar") return L"Data Bar";
-  if (t == "iconSet") return L"Icon Set";
-  if (t == "containsBlanks") return L"Blanks";
-  if (t == "notContainsBlanks") return L"No Blanks";
-  if (t == "containsErrors") return L"Errors";
-  if (t == "notContainsErrors") return L"No Errors";
+  if (t == "colorScale") return T(L"Graded Color Scale");
+  if (t == "dataBar") return T(L"Data Bar");
+  if (t == "iconSet") return T(L"Icon Set");
+  if (t == "containsBlanks") return T(L"Blanks");
+  if (t == "notContainsBlanks") return T(L"No Blanks");
+  if (t == "containsErrors") return T(L"Errors");
+  if (t == "notContainsErrors") return T(L"No Errors");
   return Utf8ToWide(t);
 }
 

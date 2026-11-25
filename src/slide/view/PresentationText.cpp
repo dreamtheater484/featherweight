@@ -9,6 +9,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "slide/view/Deck.h"
@@ -43,7 +44,7 @@ struct TextEditing::Hide : render::DrawFilter {
 class TextEditing::LinkPanel : public PanelContent {
  public:
   explicit LinkPanel(TextEditing& t);
-  std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
+  std::wstring Title() const override { return editing_ ? T(L"Edit link") : T(L"Insert link"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   void Open();
@@ -229,7 +230,7 @@ bool TextEditing::NextMisspelling(size_t slide, const std::function<void(size_t)
     spelling_ = std::make_unique<SlideSpelling>(*checker_);
   }
   if (!checker_->Available()) {
-    host_.ViewMessage(BannerKind::Info, L"Spelling can't be checked on this PC.");
+    host_.ViewMessage(BannerKind::Info, T(L"Spelling can't be checked on this PC."));
     return false;
   }
   // The texts in order, and where to start: the caret's text, else the current slide's first.
@@ -270,7 +271,7 @@ bool TextEditing::NextMisspelling(size_t slide, const std::function<void(size_t)
       return true;
     }
   }
-  host_.ViewMessage(BannerKind::Info, L"No spelling errors were found.");
+  host_.ViewMessage(BannerKind::Info, T(L"No spelling errors were found."));
   return false;
 }
 
@@ -282,9 +283,9 @@ bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size
   };
   if (op == L"edit") {
     Presentation* p = model_ ? model_->Deck() : nullptr;
-    if (!p || !deck_) return fail("text can't be edited in this deck");
+    if (!p || !deck_) return fail(T("text can't be edited in this deck"));
     const Slide* s = slide < p->SlideCount() ? p->GetSlide(slide) : nullptr;
-    if (!s) return fail("no such slide");
+    if (!s) return fail(T("no such slide"));
     const Shape* found = nullptr;
     std::vector<const Shape*> bodies;
     for (const Shape& sh : s->shapes) {
@@ -303,12 +304,12 @@ bool TextEditing::ScriptOp(const std::wstring& op, const std::wstring& arg, size
       const size_t want = arg == L"body" ? 0 : 1;
       if (want < bodies.size()) found = bodies[want];
     }
-    if (!found) return fail("no such placeholder on this slide");
-    if (!BeginTextEdit(slide, found->id)) return fail("its text can't be edited");
+    if (!found) return fail(T("no such placeholder on this slide"));
+    if (!BeginTextEdit(slide, found->id)) return fail(T("its text can't be edited"));
     return true;
   }
   if (op == L"fontsize" || op == L"fontcolor") {
-    if (!session_) return fail("no text is being edited");
+    if (!session_) return fail(T("no text is being edited"));
     bool ok = false;
     if (op == L"fontsize") {
       const float points = static_cast<float>(_wtof(arg.c_str()));
@@ -707,7 +708,7 @@ CommandState TextEditing::Query(int cmd) {
   CommandState s;
   if (cmd == CmdSpelling) {
     s.enabled = model_ != nullptr;
-    s.label = L"Spelling: next error";
+    s.label = T(L"Spelling: next error");
     s.shortcut = L"F7";
     return s;
   }
@@ -719,45 +720,45 @@ CommandState TextEditing::Query(int cmd) {
     s.shortcut = keys;
   };
   switch (cmd) {
-    case CmdBold: label(L"Bold", L"Ctrl+B"), s.checked = look.bold.value_or(false); break;
-    case CmdItalic: label(L"Italic", L"Ctrl+I"), s.checked = look.italic.value_or(false); break;
-    case CmdUnderline: label(L"Underline", L"Ctrl+U"), s.checked = look.underline.value_or(false); break;
-    case CmdStrike: label(L"Strikethrough", L""), s.checked = look.strike.value_or(false); break;
-    case CmdSuperscript: label(L"Superscript", L"Ctrl+Shift+="), s.checked = look.baseline > 0; break;
-    case CmdSubscript: label(L"Subscript", L"Ctrl+="), s.checked = look.baseline < 0; break;
-    case CmdGrowFont: label(L"Increase font size", L"Ctrl+Shift+>"); break;
-    case CmdShrinkFont: label(L"Decrease font size", L"Ctrl+Shift+<"); break;
-    case CmdGrowFontPoint: label(L"Increase font size by 1 point", L"Ctrl+]"); break;
-    case CmdShrinkFontPoint: label(L"Decrease font size by 1 point", L"Ctrl+["); break;
-    case CmdClearCharFormat: label(L"Clear formatting", L"Ctrl+Space"); break;
-    case CmdFontColor: label(L"Font color", L""); break;
-    case CmdHighlightColor: label(L"Highlight", L""); break;
-    case CmdCopyFormat: label(L"Copy formatting", L"Ctrl+Shift+C"); break;
-    case CmdPasteFormat: label(L"Paste formatting", L"Ctrl+Shift+V"), s.enabled = !copiedLook_.first_child().empty(); break;
-    case CmdFormatPainter: label(L"Format painter", L""), s.checked = painter_; break;
-    case CmdAlignLeft: label(L"Align left", L"Ctrl+L"), s.checked = look.align == TextAlign::Left; break;
-    case CmdAlignCenter: label(L"Center", L"Ctrl+E"), s.checked = look.align == TextAlign::Center; break;
-    case CmdAlignRight: label(L"Align right", L"Ctrl+R"), s.checked = look.align == TextAlign::Right; break;
-    case CmdAlignJustify: label(L"Justify", L"Ctrl+J"), s.checked = look.align == TextAlign::Justify; break;
-    case CmdSpacing1: label(L"Single line spacing", L"Ctrl+1"), s.checked = std::fabs(look.lineSpacing - 1) < 0.01f; break;
-    case CmdSpacing15: label(L"1.5 line spacing", L"Ctrl+5"), s.checked = std::fabs(look.lineSpacing - 1.5f) < 0.01f; break;
-    case CmdSpacing2: label(L"Double line spacing", L"Ctrl+2"), s.checked = std::fabs(look.lineSpacing - 2) < 0.01f; break;
-    case CmdBullets: label(L"Bullets", L"Ctrl+Shift+L"), s.checked = look.bullets; break;
-    case CmdNumbering: label(L"Numbering", L""), s.checked = look.numbering; break;
-    case CmdIndent: label(L"Increase list level", L"Alt+Shift+Right"), s.enabled = look.level < 8; break;
-    case CmdOutdent: label(L"Decrease list level", L"Alt+Shift+Left"), s.enabled = look.level > 0; break;
-    case CmdChangeCase: label(L"Change case", L"Shift+F3"); break;
-    case CmdInsertLink: label(look.link ? L"Edit link" : L"Link", L"Ctrl+K"); break;
-    case CmdRemoveLink: label(L"Remove link", L""), s.enabled = look.link; break;
-    case CmdCut: label(L"Cut", L"Ctrl+X"), s.enabled = session_ && session_->HasSelection(); break;
-    case CmdCopy: label(L"Copy", L"Ctrl+C"), s.enabled = session_ && session_->HasSelection(); break;
-    case CmdPaste: label(L"Paste", L"Ctrl+V"), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
-    case CmdPasteMerge: label(L"Paste as text", L""), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
-    case CmdSelectAll: label(L"Select all", L"Ctrl+A"); break;
-    case CmdFontBox: label(L"Font", L""); break;
-    case CmdSizeBox: label(L"Font size", L""); break;
-    case CmdSpellIgnore: label(L"Ignore all", L""), s.enabled = menuWord_.has_value(); break;
-    case CmdSpellAdd: label(L"Add to dictionary", L""), s.enabled = menuWord_.has_value(); break;
+    case CmdBold: label(T(L"Bold"), L"Ctrl+B"), s.checked = look.bold.value_or(false); break;
+    case CmdItalic: label(T(L"Italic"), L"Ctrl+I"), s.checked = look.italic.value_or(false); break;
+    case CmdUnderline: label(T(L"Underline"), L"Ctrl+U"), s.checked = look.underline.value_or(false); break;
+    case CmdStrike: label(T(L"Strikethrough"), L""), s.checked = look.strike.value_or(false); break;
+    case CmdSuperscript: label(T(L"Superscript"), L"Ctrl+Shift+="), s.checked = look.baseline > 0; break;
+    case CmdSubscript: label(T(L"Subscript"), L"Ctrl+="), s.checked = look.baseline < 0; break;
+    case CmdGrowFont: label(T(L"Increase font size"), L"Ctrl+Shift+>"); break;
+    case CmdShrinkFont: label(T(L"Decrease font size"), L"Ctrl+Shift+<"); break;
+    case CmdGrowFontPoint: label(T(L"Increase font size by 1 point"), L"Ctrl+]"); break;
+    case CmdShrinkFontPoint: label(T(L"Decrease font size by 1 point"), L"Ctrl+["); break;
+    case CmdClearCharFormat: label(T(L"Clear formatting"), L"Ctrl+Space"); break;
+    case CmdFontColor: label(T(L"Font color"), L""); break;
+    case CmdHighlightColor: label(T(L"Highlight"), L""); break;
+    case CmdCopyFormat: label(T(L"Copy formatting"), L"Ctrl+Shift+C"); break;
+    case CmdPasteFormat: label(T(L"Paste formatting"), L"Ctrl+Shift+V"), s.enabled = !copiedLook_.first_child().empty(); break;
+    case CmdFormatPainter: label(T(L"Format painter"), L""), s.checked = painter_; break;
+    case CmdAlignLeft: label(T(L"Align left"), L"Ctrl+L"), s.checked = look.align == TextAlign::Left; break;
+    case CmdAlignCenter: label(T(L"Center"), L"Ctrl+E"), s.checked = look.align == TextAlign::Center; break;
+    case CmdAlignRight: label(T(L"Align right"), L"Ctrl+R"), s.checked = look.align == TextAlign::Right; break;
+    case CmdAlignJustify: label(T(L"Justify"), L"Ctrl+J"), s.checked = look.align == TextAlign::Justify; break;
+    case CmdSpacing1: label(T(L"Single line spacing"), L"Ctrl+1"), s.checked = std::fabs(look.lineSpacing - 1) < 0.01f; break;
+    case CmdSpacing15: label(T(L"1.5 line spacing"), L"Ctrl+5"), s.checked = std::fabs(look.lineSpacing - 1.5f) < 0.01f; break;
+    case CmdSpacing2: label(T(L"Double line spacing"), L"Ctrl+2"), s.checked = std::fabs(look.lineSpacing - 2) < 0.01f; break;
+    case CmdBullets: label(T(L"Bullets"), L"Ctrl+Shift+L"), s.checked = look.bullets; break;
+    case CmdNumbering: label(T(L"Numbering"), L""), s.checked = look.numbering; break;
+    case CmdIndent: label(T(L"Increase list level"), L"Alt+Shift+Right"), s.enabled = look.level < 8; break;
+    case CmdOutdent: label(T(L"Decrease list level"), L"Alt+Shift+Left"), s.enabled = look.level > 0; break;
+    case CmdChangeCase: label(T(L"Change case"), L"Shift+F3"); break;
+    case CmdInsertLink: label(look.link ? T(L"Edit link") : T(L"Link"), L"Ctrl+K"); break;
+    case CmdRemoveLink: label(T(L"Remove link"), L""), s.enabled = look.link; break;
+    case CmdCut: label(T(L"Cut"), L"Ctrl+X"), s.enabled = session_ && session_->HasSelection(); break;
+    case CmdCopy: label(T(L"Copy"), L"Ctrl+C"), s.enabled = session_ && session_->HasSelection(); break;
+    case CmdPaste: label(T(L"Paste"), L"Ctrl+V"), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
+    case CmdPasteMerge: label(T(L"Paste as text"), L""), s.enabled = IsClipboardFormatAvailable(CF_UNICODETEXT) || util::UsingPrivateClipboard(); break;
+    case CmdSelectAll: label(T(L"Select all"), L"Ctrl+A"); break;
+    case CmdFontBox: label(T(L"Font"), L""); break;
+    case CmdSizeBox: label(T(L"Font size"), L""); break;
+    case CmdSpellIgnore: label(T(L"Ignore all"), L""), s.enabled = menuWord_.has_value(); break;
+    case CmdSpellAdd: label(T(L"Add to dictionary"), L""), s.enabled = menuWord_.has_value(); break;
     default:
       if (cmd >= CmdSpellSuggest && cmd < CmdSpellSuggest + static_cast<int>(suggestions_.size()))
         s.label = suggestions_[cmd - CmdSpellSuggest];
@@ -823,7 +824,7 @@ bool TextEditing::Execute(int cmd) {
     default:
       if (cmd >= CmdSpellSuggest && cmd < CmdSpellSuggest + static_cast<int>(suggestions_.size()) && menuWord_) {
         s.Select(menuWord_->first, menuWord_->second);
-        s.ReplaceSelection(suggestions_[cmd - CmdSpellSuggest], u"Spelling");
+        s.ReplaceSelection(suggestions_[cmd - CmdSpellSuggest], T(u"Spelling"));
         break;
       }
       return false;
@@ -836,7 +837,7 @@ void TextEditing::Copy(bool cut) {
   if (!session_ || !model_ || !session_->HasSelection()) return;
   const TextClipboard clip = CopySelection(*session_, *model_);
   util::SetClipboardText(clip.text, clip.rtf, clip.html);
-  if (cut) session_->ReplaceSelection({}, u"Cut");
+  if (cut) session_->ReplaceSelection({}, T(u"Cut"));
 }
 
 void TextEditing::Paste(bool textOnly) {
@@ -860,7 +861,7 @@ ToolItem TextEditing::Tool(int cmd) {
       if (DocFormat::FontsPending()) DocFormat::ReadFonts();
       t.kind = ToolKind::ComboBox;
       t.width = 116;
-      t.tooltip = L"Font";
+      t.tooltip = T(L"Font");
       t.enabled = session_ != nullptr;
       t.choices = DocFormat::FontNames();
       t.text = look ? look->font.value_or(L"") : L"";
@@ -872,7 +873,7 @@ ToolItem TextEditing::Tool(int cmd) {
     case CmdSizeBox:
       t.kind = ToolKind::ComboBox;
       t.width = 56;
-      t.tooltip = L"Font size";
+      t.tooltip = T(L"Font size");
       t.enabled = session_ != nullptr;
       for (int v : {8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96})
         t.choices.push_back(std::to_wstring(v));
@@ -900,7 +901,7 @@ ToolItem TextEditing::Tool(int cmd) {
       t.colors = true;
       const draw::Color last = font ? FromHex(lastColorHex_) : draw::Color{1, 1, 0, 1};
       t.color = {last.r, last.g, last.b, 1};
-      t.automaticLabel = font ? L"Automatic" : L"No color";
+      t.automaticLabel = font ? T(L"Automatic") : T(L"No color");
       t.automaticColor = font ? D2D1_COLOR_F{0, 0, 0, 1} : D2D1_COLOR_F{0, 0, 0, 0};
       t.onChange = [this, font](const ToolValue& v) {
         if (!session_) return;
@@ -957,8 +958,8 @@ void TextEditing::FillContextMenu(HMENU m, size_t slide, draw::Point at) {
         suggestions_ = e.action == fw::text::SpellChecker::Action::Replace ? std::vector<std::wstring>{e.replacement}
                                                                             : checker_->Suggest(e.lang, word, 5);
         for (size_t i = 0; i < suggestions_.size(); ++i) menu::AppendItem(m, CmdSpellSuggest + static_cast<int>(i), suggestions_[i]);
-        menu::AppendItem(m, CmdSpellIgnore, L"Ignore all");
-        menu::AppendItem(m, CmdSpellAdd, L"Add to dictionary");
+        menu::AppendItem(m, CmdSpellIgnore, T(L"Ignore all"));
+        menu::AppendItem(m, CmdSpellAdd, T(L"Add to dictionary"));
         menu::AppendSeparator(m);
         break;
       }
@@ -966,7 +967,7 @@ void TextEditing::FillContextMenu(HMENU m, size_t slide, draw::Point at) {
   for (int cmd : {CmdCut, CmdCopy, CmdPaste}) menu::AppendItem(m, cmd, Query(cmd).label, Query(cmd).enabled);
   menu::AppendSeparator(m);
   menu::AppendItem(m, CmdInsertLink, Query(CmdInsertLink).label);
-  if (Query(CmdRemoveLink).enabled) menu::AppendItem(m, CmdRemoveLink, L"Remove link");
+  if (Query(CmdRemoveLink).enabled) menu::AppendItem(m, CmdRemoveLink, T(L"Remove link"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,7 +1004,7 @@ std::wstring SlideItem(Deck& deck, size_t i) {
     }
     break;
   }
-  return L"Slide " + std::to_wstring(i + 1) + (title.empty() ? L"" : L": " + title);
+  return T(L"Slide ") + std::to_wstring(i + 1) + (title.empty() ? L"" : L": " + title);
 }
 
 }  // namespace
@@ -1019,7 +1020,7 @@ void TextEditing::OpenLinkPanel() {
 TextEditing::LinkPanel::LinkPanel(TextEditing& t) : t_(t) {
   text_.autoComplete = false;
   tip_.autoComplete = false;
-  address_.tooltip = L"A web or e-mail address, a file, or a slide of this presentation";
+  address_.tooltip = T(L"A web or e-mail address, a file, or a slide of this presentation");
   for (Box* b : {&text_, &address_, &tip_}) b->onEnter = [this] { Apply(); };
   address_.onCommit = [this](const std::wstring& item, int index) {
     // Picking a slide shows its title when there's no text yet.
@@ -1029,7 +1030,7 @@ TextEditing::LinkPanel::LinkPanel(TextEditing& t) : t_(t) {
     }
   };
   apply_.onInvoke = [this] { Apply(); };
-  remove_.text = L"Remove link";
+  remove_.text = T(L"Remove link");
   remove_.onInvoke = [this] { Remove(); };
 }
 
@@ -1067,7 +1068,7 @@ void TextEditing::LinkPanel::Open() {
   }
   address_.SetText(address);
   tip_.SetText(tip);
-  apply_.text = editing_ ? L"Update link" : L"Insert link";
+  apply_.text = editing_ ? T(L"Update link") : T(L"Insert link");
   remove_.visible = editing_;
 }
 
@@ -1076,8 +1077,8 @@ std::vector<Control*> TextEditing::LinkPanel::Layout(const D2D1_RECT_F& body, fl
   const float left = body.left + 16 * ui, right = body.right - 16 * ui;
   float y = body.top + 12 * ui;
   labels_.clear();
-  const std::pair<const wchar_t*, Box*> rows[] = {{L"Text to display", &text_},
-                                                  {L"Address, or a slide in this presentation", &address_},
+  const std::pair<const wchar_t*, Box*> rows[] = {{T(L"Text to display"), &text_},
+                                                  {T(L"Address, or a slide in this presentation"), &address_},
                                                   {L"ScreenTip", &tip_}};
   for (const auto& [label, box] : rows) {
     labels_.push_back({label, D2D1::RectF(left, y, right, y + 16 * ui)});
@@ -1095,7 +1096,7 @@ std::vector<Control*> TextEditing::LinkPanel::Layout(const D2D1_RECT_F& body, fl
 void TextEditing::LinkPanel::Draw(gfx::Canvas& c) {
   const Palette& p = theme::P();
   for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
-  c.TextWrapped(note_.empty() ? L"In the slide show a click on the text follows the link." : note_, noteRc_,
+  c.TextWrapped(note_.empty() ? T(L"In the slide show a click on the text follows the link.") : note_, noteRc_,
                 note_.empty() ? p.textSecondary : p.text, 12 * ui_, 4);
   if (focusWanted_) {
     address_.TakeFocus();
@@ -1113,13 +1114,13 @@ void TextEditing::LinkPanel::Apply() {
   TextSession* s = t_.session_.get();
   TextModel* model = t_.model_;
   if (!s || !model) {
-    note_ = L"Click into the text to link first.";
+    note_ = T(L"Click into the text to link first.");
     t_.host_.ViewInvalidate();
     return;
   }
   const std::wstring typed = Trim(address_.Text());
   if (typed.empty()) {
-    note_ = L"Type an address, or pick a slide.";
+    note_ = T(L"Type an address, or pick a slide.");
     t_.host_.ViewInvalidate();
     return;
   }
@@ -1133,11 +1134,11 @@ void TextEditing::LinkPanel::Apply() {
   TextPos from = s->SelFrom(), to = s->SelTo();
   pugi::xml_node h;
   if (editing_) format::LinkAt(*s, from, to, h);
-  model->BeginGroup(u"Hyperlink");
+  model->BeginGroup(T(u"Hyperlink"));
   bool ok = true;
   if ((from == to || s->Doc().Text(from, to) != shown) && from.para == to.para) {
     s->Select(from, to);
-    ok = s->ReplaceSelection(shown, u"Hyperlink");
+    ok = s->ReplaceSelection(shown, T(u"Hyperlink"));
     to = {from.para, from.offset + static_cast<uint32_t>(shown.size())};
   }
   std::string rel;
@@ -1150,7 +1151,7 @@ void TextEditing::LinkPanel::Apply() {
   model->EndGroup();
   t_.Changed();
   if (!ok || rel.empty()) {
-    note_ = L"That link can't be made here.";
+    note_ = T(L"That link can't be made here.");
     t_.host_.ViewInvalidate();
     return;
   }

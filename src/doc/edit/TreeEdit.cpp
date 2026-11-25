@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Forms.h"
@@ -226,7 +227,7 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
     chain.push_back(e);
     if (t.elems[e].flags & kDisplayOnly) {
       verdict = false;
-      why = u"This text is kept as the file has it, so it can't be formatted.";
+      why = T(u"This text is kept as the file has it, so it can't be formatted.");
       break;
     }
     // A text box's story is written into its drawing (docx::Writer), where the file allows it.
@@ -234,7 +235,7 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
       for (uint32_t s = 0; s < doc_.stories_.size(); ++s)
         if (doc_.stories_[s].root == e && !TextBoxEditable(doc_, s)) {
           verdict = false;
-          why = u"The text in this text box can't be formatted: the file keeps it in a way Featherweight can't write back.";
+          why = T(u"The text in this text box can't be formatted: the file keeps it in a way Featherweight can't write back.");
         }
       break;
     }
@@ -243,12 +244,12 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
       for (const Part& part : doc_.parts_)
         if (part.root == e && (!part.Editable() || !part.writable)) {
           verdict = false;
-          why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
+          why = T(u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.");
         }
       break;
     }
   }
-  if (!verdict && why.empty()) why = u"This text can't be formatted.";
+  if (!verdict && why.empty()) why = T(u"This text can't be formatted.");
   for (ElemId e : chain) memo.emplace(e, verdict);
   return verdict;
 }
@@ -1276,16 +1277,16 @@ bool TreeEdit::Copyable(ElemId root, std::u16string& why) const {
     const Elem& e = t.elems[id];
     const uint32_t name = NameOfElem(t, id);
     if (e.flags & kDisplayOnly) {
-      why = u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.";
+      why = T(u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.");
       return false;
     }
     if (S().Type(TypeOfElem(t, id)).role == Role::Object) {
-      why = u"This header or footer has a picture or an object, which Featherweight can't copy yet.";
+      why = T(u"This header or footer has a picture or an object, which Featherweight can't copy yet.");
       return false;
     }
     for (uint32_t r : kRefuse)
       if (name == r) {
-        why = u"This header or footer has a note or a comment, which can't be copied.";
+        why = T(u"This header or footer has a note or a comment, which can't be copied.");
         return false;
       }
     if (!RealNode(e.node)) continue;
@@ -1297,7 +1298,7 @@ bool TreeEdit::Copyable(ElemId root, std::u16string& why) const {
       if (leftOut || x.find("r:id=") != std::string::npos || x.find("r:embed=") != std::string::npos ||
           x.find("r:link=") != std::string::npos || x.find(":id=") != std::string::npos ||
           x.find("paraId=") != std::string::npos) {
-        why = u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.";
+        why = T(u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.");
         return false;
       }
     }
@@ -1368,7 +1369,7 @@ uint32_t TreeEdit::NewStoryPart(PartKind kind, uint32_t copyOf, std::string& rel
   why.clear();
   const Part* main = doc_.FindPart(PartKind::Document);
   if ((kind != PartKind::Header && kind != PartKind::Footer) || depth_ > 0 || !main || !doc_.Editable()) {
-    why = u"This document can't get a new header or footer.";
+    why = T(u"This document can't get a new header or footer.");
     return kNone;
   }
   if (!fill_ && FormsProtected(doc_)) {  // it isn't undone: nothing made that the change can't keep

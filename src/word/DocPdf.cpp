@@ -7,6 +7,7 @@
 #include <pugixml.hpp>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Pdf.h"
@@ -44,8 +45,8 @@ bool WriteAtomically(const std::wstring& path, const std::vector<uint8_t>& bytes
   const std::wstring tmp = fw::DirOf(path) + L"\\~" + fw::FileNameOf(path) + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
   HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
-    error = GetLastError() == ERROR_ACCESS_DENIED ? L"Featherweight can't save in this folder."
-                                                  : L"The PDF couldn't be saved. " + util::LastErrorMessage(GetLastError());
+    error = GetLastError() == ERROR_ACCESS_DENIED ? T(L"Featherweight can't save in this folder.")
+                                                  : T(L"The PDF couldn't be saved. ") + util::LastErrorMessage(GetLastError());
     return false;
   }
   DWORD written = 0;
@@ -57,8 +58,8 @@ bool WriteAtomically(const std::wstring& path, const std::vector<uint8_t>& bytes
     const DWORD e = GetLastError();
     DeleteFileW(tmp.c_str());
     error = (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_ACCESS_DENIED)
-                ? L"The PDF couldn't be saved: another program has " + fw::FileNameOf(path) + L" open."
-                : L"The PDF couldn't be saved. " + util::LastErrorMessage(e);
+                ? T(L"The PDF couldn't be saved: another program has ") + fw::FileNameOf(path) + L" open."
+                : T(L"The PDF couldn't be saved. ") + util::LastErrorMessage(e);
   }
   return ok;
 }
@@ -67,7 +68,7 @@ bool WriteAtomically(const std::wstring& path, const std::vector<uint8_t>& bytes
 
 bool DocView::ExportPdf(const std::wstring& path, std::wstring& message) {
   if (!Ready() || !doc_ || !pagination_) {
-    message = L"This document can't be exported yet.";
+    message = T(L"This document can't be exported yet.");
     return false;
   }
   pagination_->LayOutAll();
@@ -85,7 +86,7 @@ bool DocView::ExportPdf(const std::wstring& path, std::wstring& message) {
   }
   const size_t count = pages->PageCount();
   if (count == 0) {
-    message = L"This document has no pages to export.";
+    message = T(L"This document has no pages to export.");
     return false;
   }
   draw::PdfDocument pdf;
@@ -144,8 +145,8 @@ bool DocView::ExportPdf(const std::wstring& path, std::wstring& message) {
   pdf.SetInfo(U16(title), U16(author));
   const std::vector<uint8_t> bytes = pdf.Finish();
   if (!WriteAtomically(path, bytes, message)) return false;
-  message = count == 1 ? L"Exported 1 page to " + fw::FileNameOf(path)
-                       : L"Exported " + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
+  message = count == 1 ? T(L"Exported 1 page to ") + fw::FileNameOf(path)
+                       : T(L"Exported ") + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
   return true;
 }
 

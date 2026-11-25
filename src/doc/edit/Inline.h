@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/Editor.h"
 
 // Fields, links and bookmarks (plan §6.2 "basic", milestone D3). Each operation is one undo step
@@ -19,7 +20,7 @@ namespace fw::doc::edit {
 // (PAGE, NUMPAGES) or Word updates it. The result takes the formatting of the text before it.
 // Refused inside another field, and in content that isn't edited. One undo step named `name`.
 Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16string_view result,
-                   std::u16string name = u"Field");
+                   std::u16string name = T(u"Field"));
 // Whether `at` is inside a field: between its begin and its end, or inside a w:fldSimple. Where
 // a field ends or begins is outside it.
 bool InsideField(const Document& doc, Pos at);

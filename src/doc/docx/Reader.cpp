@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/model/Utf.h"
 #include "pkg/Mce.h"
@@ -403,7 +404,7 @@ Status Reader::Stream(pkg::XmlPull& pull, ElemId root, bool capture, bool checkR
       case Event::Comment:
       case Event::ProcessingInstruction: OnMarkup(pull, e); break;
       case Event::Error: return pull.GetStatus();
-      case Event::EndDocument: return Status::Fail(Status::Code::Damaged, "This part ends unexpectedly.");
+      case Event::EndDocument: return Status::Fail(Status::Code::Damaged, T("This part ends unexpectedly."));
     }
   }
   return Status{};
@@ -1190,7 +1191,7 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
   if (rootDef != kNoDef && s.Elem(rootDef).ns != rootNs) rootDef = kNoDef;  // as in KnownChild
   if (rootDef == kNoDef || s.Elem(rootDef).local == "txbxContent") {
     if (kind == PartKind::Document)
-      return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document: its main part is something else.");
+      return Status::Fail(Status::Code::Unsupported, T("This file isn't a Word document: its main part is something else."));
     // Not WordprocessingML: the part stays as it is, but it must still be well-formed.
     while ((e = pull.Next()) != Event::EndDocument)
       if (e == Event::Error) return pull.GetStatus();
@@ -1287,15 +1288,15 @@ Status Reader::Run() {
         break;
       }
   if (mainName.empty() || !pkg.FindPart(mainName))
-    return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document: it has no main document part.");
+    return Status::Fail(Status::Code::Unsupported, T("This file isn't a Word document: it has no main document part."));
   std::string_view type = pkg.ContentTypeOf(mainName);
   if (std::find(std::begin(kWordMainTypes), std::end(kWordMainTypes), type) == std::end(kWordMainTypes))
-    return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document.");
+    return Status::Fail(Status::Code::Unsupported, T("This file isn't a Word document."));
 
   Status st = ReadPart(mainName, PartKind::Document);
   if (!st.Ok()) return st;
   if (doc_.main_ == kNone)
-    return Status::Fail(Status::Code::Damaged, "This Word document is damaged: it has no body.");
+    return Status::Fail(Status::Code::Damaged, T("This Word document is damaged: it has no body."));
 
   if (const pkg::RelationshipSet* rels = pkg.RelationshipsOf(mainName)) {
     struct Kind {
@@ -1327,7 +1328,7 @@ Status Reader::Run() {
 
 std::unique_ptr<Document> Reader::Read(std::unique_ptr<pkg::Package> package, Status& status, const ReadOptions& options) {
   if (!package) {
-    status = Status::Fail(Status::Code::NotFound, "There is no package to read.");
+    status = Status::Fail(Status::Code::NotFound, T("There is no package to read."));
     return nullptr;
   }
   std::unique_ptr<Document> doc(new Document());

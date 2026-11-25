@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Bind.h"
 #include "ui/Theme.h"
@@ -13,8 +14,8 @@ namespace fw::sheet::view {
 
 namespace {
 
-const wchar_t* const kFilters[] = {L"All names", L"Scoped to the workbook", L"Scoped to this sheet",
-                                   L"Names with errors", L"Names without errors"};
+const UiText kFilters[] = {N_(L"All names"), N_(L"Scoped to the workbook"), N_(L"Scoped to this sheet"),
+                                   N_(L"Names with errors"), N_(L"Names without errors")};
 
 bool IsError(const calc::NameRow& r) { return !r.value.empty() && r.value[0] == '#'; }
 
@@ -32,35 +33,35 @@ WorkbookView::NamesPanel::NamesPanel(WorkbookView& view) : v_(view) {
     if (mode_ == Mode::Paste) Paste(i);
   };
   name_.autoComplete = refersTo_.autoComplete = false;
-  name_.label = L"Name";
-  refersTo_.label = L"Refers to";
+  name_.label = T(L"Name");
+  refersTo_.label = T(L"Refers to");
   refersTo_.tooltip = L"A range, a constant or a formula, as you'd type it in a cell (=Sheet1!$A$1:$A$9)";
   refersTo_.onEnter = [this] { Save(); };
-  scope_.label = L"Scope";
-  new_.text = L"New";
+  scope_.label = T(L"Scope");
+  new_.text = T(L"New");
   new_.onInvoke = [this] { NewName(); };
-  save_.text = L"Save";
+  save_.text = T(L"Save");
   save_.onInvoke = [this] { Save(); };
-  delete_.text = L"Delete";
+  delete_.text = T(L"Delete");
   delete_.onInvoke = [this] { Delete(); };
   const std::pair<PanelButton*, const wchar_t*> lines[] = {
-      {&top_, L"Top row"}, {&left_, L"Left column"}, {&bottom_, L"Bottom row"}, {&right_, L"Right column"}};
+      {&top_, T(L"Top row")}, {&left_, T(L"Left column")}, {&bottom_, T(L"Bottom row")}, {&right_, T(L"Right column")}};
   for (const auto& [b, text] : lines) {
     b->text = text;
     b->toggle = true;
   }
-  create_.text = L"Create names";
+  create_.text = T(L"Create names");
   create_.onInvoke = [this] { Create(); };
-  pasteList_.text = L"Paste list";
-  pasteList_.tooltip = L"Writes every name and what it refers to from the active cell down";
+  pasteList_.text = T(L"Paste list");
+  pasteList_.tooltip = T(L"Writes every name and what it refers to from the active cell down");
   pasteList_.onInvoke = [this] { PasteList(); };
 }
 
 std::wstring WorkbookView::NamesPanel::Title() const {
   switch (mode_) {
-    case Mode::Create: return L"Create names from selection";
-    case Mode::Paste: return L"Paste name";
-    default: return L"Name Manager";
+    case Mode::Create: return T(L"Create names from selection");
+    case Mode::Paste: return T(L"Paste name");
+    default: return T(L"Name Manager");
   }
 }
 
@@ -74,7 +75,7 @@ std::vector<Control*> WorkbookView::NamesPanel::Layout(const D2D1_RECT_F& body, 
     y += 20 * ui;
   };
   if (mode_ == Mode::Create) {
-    label(L"Create names from values in the");
+    label(T(L"Create names from values in the"));
     for (PanelButton* b : {&top_, &left_, &bottom_, &right_}) {
       b->rc = RectF(left, y, right, y + 30 * ui);
       y += 38 * ui;
@@ -84,7 +85,7 @@ std::vector<Control*> WorkbookView::NamesPanel::Layout(const D2D1_RECT_F& body, 
     return {&top_, &left_, &bottom_, &right_, &create_};
   }
   if (mode_ == Mode::Paste) {
-    label(L"Names (Enter or double-click pastes one)");
+    label(T(L"Names (Enter or double-click pastes one)"));
     const float bottom = std::max(y + 120 * ui, body.bottom - 60 * ui);
     list_.rc = RectF(left, y, right, bottom);
     pasteList_.rc = RectF(left, bottom + 12 * ui, right, bottom + 42 * ui);
@@ -96,13 +97,13 @@ std::vector<Control*> WorkbookView::NamesPanel::Layout(const D2D1_RECT_F& body, 
   const float listBottom = std::max(y + 120 * ui, body.bottom - 300 * ui);
   list_.rc = RectF(left, y, right, listBottom);
   y = listBottom + 12 * ui;
-  label(L"Name");
+  label(T(L"Name"));
   name_.rc = RectF(left, y, right, y + 30 * ui);
   y += 40 * ui;
-  label(L"Scope");
+  label(T(L"Scope"));
   scope_.rc = RectF(left, y, right, y + 30 * ui);
   y += 40 * ui;
-  label(L"Refers to");
+  label(T(L"Refers to"));
   refersTo_.rc = RectF(left, y, right, y + 30 * ui);
   y += 42 * ui;
   const float w = (right - left - 2 * gap) / 3;
@@ -118,7 +119,7 @@ void WorkbookView::NamesPanel::Draw(Canvas& c) {
   for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
   std::wstring note = note_;
   if (note.empty() && mode_ == Mode::Manager && editing_ >= 0 && static_cast<size_t>(editing_) < rows_.size())
-    note = L"Value: " + Utf8ToWide(rows_[static_cast<size_t>(editing_)].value);
+    note = T(L"Value: ") + Utf8ToWide(rows_[static_cast<size_t>(editing_)].value);
   if (!note.empty()) c.TextWrapped(note, noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 3);
   if (focusWanted_) {
     if (mode_ == Mode::Manager) name_.TakeFocus();
@@ -135,7 +136,7 @@ void WorkbookView::NamesPanel::Open(Mode mode, bool define) {
     top_.checked = top, left_.checked = left, bottom_.checked = right_.checked = false;
     return;
   }
-  scope_.items = {L"Workbook"};
+  scope_.items = {T(L"Workbook")};
   for (size_t i = 0; i < v_.book_->SheetCount(); ++i) scope_.items.push_back(Utf8ToWide(v_.book_->GetSheet(i).Name()));
   Refresh();
   if (mode == Mode::Manager) {
@@ -250,7 +251,7 @@ void WorkbookView::NamesPanel::Save() {
   d.sheet = scope;
   d.formula = formula;
   d.hidden = old && old->hidden;
-  edit::EditGroup group(v_.Ed(), old ? u"Edit Name" : u"Define Name");
+  edit::EditGroup group(v_.Ed(), old ? T(u"Edit Name") : T(u"Define Name"));
   edit::Result r;
   if (old && (FullName(*old) != name || old->scope != scope)) r = v_.Ed().DeleteName(FullName(*old), old->scope);
   if (r) r = v_.Ed().SetName(d);
@@ -273,11 +274,11 @@ void WorkbookView::NamesPanel::Create() {
   const std::vector<calc::LabelName> made = calc::NamesFromLabels(
       *v_.book_, static_cast<int>(v_.sheet_), sel, top_.checked, left_.checked, bottom_.checked, right_.checked);
   if (made.empty()) {
-    note_ = L"No names were made: the chosen rows and columns have no text to name the cells by.";
+    note_ = T(L"No names were made: the chosen rows and columns have no text to name the cells by.");
     v_.host_.ViewInvalidate();
     return;
   }
-  edit::EditGroup group(v_.Ed(), u"Create Names");
+  edit::EditGroup group(v_.Ed(), T(u"Create Names"));
   for (const calc::LabelName& m : made) {
     DefinedName d;
     d.name = m.name;
@@ -312,7 +313,7 @@ void WorkbookView::NamesPanel::PasteList() {
     ++row;
   }
   if (cells.empty()) return;
-  edit::EditGroup group(v_.Ed(), u"Paste List");
+  edit::EditGroup group(v_.Ed(), T(u"Paste List"));
   if (v_.EditRefused(v_.Ed().SetCells(static_cast<int>(v_.sheet_), cells))) return;
   group.done = true;
   v_.host_.ViewShowPanel(nullptr);
@@ -341,7 +342,7 @@ bool WorkbookView::NamesPanel::Script(const std::wstring& op, const std::wstring
     for (size_t k = 0; k < shown_.size(); ++k)
       if (NameEqualsNoCase(rows_[shown_[k]].name, name)) found = static_cast<int>(k);
     if (found < 0) {
-      why = L"name: there's no name " + arg.substr(1);
+      why = T(L"name: there's no name ") + arg.substr(1);
       return false;
     }
     list_.SetSelected(found);
@@ -389,18 +390,18 @@ bool WorkbookView::NamesCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet();
   switch (cmd) {
     case CmdNameManager:
-      s.label = L"Name Manager";
+      s.label = T(L"Name Manager");
       s.shortcut = L"Ctrl+F3";
       s.enabled = cells && !editor_.Active();
       return true;
-    case CmdDefineName: s.label = L"Define name"; s.enabled = cells && !editor_.Active(); return true;
+    case CmdDefineName: s.label = T(L"Define name"); s.enabled = cells && !editor_.Active(); return true;
     case CmdCreateNames:
-      s.label = L"Create names from selection";
+      s.label = T(L"Create names from selection");
       s.shortcut = L"Ctrl+Shift+F3";
       s.enabled = cells && !editor_.Active();
       return true;
     case CmdPasteNames: {
-      s.label = L"Paste name";
+      s.label = T(L"Paste name");
       s.shortcut = L"F3";
       bool any = false;
       if (cells)

@@ -8,6 +8,7 @@
 #include <iterator>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Formula.h"
 #include "sheet/edit/Protection.h"
@@ -24,33 +25,33 @@ namespace fw::sheet::view {
 namespace {
 
 // Excel's words (Excel 2021).
-constexpr wchar_t kWrongPassword[] =
-    L"The password you supplied is not correct. Verify that the CAPS LOCK key is off and be sure to use the correct "
-    L"capitalization.";
-constexpr wchar_t kNotIdentical[] = L"Confirmation password is not identical.";
+constexpr UiText kWrongPassword =
+    N_(L"The password you supplied is not correct. Verify that the CAPS LOCK key is off and be sure to use the correct "
+    L"capitalization.");
+constexpr UiText kNotIdentical = N_(L"Confirmation password is not identical.");
 
 // Protect Sheet's list, in the order of Excel's dialog: what everyone may still do. Each is a
 // SheetProtection flag that protects when set.
 struct Permission {
-  const wchar_t* label;
+  UiText label;
   bool edit::SheetProtection::*flag;
 };
 constexpr Permission kPermissions[] = {
-    {L"Select locked cells", &edit::SheetProtection::selectLockedCells},
-    {L"Select unlocked cells", &edit::SheetProtection::selectUnlockedCells},
-    {L"Format cells", &edit::SheetProtection::formatCells},
-    {L"Format columns", &edit::SheetProtection::formatColumns},
-    {L"Format rows", &edit::SheetProtection::formatRows},
-    {L"Insert columns", &edit::SheetProtection::insertColumns},
-    {L"Insert rows", &edit::SheetProtection::insertRows},
-    {L"Insert links", &edit::SheetProtection::insertHyperlinks},
-    {L"Delete columns", &edit::SheetProtection::deleteColumns},
-    {L"Delete rows", &edit::SheetProtection::deleteRows},
-    {L"Sort", &edit::SheetProtection::sort},
-    {L"Use AutoFilter", &edit::SheetProtection::autoFilter},
-    {L"Use PivotTables", &edit::SheetProtection::pivotTables},
-    {L"Edit objects", &edit::SheetProtection::objects},
-    {L"Edit scenarios", &edit::SheetProtection::scenarios},
+    {N_(L"Select locked cells"), &edit::SheetProtection::selectLockedCells},
+    {N_(L"Select unlocked cells"), &edit::SheetProtection::selectUnlockedCells},
+    {N_(L"Format cells"), &edit::SheetProtection::formatCells},
+    {N_(L"Format columns"), &edit::SheetProtection::formatColumns},
+    {N_(L"Format rows"), &edit::SheetProtection::formatRows},
+    {N_(L"Insert columns"), &edit::SheetProtection::insertColumns},
+    {N_(L"Insert rows"), &edit::SheetProtection::insertRows},
+    {N_(L"Insert links"), &edit::SheetProtection::insertHyperlinks},
+    {N_(L"Delete columns"), &edit::SheetProtection::deleteColumns},
+    {N_(L"Delete rows"), &edit::SheetProtection::deleteRows},
+    {N_(L"Sort"), &edit::SheetProtection::sort},
+    {N_(L"Use AutoFilter"), &edit::SheetProtection::autoFilter},
+    {N_(L"Use PivotTables"), &edit::SheetProtection::pivotTables},
+    {N_(L"Edit objects"), &edit::SheetProtection::objects},
+    {N_(L"Edit scenarios"), &edit::SheetProtection::scenarios},
 };
 constexpr size_t kPermissionCount = std::size(kPermissions);
 
@@ -67,8 +68,8 @@ class WorkbookView::ProtectPanel : public PanelContent {
       box->autoComplete = false;
       box->onEnter = [this] { Apply(); };
     }
-    password_.label = L"Password";
-    confirm_.label = L"Confirm password";
+    password_.label = T(L"Password");
+    confirm_.label = T(L"Confirm password");
     for (size_t i = 0; i < kPermissionCount; ++i) {
       allow_[i].toggle = true;
       allow_[i].text = kPermissions[i].label;
@@ -76,17 +77,17 @@ class WorkbookView::ProtectPanel : public PanelContent {
       allow_[i].onInvoke = [this] { v_.host_.ViewInvalidate(); };  // (a toggle flips itself)
     }
     structure_.toggle = true;
-    structure_.text = L"Structure";
+    structure_.text = T(L"Structure");
     structure_.onInvoke = [this] { v_.host_.ViewInvalidate(); };
     apply_.onInvoke = [this] { Apply(); };
   }
 
   std::wstring Title() const override {
     switch (mode_) {
-      case kProtectSheet: return L"Protect sheet";
-      case kUnprotectSheet: return L"Unprotect sheet";
-      case kProtectBook: return L"Protect workbook";
-      case kUnprotectBook: return L"Unprotect workbook";
+      case kProtectSheet: return T(L"Protect sheet");
+      case kUnprotectSheet: return T(L"Unprotect sheet");
+      case kProtectBook: return T(L"Protect workbook");
+      case kUnprotectBook: return T(L"Unprotect workbook");
     }
     return {};
   }
@@ -100,7 +101,7 @@ class WorkbookView::ProtectPanel : public PanelContent {
     const edit::SheetProtection defaults;
     for (size_t i = 0; i < kPermissionCount; ++i) allow_[i].checked = !(defaults.*kPermissions[i].flag);
     structure_.checked = true;
-    apply_.text = mode == kProtectSheet || mode == kProtectBook ? L"Protect" : L"Unprotect";
+    apply_.text = mode == kProtectSheet || mode == kProtectBook ? T(L"Protect") : T(L"Unprotect");
     focusWanted_ = true;
   }
 
@@ -117,10 +118,10 @@ class WorkbookView::ProtectPanel : public PanelContent {
       out.push_back(&b);
     };
     const bool protect = mode_ == kProtectSheet || mode_ == kProtectBook;
-    box(password_, protect ? L"Password (optional)" : L"Password");
-    if (protect) box(confirm_, L"Confirm the password");
+    box(password_, protect ? T(L"Password (optional)") : T(L"Password"));
+    if (protect) box(confirm_, T(L"Confirm the password"));
     if (mode_ == kProtectSheet) {
-      labels_.push_back({L"Everyone may:", RectF(left, y, right, y + 16 * ui)});
+      labels_.push_back({T(L"Everyone may:"), RectF(left, y, right, y + 16 * ui)});
       y += 20 * ui;
       const float gap = 4 * ui, w = (right - left - gap) / 2, h = 26 * ui;
       for (size_t i = 0; i < kPermissionCount; ++i) {
@@ -130,7 +131,7 @@ class WorkbookView::ProtectPanel : public PanelContent {
       }
       y += ((kPermissionCount + 1) / 2) * (h + gap) + 6 * ui;
     } else if (mode_ == kProtectBook) {
-      labels_.push_back({L"Protect the workbook's:", RectF(left, y, right, y + 18 * ui)});
+      labels_.push_back({T(L"Protect the workbook's:"), RectF(left, y, right, y + 18 * ui)});
       structure_.rc = RectF(left, y + 22 * ui, left + 140 * ui, y + 52 * ui);
       out.push_back(&structure_);
       y += 64 * ui;
@@ -148,7 +149,7 @@ class WorkbookView::ProtectPanel : public PanelContent {
     if (help.empty())
       help = mode_ == kProtectSheet ? L"Locked cells can't be changed (Format cells > Protect). Without a password, "
                                       L"anyone can unprotect the sheet."
-             : mode_ == kProtectBook ? L"Sheets can't be added, deleted, moved, renamed or hidden."
+             : mode_ == kProtectBook ? T(L"Sheets can't be added, deleted, moved, renamed or hidden.")
                                      : L"";
     c.TextWrapped(help, noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 4);
     if (focusWanted_) {
@@ -186,7 +187,7 @@ class WorkbookView::ProtectPanel : public PanelContent {
       }
       case kProtectBook: {
         if (pw != confirm_.Text()) return Fail(kNotIdentical);
-        if (!structure_.checked) return Fail(L"Choose what to protect.");
+        if (!structure_.checked) return Fail(T(L"Choose what to protect."));
         edit::WorkbookProtection w;
         if (auto now = edit::WorkbookProtectionOf(*v_.book_)) w.other = now->other;  // the revisions password
         w.password = edit::ProtectionPassword::Make(pw);
@@ -231,18 +232,18 @@ class WorkbookView::LinkPanel : public PanelContent {
       box->onEnter = [this] { Apply(); };
     }
     place_.autoComplete = true;
-    address_.label = L"Address";
+    address_.label = T(L"Address");
     address_.tooltip = L"A web address (https://...), an e-mail address or a file";
-    place_.label = L"Place in this workbook";
-    text_.label = L"Text to display";
+    place_.label = T(L"Place in this workbook");
+    text_.label = T(L"Text to display");
     apply_.onInvoke = [this] { Apply(); };
-    remove_.text = L"Remove link";
+    remove_.text = T(L"Remove link");
     remove_.onInvoke = [this] {
       if (!v_.EditRefused(v_.Ed().SetHyperlink(static_cast<int>(v_.sheet_), v_.Selected(), std::nullopt))) Close();
     };
   }
 
-  std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
+  std::wstring Title() const override { return editing_ ? T(L"Edit link") : T(L"Insert link"); }
 
   void Open() {
     note_.clear();
@@ -258,7 +259,7 @@ class WorkbookView::LinkPanel : public PanelContent {
     for (const DefinedName& n : v_.book_->Names())
       if (!n.hidden && n.name.rfind("_xlnm.", 0) != 0) places.push_back(Utf8ToWide(n.name));
     place_.items = std::move(places);
-    apply_.text = editing_ ? L"Update" : L"Insert";
+    apply_.text = editing_ ? T(L"Update") : T(L"Insert");
     focusWanted_ = true;
   }
 
@@ -284,8 +285,8 @@ class WorkbookView::LinkPanel : public PanelContent {
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
     for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
-    c.TextWrapped(note_.empty() ? L"An address, or a place in this workbook (a cell or a name). Clicking the cell opens "
-                                  L"web and e-mail addresses."
+    c.TextWrapped(note_.empty() ? T(L"An address, or a place in this workbook (a cell or a name). Clicking the cell opens "
+                                  L"web and e-mail addresses.")
                                 : note_,
                   noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 4);
     if (focusWanted_) {
@@ -304,7 +305,7 @@ class WorkbookView::LinkPanel : public PanelContent {
   void Apply() {
     const std::wstring addr = Trim(address_.Text()), place = Trim(place_.Text());
     if (addr.empty() && place.empty()) {
-      note_ = L"Type an address, or choose a place in this workbook.";
+      note_ = T(L"Type an address, or choose a place in this workbook.");
       v_.host_.ViewInvalidate();
       return;
     }
@@ -328,14 +329,14 @@ class WorkbookView::LinkPanel : public PanelContent {
     std::wstring shown = text_.Text();
     if (shown.empty() && empty) shown = addr.empty() ? place : addr;
     h.display = WideToUtf8(shown);
-    edit::EditGroup group(v_.Ed(), u"Insert Hyperlink");
+    edit::EditGroup group(v_.Ed(), T(u"Insert Hyperlink"));
     // An empty cell shows the text to display, as in Excel.
     if (empty && !shown.empty() && v_.EditRefused(v_.Ed().SetCell(sheet, at.row, at.col, edit::CellInput::Text(h.display))))
       return;
     if (v_.EditRefused(v_.Ed().SetHyperlink(sheet, v_.Selected(), h))) return;
     // Excel's Hyperlink look: the theme's link color, underlined (where formatting is allowed).
     if (!editing_ && edit::ProtectionRefusal(*v_.book_, sheet, edit::ProtectAct::FormatCells).empty())
-      v_.ChangeFont(u"Insert Hyperlink", [](Font& f) {
+      v_.ChangeFont(T(u"Insert Hyperlink"), [](Font& f) {
         f.color = Color{Color::Kind::Theme, 10};
         f.underline = Underline::Single;
       });
@@ -381,12 +382,12 @@ class WorkbookView::NotePanel : public PanelContent {
  public:
   explicit NotePanel(WorkbookView& view) : v_(view) {
     text_.autoComplete = false;
-    text_.label = L"Note";
+    text_.label = T(L"Note");
     text_.onEnter = [this] { Apply(); };
     shown_.toggle = true;
-    shown_.text = L"Keep shown";
+    shown_.text = T(L"Keep shown");
     shown_.onInvoke = [this] { v_.host_.ViewInvalidate(); };  // (a toggle flips itself)
-    save_.text = L"Save";
+    save_.text = T(L"Save");
     save_.onInvoke = [this] { Apply(); };
     for (FocusComboBox* b : {&width_, &height_}) {
       b->autoComplete = false;
@@ -397,14 +398,14 @@ class WorkbookView::NotePanel : public PanelContent {
         return end && *end == 0 && v >= 10 && v <= 2000;
       };
     }
-    width_.label = L"Width (pt)";
-    height_.label = L"Height (pt)";
-    delete_.text = L"Delete note";
+    width_.label = T(L"Width (pt)");
+    height_.label = T(L"Height (pt)");
+    delete_.text = T(L"Delete note");
     delete_.onInvoke = [this] {
       if (!v_.EditRefused(v_.Ed().SetNote(static_cast<int>(v_.sheet_), cell_, std::nullopt))) Close();
     };
   }
-  std::wstring Title() const override { return editing_ ? L"Edit note" : L"New note"; }
+  std::wstring Title() const override { return editing_ ? T(L"Edit note") : T(L"New note"); }
 
   void Open() {
     cell_ = v_.active_;
@@ -445,9 +446,9 @@ class WorkbookView::NotePanel : public PanelContent {
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
     const std::wstring by = author_.empty() ? std::wstring() : L" by " + Utf8ToWide(author_);
-    c.Text(L"Note on " + Utf8ToWide(CellName(cell_.row, cell_.col)) + by, labelRc_, p.textSecondary, 12 * ui_);
-    c.Text(L"Box width and height, in points", sizeRc_, p.textSecondary, 12 * ui_);
-    c.TextWrapped(L"Enter saves. A ¶ starts a new line in the note. A new size puts the box beside the cell.", noteRc_,
+    c.Text(T(L"Note on ") + Utf8ToWide(CellName(cell_.row, cell_.col)) + by, labelRc_, p.textSecondary, 12 * ui_);
+    c.Text(T(L"Box width and height, in points"), sizeRc_, p.textSecondary, 12 * ui_);
+    c.TextWrapped(T(L"Enter saves. A ¶ starts a new line in the note. A new size puts the box beside the cell."), noteRc_,
                   p.textSecondary, 12 * ui_, 3);
     if (focusWanted_) {
       text_.TakeFocus();
@@ -501,7 +502,7 @@ class WorkbookView::CommentPanel : public PanelContent {
  public:
   explicit CommentPanel(WorkbookView& view) : v_(view) {
     pick_.autoComplete = false;
-    pick_.label = L"Comment";
+    pick_.label = T(L"Comment");
     pick_.onCommit = [this](const std::wstring&, int i) { Pick(i); };
     text_.autoComplete = false;
     text_.onEnter = [this] { Post(); };
@@ -523,7 +524,7 @@ class WorkbookView::CommentPanel : public PanelContent {
       }
     };
   }
-  std::wstring Title() const override { return thread_ ? L"Comments" : L"New comment"; }
+  std::wstring Title() const override { return thread_ ? T(L"Comments") : T(L"New comment"); }
 
   void Open() {
     cell_ = v_.active_;
@@ -554,8 +555,8 @@ class WorkbookView::CommentPanel : public PanelContent {
 
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
-    std::wstring head = L"Comment on " + Utf8ToWide(CellName(cell_.row, cell_.col));
-    if (thread_ && thread_->resolved) head += L" · resolved";
+    std::wstring head = T(L"Comment on ") + Utf8ToWide(CellName(cell_.row, cell_.col));
+    if (thread_ && thread_->resolved) head += T(L" · resolved");
     c.Text(head, labelRc_, p.textSecondary, 12 * ui_);
     if (thread_) {
       // The latest comments that fit, each "Name: text".
@@ -564,7 +565,7 @@ class WorkbookView::CommentPanel : public PanelContent {
         all += (all.empty() ? L"" : L"\n") + Utf8ToWide(m.author.empty() ? m.text : m.author + ": " + m.text);
       c.TextWrapped(all, threadRc_, p.text, 12 * ui_, 5);
     }
-    c.TextWrapped(L"Enter posts. A ¶ starts a new line.", noteRc_, p.textSecondary, 12 * ui_, 2);
+    c.TextWrapped(T(L"Enter posts. A ¶ starts a new line."), noteRc_, p.textSecondary, 12 * ui_, 2);
     if (focusWanted_) {
       text_.TakeFocus();
       focusWanted_ = false;
@@ -577,7 +578,7 @@ class WorkbookView::CommentPanel : public PanelContent {
     thread_ = v_.Ed().ThreadAt(static_cast<int>(v_.sheet_), cell_);
     pick_.items.clear();
     if (thread_) {
-      pick_.items.push_back(L"Reply");
+      pick_.items.push_back(T(L"Reply"));
       for (size_t i = 0; i < thread_->comments.size(); ++i) {
         const auto& m = thread_->comments[i];
         std::wstring t = std::to_wstring(i + 1) + L". " + Utf8ToWide(m.author) + L": " + ToBox(Utf8ToWide(m.text));
@@ -591,11 +592,11 @@ class WorkbookView::CommentPanel : public PanelContent {
     if (!thread_ || i < 0 || static_cast<size_t>(i) > thread_->comments.size()) i = 0;
     editing_ = i - 1;
     pick_.ReplaceText(thread_ ? pick_.items[static_cast<size_t>(i)] : std::wstring());
-    text_.label = !thread_ ? L"Comment" : editing_ < 0 ? L"Reply" : L"Edit";
+    text_.label = !thread_ ? T(L"Comment") : editing_ < 0 ? T(L"Reply") : T(L"Edit");
     text_.ReplaceText(editing_ < 0 ? std::wstring() : ToBox(Utf8ToWide(thread_->comments[static_cast<size_t>(editing_)].text)));
-    post_.text = editing_ < 0 ? L"Post" : L"Save";
-    resolve_.text = thread_ && thread_->resolved ? L"Reopen" : L"Resolve";
-    delete_.text = editing_ <= 0 ? L"Delete thread" : L"Delete reply";
+    post_.text = editing_ < 0 ? T(L"Post") : T(L"Save");
+    resolve_.text = thread_ && thread_->resolved ? T(L"Reopen") : T(L"Resolve");
+    delete_.text = editing_ <= 0 ? T(L"Delete thread") : T(L"Delete reply");
     focusWanted_ = true;
     v_.host_.ViewInvalidate();
   }
@@ -673,16 +674,16 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
   const bool grid = Ready() && !preview_;
   switch (cmd) {
     case CmdProtectSheet:
-      s.label = grid && edit::SheetProtected(Current()) ? L"Unprotect sheet" : L"Protect sheet";
+      s.label = grid && edit::SheetProtected(Current()) ? T(L"Unprotect sheet") : T(L"Protect sheet");
       s.enabled = grid && !ChartSheet();
       return true;
     case CmdProtectWorkbook:
-      s.label = L"Protect workbook";
+      s.label = T(L"Protect workbook");
       s.checked = Ready() && edit::StructureProtected(*book_);
       s.enabled = grid;
       return true;
     case CmdInsertLink:
-      s.label = grid && !ChartSheet() && LinkAt(active_.row, active_.col) ? L"Edit link" : L"Insert link";
+      s.label = grid && !ChartSheet() && LinkAt(active_.row, active_.col) ? T(L"Edit link") : T(L"Insert link");
       s.shortcut = L"Ctrl+K";
       s.enabled = grid && !ChartSheet();
       return true;
@@ -694,31 +695,31 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
           any = any || (sel.firstRow <= h.ref.lastRow && h.ref.firstRow <= sel.lastRow && sel.firstCol <= h.ref.lastCol &&
                         h.ref.firstCol <= sel.lastCol);
         }
-      s.label = L"Remove link";
+      s.label = T(L"Remove link");
       s.enabled = any;
       return true;
     }
     case CmdNewNote:
-      s.label = grid && !ChartSheet() && NoteHere() ? L"Edit note" : L"New note";
+      s.label = grid && !ChartSheet() && NoteHere() ? T(L"Edit note") : T(L"New note");
       s.shortcut = L"Shift+F2";
       s.enabled = grid && !ChartSheet() && !ThreadHere();  // a cell has a note or a thread
       return true;
     case CmdNewComment:
-      s.label = grid && !ChartSheet() && ThreadHere() ? L"Reply to comment" : L"New comment";
+      s.label = grid && !ChartSheet() && ThreadHere() ? T(L"Reply to comment") : T(L"New comment");
       s.shortcut = L"Ctrl+Alt+M";
       s.enabled = grid && !ChartSheet() && !NoteHere();
       return true;
     case CmdDeleteThread:
-      s.label = L"Delete comment";
+      s.label = T(L"Delete comment");
       s.enabled = grid && !ChartSheet() && ThreadHere();
       return true;
     case CmdDeleteNote:
-      s.label = L"Delete note";
+      s.label = T(L"Delete note");
       s.enabled = grid && !ChartSheet() && NoteHere();
       return true;
     case CmdShowNote: {
       const CellNote* n = grid && !ChartSheet() ? NoteHere() : nullptr;
-      s.label = n && n->shown ? L"Hide note" : L"Show note";
+      s.label = n && n->shown ? T(L"Hide note") : T(L"Show note");
       s.enabled = n != nullptr;
       return true;
     }
@@ -726,7 +727,7 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
       bool any = false;
       if (const SheetObjects* o = grid && !ChartSheet() ? Objects() : nullptr)
         for (const CellNote& n : o->Notes()) any = any || !n.threaded;
-      s.label = L"Show all notes";
+      s.label = T(L"Show all notes");
       s.enabled = any;
       return true;
     }
@@ -811,7 +812,7 @@ bool WorkbookView::ReviewCommand(int cmd) {
           notes.push_back(n);
           allShown = allShown && n.shown;
         }
-      edit::EditGroup group(Ed(), cmd == CmdShowNote ? u"Show Note" : u"Show All Notes");
+      edit::EditGroup group(Ed(), cmd == CmdShowNote ? T(u"Show Note") : T(u"Show All Notes"));
       for (const CellNote& n : notes) {
         std::wstring text = n.text;
         const std::wstring head = n.author + L":\n";

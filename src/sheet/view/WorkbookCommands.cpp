@@ -8,6 +8,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "ui/Anim.h"
 #include "core/Layout.h"
 #include "core/Strings.h"
@@ -27,19 +28,19 @@ namespace {
 
 struct CommandName {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 constexpr CommandName kCommandNames[] = {
-    {CmdCopy, L"Copy", L"Ctrl+C"},
-    {CmdSelectAll, L"Select all", L"Ctrl+A"},
-    {CmdPrintPreview, L"Print preview", L"Ctrl+F2"},
-    {CmdNextSheet, L"Next sheet", L"Ctrl+Page Down"},
-    {CmdPrevSheet, L"Previous sheet", L"Ctrl+Page Up"},
-    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
-    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
-    {CmdZoomActual, L"Zoom to 100 %", L"Ctrl+0"},
+    {CmdCopy, N_(L"Copy"), L"Ctrl+C"},
+    {CmdSelectAll, N_(L"Select all"), L"Ctrl+A"},
+    {CmdPrintPreview, N_(L"Print preview"), L"Ctrl+F2"},
+    {CmdNextSheet, N_(L"Next sheet"), L"Ctrl+Page Down"},
+    {CmdPrevSheet, N_(L"Previous sheet"), L"Ctrl+Page Up"},
+    {CmdZoomIn, N_(L"Zoom in"), L"Ctrl+="},
+    {CmdZoomOut, N_(L"Zoom out"), L"Ctrl+−"},
+    {CmdZoomActual, N_(L"Zoom to 100 %"), L"Ctrl+0"},
 };
 
 // The zoom steps Ctrl+= and Ctrl+− go through.
@@ -246,7 +247,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
     s = PagedView::QueryCommand(cmd);
     // Their names, for the ribbon's Print Preview tab (the window's toolbar showed them as arrows).
     if (s.label.empty())
-      s.label = cmd == CmdNextPage ? L"Next page" : cmd == CmdPrevPage ? L"Previous page" : cmd == CmdZoomActual ? L"Zoom to 100 %" : L"";
+      s.label = cmd == CmdNextPage ? T(L"Next page") : cmd == CmdPrevPage ? T(L"Previous page") : cmd == CmdZoomActual ? T(L"Zoom to 100 %") : L"";
     return s;
   }
   if (GridCommandState(cmd, s)) return s;
@@ -281,7 +282,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
       s.enabled = ready && edit_ && (cmd == CmdUndo ? edit_->CanUndo() : edit_->CanRedo());
       s.shortcut = cmd == CmdUndo ? L"Ctrl+Z" : L"Ctrl+Y";
       const std::u16string name = s.enabled ? (cmd == CmdUndo ? edit_->UndoName() : edit_->RedoName()) : u"";
-      s.label = (cmd == CmdUndo ? L"Undo" : L"Redo") +
+      s.label = (cmd == CmdUndo ? T(L"Undo") : T(L"Redo")) +
                 (name.empty() ? std::wstring() : L" " + fw::ToLower(std::wstring(name.begin(), name.end())));
       break;
     }
@@ -489,20 +490,20 @@ void WorkbookView::UpdateStatus() {
 void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
-  if (file_->SaveRunning()) m.segments.push_back(L"Saving\u2026");  // as Excel's status bar
+  if (file_->SaveRunning()) m.segments.push_back(T(L"Saving\u2026"));  // as Excel's status bar
   // A long recalculation, and in manual mode what is waiting for F9, as Excel's status bar.
-  if (calcSince_ > 0 && anim::Now() - calcSince_ > 300) m.segments.push_back(L"Calculating\u2026");
+  if (calcSince_ > 0 && anim::Now() - calcSince_ > 300) m.segments.push_back(T(L"Calculating\u2026"));
   else if (calc_ && !calc_->Opening() && calc_->ManualCalc() && calc_->Calculating() && !calcNow_)
-    m.segments.push_back(L"Calculate");
+    m.segments.push_back(T(L"Calculate"));
   if (circular_) {
     const auto [sheet, row, col] = *circular_;
     std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
     if (sheet != static_cast<int>(sheet_) && static_cast<size_t>(sheet) < book_->SheetCount())
       at = Utf8ToWide(book_->GetSheet(static_cast<size_t>(sheet)).Name()) + L"!" + at;
-    m.segments.push_back(L"Circular References: " + at);
+    m.segments.push_back(T(L"Circular References: ") + at);
   }
   if (Stale(active_.row, active_.col))
-    m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
+    m.segments.push_back(T(L"Value possibly out of date: it uses a function Featherweight can't calculate yet"));
   if (calc_ && !calc_->Opening())  // a dynamic array that can't spill: why, as Excel's error menu says it
     if (std::wstring why = calc_->SpillReason(static_cast<int>(sheet_), active_.row, active_.col); !why.empty())
       m.segments.push_back(L"#SPILL!: " + why);
@@ -519,9 +520,9 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
       if (out.overflow || out.text.empty() || f.IsGeneral()) return FormatGeneral(v, 15, text_->Locale());
       return out.text;
     };
-    if (totals_.numbers > 0) m.segments.push_back(L"Average: " + show(totals_.sum / static_cast<double>(totals_.numbers)));
-    m.segments.push_back(L"Count: " + std::to_wstring(totals_.count));
-    if (totals_.numbers > 0) m.segments.push_back(L"Sum: " + show(totals_.sum));
+    if (totals_.numbers > 0) m.segments.push_back(T(L"Average: ") + show(totals_.sum / static_cast<double>(totals_.numbers)));
+    m.segments.push_back(T(L"Count: ") + std::to_wstring(totals_.count));
+    if (totals_.numbers > 0) m.segments.push_back(T(L"Sum: ") + show(totals_.sum));
   }
   m.zoom = true;
   m.zoomValue = zoom_;
@@ -543,7 +544,7 @@ void WorkbookView::Copy() {
   if (sel.lastRow < sel.firstRow || sel.lastCol < sel.firstCol) return;
   const uint64_t cells = static_cast<uint64_t>(sel.lastRow - sel.firstRow + 1) * (sel.lastCol - sel.firstCol + 1);
   if (cells > 2000000) {
-    host_.ViewMessage(BannerKind::Info, L"That's too many cells to copy at once. Select fewer and copy again.");
+    host_.ViewMessage(BannerKind::Info, T(L"That's too many cells to copy at once. Select fewer and copy again."));
     return;
   }
   const Sheet& s = Current();
@@ -888,7 +889,7 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
     Range r;
     const int target = sheetName.empty() ? static_cast<int>(sheet_) : book_->FindSheet(sheetName);
     if (target < 0 || !SheetShown(static_cast<size_t>(target)) || !ParseRange(where, r)) {
-      host_.ViewMessage(BannerKind::Warning, L"The place this link points to isn't in the workbook.");
+      host_.ViewMessage(BannerKind::Warning, T(L"The place this link points to isn't in the workbook."));
       return;
     }
     if (static_cast<size_t>(target) != sheet_) ShowSheet(static_cast<size_t>(target));
@@ -898,7 +899,7 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
   std::wstring url = Utf8ToWide(link.target);
   if (!link.location.empty()) url += L"#" + Utf8ToWide(link.location);
   if (!util::OpenExternalLink(url))
-    host_.ViewMessage(BannerKind::Warning, L"This link was blocked because it doesn’t point to a website.");
+    host_.ViewMessage(BannerKind::Warning, T(L"This link was blocked because it doesn’t point to a website."));
 }
 
 // ---------------------------------------------------------------------------
@@ -906,10 +907,10 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
 
 namespace {
 
-constexpr SaveFormat kXlsx{L"Excel workbook", L"*.xlsx", L"xlsx"};
-constexpr SaveFormat kXlsm{L"Excel macro-enabled workbook", L"*.xlsm", L"xlsm"};
-constexpr SaveFormat kXltx{L"Excel template", L"*.xltx", L"xltx"};
-constexpr SaveFormat kXltm{L"Excel macro-enabled template", L"*.xltm", L"xltm"};
+constexpr SaveFormat kXlsx{N_(L"Excel workbook"), L"*.xlsx", L"xlsx"};
+constexpr SaveFormat kXlsm{N_(L"Excel macro-enabled workbook"), L"*.xlsm", L"xlsm"};
+constexpr SaveFormat kXltx{N_(L"Excel template"), L"*.xltx", L"xltx"};
+constexpr SaveFormat kXltm{N_(L"Excel macro-enabled template"), L"*.xltm", L"xltm"};
 
 }  // namespace
 
@@ -917,13 +918,13 @@ bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
   if (bigLoad_) WorkDone();
   if (partial_) {
-    error = Title() + L" can't be saved: it couldn't be read in full.";
+    error = Title() + T(L" can't be saved: it couldn't be read in full.");
     return false;
   }
   // What is being typed is part of what's saved, as in Excel's Ctrl+S; a formula that can't be
   // entered stops the save with its reason.
   if (editor_.Active() && !renaming_ && !CommitEdit(false)) {
-    error = Title() + L" wasn't saved: finish or cancel what you're typing in the cell first.";
+    error = Title() + T(L" wasn't saved: finish or cancel what you're typing in the cell first.");
     return false;
   }
   return true;
@@ -1000,13 +1001,13 @@ std::vector<SaveFormat> WorkbookView::OtherSaveFormats() const {
 
 std::vector<SaveFormat> WorkbookView::CopyFormats() const {
   if (!book_ || book_->Format() == FileFormat::Csv) return {};  // a CSV file: Save As .csv is the file itself
-  return {{L"CSV UTF-8 (the first sheet's values)", L"*.csv", L"csv"}};
+  return {{T(L"CSV UTF-8 (the first sheet's values)"), L"*.csv", L"csv"}};
 }
 
 bool WorkbookView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
   if (!Ready() || format != 0) return false;
   if (EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
-    error = FileNameOf(path) + L" is this workbook's own file. Choose another name for the copy.";
+    error = FileNameOf(path) + T(L" is this workbook's own file. Choose another name for the copy.");
     return false;
   }
   csv::Options o;
@@ -1029,10 +1030,10 @@ std::wstring WorkbookView::FormatLoss(const std::wstring& path) const {
   const FileFormat to = WorkbookFile::FormatOf(path, book_->Format());
   // Excel asks the same before saving a workbook with macros as .xlsx.
   if ((to == FileFormat::Xlsx || to == FileFormat::Xltx) && xlsx::HasMacros(*book_))
-    return to == FileFormat::Xlsx ? L"An .xlsx workbook can't keep this workbook's macros: they would be left out."
-                                  : L"An .xltx template can't keep this workbook's macros: they would be left out.";
+    return to == FileFormat::Xlsx ? T(L"An .xlsx workbook can't keep this workbook's macros: they would be left out.")
+                                  : T(L"An .xltx template can't keep this workbook's macros: they would be left out.");
   if (to != FileFormat::Csv) return {};
-  return csv::Loses(*book_) ? L"CSV keeps only the values of the first sheet." : L"";
+  return csv::Loses(*book_) ? T(L"CSV keeps only the values of the first sheet.") : L"";
 }
 
 FileState WorkbookView::State() const {
@@ -1057,7 +1058,7 @@ void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
   t[grid].hasValue = true;
   t[grid].value = ActiveName() + L" " + SelectedText();
   t[grid].focusable = true;
-  const int tabs = t.Add(parent, 2, UIA_TabControlTypeId, L"Sheets", tabs_);
+  const int tabs = t.Add(parent, 2, UIA_TabControlTypeId, T(L"Sheets"), tabs_);
   t[tabs].selectionContainer = true;
   int i = 0;
   for (const TabRect& r : TabRects()) {

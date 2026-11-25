@@ -10,6 +10,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pdf/Print.h"
 #include "ui/Anim.h"
@@ -46,14 +47,14 @@ PdfView::PdfView(PdfHost& host, std::wstring path)
     : PagedView(host), pdfHost_(host), path_(std::move(path)), pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {
   selHighlight_.id = 1;
   selHighlight_.glyph = icon::Highlight;
-  selHighlight_.text = L"Highlight";
+  selHighlight_.text = T(L"Highlight");
   selHighlight_.glyphSize = 14;
-  selHighlight_.tooltip = L"Highlight the selected text";
+  selHighlight_.tooltip = T(L"Highlight the selected text");
   selCopy_.id = 2;
   selCopy_.glyph = icon::Copy;
-  selCopy_.text = L"Copy";
+  selCopy_.text = T(L"Copy");
   selCopy_.glyphSize = 14;
-  selCopy_.tooltip = L"Copy (Ctrl+C)";
+  selCopy_.tooltip = T(L"Copy (Ctrl+C)");
   selButtons_.Add(&selHighlight_);
   selButtons_.Add(&selCopy_);
 }
@@ -677,7 +678,7 @@ HCURSOR PdfView::CursorAt(int x, int y) {
 
 std::wstring PdfView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
-  if (int m = MarkerAt(x, y); m >= 0) return L"Note on page " + std::to_wstring(notes_[m].page + 1);
+  if (int m = MarkerAt(x, y); m >= 0) return T(L"Note on page ") + std::to_wstring(notes_[m].page + 1);
   if (selBar_) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y))
@@ -690,8 +691,8 @@ std::wstring PdfView::TooltipAt(int x, int y) {
   LinkTarget t = doc_->LinkAt(page, px, py);
   switch (t.kind) {
     case LinkTarget::Kind::Uri: return t.uri;
-    case LinkTarget::Kind::Page: return L"Go to page " + std::to_wstring(t.page + 1);
-    case LinkTarget::Kind::Blocked: return L"Links to files and programs are blocked";
+    case LinkTarget::Kind::Page: return T(L"Go to page ") + std::to_wstring(t.page + 1);
+    case LinkTarget::Kind::Blocked: return T(L"Links to files and programs are blocked");
     default: return {};
   }
 }
@@ -815,11 +816,11 @@ void PdfView::FollowLink(const LinkTarget& link) {
     case LinkTarget::Kind::Page: GoToPosition(link.page, link.hasPos, link.x, link.y); break;
     case LinkTarget::Kind::Uri:
       if (!util::OpenExternalLink(link.uri))
-        host_.ViewMessage(BannerKind::Warning, L"This link was blocked because it doesn’t point to a website.");
+        host_.ViewMessage(BannerKind::Warning, T(L"This link was blocked because it doesn’t point to a website."));
       break;
     case LinkTarget::Kind::Blocked:
       host_.ViewMessage(BannerKind::Warning,
-                        L"For your safety, Featherweight doesn’t open files or programs from links in PDFs.");
+                        T(L"For your safety, Featherweight doesn’t open files or programs from links in PDFs."));
       break;
     default: break;
   }
@@ -835,7 +836,7 @@ void PdfView::Copy() {
   std::wstring text = textsel::Text(*doc_, selection_);
   if (!text.empty()) {
     util::SetClipboardText(text);
-    host_.ViewMessage(BannerKind::Success, L"Copied");
+    host_.ViewMessage(BannerKind::Success, T(L"Copied"));
   }
 }
 
@@ -925,13 +926,13 @@ bool PdfView::Save(const std::wstring& path, std::wstring& error) {
 
 bool PdfView::ExportPdf(const std::wstring& path, std::wstring& message) {
   if (!Ready() || !CanExportPdf()) {
-    message = L"This PDF can't be exported.";
+    message = T(L"This PDF can't be exported.");
     return false;
   }
   if (!doc_->ExportFlattened(path, message)) return false;
   const int count = doc_->PageCount();
-  message = count == 1 ? L"Exported 1 page to " + fw::FileNameOf(path)
-                       : L"Exported " + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
+  message = count == 1 ? T(L"Exported 1 page to ") + fw::FileNameOf(path)
+                       : T(L"Exported ") + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
   return true;
 }
 
@@ -1261,7 +1262,7 @@ void PdfView::DrawNoteHover(Canvas& c) {
   if (age < 250) return;
   float alpha = theme::AnimationsEnabled() ? static_cast<float>(std::min(1.0, (age - 250) / 150)) : 1.0f;
 
-  const std::wstring& text = hoverNote_.text.empty() ? std::wstring(L"Empty note") : hoverNote_.text;
+  const std::wstring& text = hoverNote_.text.empty() ? std::wstring(T(L"Empty note")) : hoverNote_.text;
   const float w = 300 * u, pad = 14 * u, textSize = 13.5f * u;
   D2D1_RECT_F measure = gfx::RectF(0, 0, w - 2 * pad, 1000);
   float textH = c.TextWrapped(text, measure, p.text, textSize, 10, false);
@@ -1284,12 +1285,12 @@ void PdfView::DrawNoteHover(Canvas& c) {
   D2D1_RECT_F badge = gfx::RectF(card.left + pad, hy, card.left + pad + 20 * u, hy + 20 * u);
   c.FillRound(badge, 5 * u, gfx::Rgb(0xFFB900));
   c.Icon(icon::Comment, badge, gfx::Rgb(0x1B1B1B), 11 * u);
-  c.Text(L"Note", gfx::RectF(badge.right + 8 * u, hy, card.right - pad, hy + 20 * u), p.textSecondary, 12 * u,
+  c.Text(T(L"Note"), gfx::RectF(badge.right + 8 * u, hy, card.right - pad, hy + 20 * u), p.textSecondary, 12 * u,
          DWRITE_FONT_WEIGHT_SEMI_BOLD);
   float ty = hy + 20 * u + 8 * u;
   c.TextWrapped(text, gfx::RectF(card.left + pad, ty, card.right - pad, ty + textH + 2),
                 hoverNote_.text.empty() ? p.textSecondary : p.text, textSize, 10);
-  c.Text(L"Click to edit", gfx::RectF(card.left + pad, card.bottom - pad - 16 * u, card.right - pad, card.bottom - pad),
+  c.Text(T(L"Click to edit"), gfx::RectF(card.left + pad, card.bottom - pad - 16 * u, card.right - pad, card.bottom - pad),
          p.textSecondary, 11.5f * u);
   dc->PopLayer();
   if (alpha < 1) anim::KeepAlive(anim::Now() + 20);
@@ -1344,34 +1345,34 @@ namespace {
 // The reader's commands as command search and the toolbar name them, with the reader's keys.
 struct CommandName {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 constexpr CommandName kCommandNames[] = {
-    {CmdGoToPage, L"Go to page", L"Ctrl+G"},
-    {CmdNextPage, L"Next page", L"Page Down"},
-    {CmdPrevPage, L"Previous page", L"Page Up"},
-    {CmdFirstPage, L"First page", L"Home"},
-    {CmdLastPage, L"Last page", L"End"},
-    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
-    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
-    {CmdZoomAuto, L"Zoom automatically", L"Ctrl+0"},
-    {CmdZoomActual, L"Actual size", L"Ctrl+1"},
-    {CmdZoomFitPage, L"Fit page", L"Ctrl+2"},
-    {CmdZoomFitWidth, L"Fit width", L"Ctrl+3"},
-    {CmdViewSingle, L"Single page", L"Ctrl+6"},
-    {CmdViewContinuous, L"Continuous pages", L"Ctrl+7"},
-    {CmdViewFacing, L"Two pages", L"Ctrl+8"},
-    {CmdToggleCover, L"Show cover page on its own", L""},
-    {CmdRotateRight, L"Rotate clockwise", L"Ctrl+Shift+="},
-    {CmdRotateLeft, L"Rotate counterclockwise", L"Ctrl+Shift+−"},
-    {CmdPresentation, L"Present", L"F5"},
-    {CmdToggleInvert, L"Night reading: dark pages", L"Ctrl+I"},
-    {CmdCopy, L"Copy", L"Ctrl+C"},
-    {CmdSelectAll, L"Select all", L"Ctrl+A"},
-    {CmdSelectAllOnPage, L"Select all text on this page", L""},
-    {CmdHighlight, L"Highlight selected text", L""},
+    {CmdGoToPage, N_(L"Go to page"), L"Ctrl+G"},
+    {CmdNextPage, N_(L"Next page"), N_(L"Page Down")},
+    {CmdPrevPage, N_(L"Previous page"), N_(L"Page Up")},
+    {CmdFirstPage, N_(L"First page"), N_(L"Home")},
+    {CmdLastPage, N_(L"Last page"), N_(L"End")},
+    {CmdZoomIn, N_(L"Zoom in"), L"Ctrl+="},
+    {CmdZoomOut, N_(L"Zoom out"), L"Ctrl+−"},
+    {CmdZoomAuto, N_(L"Zoom automatically"), L"Ctrl+0"},
+    {CmdZoomActual, N_(L"Actual size"), L"Ctrl+1"},
+    {CmdZoomFitPage, N_(L"Fit page"), L"Ctrl+2"},
+    {CmdZoomFitWidth, N_(L"Fit width"), L"Ctrl+3"},
+    {CmdViewSingle, N_(L"Single page"), L"Ctrl+6"},
+    {CmdViewContinuous, N_(L"Continuous pages"), L"Ctrl+7"},
+    {CmdViewFacing, N_(L"Two pages"), L"Ctrl+8"},
+    {CmdToggleCover, N_(L"Show cover page on its own"), L""},
+    {CmdRotateRight, N_(L"Rotate clockwise"), L"Ctrl+Shift+="},
+    {CmdRotateLeft, N_(L"Rotate counterclockwise"), L"Ctrl+Shift+−"},
+    {CmdPresentation, N_(L"Present"), L"F5"},
+    {CmdToggleInvert, N_(L"Night reading: dark pages"), L"Ctrl+I"},
+    {CmdCopy, N_(L"Copy"), L"Ctrl+C"},
+    {CmdSelectAll, N_(L"Select all"), L"Ctrl+A"},
+    {CmdSelectAllOnPage, N_(L"Select all text on this page"), L""},
+    {CmdHighlight, N_(L"Highlight selected text"), L""},
 };
 
 }  // namespace
@@ -1465,10 +1466,10 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   ToolItem save = item(CmdSave, icon::Save);
   save.enabled = Modified();
   save.joinNext = true;
-  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save as\u2026 (Ctrl+Shift+S)");
+  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, T(L"Save as\u2026 (Ctrl+Shift+S)"));
   saveAs.width = 18;
   saveAs.glyphSize = 9;
-  ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"" : L"This PDF doesn’t allow printing");
+  ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"" : T(L"This PDF doesn’t allow printing"));
   print.enabled = CanPrint();
   m.left = {save, saveAs, print};
 
@@ -1480,7 +1481,7 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   wchar_t viewGlyph = viewMode_ == fw::ViewMode::Single   ? icon::ViewSingle
                       : viewMode_ == fw::ViewMode::Facing ? icon::ViewFacing
                                                           : icon::ViewContinuous;
-  ToolItem view = item(CmdViewMenu, viewGlyph, L"Page layout");
+  ToolItem view = item(CmdViewMenu, viewGlyph, T(L"Page layout"));
   view.width = 52;
   view.dropdown = true;
   view.priority = 1;
@@ -1518,40 +1519,40 @@ void PdfView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
   if (HasKeyFocus()) {
-    AppendItem(m, CmdCut, L"Cut\tCtrl+X");
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    AppendItem(m, CmdPaste, L"Paste\tCtrl+V");
+    AppendItem(m, CmdCut, T(L"Cut\tCtrl+X"));
+    AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"));
+    AppendItem(m, CmdPaste, T(L"Paste\tCtrl+V"));
     AppendSeparator(m);
-    AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
+    AppendItem(m, CmdSelectAll, T(L"Select all\tCtrl+A"));
     return;
   }
   contextPt_ = POINT{x, y};
   contextAnnot_ = AnnotAtPoint(x, y, contextPage_);
   if (HasSelection()) {
-    AppendItem(m, CmdHighlight, L"Highlight");
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
+    AppendItem(m, CmdHighlight, T(L"Highlight"));
+    AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"));
   }
   if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
-    AppendItem(m, CmdRemoveAnnot, L"Remove highlight");
+    AppendItem(m, CmdRemoveAnnot, T(L"Remove highlight"));
   } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
-    AppendItem(m, CmdOpenNote, L"Open note");
-    AppendItem(m, CmdRemoveAnnot, L"Delete note");
+    AppendItem(m, CmdOpenNote, T(L"Open note"));
+    AppendItem(m, CmdRemoveAnnot, T(L"Delete note"));
   } else if (contextPage_ >= 0) {
-    AppendItem(m, CmdAddNote, L"Add note here");
+    AppendItem(m, CmdAddNote, T(L"Add note here"));
   }
   AppendSeparator(m);
-  AppendItem(m, CmdSelectAllOnPage, L"Select all text on this page");
+  AppendItem(m, CmdSelectAllOnPage, T(L"Select all text on this page"));
   AppendSeparator(m);
   AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
-  AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
-  AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-  AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
+  AppendItem(m, CmdZoomOut, T(L"Zoom out\tCtrl+−"));
+  AppendItem(m, CmdZoomFitWidth, T(L"Fit width\tCtrl+3"));
+  AppendItem(m, CmdZoomFitPage, T(L"Fit page\tCtrl+2"));
   AppendSeparator(m);
   AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
-  AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
+  AppendItem(m, CmdRotateLeft, T(L"Rotate counterclockwise\tCtrl+Shift+−"));
   AppendSeparator(m);
-  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-  AppendItem(m, CmdPrint, L"Print…\tCtrl+P", CanPrint());
+  AppendItem(m, CmdFind, T(L"Find…\tCtrl+F"));
+  AppendItem(m, CmdPrint, T(L"Print…\tCtrl+P"), CanPrint());
 }
 
 PrintOutcome PdfView::Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) {

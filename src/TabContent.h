@@ -9,6 +9,7 @@
 
 #include "Outcome.h"
 #include "Settings.h"
+#include "core/Lang.h"
 #include "ui/Banner.h"
 #include "ui/Gfx.h"
 #include "ui/Widgets.h"
@@ -234,7 +235,7 @@ class TabContent {
   // is. False with a reason in `message` when it couldn't; `message` says what was done otherwise.
   virtual bool CanExportPdf() const { return false; }
   virtual bool ExportPdf(const std::wstring& /*path*/, std::wstring& message) {
-    message = L"This tab can't be exported as a PDF.";
+    message = T(L"This tab can't be exported as a PDF.");
     return false;
   }
   virtual FileState State() const = 0;

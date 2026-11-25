@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
@@ -21,9 +22,9 @@ StatusBar::StatusBar() {
   zoomOut_.id = 1;
   zoomIn_.id = 2;
   zoomOut_.glyph = icon::Remove;
-  zoomOut_.tooltip = L"Zoom out";
+  zoomOut_.tooltip = T(L"Zoom out");
   zoomIn_.glyph = icon::Add;
-  zoomIn_.tooltip = L"Zoom in";
+  zoomIn_.tooltip = T(L"Zoom in");
   zoomOut_.glyphSize = zoomIn_.glyphSize = 12;
   set_.Add(&zoomOut_);
   set_.Add(&zoomIn_);
@@ -207,7 +208,7 @@ std::wstring StatusBar::TooltipAt(int x, int y) const {
   if (!m_.zoom) return {};
   if (zoomOut_.visible && Contains(zoomOut_.rc, (float)x, (float)y)) return zoomOut_.tooltip;
   if (zoomIn_.visible && Contains(zoomIn_.rc, (float)x, (float)y)) return zoomIn_.tooltip;
-  if (Contains(slider_, (float)x, (float)y)) return L"Zoom";
+  if (Contains(slider_, (float)x, (float)y)) return T(L"Zoom");
   return {};
 }
 
@@ -241,12 +242,12 @@ bool StatusBar::OnKeyDown(UINT vk, bool ctrl, bool) {
 }
 
 void StatusBar::Describe(uia::Tree& t, int parent, const std::function<void()>& focus) {
-  int bar = t.Add(parent, 9, UIA_StatusBarControlTypeId, L"Status bar", RectF(rc_));
+  int bar = t.Add(parent, 9, UIA_StatusBarControlTypeId, T(L"Status bar"), RectF(rc_));
   for (size_t i = 0; i < segmentRc_.size(); ++i)
     t.Add(bar, 10 + static_cast<int64_t>(i), UIA_TextControlTypeId, m_.segments[i], segmentRc_[i]);
   if (!m_.zoom) return;
   uia::AddButton(t, bar, 1, zoomOut_, [this] { SetZoom(Step(-1)); });
-  int s = t.Add(bar, 2, UIA_SliderControlTypeId, L"Zoom", slider_);
+  int s = t.Add(bar, 2, UIA_SliderControlTypeId, T(L"Zoom"), slider_);
   {
     uia::Node& n = t[s];
     n.orientation = OrientationType_Horizontal;

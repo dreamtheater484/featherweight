@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/xlsx/Internal.h"
 
 namespace fw::sheet::edit {
@@ -233,8 +234,8 @@ class Fields {
 void Editor::SetJournal(Journal* journal) { journal_ = journal; }
 
 Result Editor::Replay(std::string_view records, size_t* applied) {
-  const Result damaged = Result::Fail(u"The recovery journal is damaged.");
-  const Result differs = Result::Fail(u"The recovery journal doesn't match this workbook.");
+  const Result damaged = Result::Fail(T(u"The recovery journal is damaged."));
+  const Result differs = Result::Fail(T(u"The recovery journal doesn't match this workbook."));
   if (applied) *applied = 0;
   Fields in(records);
   for (size_t done = 0; !in.AtEnd(); ++done) {
@@ -250,7 +251,7 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
       case JournalOp::Version: {
         const uint64_t v = f.U();
         if (v == 0 || v > Journal::kVersion)
-          return Result::Fail(u"The recovery journal was written by a newer Featherweight.");
+          return Result::Fail(T(u"The recovery journal was written by a newer Featherweight."));
         break;
       }
       case JournalOp::SetCells: {

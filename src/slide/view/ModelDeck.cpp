@@ -17,6 +17,7 @@
 #include "text/Fonts.h"
 
 #if __has_include("slide/edit/Edit.h")
+#include "core/Lang.h"
 #include "slide/edit/Edit.h"
 #define FW_SLIDE_EDIT 1
 #else
@@ -348,7 +349,7 @@ std::unique_ptr<Deck> OpenDeck(const std::wstring& path, std::wstring& error) {
   pkg::Status status;
   std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path, {}, status);
   if (!snap) {
-    error = L"The file couldn't be read.";
+    error = T(L"The file couldn't be read.");
     return nullptr;
   }
   return DeckOf(std::move(snap), error);
@@ -358,15 +359,15 @@ std::unique_ptr<Deck> OpenOpenDocument(const std::wstring& path, std::wstring& e
   pkg::Status status;
   std::unique_ptr<pkg::Snapshot> snap = pkg::Snapshot::Open(path, {}, status);
   if (!snap) {
-    error = L"The file couldn't be read.";
+    error = T(L"The file couldn't be read.");
     return nullptr;
   }
   std::vector<uint8_t> pptx;
   status = odp::OdpToPptx(snap->Bytes(), pptx);
   snap.reset();
   if (!status.Ok()) {
-    error = status.code == pkg::Status::Code::TooLarge ? L"It's too large to open."
-                                                       : L"It seems to be damaged or isn't an OpenDocument presentation.";
+    error = status.code == pkg::Status::Code::TooLarge ? T(L"It's too large to open.")
+                                                       : T(L"It seems to be damaged or isn't an OpenDocument presentation.");
     return nullptr;
   }
   return DeckOf(pkg::Snapshot::FromBytes(std::move(pptx)), error);
@@ -390,14 +391,14 @@ bool ReadLegacyPresentation(const std::wstring& path, std::wstring_view password
   pptx = ppt::ToPptx(streams, status, password);
   if (pptx.empty() && locked && status.code == pkg::Status::Code::Rejected) return true;  // the wrong password
   if (pptx.empty())
-    error = status.message.empty() ? L"This file isn't a presentation Featherweight can open, or it is damaged."
-                                   : L"It couldn't be opened — " + Utf8ToWide(status.message);
+    error = status.message.empty() ? T(L"This file isn't a presentation Featherweight can open, or it is damaged.")
+                                   : T(L"It couldn't be opened — ") + Utf8ToWide(status.message);
   return true;
 }
 
 std::unique_ptr<Deck> OpenDeckFromBytes(std::vector<uint8_t> bytes, std::wstring& error) {
   if (bytes.empty()) {
-    error = L"The presentation couldn't be made.";
+    error = T(L"The presentation couldn't be made.");
     return nullptr;
   }
   return DeckOf(pkg::Snapshot::FromBytes(std::move(bytes)), error);
@@ -409,7 +410,7 @@ std::unique_ptr<Deck> DeckOf(std::unique_ptr<pkg::Snapshot> snap, std::wstring& 
   std::unique_ptr<pkg::Package> package = pkg::Package::Open(std::move(snap), pkg::Limits::Default(), status);
   std::unique_ptr<Presentation> deck = package && status.Ok() ? Read(std::move(package), status) : nullptr;
   if (!deck) {
-    error = status.message.empty() ? L"This file isn't a presentation Featherweight can open, or it is damaged."
+    error = status.message.empty() ? T(L"This file isn't a presentation Featherweight can open, or it is damaged.")
                                    : Utf8ToWide(status.message);
     return nullptr;
   }

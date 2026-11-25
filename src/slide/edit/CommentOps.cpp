@@ -13,6 +13,7 @@
 #include <cwctype>
 #include <map>
 
+#include "core/Lang.h"
 #include "pkg/OfficeCrypto.h"
 #include "slide/edit/EditInternal.h"
 
@@ -474,7 +475,7 @@ void RemovePart(Editor::Impl& m, std::string_view slidePart, std::string_view re
 
 Result CheckSlide(Editor::Impl& m, size_t slide, std::string& part) {
   part = m.SlidePart(slide);
-  if (part.empty()) return Result::Fail(u"That slide isn't in the presentation.");
+  if (part.empty()) return Result::Fail(T(u"That slide isn't in the presentation."));
   return {};
 }
 
@@ -508,28 +509,28 @@ std::vector<size_t> CommentCounts(Editor& ed) {
 }
 
 Result AddComment(Editor& ed, size_t slide, draw::Point at, std::wstring_view text, const CommentAuthor& who, std::string* id) {
-  Call call(ed, u"New Comment");
+  Call call(ed, T(u"New Comment"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   const std::wstring body = Trimmed(text);
-  if (body.empty()) return call.End(Result::Fail(u"A comment needs some text."));
+  if (body.empty()) return call.End(Result::Fail(T(u"A comment needs some text.")));
   const std::vector<Editor::Impl::SlideEntry> list = m.SlideList();
   const uint32_t sldId = slide < list.size() ? list[slide].id : 0;
   const uint32_t cId = CreationId(m, sp);
   const std::string author = ModernAuthor(ed, who);
-  if (!cId || author.empty()) return call.End(Result::Fail(u"The comment couldn't be added to this slide."));
+  if (!cId || author.empty()) return call.End(Result::Fail(T(u"The comment couldn't be added to this slide.")));
   std::string part = ModernPart(m, sp);
   if (part.empty()) {
     part = "/ppt/comments/modernComment_" + Hex(sldId) + "_" + Hex(cId) + ".xml";
     if (m.Exists(part)) part = m.NewName("/ppt/comments/modernComment_" + Hex(sldId) + "_" + Hex(cId) + "_", ".xml");
     auto dom = NewPart(ed, "p188:cmLst", kP188);
-    if (!dom) return call.End(Result::Fail(u"The comment couldn't be added to this slide."));
+    if (!dom) return call.End(Result::Fail(T(u"The comment couldn't be added to this slide.")));
     m.PutXml(part, dom, kTypeModern);
     AddCommentRel(m.Edit(sp), m.AddRel(sp, kRelModern, part));
   }
   pugi::xml_node root = m.Edit(part);
-  if (!IsElement(root, kP188, "cmLst")) return call.End(Result::Fail(u"This slide's comments can't be read."));
+  if (!IsElement(root, kP188, "cmLst")) return call.End(Result::Fail(T(u"This slide's comments can't be read.")));
   const std::string p188 = PrefixFor(root, kP188, "p188");
   const std::string newId = NewGuid();
   pugi::xml_node cm = root.append_child((p188 + ":cm").c_str());
@@ -553,19 +554,19 @@ Result AddComment(Editor& ed, size_t slide, draw::Point at, std::wstring_view te
 
 Result ReplyToComment(Editor& ed, size_t slide, std::string_view id, std::wstring_view text, const CommentAuthor& who,
                       std::string* replyId) {
-  Call call(ed, u"Reply to Comment");
+  Call call(ed, T(u"Reply to Comment"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   const std::wstring body = Trimmed(text);
-  if (body.empty()) return call.End(Result::Fail(u"A reply needs some text."));
+  if (body.empty()) return call.End(Result::Fail(T(u"A reply needs some text.")));
   Found f = Locate(m, sp, id);
-  if (!f.node) return call.End(Result::Fail(u"That comment isn't on this slide."));
+  if (!f.node) return call.End(Result::Fail(T(u"That comment isn't on this slide.")));
   std::string newId;
   if (f.legacy) {
     std::string author;
     uint32_t idx = 0;
-    if (!LegacyAuthor(ed, who, author, idx)) return call.End(Result::Fail(u"The reply couldn't be added."));
+    if (!LegacyAuthor(ed, who, author, idx)) return call.End(Result::Fail(T(u"The reply couldn't be added.")));
     pugi::xml_node root = m.Edit(f.part);
     const std::string p = PrefixFor(root, kP, "p");
     pugi::xml_node cm = root.append_child((p + ":cm").c_str());
@@ -590,7 +591,7 @@ Result ReplyToComment(Editor& ed, size_t slide, std::string_view id, std::wstrin
     newId = std::string(kLegacy) + author + ":" + std::to_string(idx);
   } else {
     const std::string author = ModernAuthor(ed, who);
-    if (author.empty()) return call.End(Result::Fail(u"The reply couldn't be added."));
+    if (author.empty()) return call.End(Result::Fail(T(u"The reply couldn't be added.")));
     const std::string p188 = PrefixFor(f.thread, kP188, "p188");
     pugi::xml_node list = First(f.thread, kP188, "replyLst");
     if (!list) {
@@ -612,14 +613,14 @@ Result ReplyToComment(Editor& ed, size_t slide, std::string_view id, std::wstrin
 }
 
 Result EditComment(Editor& ed, size_t slide, std::string_view id, std::wstring_view text) {
-  Call call(ed, u"Edit Comment");
+  Call call(ed, T(u"Edit Comment"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   const std::wstring body = Trimmed(text);
-  if (body.empty()) return call.End(Result::Fail(u"A comment needs some text."));
+  if (body.empty()) return call.End(Result::Fail(T(u"A comment needs some text.")));
   Found f = Locate(m, sp, id);
-  if (!f.node) return call.End(Result::Fail(u"That comment isn't on this slide."));
+  if (!f.node) return call.End(Result::Fail(T(u"That comment isn't on this slide.")));
   if (f.legacy) {
     pugi::xml_node t = First(f.node, kP, "text");
     if (!t) {
@@ -642,12 +643,12 @@ Result EditComment(Editor& ed, size_t slide, std::string_view id, std::wstring_v
 }
 
 Result DeleteComment(Editor& ed, size_t slide, std::string_view id) {
-  Call call(ed, u"Delete Comment");
+  Call call(ed, T(u"Delete Comment"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   Found f = Locate(m, sp, id);
-  if (!f.node) return call.End(Result::Fail(u"That comment isn't on this slide."));
+  if (!f.node) return call.End(Result::Fail(T(u"That comment isn't on this slide.")));
   pugi::xml_node root = m.Edit(f.part);
   if (f.legacy) {
     const std::string thread = f.node == f.thread ? LegacyId(f.node.attribute("authorId"), f.node.attribute("idx")) : "";
@@ -688,7 +689,7 @@ Result DeleteComment(Editor& ed, size_t slide, std::string_view id) {
 }
 
 Result DeleteAllComments(Editor& ed, const std::vector<size_t>& slides) {
-  Call call(ed, u"Delete All Comments");
+  Call call(ed, T(u"Delete All Comments"));
   Editor::Impl& m = ed.Internals();
   std::vector<size_t> which = slides;
   if (which.empty())
@@ -704,18 +705,18 @@ Result DeleteAllComments(Editor& ed, const std::vector<size_t>& slides) {
     m.CommentsChanged(sp);
     any = true;
   }
-  if (!any) return call.End(Result::Fail(u"There are no comments to delete."));
+  if (!any) return call.End(Result::Fail(T(u"There are no comments to delete.")));
   return call.End({});
 }
 
 Result ResolveComment(Editor& ed, size_t slide, std::string_view id, bool resolved) {
-  Call call(ed, resolved ? u"Resolve Thread" : u"Reopen Thread");
+  Call call(ed, resolved ? T(u"Resolve Thread") : T(u"Reopen Thread"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   Found f = Locate(m, sp, id);
-  if (!f.node) return call.End(Result::Fail(u"That comment isn't on this slide."));
-  if (f.legacy) return call.End(Result::Fail(u"This comment is in PowerPoint's older format, which can't mark it resolved."));
+  if (!f.node) return call.End(Result::Fail(T(u"That comment isn't on this slide.")));
+  if (f.legacy) return call.End(Result::Fail(T(u"This comment is in PowerPoint's older format, which can't mark it resolved.")));
   f.thread.remove_attribute("status");
   if (resolved) f.thread.append_attribute("status") = "resolved";
   m.CommentsChanged(sp);
@@ -723,12 +724,12 @@ Result ResolveComment(Editor& ed, size_t slide, std::string_view id, bool resolv
 }
 
 Result MoveComment(Editor& ed, size_t slide, std::string_view id, draw::Point at) {
-  Call call(ed, u"Move Comment");
+  Call call(ed, T(u"Move Comment"));
   Editor::Impl& m = ed.Internals();
   std::string sp;
   if (Result r = CheckSlide(m, slide, sp); !r) return call.End(r);
   Found f = Locate(m, sp, id);
-  if (!f.node) return call.End(Result::Fail(u"That comment isn't on this slide."));
+  if (!f.node) return call.End(Result::Fail(T(u"That comment isn't on this slide.")));
   at = {std::max(0.f, at.x), std::max(0.f, at.y)};
   if (f.legacy) {
     const std::string p = PrefixFor(f.thread, kP, "p");

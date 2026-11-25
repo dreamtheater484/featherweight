@@ -15,6 +15,7 @@
 #include <limits>
 #include <map>
 
+#include "core/Lang.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "sheet/pivot/Pivot.h"
@@ -29,7 +30,7 @@ constexpr int32_t kData = -2;  // the data fields' place on an axis
 // ---- Reading the source
 
 bool SourceRange(Workbook& book, const Cache& cache, size_t& sheet, Range& r, std::u16string& why) {
-  why = u"The reference to the PivotTable's data source isn't valid.";
+  why = T(u"The reference to the PivotTable's data source isn't valid.");
   if (!cache.name.empty()) {
     if (const sheet::Table* t = book.FindTable(cache.name, &sheet)) {
       r = t->ref;
@@ -123,7 +124,7 @@ bool ItemLess(const Item& a, const Item& b) {
 bool RefreshCache(Workbook& book, Cache& cache, const std::vector<bool>& axisFields,
                   std::vector<std::vector<uint32_t>>& remap, std::u16string& why) {
   if (!cache.why.empty()) {
-    why = u"This PivotTable uses features Featherweight keeps but doesn't refresh.";
+    why = T(u"This PivotTable uses features Featherweight keeps but doesn't refresh.");
     return false;
   }
   size_t sheet = 0;
@@ -138,8 +139,8 @@ bool RefreshCache(Workbook& book, Cache& cache, const std::vector<bool>& axisFie
   for (size_t c = 0; c < n; ++c) {
     std::string name = HeaderText(s.GetValue(r.firstRow, r.firstCol + static_cast<uint32_t>(c)));
     if (name.empty()) {
-      why = u"The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a "
-            u"list with labeled columns.";
+      why = T(u"The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a "
+            u"list with labeled columns.");
       return false;
     }
     for (size_t f = 0; f < cache.fields.size(); ++f)
@@ -154,9 +155,9 @@ bool RefreshCache(Workbook& book, Cache& cache, const std::vector<bool>& axisFie
     if (column[f] == SIZE_MAX && f < n && std::find(column.begin(), column.end(), f) == column.end()) column[f] = f;
   for (size_t f = 0; f < cache.fields.size(); ++f)
     if (column[f] == SIZE_MAX || cache.fields[f].kept) {
-      why = u"The PivotTable's source no longer has the column “" + std::u16string(cache.fields[f].name.begin(), cache.fields[f].name.end()) +
-            u"”. Featherweight refreshes PivotTables whose source keeps its columns.";
-      if (cache.fields[f].kept) why = u"This PivotTable uses features Featherweight keeps but doesn't refresh.";
+      why = T(u"The PivotTable's source no longer has the column “") + std::u16string(cache.fields[f].name.begin(), cache.fields[f].name.end()) +
+            T(u"”. Featherweight refreshes PivotTables whose source keeps its columns.");
+      if (cache.fields[f].kept) why = T(u"This PivotTable uses features Featherweight keeps but doesn't refresh.");
       return false;
     }
   const Styles& styles = book.GetStyles();
@@ -531,7 +532,7 @@ Range AreaOf(const Range& location, uint32_t pages) {
 }
 
 bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
-  why = u"This PivotTable uses features Featherweight keeps but doesn't refresh.";
+  why = T(u"This PivotTable uses features Featherweight keeps but doesn't refresh.");
   if (!t.why.empty() || !cache.why.empty() || t.fields.size() != cache.fields.size()) return false;
   const size_t nf = cache.fields.size();
   for (const std::vector<int32_t>* list : {&t.rowFields, &t.colFields})
@@ -609,7 +610,7 @@ bool Lay(const Cache& cache, Table& t, Layout& out, std::u16string& why) {
   uint64_t lastCol = uint64_t{left} + fdc + cols.size() - 1 - (noValueCol ? 1 : 0);
   if (nothing) lastRow = top + (pages ? 0 : 17), lastCol = left + (pages ? 0 : 2);
   if (lastRow >= kMaxRows || lastCol >= kMaxCols || (pages && (top < pages + 1 || left + 1 >= kMaxCols))) {
-    why = u"The PivotTable doesn't fit on the sheet.";
+    why = T(u"The PivotTable doesn't fit on the sheet.");
     return false;
   }
   t.firstHeaderRow = fhr;

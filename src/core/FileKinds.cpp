@@ -1,5 +1,6 @@
 #include "core/FileKinds.h"
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 
 namespace fw {
@@ -14,14 +15,14 @@ constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".pot
 
 // Ships a kind: set `viewer` when its viewer is released, `editor` when its editor is.
 const FileKindInfo kKinds[] = {
-    {FileKind::Pdf, L"PDF", L"PDF", L"PDFs", L"Featherweight.PDF", L"PDF Document", L"PDF documents", kPdf, {}, 0,
+    {FileKind::Pdf, L"PDF", L"PDF", L"PDFs", L"Featherweight.PDF", N_(L"PDF Document"), N_(L"PDF documents"), kPdf, {}, 0,
      true, false},
-    {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", L"Document", L"Documents",
+    {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", N_(L"Document"), N_(L"Documents"),
      kDocument, kDocumentLater, 1, true, true},
-    {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
-     L"Spreadsheets", kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
+    {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", N_(L"Spreadsheet"),
+     N_(L"Spreadsheets"), kWorkbook, {}, 2, true, true},  // the editor ships in 3.0 (S4, W13)
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
-     L"Presentation", L"Presentations", kPresentation, {}, 3, true, true},  // the viewer in 3.1 (P1), the editor in 4.0 (P2, P3)
+     N_(L"Presentation"), N_(L"Presentations"), kPresentation, {}, 3, true, true},  // the viewer in 3.1 (P1), the editor in 4.0 (P2, P3)
 };
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kFileKindCount);
 

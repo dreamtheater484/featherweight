@@ -8,6 +8,7 @@
 
 #include "Settings.h"
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "ui/Uia.h"
 #include "ui/Widgets.h"
 
@@ -33,7 +34,7 @@ class EmptyState {
   };
   // The built-in templates, in fw::doc::docx::Template's order (after None).
   static constexpr int kTemplateCount = 3;
-  static constexpr const wchar_t* kTemplates[kTemplateCount] = {L"Letter", L"CV", L"Report"};
+  static constexpr UiText kTemplates[kTemplateCount] = {N_(L"Letter"), L"CV", N_(L"Report")};
 
   EmptyState();
   // `templates`: the user's own (usertemplates::List). `showRecent`: Settings::showRecent.

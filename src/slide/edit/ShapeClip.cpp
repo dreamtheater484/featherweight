@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <sstream>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 
@@ -96,11 +97,11 @@ ShapeClip Editor::CopyShapes(size_t slide, const std::vector<uint32_t>& ids) con
 }
 
 Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint32_t>* ids) {
-  Call call(*this, u"Paste");
+  Call call(*this, T(u"Paste"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  if (clip.Empty()) return call.End(Result::Fail(u"There's nothing to paste."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
+  if (clip.Empty()) return call.End(Result::Fail(T(u"There's nothing to paste.")));
   bool sameDeck = clip.deck == &deck_;
   // The clip's parts here: shared ones found by bytes (or used again within this deck), the rest new.
   std::map<std::string, std::string> placed;  // clip part key -> name here
@@ -179,11 +180,11 @@ Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint
     }
     renamed[r.id] = id;  // empty: a slide link that can't come along (its link is dropped)
   }
-  if (lost) return call.End(Result::Fail(u"The shapes can't be pasted, because a part they use can't be read."));
+  if (lost) return call.End(Result::Fail(T(u"The shapes can't be pasted, because a part they use can't be read.")));
   if (ids) ids->clear();
   for (const std::string& xml : clip.shapes) {
     pugi::xml_document doc;
-    if (!ParseFragment(xml, doc)) return call.End(Result::Fail(u"The copied shapes can't be read."));
+    if (!ParseFragment(xml, doc)) return call.End(Result::Fail(T(u"The copied shapes can't be read.")));
     // Through placeholders first, so a new id that equals an old one isn't renamed twice.
     std::vector<std::pair<pugi::xml_attribute, std::string>> sites;
     std::vector<pugi::xml_node> dropped;  // links to a slide that isn't here: never an empty r:id
@@ -196,7 +197,7 @@ Result Editor::PasteShapes(size_t slide, const ShapeClip& clip, std::vector<uint
       }
       const std::string_view k = LocalNameOf(f.element);
       if (k != "hlinkClick" && k != "hlinkHover" && k != "hlinkMouseOver") {
-        return call.End(Result::Fail(u"The shapes can't be pasted, because a part they use can't be read."));
+        return call.End(Result::Fail(T(u"The shapes can't be pasted, because a part they use can't be read.")));
       }
       dropped.push_back(f.element);
     }

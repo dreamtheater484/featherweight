@@ -6,6 +6,7 @@
 #include <cstring>
 #include <set>
 
+#include "core/Lang.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/edit/Charts.h"
 #include "sheet/edit/Edit.h"
@@ -723,7 +724,7 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
   if (!st.Ok()) return st;
   pugi::xml_document doc;
   if (!doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments))
-    return Status::Fail(Status::Code::Damaged, "The styles can't be written.");
+    return Status::Fail(Status::Code::Damaged, ::T("The styles can't be written."));
   pugi::xml_node root = doc.document_element();
   std::string p;
   if (std::string_view n = root.name(); n.find(':') != std::string_view::npos) p = std::string(n.substr(0, n.find(':') + 1));
@@ -754,7 +755,7 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
       !AppendNew(root, "fills", "fill", s.Fills(), FillXml, p) ||
       !AppendNew(root, "borders", "border", s.Borders(), BorderXml, p) ||
       !AppendNew(root, "cellXfs", "xf", s.CellXfs(), [](const Xf& x) { return XfXml(x); }, p))
-    return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new formats.");
+    return Status::Fail(Status::Code::Unsupported, ::T("The workbook's styles can't take the new formats."));
   // Cell styles added (Editor::AddCellStyle): their lists made where the schema puts them when the
   // file has none (cellStyleXfs before cellXfs, cellStyles after).
   if (pugi::xml_node xfs = Child(root, "cellXfs")) {
@@ -764,7 +765,7 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
   }
   if (!AppendNew(root, "cellStyleXfs", "xf", s.CellStyleXfs(), StyleXfXml, p) ||
       !AppendNew(root, "cellStyles", "cellStyle", s.CellStyles(), CellStyleXml, p))
-    return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new cell styles.");
+    return Status::Fail(Status::Code::Unsupported, ::T("The workbook's styles can't take the new cell styles."));
   // Differential formats added (Editor::AddDxf, conditional formats): the list after cellStyles.
   if (!Child(root, "dxfs") && !s.Dxfs().empty()) {
     pugi::xml_node after = Child(root, "cellStyles");
@@ -772,7 +773,7 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
     if (after) root.insert_child_after((p + "dxfs").c_str(), after);
   }
   if (!AppendNew(root, "dxfs", "dxf", s.Dxfs(), DxfXml, p))
-    return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new conditional formats.");
+    return Status::Fail(Status::Code::Unsupported, ::T("The workbook's styles can't take the new conditional formats."));
   out = Bytes(PrintDoc(doc));
   return {};
 }
@@ -1056,14 +1057,14 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   plan.format = format;
   const pkg::Package* pkg = book.GetPackage();
   if (!pkg || format == FileFormat::Csv)
-    return Status::Fail(Status::Code::Unsupported, "This workbook can't be saved as an Excel workbook.");
+    return Status::Fail(Status::Code::Unsupported, ::T("This workbook can't be saved as an Excel workbook."));
   const bool macros = format == FileFormat::Xlsm || format == FileFormat::Xltm;
   if (!macros)
     for (size_t i = 0; i < book.SheetCount(); ++i)
       if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
         return Status::Fail(Status::Code::Unsupported,
                             "The sheet " + book.GetSheet(i).Name() +
-                                " holds macros, which only a macro-enabled workbook (.xlsm) keeps.");
+                                ::T(" holds macros, which only a macro-enabled workbook (.xlsm) keeps."));
   const std::string& wbPart = book.WorkbookPart();
   std::vector<uint8_t> bytes;
   auto put = [&](std::string name, std::vector<uint8_t> data) { plan.changes.replace.push_back({std::move(name), std::move(data)}); };
@@ -1073,7 +1074,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   if (!st.Ok()) return st;
   pugi::xml_document wb;
   if (!wb.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments))
-    return Status::Fail(Status::Code::Damaged, "The workbook part can't be written.");
+    return Status::Fail(Status::Code::Damaged, ::T("The workbook part can't be written."));
   pugi::xml_node root = wb.document_element();
   std::string p;
   if (std::string_view n = root.name(); n.find(':') != std::string_view::npos) p = std::string(n.substr(0, n.find(':') + 1));
@@ -1101,7 +1102,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   pugi::xml_document types;
   std::vector<uint8_t> typeBytes;
   if (!pkg->ReadPart("/[Content_Types].xml", typeBytes).Ok() || !types.load_buffer(typeBytes.data(), typeBytes.size()))
-    return Status::Fail(Status::Code::Damaged, "The list of contents can't be written.");
+    return Status::Fail(Status::Code::Damaged, ::T("The list of contents can't be written."));
   pugi::xml_node typesRoot = types.document_element();
   bool relsChanged = false, typesChanged = false;
   auto dropRel = [&](std::string_view id) {
@@ -1144,7 +1145,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     }
   };
 
-  if (!relRoot) return Status::Fail(Status::Code::Damaged, "The workbook's relationships can't be written.");
+  if (!relRoot) return Status::Fail(Status::Code::Damaged, ::T("The workbook's relationships can't be written."));
   // The workbook part's content type says what the file is (Excel refuses an .xlsx typed as .xlsm).
   {
     std::string_view want = format == FileFormat::Xlsm   ? kXlsmCt
@@ -1327,7 +1328,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   // workbook.xml: sheets, names, the active tab.
   if (ed.WorkbookDirty() || added) {
     pugi::xml_node sheets = Child(root, "sheets");
-    if (!sheets) return Status::Fail(Status::Code::Damaged, "The workbook part lists no sheets.");
+    if (!sheets) return Status::Fail(Status::Code::Damaged, ::T("The workbook part lists no sheets."));
     std::vector<pugi::xml_node> old;
     for (pugi::xml_node c : sheets.children())
       if (c.type() == pugi::node_element) old.push_back(c);
@@ -1439,7 +1440,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   // Styles and shared strings (a workbook opened from CSV writes them whole: GiveBasePackage).
   const bool fromCsv = book.Format() == FileFormat::Csv;
   if (ed.StylesDirty() || fromCsv) {
-    if (book.StylesPart().empty()) return Status::Fail(Status::Code::Unsupported, "The workbook has no styles part.");
+    if (book.StylesPart().empty()) return Status::Fail(Status::Code::Unsupported, ::T("The workbook has no styles part."));
     std::vector<uint8_t> out;
     if (!(st = StylesPart(book, out)).Ok()) return st;
     put(book.StylesPart(), std::move(out));
@@ -1449,7 +1450,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     plan.strings = true;
     if (part.empty()) {
       part = dir + "sharedStrings.xml";
-      if (taken(part)) return Status::Fail(Status::Code::Unsupported, "The workbook's shared strings can't be added.");
+      if (taken(part)) return Status::Fail(Status::Code::Unsupported, ::T("The workbook's shared strings can't be added."));
       pugi::xml_node rel = relRoot.append_child("Relationship");
       rel.append_attribute("Id").set_value(newRelId().c_str());
       rel.append_attribute("Type").set_value((relType + "sharedStrings").c_str());
@@ -1479,7 +1480,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
 
 Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
   const pkg::Package* pkg = book.GetPackage();
-  if (!pkg) return Status::Fail(Status::Code::Unsupported, "This workbook has no file to save into.");
+  if (!pkg) return Status::Fail(Status::Code::Unsupported, ::T("This workbook has no file to save into."));
   // Charts' caches follow the cells (s3-charts): a chart whose cells hold what it caches is copied;
   // one read again is written and kept, as the small parts are.
   for (const pkg::Part& part : pkg->Parts()) {

@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Backups.h"
 
@@ -91,13 +92,13 @@ bool FileSession::BeginSave(const std::wstring& path, SaveJob& job, std::wstring
   if (sameFile) {
     // Two versions are never mixed (plan §3): the file must be as we last read or wrote it.
     if (pkg::CheckDisk(path_, stamp_) != pkg::Snapshot::DiskState::Unchanged) {
-      error = job.name + L" was changed by another program after you opened it.";
+      error = job.name + T(L" was changed by another program after you opened it.");
       return false;
     }
     inUse_ = pkg::CheckInUse(path_, Config().user, owner_);
     if (inUse_.locked) {
-      error = inUse_.user.empty() ? job.name + L" is open in another program, so it can't be replaced."
-                                  : job.name + L" is in use by " + inUse_.user + L", so it can't be replaced.";
+      error = inUse_.user.empty() ? job.name + T(L" is open in another program, so it can't be replaced.")
+                                  : job.name + T(L" is in use by ") + inUse_.user + T(L", so it can't be replaced.");
       return false;
     }
   }
@@ -117,7 +118,7 @@ pkg::SaveResult FileSession::WriteSave(const SaveJob& job, std::vector<uint8_t> 
     if (bytes.empty()) {
       pkg::SaveResult failed;
       failed.failure = pkg::SaveFailure::Other;
-      failed.message = fw::WideToUtf8(job.name + L" couldn't be saved — Windows couldn't encrypt it.");
+      failed.message = fw::WideToUtf8(job.name + T(L" couldn't be saved — Windows couldn't encrypt it."));
       return failed;
     }
   }
@@ -202,8 +203,8 @@ void FileSession::AutosaveProtected(std::span<const uint8_t> file) {
 std::wstring FileSession::InUseMessage() const {
   if (!inUse_.locked) return {};
   const std::wstring name = Title();
-  return (inUse_.user.empty() ? name + L" is open in another program." : name + L" is in use by " + inUse_.user + L".") +
-         L" Changes you make here can be saved as a copy.";
+  return (inUse_.user.empty() ? name + T(L" is open in another program.") : name + T(L" is in use by ") + inUse_.user + L".") +
+         T(L" Changes you make here can be saved as a copy.");
 }
 
 FileSession::DiskChange FileSession::CheckDisk() {

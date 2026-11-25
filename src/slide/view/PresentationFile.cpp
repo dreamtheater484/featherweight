@@ -6,6 +6,7 @@
 #include <new>
 #include <thread>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Zip.h"
 #include "slide/edit/Save.h"
@@ -22,7 +23,7 @@ struct PresentationFile::Running {
   pkg::SaveResult result;
 };
 
-PresentationFile::PresentationFile() : FileSession(L"Presentation", fw::pkg::OwnerStyle::Word) {}
+PresentationFile::PresentationFile() : FileSession(T(L"Presentation"), fw::pkg::OwnerStyle::Word) {}
 
 PresentationFile::~PresentationFile() {
   if (run_ && run_->worker.joinable()) run_->worker.join();
@@ -54,7 +55,7 @@ std::wstring PresentationFile::SuggestedPath(const fw::slide::Presentation& deck
 bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wstring& path, std::function<void()> done,
                                  std::wstring& error) {
   if (run_) {
-    error = Title() + L" is being saved already.";
+    error = Title() + T(L" is being saved already.");
     return false;
   }
   auto r = std::make_unique<Running>();
@@ -62,7 +63,7 @@ bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wst
   const fw::slide::Presentation& deck = editor.Deck();
   pkg::Status st = fw::slide::edit::PrepareSave(editor, r->plan, FormatOf(r->job.target, deck.Format()));
   if (!st.Ok()) {
-    error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
+    error = r->job.name + T(L" couldn't be saved. ") + fw::Utf8ToWide(st.message);
     return false;
   }
   r->editor = &editor;
@@ -74,7 +75,7 @@ bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wst
       p->written = fw::slide::edit::WriteSave(p->plan, sink);
       if (p->written.Ok()) p->result = FileSession::WriteSave(p->job, std::move(sink.bytes), opened);
     } catch (const std::bad_alloc&) {
-      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, "There isn't enough memory to write it.");
+      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, T("There isn't enough memory to write it."));
     }
     if (done) done();
   });
@@ -84,13 +85,13 @@ bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wst
 
 bool PresentationFile::FinishSave(std::wstring& error) {
   if (!run_) {
-    error = L"No save is running.";
+    error = T(L"No save is running.");
     return false;
   }
   if (run_->worker.joinable()) run_->worker.join();
   std::unique_ptr<Running> r = std::move(run_);
   if (!r->written.Ok()) {
-    error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(r->written.message);
+    error = r->job.name + T(L" couldn't be saved. ") + fw::Utf8ToWide(r->written.message);
     return false;
   }
   if (!r->result.Ok()) {

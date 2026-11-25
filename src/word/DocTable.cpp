@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/TableStyles.h"
 #include "ui/Anim.h"
@@ -22,35 +23,35 @@ namespace {
 
 struct Named {
   int cmd;
-  const wchar_t* label;
+  UiText label;
 };
 
 // Word's names, for menus, tooltips and command search.
 constexpr Named kNames[] = {
-    {CmdTableGrid, L"Insert table"},
-    {CmdTableBox, L"Table"},
-    {CmdInsertTable, L"Insert table…"},
-    {CmdTextToTable, L"Convert text to table"},
-    {CmdTableToText, L"Convert table to text"},
-    {CmdTableInsertAbove, L"Insert rows above"},
-    {CmdTableInsertBelow, L"Insert rows below"},
-    {CmdTableInsertLeft, L"Insert columns to the left"},
-    {CmdTableInsertRight, L"Insert columns to the right"},
-    {CmdTableDeleteRows, L"Delete rows"},
-    {CmdTableDeleteColumns, L"Delete columns"},
-    {CmdTableDeleteTable, L"Delete table"},
-    {CmdTableMerge, L"Merge cells"},
-    {CmdTableSplit, L"Split cells…"},
-    {CmdTableSelectCell, L"Select cell"},
-    {CmdTableSelectRow, L"Select row"},
-    {CmdTableSelectColumn, L"Select column"},
-    {CmdTableSelectTable, L"Select table"},
-    {CmdTableAutoFitContents, L"AutoFit to contents"},
-    {CmdTableAutoFitWindow, L"AutoFit to window"},
-    {CmdTableFixedWidth, L"Fixed column width"},
-    {CmdTableDistributeColumns, L"Distribute columns"},
-    {CmdTableHeaderRow, L"Repeat as header row"},
-    {CmdTableProperties, L"Table properties…"},
+    {CmdTableGrid, N_(L"Insert table")},
+    {CmdTableBox, N_(L"Table")},
+    {CmdInsertTable, N_(L"Insert table…")},
+    {CmdTextToTable, N_(L"Convert text to table")},
+    {CmdTableToText, N_(L"Convert table to text")},
+    {CmdTableInsertAbove, N_(L"Insert rows above")},
+    {CmdTableInsertBelow, N_(L"Insert rows below")},
+    {CmdTableInsertLeft, N_(L"Insert columns to the left")},
+    {CmdTableInsertRight, N_(L"Insert columns to the right")},
+    {CmdTableDeleteRows, N_(L"Delete rows")},
+    {CmdTableDeleteColumns, N_(L"Delete columns")},
+    {CmdTableDeleteTable, N_(L"Delete table")},
+    {CmdTableMerge, N_(L"Merge cells")},
+    {CmdTableSplit, N_(L"Split cells…")},
+    {CmdTableSelectCell, N_(L"Select cell")},
+    {CmdTableSelectRow, N_(L"Select row")},
+    {CmdTableSelectColumn, N_(L"Select column")},
+    {CmdTableSelectTable, N_(L"Select table")},
+    {CmdTableAutoFitContents, N_(L"AutoFit to contents")},
+    {CmdTableAutoFitWindow, N_(L"AutoFit to window")},
+    {CmdTableFixedWidth, N_(L"Fixed column width")},
+    {CmdTableDistributeColumns, N_(L"Distribute columns")},
+    {CmdTableHeaderRow, N_(L"Repeat as header row")},
+    {CmdTableProperties, N_(L"Table properties…")},
 };
 
 const wchar_t* LabelOf(int cmd) {
@@ -72,13 +73,13 @@ int32_t ToTwips(double v) { return static_cast<int32_t>(std::lround(Metric() ? v
 const wchar_t* Unit() { return Metric() ? L" cm" : L"\""; }
 
 // Lists offered in the panel.
-const std::vector<std::wstring> kAlign = {L"Left", L"Center", L"Right"};
-const std::vector<std::wstring> kVAlign = {L"Top", L"Center", L"Bottom"};
-const std::vector<std::wstring> kFit = {L"Fixed column width", L"AutoFit to contents", L"AutoFit to window"};
-const std::vector<std::wstring> kHeader = {L"Doesn't repeat", L"Repeats at the top of each page"};
-const std::vector<std::wstring> kBorders = {L"All borders",  L"Outside borders", L"Inside borders", L"No border",
-                                            L"Top border",   L"Bottom border",   L"Left border",    L"Right border"};
-const std::vector<std::wstring> kSplit = {L"2 columns", L"3 columns", L"2 rows", L"2 rows, 2 columns"};
+const std::vector<std::wstring> kAlign = {N_(L"Left"), N_(L"Center"), N_(L"Right")};
+const std::vector<std::wstring> kVAlign = {N_(L"Top"), N_(L"Center"), N_(L"Bottom")};
+const std::vector<std::wstring> kFit = {N_(L"Fixed column width"), N_(L"AutoFit to contents"), N_(L"AutoFit to window")};
+const std::vector<std::wstring> kHeader = {N_(L"Doesn't repeat"), N_(L"Repeats at the top of each page")};
+const std::vector<std::wstring> kBorders = {N_(L"All borders"),  N_(L"Outside borders"), N_(L"Inside borders"), N_(L"No border"),
+                                            N_(L"Top border"),   N_(L"Bottom border"),   N_(L"Left border"),    N_(L"Right border")};
+const std::vector<std::wstring> kSplit = {N_(L"2 columns"), N_(L"3 columns"), N_(L"2 rows"), N_(L"2 rows, 2 columns")};
 
 constexpr float kLabelW = 104, kRowH = 40;
 
@@ -100,7 +101,7 @@ class DocTable::GridPicker : public Control {
     const D2D1_COLOR_F fg = enabled ? p.text : p.textDisabled;
     if (rc.bottom - rc.top > 48 * u) {  // the ribbon's large button: the icon above "Table ▾"
       c.Icon(icon::Table, RectF(rc.left, rc.top + 4 * u, rc.right, rc.top + 40 * u), fg, 32 * u);
-      c.Text(L"Table", RectF(rc.left, rc.top + 42 * u, rc.right, rc.top + 60 * u), fg, 12 * u,
+      c.Text(T(L"Table"), RectF(rc.left, rc.top + 42 * u, rc.right, rc.top + 60 * u), fg, 12 * u,
              DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
       ctl::DrawChevron(c, RectF(rc.left, rc.top + 58 * u, rc.right, rc.top + 72 * u), enabled ? p.textSecondary : p.textDisabled, u);
       if (FocusVisible()) ctl::DrawFocusRing(c, rc, u);
@@ -117,7 +118,7 @@ class DocTable::GridPicker : public Control {
     const float u = Ui();
     popup_.Begin(c, u);
     const D2D1_RECT_F in = popup_.Inner(u);
-    const std::wstring title = rows_ > 0 ? std::to_wstring(cols_) + L" × " + std::to_wstring(rows_) + L" table" : L"Insert table";
+    const std::wstring title = rows_ > 0 ? std::to_wstring(cols_) + L" × " + std::to_wstring(rows_) + L" table" : T(L"Insert table");
     c.Text(title, RectF(in.left + 8 * u, in.top, in.right - 8 * u, in.top + 28 * u), p.text, 13 * u);
     for (int r = 0; r < kRows; ++r)
       for (int k = 0; k < kCols; ++k) {
@@ -214,7 +215,7 @@ class DocTable::GridPicker : public Control {
       SetOpen(e);
     };
     if (popup_.open) {
-      int pane = t.Add(i, 1, UIA_PaneControlTypeId, L"Table size", popup_.rc);
+      int pane = t.Add(i, 1, UIA_PaneControlTypeId, T(L"Table size"), popup_.rc);
       t[pane].layer = 2;
       t[pane].hasValue = true;
       t[pane].value = std::to_wstring(cols_) + L" by " + std::to_wstring(rows_);
@@ -316,17 +317,17 @@ class DocTable::Panel : public PanelContent {
       d.label = d.tooltip = name;
       d.items = items;
     };
-    drop(style_, L"Table style", {});
+    drop(style_, T(L"Table style"), {});
     style_.onChange = [this](int i) {
       if (i >= 0 && i < static_cast<int>(styles_.size())) t_.ApplyStyle(styles_[i]);
     };
-    drop(align_, L"Table alignment", kAlign);
+    drop(align_, T(L"Table alignment"), kAlign);
     align_.onChange = [this](int i) {
       if (auto c = t_.Cell()) t_.Keep(t_.editor_.SetTableProps(c->start, edit::PropEdit().Set("jc", {{"val", i == 1 ? "center" : i == 2 ? "right" : "left"}})));
     };
     drop(fit_, L"AutoFit", kFit);
     fit_.onChange = [this](int i) { t_.Execute(i == 0 ? CmdTableFixedWidth : i == 1 ? CmdTableAutoFitContents : CmdTableAutoFitWindow); };
-    drop(header_, L"Header row", kHeader);
+    drop(header_, T(L"Header row"), kHeader);
     header_.onChange = [this](int i) {
       auto [a, f] = t_.host_.selection();
       edit::PropEdit e;
@@ -334,22 +335,22 @@ class DocTable::Panel : public PanelContent {
       else e.Remove("tblHeader");
       t_.Keep(t_.editor_.SetRowProps(a, f, e));
     };
-    spin(width_, L"Column width", 0.1, 22, 0.1, 2, Unit());
+    spin(width_, T(L"Column width"), 0.1, 22, 0.1, 2, Unit());
     width_.onChange = [this](double v) {
       auto [a, f] = t_.host_.selection();
       t_.Keep(t_.editor_.SetColumnWidth(a, f, ToTwips(v)));
     };
-    spin(height_, L"Row height (0: as the text needs)", 0, 22, 0.1, 2, Unit());
+    spin(height_, T(L"Row height (0: as the text needs)"), 0, 22, 0.1, 2, Unit());
     height_.onChange = [this](double v) {
       auto [a, f] = t_.host_.selection();
       t_.Keep(t_.editor_.SetRowHeight(a, f, ToTwips(v), "atLeast"));
     };
-    drop(valign_, L"Vertical alignment", kVAlign);
+    drop(valign_, T(L"Vertical alignment"), kVAlign);
     valign_.onChange = [this](int i) {
       auto [a, f] = t_.host_.selection();
       t_.Keep(t_.editor_.SetCellProps(a, f, edit::PropEdit().Set("vAlign", {{"val", i == 1 ? "center" : i == 2 ? "bottom" : "top"}})));
     };
-    spin(margins_, L"Cell margins", 0, 2, 0.01, 2, Unit());
+    spin(margins_, T(L"Cell margins"), 0, 2, 0.01, 2, Unit());
     margins_.onChange = [this](double v) {
       auto [a, f] = t_.host_.selection();
       const std::string w = std::to_string(ToTwips(v));
@@ -357,18 +358,18 @@ class DocTable::Panel : public PanelContent {
       for (const char* side : {"tcMar/top", "tcMar/left", "tcMar/bottom", "tcMar/right"}) e.Set(side, {{"w", w}, {"type", "dxa"}});
       t_.Keep(t_.editor_.SetCellProps(a, f, e));
     };
-    drop(borders_, L"Borders", kBorders);
-    borders_.placeholder = L"Choose borders";
+    drop(borders_, T(L"Borders"), kBorders);
+    borders_.placeholder = T(L"Choose borders");
     borders_.onChange = [this](int i) {
       borders_.selected = -1;
       t_.BorderCells(i);
     };
-    shading_.label = shading_.tooltip = L"Shading";
-    shading_.automaticLabel = L"No color";
+    shading_.label = shading_.tooltip = T(L"Shading");
+    shading_.automaticLabel = T(L"No color");
     shading_.automatic = true;
     shading_.onChange = [this](D2D1_COLOR_F c, bool automatic) { t_.ShadeCells(c, automatic); };
-    drop(split_, L"Split cells", kSplit);
-    split_.placeholder = L"Choose";
+    drop(split_, T(L"Split cells"), kSplit);
+    split_.placeholder = T(L"Choose");
     split_.onChange = [this](int i) {
       split_.selected = -1;
       auto c = t_.Cell();
@@ -376,23 +377,23 @@ class DocTable::Panel : public PanelContent {
       const uint32_t down = i >= 2 ? 2 : 1, across = i == 0 ? 2 : i == 1 ? 3 : i == 3 ? 2 : 1;
       t_.Run(t_.editor_.SplitCell(t_.host_.selection().second, down, across));
     };
-    spin(cols_, L"Columns", 1, 63, 1, 0, L"");
-    spin(rows_, L"Rows", 1, 1000, 1, 0, L"");
+    spin(cols_, T(L"Columns"), 1, 63, 1, 0, L"");
+    spin(rows_, T(L"Rows"), 1, 1000, 1, 0, L"");
     cols_.SetValue(3);
     rows_.SetValue(3);
-    insert_.label = insert_.tooltip = L"Insert table";
+    insert_.label = insert_.tooltip = T(L"Insert table");
     insert_.onClick = [this] { t_.Insert(static_cast<uint32_t>(rows_.value), static_cast<uint32_t>(cols_.value)); };
-    rows = {{L"Table", nullptr},   {L"Style", &style_},       {L"Alignment", &align_}, {L"AutoFit", &fit_},
-            {L"Header row", &header_}, {L"Cells", nullptr},   {L"Column width", &width_}, {L"Row height", &height_},
-            {L"Vertical", &valign_}, {L"Margins", &margins_}, {L"Borders", &borders_}, {L"Shading", &shading_},
-            {L"Split", &split_},     {L"Insert table", nullptr}, {L"Columns", &cols_}, {L"Rows", &rows_},
+    rows = {{T(L"Table"), nullptr},   {T(L"Style"), &style_},       {T(L"Alignment"), &align_}, {L"AutoFit", &fit_},
+            {T(L"Header row"), &header_}, {T(L"Cells"), nullptr},   {T(L"Column width"), &width_}, {T(L"Row height"), &height_},
+            {T(L"Vertical"), &valign_}, {T(L"Margins"), &margins_}, {T(L"Borders"), &borders_}, {T(L"Shading"), &shading_},
+            {T(L"Split"), &split_},     {T(L"Insert table"), nullptr}, {T(L"Columns"), &cols_}, {T(L"Rows"), &rows_},
             {L"", &insert_}};
     int id = 10;
     for (auto& [label, c] : rows)
       if (c) c->id = id++;
   }
 
-  std::wstring Title() const override { return L"Table"; }
+  std::wstring Title() const override { return T(L"Table"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     ui_ = ui;
@@ -430,7 +431,7 @@ class DocTable::Panel : public PanelContent {
     float y = body_.top + 4 * u;
     bool insert = false;  // past the Insert table heading
     for (auto& [label, c] : rows) {
-      if (!c && label == L"Insert table") insert = true;
+      if (!c && label == T(L"Insert table")) insert = true;
       const bool shown = insert != inTable;
       if (c) c->visible = shown;
       if (!shown) continue;
@@ -508,7 +509,7 @@ class DocTable::Panel : public PanelContent {
 
 DocTable::DocTable(Editor& editor, Host host) : editor_(editor), host_(std::move(host)) {
   grid_ = std::make_unique<GridPicker>();
-  grid_->label = L"Insert table";
+  grid_->label = T(L"Insert table");
   grid_->onPick = [this](int rows, int cols) { Insert(static_cast<uint32_t>(rows), static_cast<uint32_t>(cols)); };
   panel_ = std::make_unique<Panel>(*this);
 }
@@ -555,12 +556,12 @@ CommandState DocTable::Query(int cmd) {
       break;
     case CmdCellShading:
     case CmdCellBorders:
-      s.label = cmd == CmdCellShading ? L"Shading" : L"Borders";
+      s.label = cmd == CmdCellShading ? T(L"Shading") : T(L"Borders");
       s.enabled = can && cell.has_value();
       break;
     case CmdRowHeightBox:
     case CmdColumnWidthBox:
-      s.label = cmd == CmdRowHeightBox ? L"Row height" : L"Column width";
+      s.label = cmd == CmdRowHeightBox ? T(L"Row height") : T(L"Column width");
       s.enabled = can && cell.has_value();
       break;
     default: s.enabled = can && cell.has_value(); break;
@@ -658,7 +659,7 @@ ToolItem DocTable::GridItem() {
   t.control = grid_.get();
   t.cmd = CmdTableGrid;
   t.width = 52;
-  t.tooltip = L"Insert table";
+  t.tooltip = T(L"Insert table");
   t.enabled = editor_.CanEdit();
   return t;
 }
@@ -670,7 +671,7 @@ ToolItem DocTable::ShadingButton() {
   t.colors = true;
   t.color = shading_;
   t.automatic = noShading_;
-  t.automaticLabel = L"No color";
+  t.automaticLabel = T(L"No color");
   t.enabled = Query(CmdCellShading).enabled;
   t.onChange = [this](const ToolValue& v) {
     shading_ = v.color;
@@ -777,14 +778,14 @@ void DocTable::FillContextMenu(HMENU m) {
   HMENU insert = CreatePopupMenu();
   for (int cmd : {CmdTableInsertAbove, CmdTableInsertBelow, CmdTableInsertLeft, CmdTableInsertRight})
     AppendItem(insert, cmd, LabelOf(cmd), Query(cmd).enabled);
-  menu::AppendSubmenu(m, insert, L"Insert");
+  menu::AppendSubmenu(m, insert, T(L"Insert"));
   HMENU del = CreatePopupMenu();
   for (int cmd : {CmdTableDeleteRows, CmdTableDeleteColumns, CmdTableDeleteTable}) AppendItem(del, cmd, LabelOf(cmd), Query(cmd).enabled);
-  menu::AppendSubmenu(m, del, L"Delete");
+  menu::AppendSubmenu(m, del, T(L"Delete"));
   HMENU select = CreatePopupMenu();
   for (int cmd : {CmdTableSelectCell, CmdTableSelectRow, CmdTableSelectColumn, CmdTableSelectTable})
     AppendItem(select, cmd, LabelOf(cmd), Query(cmd).enabled);
-  menu::AppendSubmenu(m, select, L"Select");
+  menu::AppendSubmenu(m, select, T(L"Select"));
   AppendItem(m, CmdTableMerge, LabelOf(CmdTableMerge), Query(CmdTableMerge).enabled);
   AppendItem(m, CmdTableSplit, LabelOf(CmdTableSplit), Query(CmdTableSplit).enabled);
   AppendItem(m, CmdTableProperties, LabelOf(CmdTableProperties), Query(CmdTableProperties).enabled);
@@ -816,7 +817,7 @@ bool DocTable::ReplaceCells(std::u16string_view text) {
   auto block = SelectedCells();
   if (!block) return false;
   auto [a, f] = host_.selection();
-  editor_.BeginGroup(text.empty() ? u"Delete" : u"Typing");
+  editor_.BeginGroup(text.empty() ? T(u"Delete") : T(u"Typing"));
   edit::Result r = editor_.ClearCells(a, f);
   if (r && !text.empty()) r = editor_.InsertText(r.caret, text);
   if (r) editor_.EndGroup();

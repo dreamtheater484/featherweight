@@ -19,6 +19,7 @@
 #include "Version.h"
 #include "chart/Chart.h"
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "resource.h"
 #include "ui/Icons.h"
@@ -62,7 +63,7 @@ App::~App() {
 int App::Run(const AppOptions& opts) {
   fw::chart::Install();  // charts in documents are drawn from their cached values (D5)
   if (!gfx::InitFactories()) {
-    MessageBoxW(nullptr, L"Featherweight couldn’t start its graphics engine (Direct2D).", L"Featherweight",
+    MessageBoxW(nullptr, T(L"Featherweight couldn’t start its graphics engine (Direct2D)."), L"Featherweight",
                 MB_ICONERROR);
     return 1;
   }
@@ -340,7 +341,7 @@ std::wstring App::SearchStatus() {
   TabContent* v = Active();
   if (!v || search_.Box().Text().empty()) return L"";
   int n = v->SearchCount();
-  if (n == 0) return v->SearchDone() ? L"No results" : L"Searching…";
+  if (n == 0) return v->SearchDone() ? T(L"No results") : T(L"Searching…");
   int cur = v->SearchCurrent();
   return std::to_wstring(cur + 1) + L" of " + std::to_wstring(n) + (v->SearchDone() ? L"" : L"+");
 }
@@ -389,7 +390,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
     float cy = (inner.top + inner.bottom) / 2;
     canvas_.Icon(icon::Download, RectF(inner.left, cy - 60 * ui_, inner.right, cy - 12 * ui_), Alpha(p.accentText, dv),
                  32 * ui_);
-    canvas_.Text(L"Drop to open", RectF(inner.left, cy, inner.right, cy + 32 * ui_), Alpha(p.text, dv), 20 * ui_,
+    canvas_.Text(T(L"Drop to open"), RectF(inner.left, cy, inner.right, cy + 32 * ui_), Alpha(p.text, dv), 20 * ui_,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   }
 
@@ -1506,7 +1507,7 @@ void App::Execute(int cmd) {
     switch (cmd - CmdBannerAction) {
       case kActUpdate:
         manualUpdateCheck_ = true;
-        banner_.Show(BannerKind::Info, L"Downloading the update…");
+        banner_.Show(BannerKind::Info, T(L"Downloading the update…"));
         updater_.Start(hwnd_, true);
         break;
       case kActDownload: util::OpenExternalLink(bannerUpdateUrl_); break;
@@ -1574,8 +1575,8 @@ void App::Execute(int cmd) {
       if (ready && search_.Replacing() && !search_.Box().Text().empty()) {
         const int n = v->ReplaceAll(search_.WithBox().Text());
         banner_.Show(n > 0 ? BannerKind::Success : BannerKind::Info,
-                     n == 0 ? std::wstring(L"Nothing was replaced") : n == 1 ? std::wstring(L"Replaced 1 match")
-                                                                     : L"Replaced " + std::to_wstring(n) + L" matches",
+                     n == 0 ? std::wstring(T(L"Nothing was replaced")) : n == 1 ? std::wstring(T(L"Replaced 1 match"))
+                                                                     : T(L"Replaced ") + std::to_wstring(n) + L" matches",
                      {}, 2500);
       }
       break;
@@ -1614,7 +1615,7 @@ void App::Execute(int cmd) {
       break;
     case CmdToggleInvert:
       settings_.invert = !settings_.invert;
-      banner_.Show(BannerKind::Info, settings_.invert ? L"Night reading on: pages are dark" : L"Night reading off", {},
+      banner_.Show(BannerKind::Info, settings_.invert ? T(L"Night reading on: pages are dark") : T(L"Night reading off"), {},
                    1800);
       break;
     case CmdFullScreen:
@@ -1689,7 +1690,7 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
 
 // "New document\tCtrl+N": Ctrl+N makes a new document (AppShortcut).
 static std::wstring NewLabel(const fw::FileKindInfo& k) {
-  return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
+  return T(L"New ") + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
 }
 
 // "New from template": the built-in templates, once the Word editor ships, and the user's own
@@ -1699,7 +1700,7 @@ static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
   if (!docs && !fw::EditorShipped(fw::FileKind::Workbook) && !fw::EditorShipped(fw::FileKind::Presentation)) return;
   HMENU sub = CreatePopupMenu();
   if (docs)
-    for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+    for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, std::wstring(EmptyState::kTemplates[i]));
   if (docs && !mine.empty()) AppendSeparator(sub);
   for (size_t i = 0; i < mine.size(); ++i) {
     std::wstring name = fw::FileNameOf(mine[i]), shown;
@@ -1708,8 +1709,8 @@ static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
     AppendItem(sub, CmdUserTemplate + static_cast<int>(i), shown);
   }
   AppendSeparator(sub);
-  AppendItem(sub, CmdUserTemplatesFolder, L"More templates\u2026");
-  AppendSubmenu(m, sub, L"New from template");
+  AppendItem(sub, CmdUserTemplatesFolder, T(L"More templates\u2026"));
+  AppendSubmenu(m, sub, T(L"New from template"));
 }
 
 void App::ShowMenu(int which) {
@@ -1740,17 +1741,17 @@ bool App::FillWindowMenu(int which, HMENU m) {
     userTemplates_ = usertemplates::List(kUserTemplateCount);
     AppendTemplates(m, userTemplates_);
     AppendSeparator(m);
-    AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
+    AppendItem(m, CmdOpen, T(L"Open…\tCtrl+O"));
   } else if (which == CmdSaveMenu && ready) {
-    AppendItem(m, CmdSave, L"Save\tCtrl+S", v->Modified());
-    AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
+    AppendItem(m, CmdSave, T(L"Save\tCtrl+S"), v->Modified());
+    AppendItem(m, CmdSaveAs, T(L"Save as\u2026\tCtrl+Shift+S"));
   } else if (which == CmdMoreMenu) {
     alignRight = true;
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
     userTemplates_ = usertemplates::List(kUserTemplateCount);
     AppendTemplates(m, userTemplates_);
-    AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
+    AppendItem(m, CmdOpen, T(L"Open…\tCtrl+O"));
     if (settings_.showRecent) {
       HMENU recent = CreatePopupMenu();
       for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
@@ -1762,34 +1763,34 @@ bool App::FillWindowMenu(int which, HMENU m) {
         AppendSeparator(recent);
         AppendItem(recent, CmdClearRecent, QueryCommand(CmdClearRecent).label, QueryCommand(CmdClearRecent).enabled);
       }
-      AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
+      AppendSubmenu(m, recent, T(L"Open recent"), !settings_.recent.empty());
     }
-    AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
-    AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
-    if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
+    AppendItem(m, CmdSaveAs, T(L"Save as…\tCtrl+Shift+S"), ready);
+    AppendItem(m, CmdPrint, T(L"Print…\tCtrl+P"), ready && v->CanPrint());
+    if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, T(L"Export PDF…"));
     if (ready && v->Kind() == TabKind::Workbook) {  // a document's is on its ribbon (Layout)
       const CommandState setup = v->QueryCommand(CmdPageSetup);
-      if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);
+      if (setup.visible) AppendItem(m, CmdPageSetup, T(L"Page setup…"), setup.enabled);
     }
     AppendSeparator(m);
-    AppendItem(m, CmdPresentation, L"Present\tF5", ready);
-    AppendItem(m, CmdFullScreen, fullscreen_ ? L"Exit full screen\tF11" : L"Full screen\tF11");
-    AppendItem(m, CmdToggleInvert, L"Night reading (dark pages)\tCtrl+I", true, settings_.invert);
+    AppendItem(m, CmdPresentation, T(L"Present\tF5"), ready);
+    AppendItem(m, CmdFullScreen, fullscreen_ ? T(L"Exit full screen\tF11") : T(L"Full screen\tF11"));
+    AppendItem(m, CmdToggleInvert, T(L"Night reading (dark pages)\tCtrl+I"), true, settings_.invert);
     HMENU themeMenu = CreatePopupMenu();
-    AppendItem(themeMenu, CmdThemeSystem, L"Use Windows setting", true, settings_.theme == ThemeSetting::System, true);
-    AppendItem(themeMenu, CmdThemeLight, L"Light", true, settings_.theme == ThemeSetting::Light, true);
-    AppendItem(themeMenu, CmdThemeDark, L"Dark", true, settings_.theme == ThemeSetting::Dark, true);
-    AppendSubmenu(m, themeMenu, L"App theme");
-    AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
-    AppendItem(m, CmdShowRecentFiles, L"Show recent files", true, settings_.showRecent);
+    AppendItem(themeMenu, CmdThemeSystem, T(L"Use Windows setting"), true, settings_.theme == ThemeSetting::System, true);
+    AppendItem(themeMenu, CmdThemeLight, T(L"Light"), true, settings_.theme == ThemeSetting::Light, true);
+    AppendItem(themeMenu, CmdThemeDark, T(L"Dark"), true, settings_.theme == ThemeSetting::Dark, true);
+    AppendSubmenu(m, themeMenu, T(L"App theme"));
+    AppendItem(m, CmdToggleHighlight, T(L"Highlight form fields"), true, settings_.highlightFields);
+    AppendItem(m, CmdShowRecentFiles, T(L"Show recent files"), true, settings_.showRecent);
     // A document's spelling, AutoCorrect, Paragraph, Page setup, Ruler and Review are on its ribbon.
     AppendSeparator(m);
-    if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
-    AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
-    AppendItem(m, CmdCheckUpdates, L"Check for updates now");
-    if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
+    if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, T(L"Delete backups"));
+    AppendItem(m, CmdToggleAutoUpdate, T(L"Update automatically"), true, settings_.autoUpdate);
+    AppendItem(m, CmdCheckUpdates, T(L"Check for updates now"));
+    if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, T(L"Make Featherweight the default PDF app"));
     AppendSeparator(m);
-    AppendItem(m, CmdAbout, L"About Featherweight");
+    AppendItem(m, CmdAbout, T(L"About Featherweight"));
   } else if (which == CmdToolbarOverflow) {
     toolbar_.FillOverflowMenu(m);  // what doesn't fit a narrow window
   } else if (ready) {
@@ -1884,7 +1885,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
     banner_.Show(BannerKind::Error, errors.front(), {}, 8000);
   } else if (errors.size() > 1) {
     banner_.Show(BannerKind::Error,
-                 std::to_wstring(errors.size()) + L" files couldn’t be opened. They may be damaged.",
+                 std::to_wstring(errors.size()) + T(L" files couldn’t be opened. They may be damaged."),
                  {}, 8000);
   }
   if (toActivate >= 0) ActivateTab(toActivate);
@@ -1913,13 +1914,13 @@ void App::OpenDialog(bool templates) {
   if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
   if (fw::EditorShipped(fw::FileKind::Presentation)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.potx;*.potm;*.otp";
   if (tmpl.empty()) templates = false;
-  COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
-                                 {L"Files Featherweight opens", all.c_str()},
-                                 {L"PDF documents", L"*.pdf"},
-                                 {L"Word documents", docs.c_str()},
-                                 {L"Excel workbooks", books.c_str()},
-                                 {L"PowerPoint presentations", decks.c_str()},
-                                 {L"All files", L"*.*"}};
+  COMDLG_FILTERSPEC filters[] = {{T(L"Templates"), tmpl.c_str()},
+                                 {T(L"Files Featherweight opens"), all.c_str()},
+                                 {T(L"PDF documents"), L"*.pdf"},
+                                 {T(L"Word documents"), docs.c_str()},
+                                 {T(L"Excel workbooks"), books.c_str()},
+                                 {T(L"PowerPoint presentations"), decks.c_str()},
+                                 {T(L"All files"), L"*.*"}};
   dlg->SetFileTypes(templates ? 7 : 6, templates ? filters : filters + 1);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
@@ -1995,10 +1996,10 @@ void App::InitStartPage() {
 void App::ShowRecentMenu(int index, POINT at) {
   if (index < 0 || index >= static_cast<int>(settings_.recent.size())) return;
   HMENU m = CreatePopupMenu();
-  AppendItem(m, CmdRecentPin, settings_.recent[index].pinned ? L"Unpin from list" : L"Pin to list");
-  AppendItem(m, CmdRecentRemove, L"Remove from list");
+  AppendItem(m, CmdRecentPin, settings_.recent[index].pinned ? T(L"Unpin from list") : T(L"Pin to list"));
+  AppendItem(m, CmdRecentRemove, T(L"Remove from list"));
   AppendSeparator(m);
-  AppendItem(m, CmdRecentLocation, L"Open file location");
+  AppendItem(m, CmdRecentLocation, T(L"Open file location"));
   ClientToScreen(hwnd_, &at);
   theme::ApplyToMenus();
   HideTooltip();
@@ -2023,7 +2024,7 @@ void App::RecentAction(int cmd, int index) {
       if (GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES)
         ShellExecuteW(hwnd_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
       else
-        banner_.Show(BannerKind::Error, L"“" + fw::FileNameOf(path) + L"” and its folder can’t be found.", {}, 6000);
+        banner_.Show(BannerKind::Error, L"“" + fw::FileNameOf(path) + T(L"” and its folder can’t be found."), {}, 6000);
     }
     return;
   }
@@ -2076,11 +2077,11 @@ std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& fo
 bool App::SaveCopy(TabContent* view, const std::wstring& path, size_t format) {
   std::wstring error;
   if (!view->SaveCopy(path, format, error)) {
-    banner_.Show(BannerKind::Error, error.empty() ? fw::FileNameOf(path) + L" couldn't be saved." : error);
+    banner_.Show(BannerKind::Error, error.empty() ? fw::FileNameOf(path) + T(L" couldn't be saved.") : error);
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
-  banner_.Show(BannerKind::Success, L"Saved a copy as " + fw::FileNameOf(path), {}, 2400);
+  banner_.Show(BannerKind::Success, T(L"Saved a copy as ") + fw::FileNameOf(path), {}, 2400);
   InvalidateRect(hwnd_, nullptr, FALSE);
   return true;
 }
@@ -2109,7 +2110,7 @@ void App::ActivateTab(int index) {
   FocusBox(v->PasswordBox());
   KeyFocusMoved();
   Layout();
-  std::wstring title = v->Title() + L" – Featherweight";
+  std::wstring title = v->Title() + T(L" – Featherweight");
   SetWindowTextW(hwnd_, title.c_str());
   if (!snapshot_) CheckActiveFile();
   InvalidateRect(hwnd_, nullptr, FALSE);
@@ -2117,16 +2118,16 @@ void App::ActivateTab(int index) {
 
 bool App::ConfirmClose(TabContent* view) {
   if (!view->Modified()) return true;
-  std::wstring heading = L"Save changes to “" + view->Title() + L"”?";
+  std::wstring heading = T(L"Save changes to “") + view->Title() + L"”?";
   constexpr int kSaveAs = 100;
-  TASKDIALOG_BUTTON buttons[] = {{IDYES, L"Save"}, {kSaveAs, L"Save as\u2026"}, {IDNO, L"Don’t save"}};
+  TASKDIALOG_BUTTON buttons[] = {{IDYES, T(L"Save")}, {kSaveAs, T(L"Save as\u2026")}, {IDNO, T(L"Don’t save")}};
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
   cfg.hwndParent = hwnd_;
   cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
   cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
   cfg.pszWindowTitle = L"Featherweight";
   cfg.pszMainInstruction = heading.c_str();
-  cfg.pszContent = L"If you don’t save, your changes will be lost.";
+  cfg.pszContent = T(L"If you don’t save, your changes will be lost.");
   cfg.pButtons = buttons;
   cfg.cButtons = 3;
   cfg.nDefaultButton = IDYES;
@@ -2216,8 +2217,8 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
     // A CSV file: keep the workbook (Save As .xlsx), or write the data only (s4 friction W7).
     const bool data = ext == L"CSV" || ext == L"TSV";
     banner_.Show(BannerKind::Warning, loss,
-                 {{kActSaveAs, std::wstring(data ? L"Keep as ." : L"Save as .") + v->SaveAsFormat().ext, true},
-                  {kActKeepFormat, data ? L"Save as " + ext : ext.empty() ? L"Keep it" : L"Keep " + ext}});
+                 {{kActSaveAs, std::wstring(data ? T(L"Keep as .") : T(L"Save as .")) + v->SaveAsFormat().ext, true},
+                  {kActKeepFormat, data ? T(L"Save as ") + ext : ext.empty() ? T(L"Keep it") : T(L"Keep ") + ext}});
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
@@ -2235,7 +2236,7 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
   }
   if (!saveAs) {
     // Can't write here: offer another place right away.
-    banner_.Show(BannerKind::Warning, error + L" Choose another place to save it.");
+    banner_.Show(BannerKind::Warning, error + T(L" Choose another place to save it."));
     InvalidateRect(hwnd_, nullptr, FALSE);
     UpdateWindow(hwnd_);
     path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
@@ -2254,7 +2255,7 @@ void App::Saved(TabContent* v) {
     settings_.AddRecent(v->Path());
     settings_.Save();
   }
-  banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
+  banner_.Show(BannerKind::Success, T(L"Saved"), {}, 1600);
   if (Active() == v) ActivateTab(active_);  // the title: the file's name, without the unsaved dot
   UpdateAutosaveTimer();
   InvalidateRect(hwnd_, nullptr, FALSE);
@@ -2267,7 +2268,7 @@ void App::ViewSaved(TabContent* view, bool ok, const std::wstring& error) {
   }
   // Written in the background: no dialog pops up unasked; the banner offers another place.
   std::vector<Banner::Action> actions;
-  if (Active() == view) actions.push_back({kActSaveAs, L"Save as…", true});
+  if (Active() == view) actions.push_back({kActSaveAs, T(L"Save as…"), true});
   banner_.Show(BannerKind::Error, error, std::move(actions));
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -2298,7 +2299,7 @@ void App::PrintActive() {
       hwnd_,
       [this](int done, int total) {
         banner_.Show(BannerKind::Info,
-                     L"Printing… page " + std::to_wstring(done + 1) + L" of " + std::to_wstring(total));
+                     T(L"Printing… page ") + std::to_wstring(done + 1) + L" of " + std::to_wstring(total));
         Layout();
         RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
       },
@@ -2318,7 +2319,7 @@ void App::ExportPdfActive() {
   std::wstring suggested = v->SuggestedSavePath();
   const size_t slash = suggested.find_last_of(L"\\/"), dot = suggested.rfind(L'.');
   if (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash)) suggested.resize(dot);
-  const std::wstring path = SaveDialog(suggested + L".pdf", {L"PDF document", L"*.pdf", L"pdf"});
+  const std::wstring path = SaveDialog(suggested + L".pdf", {T(L"PDF document"), L"*.pdf", L"pdf"});
   if (path.empty()) return;
   ExportPdfTo(path);
 }
@@ -2327,11 +2328,11 @@ bool App::ExportPdfTo(const std::wstring& path) {
   TabContent* v = Active();
   if (!v || !v->Ready() || !v->CanExportPdf()) return false;
   if (fw::EqualsNoCase(path, v->Path())) {
-    banner_.Show(BannerKind::Warning, L"Choose another name: the PDF would replace the open file.", {}, 6000);
+    banner_.Show(BannerKind::Warning, T(L"Choose another name: the PDF would replace the open file."), {}, 6000);
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
-  banner_.Show(BannerKind::Info, L"Exporting…");
+  banner_.Show(BannerKind::Info, T(L"Exporting…"));
   Layout();
   RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
   std::wstring message;
@@ -2387,7 +2388,7 @@ void App::ToggleFullScreen() {
     SetWindowLongPtrW(hwnd_, GWL_STYLE, (savedStyle_ & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
     SetWindowPos(hwnd_, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
                  mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
-    banner_.Show(BannerKind::Info, L"Full screen. Press Esc or F11 to exit.", {}, 2500);
+    banner_.Show(BannerKind::Info, T(L"Full screen. Press Esc or F11 to exit."), {}, 2500);
   } else {
     fullscreen_ = false;
     if (snapshot_) {
@@ -2510,7 +2511,7 @@ void App::OnDropFiles(const std::vector<std::wstring>& files) {
   for (const auto& f : files)
     if (fw::Opens(f)) opened.push_back(f);
   if (opened.empty()) {
-    banner_.Show(BannerKind::Warning, L"Only PDFs and Word documents can be opened.", {}, 4000);
+    banner_.Show(BannerKind::Warning, T(L"Only PDFs and Word documents can be opened."), {}, 4000);
   } else {
     SetForegroundWindow(hwnd_);
     OpenFiles(opened);
@@ -2560,7 +2561,7 @@ void App::StartupNotices() {
   }
 
   if (updated) {
-    banner_.Show(BannerKind::Success, L"Featherweight was updated to " + current, {}, 6000);
+    banner_.Show(BannerKind::Success, T(L"Featherweight was updated to ") + current, {}, 6000);
   } else if (!firstRun) {
     // Offered once per kind of file, from the second start on (so the very first impression is
     // just the app), and one kind per start.
@@ -2569,8 +2570,8 @@ void App::StartupNotices() {
       if (offered || fileassoc::IsDefault(kind)) continue;
       offered = true;
       banner_.Show(BannerKind::Info,
-                   L"Open " + std::wstring(fw::Info(kind).plural) + L" with Featherweight by default?",
-                   {{kActMakeDefault + static_cast<int>(kind), L"Make default", true}, {kActNotNow, L"Not now"}});
+                   T(L"Open ") + std::wstring(fw::Info(kind).plural) + T(L" with Featherweight by default?"),
+                   {{kActMakeDefault + static_cast<int>(kind), T(L"Make default"), true}, {kActNotNow, T(L"Not now")}});
       break;
     }
   }
@@ -2582,12 +2583,12 @@ void App::MakeDefaultApp(fw::FileKind kind) {
   if (fileassoc::Register(util::ExePath())) {
     fileassoc::OpenDefaultAppsSettings();
     banner_.Show(BannerKind::Info,
-                 L"In the Settings window that just opened, choose Featherweight for " + std::wstring(k.extensions[0]) +
+                 T(L"In the Settings window that just opened, choose Featherweight for ") + std::wstring(k.extensions[0]) +
                      L" files.",
                  {}, 9000);
   } else {
     banner_.Show(BannerKind::Error,
-                 L"Featherweight couldn’t register itself as a " + std::wstring(k.noun) + L" app.");
+                 T(L"Featherweight couldn’t register itself as a ") + std::wstring(k.noun) + L" app.");
   }
 }
 
@@ -2598,7 +2599,7 @@ void App::MaybeCheckForUpdates(bool manual) {
   settings_.lastUpdateCheck = now;
   settings_.Save();
   manualUpdateCheck_ = manual;
-  if (manual) banner_.Show(BannerKind::Info, L"Checking for updates…");
+  if (manual) banner_.Show(BannerKind::Info, T(L"Checking for updates…"));
   updater_.Start(hwnd_, settings_.autoUpdate);
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -2609,25 +2610,25 @@ void App::OnUpdaterDone() {
   bannerUpdateVersion_ = r.version;
   switch (r.status) {
     case Updater::Status::UpToDate:
-      if (manualUpdateCheck_) banner_.Show(BannerKind::Success, L"Featherweight is up to date.", {}, 3000);
+      if (manualUpdateCheck_) banner_.Show(BannerKind::Success, T(L"Featherweight is up to date."), {}, 3000);
       break;
     case Updater::Status::Installed:
       if (manualUpdateCheck_)
         banner_.Show(BannerKind::Success,
-                     L"Featherweight " + r.version + L" is ready. It will be used the next time you start Featherweight.",
+                     L"Featherweight " + r.version + T(L" is ready. It will be used the next time you start Featherweight."),
                      {}, 8000);
       break;
     case Updater::Status::Available:
       if (manualUpdateCheck_ || r.version != settings_.skippedVersion) {
         std::vector<Banner::Action> actions;
-        if (Updater::CanSelfUpdate()) actions.push_back({kActUpdate, L"Update", true});
-        else actions.push_back({kActDownload, L"Download", true});
-        actions.push_back({kActSkip, L"Skip this version"});
-        banner_.Show(BannerKind::Info, L"Featherweight " + r.version + L" is available.", actions);
+        if (Updater::CanSelfUpdate()) actions.push_back({kActUpdate, T(L"Update"), true});
+        else actions.push_back({kActDownload, T(L"Download"), true});
+        actions.push_back({kActSkip, T(L"Skip this version")});
+        banner_.Show(BannerKind::Info, L"Featherweight " + r.version + T(L" is available."), actions);
       }
       break;
     case Updater::Status::Failed:
-      if (manualUpdateCheck_) banner_.Show(BannerKind::Error, L"Update check failed: " + r.error, {}, 6000);
+      if (manualUpdateCheck_) banner_.Show(BannerKind::Error, T(L"Update check failed: ") + r.error, {}, 6000);
       break;
     default: break;
   }
@@ -2636,8 +2637,9 @@ void App::OnUpdaterDone() {
 }
 
 void App::ShowAbout() {
-  std::wstring content = L"Version " FW_VERSION_WSTRING L"\n\nA light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.\n\n"
-                         L"PDF engine: PDFium (build " + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
+  std::wstring content = std::wstring(T(L"Version ")) + FW_VERSION_WSTRING + L"\n\n" +
+                         T(L"A light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.") +
+                         L"\n\n" + T(L"PDF engine: PDFium (build ") + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
                          L")\nMIT License © 2026 Roy Clerx\n\n"
                          L"<a href=\"https://github.com/dreamtheater484/featherweight\">github.com/dreamtheater484/featherweight</a>";
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
@@ -2645,7 +2647,7 @@ void App::ShowAbout() {
   cfg.hInstance = GetModuleHandleW(nullptr);
   cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION;
   cfg.dwCommonButtons = TDCBF_CLOSE_BUTTON;
-  cfg.pszWindowTitle = L"About Featherweight";
+  cfg.pszWindowTitle = T(L"About Featherweight");
   cfg.pszMainIcon = MAKEINTRESOURCEW(IDI_APP);
   cfg.pszMainInstruction = L"Featherweight";
   cfg.pszContent = content.c_str();
@@ -2891,7 +2893,7 @@ void App::RunScript(const std::wstring& script) {
       // new:workbook for a new workbook ("Book1").
       int kind = 0;
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
-        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
+        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i].en)) kind = i + 1;
       if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
       else if (fw::EqualsNoCase(arg, L"presentation")) NewPresentation();  // new:presentation (P2)
       else NewDocument(kind);
@@ -3035,7 +3037,7 @@ void App::RunScript(const std::wstring& script) {
       xy(x, y);
       if (PdfView* v = ActivePdf()) {
         AnnotHit hit = v->AnnotAtPoint(x, y, page);
-        std::wstring t = hit.kind == AnnotHit::Kind::Note ? v->NoteText(NoteTarget{page, hit.index}) : L"(no note)";
+        std::wstring t = hit.kind == AnnotHit::Kind::Note ? v->NoteText(NoteTarget{page, hit.index}) : T(L"(no note)");
         for (wchar_t ch : t) fwprintf(stderr, L"%04x ", static_cast<unsigned>(ch));
         fwprintf(stderr, L"\n");
       }
@@ -3051,7 +3053,7 @@ void App::RunScript(const std::wstring& script) {
       PdfView* v = ActivePdf();
       NoteTarget note;
       if (v && p.size() >= 2 && v->NewNoteAt(_wtoi(p[0].c_str()), _wtoi(p[1].c_str()), note)) {
-        std::wstring text = p.size() > 2 ? p[2] : L"Note";
+        std::wstring text = p.size() > 2 ? p[2] : T(L"Note");
         std::replace(text.begin(), text.end(), L'|', L'\r');
         if (op == L"note") v->SaveNote(note, text);
         else ViewOpenNote(v, note);
@@ -3089,7 +3091,7 @@ void App::RunScript(const std::wstring& script) {
             fw::SetEditorShippedForTesting(k.kind, true);
       Layout();
     } else if (op == L"banner") {
-      banner_.Show(BannerKind::Info, arg, {{kActUpdate, L"Update", true}, {kActSkip, L"Skip this version"}});
+      banner_.Show(BannerKind::Info, arg, {{kActUpdate, T(L"Update"), true}, {kActSkip, T(L"Skip this version")}});
     } else if (op == L"wait") {
       PumpUntilIdle(_wtoi(arg.c_str()));
       continue;

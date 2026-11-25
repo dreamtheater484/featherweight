@@ -9,6 +9,7 @@
 #include <map>
 #include <unordered_map>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/model/Utf.h"
 #include "pkg/Mce.h"
@@ -258,7 +259,7 @@ void Writer::Fragments(pkg::NodeId owner, pkg::Slot slot) {
       std::vector<std::string> xmls;
       for (const pkg::Fragment* f : list) xmls.push_back(f->xml);
       if (!WithTextBoxes(it->second, xmls)) {
-        failed_ = Status::Fail(Status::Code::Unsupported, "A text box's text couldn't be written into its drawing.");
+        failed_ = Status::Fail(Status::Code::Unsupported, T("A text box's text couldn't be written into its drawing."));
         return;
       }
       for (const std::string& x : xmls) w_.Raw(x);
@@ -270,7 +271,7 @@ void Writer::Fragments(pkg::NodeId owner, pkg::Slot slot) {
       if (auto it = byTag_.find(f->tag); it != byTag_.end()) {
         std::vector<std::string> xmls{f->xml};
         if (!WithTextBoxes(it->second, xmls)) {
-          failed_ = Status::Fail(Status::Code::Unsupported, "A text box's text couldn't be written into its drawing.");
+          failed_ = Status::Fail(Status::Code::Unsupported, T("A text box's text couldn't be written into its drawing."));
           return;
         }
         w_.Raw(xmls[0]);
@@ -339,7 +340,7 @@ void Writer::Walk(ElemId root) {
 Status Writer::Write(std::string& out) {
   if (!part_.writable)
     return Status::Fail(Status::Code::Unsupported,
-                        "Part " + part_.name.substr(1) + " redeclares a namespace prefix inside it, so it is kept as it is.");
+                        "Part " + part_.name.substr(1) + T(" redeclares a namespace prefix inside it, so it is kept as it is."));
   Walk(part_.root);
   if (!failed_.Ok()) return failed_;
   out = w_.Take();
@@ -347,7 +348,7 @@ Status Writer::Write(std::string& out) {
 }
 
 Status WritePart(const Document& doc, uint32_t part, std::string& out) {
-  if (part >= doc.Parts().size()) return Status::Fail(Status::Code::NotFound, "There is no such part.");
+  if (part >= doc.Parts().size()) return Status::Fail(Status::Code::NotFound, T("There is no such part."));
   Writer w(doc, doc.Parts()[part]);
   return w.Write(out);
 }

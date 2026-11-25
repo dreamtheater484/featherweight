@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "pkg/Formula.h"
 #include "pkg/OfficeCrypto.h"
 #include "pkg/XmlDom.h"
@@ -1158,7 +1159,7 @@ struct Editor::State {
     if (followers.empty()) return true;
     auto compiled = calc::Compile(text, at, names);
     if (!compiled) {
-      why = u"Other cells share this cell's formula, and Featherweight can't rewrite it for them.";
+      why = ::T(u"Other cells share this cell's formula, and Featherweight can't rewrite it for them.");
       return false;
     }
     for (const CellAddr& f : followers) {
@@ -1545,7 +1546,7 @@ namespace {
 // succeeded, CancelGroup when it didn't.
 template <class Fn>
 Result Run(Editor& ed, std::u16string name, Fn&& fn) {
-  if (ed.Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+  if (ed.Saving()) return Result::Fail(::T(u"The workbook is being saved. Try again in a moment."));
   ed.BeginGroup(std::move(name));
   Result r = fn();
   if (r) ed.EndGroup();
@@ -1553,8 +1554,8 @@ Result Run(Editor& ed, std::u16string name, Fn&& fn) {
   return r;
 }
 
-Result NoSheet() { return Result::Fail(u"There's no such sheet."); }
-Result BadRange() { return Result::Fail(u"The range is outside the sheet."); }
+Result NoSheet() { return Result::Fail(::T(u"There's no such sheet.")); }
+Result BadRange() { return Result::Fail(::T(u"The range is outside the sheet.")); }
 
 }  // namespace
 
@@ -1609,14 +1610,14 @@ pkg::AttrSetId EditAttrs(pkg::RoundTripStore& store, pkg::AttrSetId id, std::ini
 
 // Checks a cell's new content before anything changes.
 static Result CheckInput(const CellInput& in) {
-  if (in.type == ValueType::Number && !std::isfinite(in.number)) return Result::Fail(u"That number is too large.");
+  if (in.type == ValueType::Number && !std::isfinite(in.number)) return Result::Fail(::T(u"That number is too large."));
   if (in.type == ValueType::String) {
-    if (Utf16Length(in.text) > 32767) return Result::Fail(u"A cell can hold at most 32,767 characters.");
-    if (!XmlSafe(in.text)) return Result::Fail(u"The text holds characters a workbook can't store.");
+    if (Utf16Length(in.text) > 32767) return Result::Fail(::T(u"A cell can hold at most 32,767 characters."));
+    if (!XmlSafe(in.text)) return Result::Fail(::T(u"The text holds characters a workbook can't store."));
   }
   if (!in.formula.empty()) {
-    if (Utf16Length(in.formula) > 8192) return Result::Fail(u"A formula can be at most 8,192 characters long.");
-    if (!XmlSafe(in.formula)) return Result::Fail(u"The formula holds characters a workbook can't store.");
+    if (Utf16Length(in.formula) > 8192) return Result::Fail(::T(u"A formula can be at most 8,192 characters long."));
+    if (!XmlSafe(in.formula)) return Result::Fail(::T(u"The formula holds characters a workbook can't store."));
   }
   if ((in.array || in.dynamic) && !Valid(in.arrayRange)) return BadRange();
   return {};
@@ -1779,7 +1780,7 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
   Rec rec(*this, JournalOp::SetCells, [&](JournalRecord& w) { w.I(sheet).U(cells.size()); for (const auto& [a, in] : cells) w.A(a).Input(in); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     const std::vector<Range> arrays = State::Arrays(s);
     for (const auto& [at, in] : cells) {
@@ -1788,19 +1789,19 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       // Excel would look for a workbook by that name; a file can't name a sheet it doesn't have.
       if (!in.formula.empty())
         if (!MissingSheet(book_, in.formula).empty())
-          return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
+          return Result::Fail(::T(u"The formula names a sheet this workbook doesn't have."));
       if ((in.array || in.dynamic) && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col))
         return BadRange();
       if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
-        return Result::Fail(u"You can't change part of an array.");
+        return Result::Fail(::T(u"You can't change part of an array."));
       // Excel turns a formula typed into a table's header into its value as text; its value isn't
       // known here.
       if (!in.formula.empty())
         for (const Table& t : s.Tables())
           if (t.headerRows && at.row == t.ref.firstRow && at.col >= t.ref.firstCol && at.col <= t.ref.lastCol)
-            return Result::Fail(u"A table's header can't hold a formula. Type its name instead.");
+            return Result::Fail(::T(u"A table's header can't hold a formula. Type its name instead."));
     }
-    return Run(*this, u"Typing", [&]() -> Result {
+    return Run(*this, ::T(u"Typing"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
@@ -1887,12 +1888,12 @@ Result Editor::ClearContents(int sheet, const Range& r) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(r)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     std::vector<CellAddr> cells = State::StoredIn(s, r);
     for (const Range& arr : State::Arrays(s))
-      if (Overlaps(arr, r) && !Inside(arr, r)) return Result::Fail(u"You can't change part of an array.");
-    return Run(*this, u"Clear", [&]() -> Result {
+      if (Overlaps(arr, r) && !Inside(arr, r)) return Result::Fail(::T(u"You can't change part of an array."));
+    return Run(*this, ::T(u"Clear"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
@@ -1918,7 +1919,7 @@ Result Editor::ClearFormats(int sheet, const Range& r) {
 Result Editor::ClearAll(int sheet, const Range& r) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
-  return Run(*this, u"Clear All", [&]() -> Result {
+  return Run(*this, ::T(u"Clear All"), [&]() -> Result {
     if (Result x = ClearContents(sheet, r); !x) return x;
     return ClearFormats(sheet, r);
   });
@@ -1936,9 +1937,9 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
   const Result result = [&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(r)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, u"Format Cells", [&]() -> Result {
+    return Run(*this, ::T(u"Format Cells"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
@@ -2147,10 +2148,10 @@ Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double poi
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxRows) return BadRange();
-    if (!(points >= 0 && points <= 409.5)) return Result::Fail(u"Row height must be between 0 and 409.5 points.");
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!(points >= 0 && points <= 409.5)) return Result::Fail(::T(u"Row height must be between 0 and 409.5 points."));
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, u"Row Height", [&]() -> Result {
+    return Run(*this, ::T(u"Row Height"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       auto apply = [&](RowRec& r) {
@@ -2180,9 +2181,9 @@ Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxRows) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, hidden ? u"Hide Rows" : u"Unhide Rows", [&]() -> Result {
+    return Run(*this, hidden ? ::T(u"Hide Rows") : ::T(u"Unhide Rows"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       auto apply = [&](RowRec& r) {
@@ -2204,10 +2205,10 @@ Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t l
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxRows) return BadRange();
-    if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (level > 7) return Result::Fail(::T(u"Outlines have at most 7 levels."));
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
+    return Run(*this, level ? ::T(u"Group") : ::T(u"Ungroup"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       auto apply = [&](RowRec& r) {
@@ -2230,10 +2231,10 @@ Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double c
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxCols) return BadRange();
-    if (!(chars >= 0 && chars <= 255)) return Result::Fail(u"Column width must be between 0 and 255 characters.");
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!(chars >= 0 && chars <= 255)) return Result::Fail(::T(u"Column width must be between 0 and 255 characters."));
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, u"Column Width", [&]() -> Result {
+    return Run(*this, ::T(u"Column Width"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.EditCols(sv, first, last, [&](ColumnInfo& c) {
@@ -2254,9 +2255,9 @@ Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxCols) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, hidden ? u"Hide Columns" : u"Unhide Columns", [&]() -> Result {
+    return Run(*this, hidden ? ::T(u"Hide Columns") : ::T(u"Unhide Columns"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.EditCols(sv, first, last, [&](ColumnInfo& c) { c.hidden = hidden; });
@@ -2273,10 +2274,10 @@ Result Editor::SetColumnOutline(int sheet, uint32_t first, uint32_t last, uint8_
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (first > last || last >= kMaxCols) return BadRange();
-    if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (level > 7) return Result::Fail(::T(u"Outlines have at most 7 levels."));
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
+    return Run(*this, level ? ::T(u"Group") : ::T(u"Ungroup"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.EditCols(sv, first, last, [&](ColumnInfo& c) {
@@ -2438,24 +2439,24 @@ bool EndsWith(std::string_view s, std::string_view suffix) {
 Result Editor::InsertRows(int sheet, uint32_t at, uint32_t count) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::InsertRows); !no) return no;
-  return ShiftCells(sheet, Shift{Shift::Axis::Rows, at, static_cast<int32_t>(count), Range::All()}, u"Insert Rows");
+  return ShiftCells(sheet, Shift{Shift::Axis::Rows, at, static_cast<int32_t>(count), Range::All()}, ::T(u"Insert Rows"));
 }
 Result Editor::DeleteRows(int sheet, uint32_t first, uint32_t count) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::DeleteRows, Range{first, 0, count ? first + std::min(count, kMaxRows) - 1 : first, kMaxCols - 1}); !no) return no;
-  return ShiftCells(sheet, Shift{Shift::Axis::Rows, first, -static_cast<int32_t>(count), Range::All()}, u"Delete Rows");
+  return ShiftCells(sheet, Shift{Shift::Axis::Rows, first, -static_cast<int32_t>(count), Range::All()}, ::T(u"Delete Rows"));
 }
 Result Editor::InsertColumns(int sheet, uint32_t at, uint32_t count) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::InsertColumns); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, at, static_cast<int32_t>(count), Range::All()},
-                    u"Insert Columns");
+                    ::T(u"Insert Columns"));
 }
 Result Editor::DeleteColumns(int sheet, uint32_t first, uint32_t count) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::DeleteColumns, Range{0, first, kMaxRows - 1, count ? first + std::min(count, kMaxCols) - 1 : first}); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, first, -static_cast<int32_t>(count), Range::All()},
-                    u"Delete Columns");
+                    ::T(u"Delete Columns"));
 }
 Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
   Guard guard(*this);
@@ -2466,12 +2467,12 @@ Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
                         : ShiftCells(sheet,
                                      Shift{Shift::Axis::Rows, r.firstRow, static_cast<int32_t>(r.lastRow - r.firstRow + 1),
                                            Range{0, r.firstCol, kMaxRows - 1, r.lastCol}},
-                                     u"Insert Cells");
+                                     ::T(u"Insert Cells"));
   return WholeCols(r) ? InsertColumns(sheet, r.firstCol, r.lastCol - r.firstCol + 1)
                       : ShiftCells(sheet,
                                    Shift{Shift::Axis::Columns, r.firstCol, static_cast<int32_t>(r.lastCol - r.firstCol + 1),
                                          Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}},
-                                   u"Insert Cells");
+                                   ::T(u"Insert Cells"));
 }
 Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
   Guard guard(*this);
@@ -2482,12 +2483,12 @@ Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
                         : ShiftCells(sheet,
                                      Shift{Shift::Axis::Rows, r.firstRow, -static_cast<int32_t>(r.lastRow - r.firstRow + 1),
                                            Range{0, r.firstCol, kMaxRows - 1, r.lastCol}},
-                                     u"Delete Cells");
+                                     ::T(u"Delete Cells"));
   return WholeCols(r) ? DeleteColumns(sheet, r.firstCol, r.lastCol - r.firstCol + 1)
                       : ShiftCells(sheet,
                                    Shift{Shift::Axis::Columns, r.firstCol, -static_cast<int32_t>(r.lastCol - r.firstCol + 1),
                                          Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}},
-                                   u"Delete Cells");
+                                   ::T(u"Delete Cells"));
 }
 
 Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
@@ -2497,9 +2498,9 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
     const refs::Mover m(sh);
     if (sh.count == 0) return {};
     if (sh.at >= m.max || (sh.count < 0 && static_cast<uint64_t>(sh.at) + m.Deleted() > m.max)) return BadRange();
-    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+    if (!book_.LoadAll().Ok()) return Result::Fail(::T(u"A sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"This sheet has no cells."));
     const bool rows = m.Rows();
     const bool whole = m.Across(0, rows ? kMaxCols - 1 : kMaxRows - 1) == 1;
     const std::string name = s.Name();
@@ -2529,7 +2530,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
 
     // ---- What Excel refuses, and what Featherweight can't move yet.
     auto cantYet = [](std::u16string_view what) {
-      return Result::Fail(u"Featherweight can't insert or delete cells on this sheet yet: it has " + std::u16string(what) +
+      return Result::Fail(::T(u"Featherweight can't insert or delete cells on this sheet yet: it has ") + std::u16string(what) +
                           u".");
     };
     if (std::u16string what = refs::CheckSheetXml(A::Text(s)); !what.empty()) return cantYet(what);
@@ -2542,22 +2543,22 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
               "/printerSettings", "/image", "/oleObject", "/package", "/control", "/ctrlProp", "/slicer", "/timeline",
               "/customProperty", "/webextension"};
           if (std::none_of(std::begin(kKnown), std::end(kKnown), [&](std::string_view k) { return EndsWith(r.type, k); }))
-            return cantYet(u"parts Featherweight doesn't know");
+            return cantYet(::T(u"parts Featherweight doesn't know"));
           if (!r.external && !r.targetPart.empty()) sheetParts.push_back({r.type, r.targetPart});
         }
     for (const FormulaRec& f : A::Formulas(s))
-      if (f.kind == FormulaKind::DataTable) return cantYet(u"a what-if data table");
+      if (f.kind == FormulaKind::DataTable) return cantYet(::T(u"a what-if data table"));
     for (const Range& a : State::Arrays(s))
-      if (int e = Effect(m, a); e == 1 || e == -1) return Result::Fail(u"You can't change part of an array.");
+      if (int e = Effect(m, a); e == 1 || e == -1) return Result::Fail(::T(u"You can't change part of an array."));
     for (const Range& g : s.Merges())
       if (Effect(m, g) == -1)
-        return Result::Fail(u"Part of a merged cell would move. Unmerge it first, or insert or delete whole rows or columns.");
+        return Result::Fail(::T(u"Part of a merged cell would move. Unmerge it first, or insert or delete whole rows or columns."));
     for (const Table& t : s.Tables()) {
       int e = Effect(m, t.ref);
-      if (e == -1) return Result::Fail(u"This won't work because it would move cells in a table on your worksheet.");
-      if (e == 2) return Result::Fail(u"Featherweight can't delete a whole table this way yet.");
+      if (e == -1) return Result::Fail(::T(u"This won't work because it would move cells in a table on your worksheet."));
+      if (e == 2) return Result::Fail(::T(u"Featherweight can't delete a whole table this way yet."));
       if (e == 1 && rows && sh.count < 0 && t.headerRows && t.ref.firstRow >= sh.at && t.ref.firstRow < sh.at + m.Deleted())
-        return Result::Fail(u"A table's header row can't be deleted on its own.");
+        return Result::Fail(::T(u"A table's header row can't be deleted on its own."));
     }
     if (package)
       for (const auto& [type, part] : sheetParts) {
@@ -2566,7 +2567,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
             PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
             Effect(m, where) != 0)
-          return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+          return Result::Fail(::T(u"We can't make this change for the selected cells because it will affect a PivotTable."));
       }
     if (sh.count > 0) {
       // Cells with something in them would be pushed off the sheet.
@@ -2577,7 +2578,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         full = full || c.hasFormula || c.value.type != ValueType::Empty;
         return !full;
       });
-      if (full) return Result::Fail(u"There's no room: cells with something in them would be pushed off the sheet.");
+      if (full) return Result::Fail(::T(u"There's no room: cells with something in them would be pushed off the sheet."));
     }
 
     // Table columns deleted: structured references to them become #REF! wherever they are.
@@ -3405,26 +3406,26 @@ Result Editor::SortLines(int sheet, const Range& r, const std::vector<uint32_t>&
     const uint32_t n = (rows ? r.lastRow : r.lastCol) - first + 1;
     std::vector<uint32_t> dest(n, kNone);
     bool same = true;
-    if (order.size() != n) return Result::Fail(u"The sort order doesn't fit the range.");
+    if (order.size() != n) return Result::Fail(::T(u"The sort order doesn't fit the range."));
     for (uint32_t i = 0; i < n; ++i) {
-      if (order[i] >= n || dest[order[i]] != kNone) return Result::Fail(u"The sort order doesn't fit the range.");
+      if (order[i] >= n || dest[order[i]] != kNone) return Result::Fail(::T(u"The sort order doesn't fit the range."));
       dest[order[i]] = i;
       same = same && order[i] == i;
     }
     for (const SortKey& k : keys)
       if (k.line < (rows ? r.firstCol : r.firstRow) || k.line > (rows ? r.lastCol : r.lastRow))
-        return Result::Fail(u"A sort key is outside the range.");
+        return Result::Fail(::T(u"A sort key is outside the range."));
     if (same && keys.empty()) return {};
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"This sheet has no cells."));
     pkg::Package* package = book_.GetPackage();
 
     // ---- What Excel refuses.
     for (const Range& g : s.Merges())
-      if (Overlaps(g, r)) return Result::Fail(u"To do this, all the merged cells need to be the same size.");
+      if (Overlaps(g, r)) return Result::Fail(::T(u"To do this, all the merged cells need to be the same size."));
     for (const Range& a : State::Arrays(s))
-      if (Overlaps(a, r)) return Result::Fail(u"You can't change part of an array.");
+      if (Overlaps(a, r)) return Result::Fail(::T(u"You can't change part of an array."));
     const std::vector<FCell> fcells = FormulaCellsOf(s);
     auto inside = [&](uint32_t row, uint32_t col) {
       return row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol;
@@ -3432,9 +3433,9 @@ Result Editor::SortLines(int sheet, const Range& r, const std::vector<uint32_t>&
     for (const FCell& c : fcells) {
       if (!inside(c.row, c.col) || c.id >= A::Formulas(s).size()) continue;
       const FormulaRec& f = A::Formulas(s)[c.id];
-      if (f.kind == FormulaKind::DataTable) return Result::Fail(u"Featherweight can't sort a what-if data table yet.");
+      if (f.kind == FormulaKind::DataTable) return Result::Fail(::T(u"Featherweight can't sort a what-if data table yet."));
       if (f.dynamic && f.hasRef && !(f.ref.firstRow == f.ref.lastRow && f.ref.firstCol == f.ref.lastCol))
-        return Result::Fail(u"You can't change part of an array.");
+        return Result::Fail(::T(u"You can't change part of an array."));
     }
     std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
     if (package && !s.PartName().empty())
@@ -3448,10 +3449,10 @@ Result Editor::SortLines(int sheet, const Range& r, const std::vector<uint32_t>&
         if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
             PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
             Overlaps(where, r))
-          return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+          return Result::Fail(::T(u"We can't make this change for the selected cells because it will affect a PivotTable."));
       }
 
-    return Run(*this, u"Sort", [&]() -> Result {
+    return Run(*this, ::T(u"Sort"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveAllFormulas(sv);
@@ -4091,11 +4092,11 @@ Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
       return BadRange();
     const std::string d = SheetDrawing(sheet, false);
     const std::string anchor = d.empty() ? std::string() : AnchorXml(d, id);
-    if (anchor.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    if (anchor.empty()) return Result::Fail(::T(u"The object isn't on this sheet any more."));
     const std::string placed = drawing::Placed(anchor, p);
-    if (placed.empty()) return Result::Fail(u"This object can't be moved.");
-    return Run(*this, u"Move Object", [&]() -> Result {
-      if (!ReplaceAnchor(d, id, placed)) return Result::Fail(u"This object can't be moved.");
+    if (placed.empty()) return Result::Fail(::T(u"This object can't be moved."));
+    return Run(*this, ::T(u"Move Object"), [&]() -> Result {
+      if (!ReplaceAnchor(d, id, placed)) return Result::Fail(::T(u"This object can't be moved."));
       s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
       return Result{};
     });
@@ -4181,16 +4182,16 @@ Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Pla
   });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"An object can't be pasted on this sheet.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(::T(u"An object can't be pasted on this sheet."));
     std::string anchor = clip.anchor.empty() ? std::string() : drawing::Placed(clip.anchor, p);
-    if (anchor.empty()) return Result::Fail(u"This object can't be pasted here.");
-    return Run(*this, u"Paste", [&]() -> Result {
+    if (anchor.empty()) return Result::Fail(::T(u"This object can't be pasted here."));
+    return Run(*this, ::T(u"Paste"), [&]() -> Result {
       State& st = *s_;
       const std::string d = SheetDrawing(sheet, true);  // a workbook read from CSV gets its package
       pkg::Package* package = book_.GetPackage();
-      if (d.empty() || !package) return Result::Fail(u"The object couldn't be added to this sheet.");
+      if (d.empty() || !package) return Result::Fail(::T(u"The object couldn't be added to this sheet."));
       const bool same = clip.book == &book_;
       // Relationship ids in `xml` from the old ones to the new (all at once: they may swap).
       auto renumber = [](std::string& xml, const std::vector<std::pair<std::string, std::string>>& ids) {
@@ -4248,7 +4249,7 @@ Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Pla
       std::vector<std::pair<std::string, std::string>> ids;
       for (const ObjectClip::Part& c : clip.parts) {
         const std::string id = add(add, d, c, 0);
-        if (id.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+        if (id.empty()) return Result::Fail(::T(u"The object couldn't be added to this sheet."));
         ids.push_back({c.rel, id});
       }
       renumber(anchor, ids);
@@ -4271,7 +4272,7 @@ Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Pla
           }
         }
       }
-      if (!AddAnchor(d, anchor)) return Result::Fail(u"The object couldn't be added to this sheet.");
+      if (!AddAnchor(d, anchor)) return Result::Fail(::T(u"The object couldn't be added to this sheet."));
       st.Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
       return Result{};
     });
@@ -4314,11 +4315,11 @@ Result Editor::EditChart(int sheet, uint32_t id, const ChartEdit& e) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     const std::string part = ChartPart(sheet, id);
-    if (part.empty()) return Result::Fail(u"That isn't a chart.");
+    if (part.empty()) return Result::Fail(::T(u"That isn't a chart."));
     std::string xml = charts::Edited(book_, PartBytes(part), e);
-    if (xml.empty()) return Result::Fail(u"This chart can't be changed that way. Check the references to the cells.");
-    return Run(*this, u"Chart", [&]() -> Result {
-      if (!WritePart(part, std::move(xml))) return Result::Fail(u"This chart can't be changed that way.");
+    if (xml.empty()) return Result::Fail(::T(u"This chart can't be changed that way. Check the references to the cells."));
+    return Run(*this, ::T(u"Chart"), [&]() -> Result {
+      if (!WritePart(part, std::move(xml))) return Result::Fail(::T(u"This chart can't be changed that way."));
       s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{});
       return Result{};
     });
@@ -4333,7 +4334,7 @@ Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     const std::string chart = ChartPart(sheet, id);
-    if (chart.empty()) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    if (chart.empty()) return Result::Fail(::T(u"Only a chart can move to a chart sheet."));
     // Its graphic frame, declaring the prefixes the drawing declares (CopyObject puts them on the
     // anchor).
     const std::string anchor = CopyObject(sheet, id).anchor;
@@ -4343,10 +4344,10 @@ Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
     const size_t begin = anchor.find("<" + p + "graphicFrame");
     const std::string close = "</" + p + "graphicFrame>";
     const size_t end = begin == std::string::npos ? begin : anchor.find(close, begin);
-    if (end == std::string::npos) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    if (end == std::string::npos) return Result::Fail(::T(u"Only a chart can move to a chart sheet."));
     std::string frame = anchor.substr(begin, end + close.size() - begin);
     const std::vector<std::string> rels = drawing::RelIds(frame);
-    if (rels.size() != 1) return Result::Fail(u"This chart can't move to a chart sheet.");
+    if (rels.size() != 1) return Result::Fail(::T(u"This chart can't move to a chart sheet."));
     std::string decls;
     const std::string_view tag = std::string_view(anchor).substr(0, anchor.find('>'));
     for (size_t at = tag.find(" xmlns"); at != std::string_view::npos; at = tag.find(" xmlns", at + 1)) {
@@ -4361,7 +4362,7 @@ Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
         if (book_.FindSheet(name) < 0) break;
       }
     if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
-    return Run(*this, u"Move Chart", [&]() -> Result {
+    return Run(*this, ::T(u"Move Chart"), [&]() -> Result {
       State& st = *s_;
       const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
       const std::string part = NewPartName("/xl/chartsheets/sheet", ".xml");
@@ -4371,7 +4372,7 @@ Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
       const std::string drawingId =
           relId.empty() ? relId : AddPart(part, rel + "drawing", d, "application/vnd.openxmlformats-officedocument.drawing+xml", std::string());
       const std::string chartId = drawingId.empty() ? drawingId : AddRelationship(d, rel + "chart", chart);
-      if (chartId.empty()) return Result::Fail(u"The chart sheet can't be added to this workbook.");
+      if (chartId.empty()) return Result::Fail(::T(u"The chart sheet can't be added to this workbook."));
       if (const size_t at = frame.find("=\"" + rels[0] + "\""); at != std::string::npos) frame.replace(at + 2, rels[0].size(), chartId);
       // As Excel writes a chart sheet: the chart filling the page (its size as Excel saves one).
       WritePart(d, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr xmlns:xdr=\""
@@ -4416,23 +4417,23 @@ Result Editor::MoveChartToObject(int chartSheet, int toSheet, CellAddr at) {
     const int n = static_cast<int>(book_.SheetCount());
     if (chartSheet < 0 || chartSheet >= n || toSheet < 0 || toSheet >= n || toSheet == chartSheet) return NoSheet();
     if (book_.GetSheet(static_cast<size_t>(chartSheet)).Kind() != SheetKind::Chartsheet)
-      return Result::Fail(u"This isn't a chart sheet.");
+      return Result::Fail(::T(u"This isn't a chart sheet."));
     if (book_.GetSheet(static_cast<size_t>(toSheet)).Kind() != SheetKind::Worksheet)
-      return Result::Fail(u"A chart can go only on a worksheet.");
+      return Result::Fail(::T(u"A chart can go only on a worksheet."));
     if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
     std::string chart;
     for (const drawing::Object& o : drawing::Objects(PartBytes(SheetDrawing(chartSheet, false))))
       if (chart.empty()) chart = ChartPart(chartSheet, o.id);
-    if (chart.empty()) return Result::Fail(u"This chart sheet has no chart to move.");
-    if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (chart.empty()) return Result::Fail(::T(u"This chart sheet has no chart to move."));
+    if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));  // a worksheet: SheetDrawing gives it its part
-    return Run(*this, u"Move Chart", [&]() -> Result {
+    return Run(*this, ::T(u"Move Chart"), [&]() -> Result {
       const std::string d = SheetDrawing(toSheet, true);
       const std::string rel =
           d.empty() ? d : AddRelationship(d, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chart);
       const CellAddr to{std::min(at.row + 15, kMaxRows - 1), std::min(at.col + 8, kMaxCols - 1)};
       if (rel.empty() || !AddAnchor(d, charts::ChartAnchor(at, to, rel, NextShapeId(d))))
-        return Result::Fail(u"The chart couldn't be added to this sheet.");
+        return Result::Fail(::T(u"The chart couldn't be added to this sheet."));
       s_->Change(&s, kObjects, Range{at.row, at.col, to.row, to.col});
       // The chart sheet goes; its chart part stays (the sheet's drawing uses it now).
       return DeleteSheet(chartSheet);
@@ -4455,8 +4456,8 @@ Result Editor::DeleteObjects(int sheet, const std::vector<uint32_t>& ids) {
     std::vector<const drawing::Object*> gone;
     for (uint32_t id : ids)
       if (const drawing::Object* o = drawing::Find(objects, id); o && std::find(gone.begin(), gone.end(), o) == gone.end()) gone.push_back(o);
-    if (gone.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
-    return Run(*this, u"Delete", [&]() -> Result {
+    if (gone.empty()) return Result::Fail(::T(u"The object isn't on this sheet any more."));
+    return Run(*this, ::T(u"Delete"), [&]() -> Result {
       State& st = *s_;
       pkg::Package& package = *book_.GetPackage();
       Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
@@ -4528,20 +4529,20 @@ Result Editor::InsertChart(int sheet, const NewChart& c) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(c.data) || c.at.row >= kMaxRows || c.at.col >= kMaxCols || !c.cols || !c.rows) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A chart can't be added to this sheet.");
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(::T(u"A chart can't be added to this sheet."));
     std::string xml = charts::NewChartXml(s, c.data, c.kind, c.title);
-    if (xml.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
-    return Run(*this, u"Insert Chart", [&]() -> Result {
+    if (xml.empty()) return Result::Fail(::T(u"Select the cells with the numbers to chart."));
+    return Run(*this, ::T(u"Insert Chart"), [&]() -> Result {
       const std::string drawing = SheetDrawing(sheet, true);
-      if (drawing.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
+      if (drawing.empty()) return Result::Fail(::T(u"The chart couldn't be added to this sheet."));
       const std::string chartPart = NewPartName("/xl/charts/chart", ".xml");
       const std::string rel = AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chartPart,
                                       "application/vnd.openxmlformats-officedocument.drawingml.chart+xml", std::move(xml));
       const CellAddr to{std::min(c.at.row + c.rows, kMaxRows - 1), std::min(c.at.col + c.cols, kMaxCols - 1)};
       if (rel.empty() || !AddAnchor(drawing, charts::ChartAnchor(c.at, to, rel, NextShapeId(drawing))))
-        return Result::Fail(u"The chart couldn't be added to this sheet.");
+        return Result::Fail(::T(u"The chart couldn't be added to this sheet."));
       s_->Change(&s, kObjects, Range{c.at.row, c.at.col, c.at.row + c.rows, c.at.col + c.cols});
       return Result{};
     });
@@ -4693,32 +4694,32 @@ Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to,
     if (!Valid(dest)) return BadRange();
     if (dest == from && toSheet == sheet) return {};
     for (size_t i = 0; i < book_.SheetCount(); ++i)
-      if (!book_.LoadSheet(i).Ok()) return Result::Fail(u"A sheet of this workbook couldn't be read.");
+      if (!book_.LoadSheet(i).Ok()) return Result::Fail(::T(u"A sheet of this workbook couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     Sheet& d = book_.GetSheet(static_cast<size_t>(toSheet));
-    if (s.Kind() != SheetKind::Worksheet || d.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    if (s.Kind() != SheetKind::Worksheet || d.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"This sheet has no cells."));
 
     // ---- What Excel refuses, and what isn't done here yet: on each sheet, its area.
     std::vector<Range> spills;  // dynamic arrays moving: the cells they spill into aren't typed again
     auto check = [&](Sheet& x, const Range& area, bool cut) -> Result {
       auto part = [&](const Range& r) { return Overlaps(r, area) && !Inside(r, area); };
       for (const Range& g : x.Merges())
-        if (part(g)) return Result::Fail(u"We can't do that to a merged cell.");
+        if (part(g)) return Result::Fail(::T(u"We can't do that to a merged cell."));
       for (const Range& a : State::Arrays(x))
-        if (part(a)) return Result::Fail(u"You can't change part of an array.");
+        if (part(a)) return Result::Fail(::T(u"You can't change part of an array."));
       for (const FCell& c : FormulaCellsOf(x)) {
         if (c.id >= A::Formulas(x).size()) continue;
         const FormulaRec& f = A::Formulas(x)[c.id];
         if (!f.dynamic || !f.hasRef) {
           if (f.kind == FormulaKind::DataTable && Overlaps(Range::Cell(c.row, c.col), area))
-            return Result::Fail(u"Featherweight can't move a what-if data table yet.");
+            return Result::Fail(::T(u"Featherweight can't move a what-if data table yet."));
           continue;
         }
-        if (part(f.ref)) return Result::Fail(u"You can't change part of an array.");
+        if (part(f.ref)) return Result::Fail(::T(u"You can't change part of an array."));
         if (cut && Inside(f.ref, area)) spills.push_back(f.ref);
       }
       for (const Table& t : x.Tables())
-        if (Overlaps(t.ref, area)) return Result::Fail(u"Featherweight can't move cells into or out of a table yet.");
+        if (Overlaps(t.ref, area)) return Result::Fail(::T(u"Featherweight can't move cells into or out of a table yet."));
       if (pkg::Package* package = book_.GetPackage(); package && !x.PartName().empty())
         if (const pkg::RelationshipSet* rels = package->RelationshipsOf(x.PartName()))
           for (const pkg::Relationship& rel : rels->items) {
@@ -4727,14 +4728,14 @@ Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to,
             if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
                 PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
                 Overlaps(where, area))
-              return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+              return Result::Fail(::T(u"We can't make this change for the selected cells because it will affect a PivotTable."));
           }
       return Result{};
     };
     if (Result r = check(s, from, true); !r) return r;
     if (Result r = check(d, dest, false); !r) return r;
 
-    return Run(*this, stepName.empty() ? std::u16string(u"Paste") : stepName, [&]() -> Result {
+    return Run(*this, stepName.empty() ? std::u16string(::T(u"Paste")) : stepName, [&]() -> Result {
       BookNames names(book_);
 
       // ---- Shared formulas whose cells' references would change differently: each its own.
@@ -4863,7 +4864,7 @@ Result Editor::Merge(int sheet, const Range& r) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(r) || (r.firstRow == r.lastRow && r.firstCol == r.lastCol)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     // The merges it overlaps go into it.
     Range m = r;
@@ -4877,10 +4878,10 @@ Result Editor::Merge(int sheet, const Range& r) {
         }
     }
     for (const Range& arr : State::Arrays(s))
-      if (Overlaps(arr, m)) return Result::Fail(u"You can't change part of an array.");
+      if (Overlaps(arr, m)) return Result::Fail(::T(u"You can't change part of an array."));
     // Excel offers no merging in tables and pivot tables (a file with one is repaired).
     for (const Table& t : s.Tables())
-      if (Overlaps(t.ref, m)) return Result::Fail(u"Cells in a table can't be merged.");
+      if (Overlaps(t.ref, m)) return Result::Fail(::T(u"Cells in a table can't be merged."));
     if (pkg::Package* package = book_.GetPackage(); package && !s.PartName().empty())
       if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
         for (const pkg::Relationship& rel : rels->items) {
@@ -4889,9 +4890,9 @@ Result Editor::Merge(int sheet, const Range& r) {
           if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
               PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
               Overlaps(where, m))
-            return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+            return Result::Fail(::T(u"We can't make this change for the selected cells because it will affect a PivotTable."));
         }
-    return Run(*this, u"Merge Cells", [&]() -> Result {
+    return Run(*this, ::T(u"Merge Cells"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
@@ -4916,10 +4917,10 @@ Result Editor::Unmerge(int sheet, const Range& r) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(r)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     if (std::none_of(s.Merges().begin(), s.Merges().end(), [&](const Range& x) { return Overlaps(x, r); })) return {};
-    return Run(*this, u"Unmerge Cells", [&]() -> Result {
+    return Run(*this, ::T(u"Unmerge Cells"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveMerges(sv);
@@ -4940,15 +4941,15 @@ Result Editor::Unmerge(int sheet, const Range& r) {
 // ---- Sheets
 
 std::u16string Editor::CheckSheetName(std::string_view name, int except) const {
-  if (name.empty()) return u"A sheet needs a name.";
-  if (Utf16Length(name) > 31) return u"A sheet name can be at most 31 characters long.";
+  if (name.empty()) return ::T(u"A sheet needs a name.");
+  if (Utf16Length(name) > 31) return ::T(u"A sheet name can be at most 31 characters long.");
   if (name.find_first_of(":\\/?*[]") != std::string_view::npos || !XmlSafe(name) ||
       name.find_first_of("\t\r\n") != std::string_view::npos)
     return u"A sheet name can't contain : \\ / ? * [ or ].";
-  if (name.front() == '\'' || name.back() == '\'') return u"A sheet name can't begin or end with an apostrophe.";
-  if (NameEqualsNoCase(name, "History")) return u"\"History\" is a name Excel keeps for itself.";
+  if (name.front() == '\'' || name.back() == '\'') return ::T(u"A sheet name can't begin or end with an apostrophe.");
+  if (NameEqualsNoCase(name, "History")) return ::T(u"\"History\" is a name Excel keeps for itself.");
   int other = book_.FindSheet(name);
-  if (other >= 0 && other != except) return u"Another sheet already has that name.";
+  if (other >= 0 && other != except) return ::T(u"Another sheet already has that name.");
   return {};
 }
 
@@ -4965,7 +4966,7 @@ Result Editor::AddSheet(int at, std::string name) {
       }
     }
     if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
-    return Run(*this, u"Insert Sheet", [&]() -> Result {
+    return Run(*this, ::T(u"Insert Sheet"), [&]() -> Result {
       State& st = *s_;
       st.SaveBook(true, true);
       uint32_t id = 0;
@@ -4999,9 +5000,9 @@ Result Editor::RenameSheet(int sheet, std::string name) {
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     if (name == s.Name()) return {};
     if (std::u16string why = CheckSheetName(name, sheet); !why.empty()) return Result::Fail(why);
-    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+    if (!book_.LoadAll().Ok()) return Result::Fail(::T(u"A sheet couldn't be read."));
     std::string old = s.Name();
-    return Run(*this, u"Rename Sheet", [&]() -> Result {
+    return Run(*this, ::T(u"Rename Sheet"), [&]() -> Result {
       State& st = *s_;
       SheetSave& own = st.Save(s);
       own.dirty |= kPieceOther;
@@ -5030,7 +5031,7 @@ Result Editor::MoveSheet(int sheet, int to) {
     if (sheet < 0 || sheet >= n) return NoSheet();
     to = std::clamp(to, 0, n - 1);
     if (to == sheet) return {};
-    return Run(*this, u"Move Sheet", [&]() -> Result {
+    return Run(*this, ::T(u"Move Sheet"), [&]() -> Result {
       State& st = *s_;
       st.SaveBook(true, true);
       // 3-D references whose end sheets move (before the list changes: indexes as they are).
@@ -5069,13 +5070,13 @@ Result Editor::DeleteSheet(int sheet) {
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
     if (sheet < 0 || sheet >= n) return NoSheet();
-    if (n == 1) return Result::Fail(u"A workbook needs at least one sheet.");
+    if (n == 1) return Result::Fail(::T(u"A workbook needs at least one sheet."));
     int visible = 0;
     for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
     if (visible == 1 && book_.GetSheet(static_cast<size_t>(sheet)).State() == SheetState::Visible)
-      return Result::Fail(u"A workbook needs at least one visible sheet.");
-    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-    return Run(*this, u"Delete Sheet", [&]() -> Result {
+      return Result::Fail(::T(u"A workbook needs at least one visible sheet."));
+    if (!book_.LoadAll().Ok()) return Result::Fail(::T(u"A sheet couldn't be read."));
+    return Run(*this, ::T(u"Delete Sheet"), [&]() -> Result {
       State& st = *s_;
       st.SaveBook(true, true);
       // References to it become #REF! as Excel writes them (Sheet2!A1+1 -> #REF!+1; 3-D ranges give
@@ -5234,12 +5235,12 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (filter && !Valid(filter->ref)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     if (filter)
       for (const Table& t : s.Tables())
-        if (Overlaps(t.ref, filter->ref)) return Result::Fail(u"A table has its own filter.");
-    return Run(*this, filter ? u"Filter" : u"Remove Filter", [&]() -> Result {
+        if (Overlaps(t.ref, filter->ref)) return Result::Fail(::T(u"A table has its own filter."));
+    return Run(*this, filter ? ::T(u"Filter") : ::T(u"Remove Filter"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveFilter(sv);
@@ -5309,11 +5310,11 @@ Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, c
           [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(kind)).S(xml).S(ext).S16(stepName); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     // A sheet without a part yet (read from CSV, or added since opening) keeps them in its text,
     // which its first save writes (s4 friction W7).
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only a worksheet keeps these rules.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"Only a worksheet keeps these rules."));
     const bool validations = kind == RuleKind::Validations;
     std::string oldXml, oldExt;
     xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
@@ -5326,7 +5327,7 @@ Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, c
       const std::vector<std::string> before = SheetXmlFormulas(A::Text(s), sheet);
       for (const std::string& f : SheetXmlFormulas(now, sheet))
         if (std::find(before.begin(), before.end(), f) == before.end() && !MissingSheet(book_, f).empty())
-          return Result::Fail(u"The rule's formula names a sheet this workbook doesn't have.");
+          return Result::Fail(::T(u"The rule's formula names a sheet this workbook doesn't have."));
     }
     return Run(*this, std::move(stepName), [&]() -> Result {
       State& st = *s_;
@@ -5347,17 +5348,17 @@ constexpr std::string_view kTableType = "application/vnd.openxmlformats-officedo
 // A table on the sheet that `ref` overlaps, other than `except`, as Excel's message names it.
 Result TableOverlap(const Sheet& s, const Range& ref, size_t except) {
   for (size_t i = 0; i < s.Tables().size(); ++i)
-    if (i != except && Overlaps(s.Tables()[i].ref, ref)) return Result::Fail(u"A table can't overlap another table.");
+    if (i != except && Overlaps(s.Tables()[i].ref, ref)) return Result::Fail(::T(u"A table can't overlap another table."));
   for (const Range& m : s.Merges())
-    if (Overlaps(m, ref)) return Result::Fail(u"A table can't overlap a range that contains merged cells.");
-  if (s.Filter() && Overlaps(s.Filter()->ref, ref)) return Result::Fail(u"A table can't overlap the sheet's filter.");
+    if (Overlaps(m, ref)) return Result::Fail(::T(u"A table can't overlap a range that contains merged cells."));
+  if (s.Filter() && Overlaps(s.Filter()->ref, ref)) return Result::Fail(::T(u"A table can't overlap the sheet's filter."));
   return {};
 }
 
 Result TableShape(const Table& t) {
   if (!Valid(t.ref)) return BadRange();
-  if (t.ref.lastRow < t.ref.firstRow + t.headerRows + t.totalsRows) return Result::Fail(u"A table needs a row of data.");
-  if (t.columns.size() != t.ref.lastCol - t.ref.firstCol + 1) return Result::Fail(u"A table needs a name for each column.");
+  if (t.ref.lastRow < t.ref.firstRow + t.headerRows + t.totalsRows) return Result::Fail(::T(u"A table needs a row of data."));
+  if (t.columns.size() != t.ref.lastCol - t.ref.firstCol + 1) return Result::Fail(::T(u"A table needs a name for each column."));
   return {};
 }
 }  // namespace
@@ -5369,15 +5370,15 @@ Result Editor::AddTable(int sheet, Table t) {
   Rec rec(*this, JournalOp::AddTable, [&](JournalRecord& w) { w.I(sheet).S(xlsx::TableXml(t)).S(t.part); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only a worksheet can hold a table.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"Only a worksheet can hold a table."));
     if (Result r = TableShape(t); !r) return r;
     if (Result r = TableOverlap(s, t.ref, SIZE_MAX); !r) return r;
-    return Run(*this, u"Create Table", [&]() -> Result {
+    return Run(*this, ::T(u"Create Table"), [&]() -> Result {
       State& st = *s_;
       // A sheet read from CSV or added since opening gets its part (s4 friction W7).
-      if (SheetPart(sheet, true).empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
+      if (SheetPart(sheet, true).empty()) return Result::Fail(::T(u"The table couldn't be added to the workbook."));
       // Ids and names unique in the workbook: Excel's "Table1", "Table2"...
       uint32_t maxId = 0;
       bool idTaken = false;
@@ -5402,7 +5403,7 @@ Result Editor::AddTable(int sheet, Table t) {
       t.part = NewPartName("/xl/tables/table", ".xml");
       const bool strict = A::Text(s).rootStart.find(xlsx::kStrictMainNs) != std::string::npos;
       const std::string id = AddPart(s.PartName(), strict ? kTableRelStrict : kTableRel, t.part, kTableType, xlsx::TableXml(t, strict));
-      if (id.empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
+      if (id.empty()) return Result::Fail(::T(u"The table couldn't be added to the workbook."));
       SheetSave& sv = st.Save(s);
       st.SaveText(sv);
       xlsx::PutTablePart(A::Text(s), id, true);
@@ -5421,20 +5422,20 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
   Rec rec(*this, JournalOp::SetTable, [&](JournalRecord& w) { w.I(sheet).U(index).S(xlsx::TableXml(t)).S(t.part); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    if (index >= s.Tables().size()) return Result::Fail(::T(u"There's no such table."));
     if (Result r = TableShape(t); !r) return r;
     if (Result r = TableOverlap(s, t.ref, index); !r) return r;
     const Table before = s.Tables()[index];
     if (!t.name.empty() && !NameEqualsNoCase(t.name, before.name)) {
       for (size_t i = 0; i < book_.SheetCount(); ++i)
         for (const Table& x : book_.GetSheet(i).Tables())
-          if (NameEqualsNoCase(x.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+          if (NameEqualsNoCase(x.name, t.name)) return Result::Fail(::T(u"The name entered already exists. Enter a unique name."));
       for (const DefinedName& n : book_.Names())
-        if (NameEqualsNoCase(n.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+        if (NameEqualsNoCase(n.name, t.name)) return Result::Fail(::T(u"The name entered already exists. Enter a unique name."));
     }
-    return Run(*this, u"Table", [&]() -> Result {
+    return Run(*this, ::T(u"Table"), [&]() -> Result {
       State& st = *s_;
       Table now = t;
       now.part = before.part;
@@ -5446,12 +5447,12 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       for (size_t i = 0; i < now.columns.size(); ++i)
         if (now.columns[i].id == 0) now.columns[i].id = ++maxId;
       std::string xml = PartBytes(before.part);
-      if (xml.empty() || !xlsx::UpdateTableXml(xml, now)) return Result::Fail(u"The table's part couldn't be written.");
+      if (xml.empty() || !xlsx::UpdateTableXml(xml, now)) return Result::Fail(::T(u"The table's part couldn't be written."));
       SheetFilter kept;
       now.criteria.clear();
       if (now.autoFilter && xlsx::ReadTableFilter(xml, kept)) now.criteria = std::move(kept.columns);
       now.filtered = !now.criteria.empty();
-      if (!WritePart(before.part, std::move(xml))) return Result::Fail(u"The table's part couldn't be written.");
+      if (!WritePart(before.part, std::move(xml))) return Result::Fail(::T(u"The table's part couldn't be written."));
       SheetSave& sv = st.Save(s);
       st.SaveTables(sv);
       A::Tables(s)[index] = now;
@@ -5578,10 +5579,10 @@ Result Editor::RemoveTableAs(int sheet, size_t index, const BakedStyles* given) 
   };
   return rec.Done(withLook([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (index >= s.Tables().size() || !book_.GetPackage()) return Result::Fail(u"There's no such table.");
-    return Run(*this, u"Convert to Range", [&]() -> Result {
+    if (index >= s.Tables().size() || !book_.GetPackage()) return Result::Fail(::T(u"There's no such table."));
+    return Run(*this, ::T(u"Convert to Range"), [&]() -> Result {
       State& st = *s_;
       const Table t = s.Tables()[index];
       if (Result r = KeepTableLook(s, t, baked, given != nullptr); !r) return r;
@@ -5589,7 +5590,7 @@ Result Editor::RemoveTableAs(int sheet, size_t index, const BakedStyles* given) 
       if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
         for (const pkg::Relationship& r : set->items)
           if (!r.external && NameEqualsNoCase(r.targetPart, t.part)) relId = r.id;
-      if (!RemovePart(t.part)) return Result::Fail(u"The table's part couldn't be removed.");
+      if (!RemovePart(t.part)) return Result::Fail(::T(u"The table's part couldn't be removed."));
       SheetSave& sv = st.Save(s);
       st.SaveText(sv);
       if (!relId.empty()) xlsx::PutTablePart(A::Text(s), relId, false);
@@ -5608,22 +5609,22 @@ Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
   Rec rec(*this, JournalOp::SetTableFilter, [&](JournalRecord& w) { w.I(sheet).U(index).Filter(f); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    if (index >= s.Tables().size()) return Result::Fail(::T(u"There's no such table."));
     const Table& t = s.Tables()[index];
-    if (!t.autoFilter || !t.headerRows) return Result::Fail(u"The table has no filter buttons.");
+    if (!t.autoFilter || !t.headerRows) return Result::Fail(::T(u"The table has no filter buttons."));
     SheetFilter now = f;
     now.ref = t.ref;
     if (t.totalsRows && now.ref.lastRow > now.ref.firstRow) --now.ref.lastRow;
     const uint32_t width = t.ref.lastCol - t.ref.firstCol + 1;
     std::erase_if(now.columns, [&](const FilterColumn& c) { return c.colId >= width; });
     now.filtered = !now.columns.empty();
-    return Run(*this, u"Filter", [&]() -> Result {
+    return Run(*this, ::T(u"Filter"), [&]() -> Result {
       State& st = *s_;
       std::string xml = PartBytes(t.part);
       if (xml.empty() || !xlsx::PutTableFilter(xml, FilterXml(now, "")) || !WritePart(t.part, std::move(xml)))
-        return Result::Fail(u"The table's part couldn't be written.");
+        return Result::Fail(::T(u"The table's part couldn't be written."));
       SheetSave& sv = st.Save(s);
       st.SaveTables(sv);
       A::Tables(s)[index].filtered = now.filtered;
@@ -5661,14 +5662,14 @@ Result Editor::InsertPicture(int sheet, const std::string& bytes, const drawing:
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!PlaceOk(p)) return BadRange();
     std::string extension, type;
-    if (!data::PictureType(bytes, extension, type)) return Result::Fail(u"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP.");
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!data::PictureType(bytes, extension, type)) return Result::Fail(::T(u"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP."));
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A picture can't be added to this sheet.");
-    return Run(*this, u"Insert Picture", [&]() -> Result {
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(::T(u"A picture can't be added to this sheet."));
+    return Run(*this, ::T(u"Insert Picture"), [&]() -> Result {
       const std::string d = SheetDrawing(sheet, true);  // a workbook read from CSV gets its package
       pkg::Package* package = book_.GetPackage();
-      if (d.empty() || !package) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      if (d.empty() || !package) return Result::Fail(::T(u"The picture couldn't be added to this sheet."));
       // Stored once: a media part with the same bytes, and the drawing's own relationship to it.
       std::string media;
       for (const pkg::Part& part : package->Parts()) {
@@ -5692,7 +5693,7 @@ Result Editor::InsertPicture(int sheet, const std::string& bytes, const drawing:
       }
       const uint32_t n = NextShapeId(d);
       const std::string anchor = rel.empty() ? std::string() : drawing::Placed(data::PictureAnchor(n, rel, altText), p);
-      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(::T(u"The picture couldn't be added to this sheet."));
       if (id) *id = n;
       s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
       return Result{};
@@ -5710,15 +5711,15 @@ Result Editor::InsertShape(int sheet, data::ShapeKind kind, const drawing::Place
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!PlaceOk(p)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (!PartOrWorksheet(book_, s)) return Result::Fail(u"A shape can't be added to this sheet.");
-    return Run(*this, u"Insert Shape", [&]() -> Result {
+    if (!PartOrWorksheet(book_, s)) return Result::Fail(::T(u"A shape can't be added to this sheet."));
+    return Run(*this, ::T(u"Insert Shape"), [&]() -> Result {
       const std::string d = SheetDrawing(sheet, true);
-      if (d.empty()) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      if (d.empty()) return Result::Fail(::T(u"The shape couldn't be added to this sheet."));
       const uint32_t n = NextShapeId(d);
       const std::string anchor = drawing::Placed(data::ShapeAnchor(kind, n, text), p);
-      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(::T(u"The shape couldn't be added to this sheet."));
       if (id) *id = n;
       s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
       return Result{};
@@ -5733,14 +5734,14 @@ Result Editor::SetObjectXml(int sheet, uint32_t id, const std::string& xml, std:
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     const std::string d = SheetDrawing(sheet, false);
-    if (d.empty() || AnchorXml(d, id).empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    if (d.empty() || AnchorXml(d, id).empty()) return Result::Fail(::T(u"The object isn't on this sheet any more."));
     // Never damage the drawing: the new bytes read, as one object with the same id.
     const std::vector<drawing::Object> objects = drawing::Objects("<r>" + xml + "</r>");
     pugi::xml_document parsed;
     if (objects.size() != 1 || objects[0].id != id || !parsed.load_buffer(xml.data(), xml.size()))
-      return Result::Fail(u"The object's new format couldn't be written.");
+      return Result::Fail(::T(u"The object's new format couldn't be written."));
     return Run(*this, stepName, [&]() -> Result {
-      if (!ReplaceAnchor(d, id, xml)) return Result::Fail(u"The object's new format couldn't be written.");
+      if (!ReplaceAnchor(d, id, xml)) return Result::Fail(::T(u"The object's new format couldn't be written."));
       s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{0, 0, kMaxRows - 1, kMaxCols - 1});
       return Result{};
     });
@@ -5753,9 +5754,9 @@ Result Editor::SetTabColor(int sheet, const Color& color) {
   Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, u"Tab Color", [&]() -> Result {
+    return Run(*this, ::T(u"Tab Color"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveProps(sv);
@@ -5779,9 +5780,9 @@ Result Editor::SetSheetState(int sheet, SheetState state) {
       int visible = 0;
       for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
       if (visible <= 1 && s.State() == SheetState::Visible)
-        return Result::Fail(u"A workbook needs at least one visible sheet.");
+        return Result::Fail(::T(u"A workbook needs at least one visible sheet."));
     }
-    return Run(*this, state == SheetState::Visible ? u"Unhide Sheet" : u"Hide Sheet", [&]() -> Result {
+    return Run(*this, state == SheetState::Visible ? ::T(u"Unhide Sheet") : ::T(u"Hide Sheet"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveBook(false, false);
@@ -5811,9 +5812,9 @@ Result Editor::FreezePanes(int sheet, uint32_t rows, uint32_t cols) {
   Rec rec(*this, JournalOp::FreezePanes, [&](JournalRecord& w) { w.I(sheet).U(rows).U(cols); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    return Run(*this, rows || cols ? u"Freeze Panes" : u"Unfreeze Panes", [&]() -> Result {
+    return Run(*this, rows || cols ? ::T(u"Freeze Panes") : ::T(u"Unfreeze Panes"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveViews(sv);
@@ -5846,11 +5847,11 @@ Result Editor::SetSheetProtection(int sheet, const std::optional<SheetProtection
   Rec rec(*this, JournalOp::SetSheetProtection, [&](JournalRecord& w) { w.I(sheet).S(xml); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only worksheets can be protected here.");
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"Only worksheets can be protected here."));
     const bool on = protection && protection->sheet;
-    return Run(*this, on ? u"Protect Sheet" : u"Unprotect Sheet", [&]() -> Result {
+    return Run(*this, on ? ::T(u"Protect Sheet") : ::T(u"Unprotect Sheet"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveText(sv);
@@ -5867,7 +5868,7 @@ Result Editor::SetWorkbookProtection(const std::optional<WorkbookProtection>& pr
   Rec rec(*this, JournalOp::SetWorkbookProtection, [&](JournalRecord& w) { w.S(xml); });
   return rec.Done([&]() -> Result {
     if (book_.ProtectionXml() == xml) return Result{};
-    return Run(*this, protection && protection->lockStructure ? u"Protect Workbook" : u"Unprotect Workbook",
+    return Run(*this, protection && protection->lockStructure ? ::T(u"Protect Workbook") : ::T(u"Unprotect Workbook"),
                [&]() -> Result {
                  State& st = *s_;
                  st.SaveBook(false, false);
@@ -5895,16 +5896,16 @@ Result Editor::SetHyperlink(int sheet, const Range& r, const std::optional<Hyper
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!Valid(r)) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     if (link) {
-      if (link->target.empty() && link->location.empty()) return Result::Fail(u"Type an address, or choose a place in this workbook.");
+      if (link->target.empty() && link->location.empty()) return Result::Fail(::T(u"Type an address, or choose a place in this workbook."));
       for (const std::string* text : {&link->target, &link->location, &link->display, &link->tooltip})
-        if (!XmlSafe(*text)) return Result::Fail(u"The link holds characters a workbook can't store.");
-      if (Utf16Length(link->target) > 2079) return Result::Fail(u"An address can be at most 2,079 characters long.");
-      if (Utf16Length(link->tooltip) > 255) return Result::Fail(u"A ScreenTip can be at most 255 characters long.");
+        if (!XmlSafe(*text)) return Result::Fail(::T(u"The link holds characters a workbook can't store."));
+      if (Utf16Length(link->target) > 2079) return Result::Fail(::T(u"An address can be at most 2,079 characters long."));
+      if (Utf16Length(link->tooltip) > 255) return Result::Fail(::T(u"A ScreenTip can be at most 255 characters long."));
     }
-    return Run(*this, link ? u"Insert Hyperlink" : u"Remove Hyperlinks", [&]() -> Result {
+    return Run(*this, link ? ::T(u"Insert Hyperlink") : ::T(u"Remove Hyperlinks"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveLinks(sv);
@@ -6007,19 +6008,19 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     // A sheet without a part yet (read from CSV, or added since opening) gets one in the step.
     pkg::Package* package = book_.GetPackage();
     if (!PartOrWorksheet(book_, s) || s.Kind() != SheetKind::Worksheet)
-      return Result::Fail(u"Comments can be added only to a worksheet.");
+      return Result::Fail(::T(u"Comments can be added only to a worksheet."));
     if (thread) {
-      if (thread->comments.empty()) return Result::Fail(u"A comment thread needs a comment.");
+      if (thread->comments.empty()) return Result::Fail(::T(u"A comment thread needs a comment."));
       for (const ThreadComment& c : thread->comments) {
-        if (c.text.empty() || c.id.empty()) return Result::Fail(u"Type a comment first.");
+        if (c.text.empty() || c.id.empty()) return Result::Fail(::T(u"Type a comment first."));
         for (const std::string* t : {&c.author, &c.text, &c.id, &c.date})
-          if (!XmlSafe(*t)) return Result::Fail(u"The comment holds characters a workbook can't store.");
-        if (Utf16Length(c.text) > 32767) return Result::Fail(u"A comment can hold at most 32,767 characters.");
+          if (!XmlSafe(*t)) return Result::Fail(::T(u"The comment holds characters a workbook can't store."));
+        if (Utf16Length(c.text) > 32767) return Result::Fail(::T(u"A comment can hold at most 32,767 characters."));
       }
     }
     const NoteParts parts = package ? NotePartsOf(*package, s) : NoteParts{};
@@ -6032,18 +6033,18 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
     const bool had = notes::ReadThread(old.threads, {}, cell).has_value();
     if (!had && !thread) return Result{};
     if (!had && notes::HasEntry(old.comments, cell))
-      return Result::Fail(u"This cell has a note. Edit or delete the note first.");
+      return Result::Fail(::T(u"This cell has a note. Edit or delete the note first."));
     std::optional<notes::ThreadText> text;
     if (thread) {
       text.emplace();
       text->resolved = thread->resolved;
       for (const ThreadComment& c : thread->comments) text->comments.push_back({c.author, c.text, c.id, c.date});
     }
-    if (!notes::EditThread(old, cell, text, now)) return Result::Fail(u"This sheet's comments couldn't be read.");
+    if (!notes::EditThread(old, cell, text, now)) return Result::Fail(::T(u"This sheet's comments couldn't be read."));
     if (now.threads == old.threads && now.persons == old.persons && now.comments == old.comments && now.vml == old.vml)
       return Result{};
-    return Run(*this, !thread ? u"Delete Comment" : had ? u"Edit Comment" : u"New Comment", [&]() -> Result {
-      const Result failed = Result::Fail(u"The comment couldn't be stored in the workbook.");
+    return Run(*this, !thread ? ::T(u"Delete Comment") : had ? ::T(u"Edit Comment") : ::T(u"New Comment"), [&]() -> Result {
+      const Result failed = Result::Fail(::T(u"The comment couldn't be stored in the workbook."));
       if (SheetPart(sheet, true).empty()) return failed;
       const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
       const std::string ms = "http://schemas.microsoft.com/office/2017/10/relationships/";
@@ -6109,28 +6110,28 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     // A sheet without a part yet (read from CSV, or added since opening) gets one in the step.
     pkg::Package* package = book_.GetPackage();
     if (!PartOrWorksheet(book_, s) || s.Kind() != SheetKind::Worksheet)
-      return Result::Fail(u"Notes can be added only to a worksheet.");
+      return Result::Fail(::T(u"Notes can be added only to a worksheet."));
     if (note && (!XmlSafe(note->text) || !XmlSafe(note->author)))
-      return Result::Fail(u"The note holds characters a workbook can't store.");
-    if (note && Utf16Length(note->text) > 32767) return Result::Fail(u"A note can hold at most 32,767 characters.");
+      return Result::Fail(::T(u"The note holds characters a workbook can't store."));
+    if (note && Utf16Length(note->text) > 32767) return Result::Fail(::T(u"A note can hold at most 32,767 characters."));
     const NoteParts parts = package ? NotePartsOf(*package, s) : NoteParts{};
     const std::string &commentsPart = parts.comments, &vmlPart = parts.vml;
     if (!parts.threads.empty() && notes::ReadThread(PartBytes(parts.threads), {}, cell))
-      return Result::Fail(u"This cell has a comment thread. Reply to it, or delete it first.");
+      return Result::Fail(::T(u"This cell has a comment thread. Reply to it, or delete it first."));
     const std::string comments = commentsPart.empty() ? std::string() : PartBytes(commentsPart);
     const std::string vml = vmlPart.empty() ? std::string() : PartBytes(vmlPart);
     std::string newComments, newVml;
     std::optional<notes::NoteText> text;
     if (note) text = notes::NoteText{note->author, note->text, note->shown, note->width, note->height, note->anchor};
-    if (!notes::Edit(comments, vml, cell, text, newComments, newVml)) return Result::Fail(u"This sheet's notes couldn't be read.");
+    if (!notes::Edit(comments, vml, cell, text, newComments, newVml)) return Result::Fail(::T(u"This sheet's notes couldn't be read."));
     if (newComments == comments && newVml == vml) return Result{};
-    return Run(*this, note ? u"Edit Note" : u"Delete Note", [&]() -> Result {
-      const Result failed = Result::Fail(u"The note couldn't be stored in the workbook.");
+    return Run(*this, note ? ::T(u"Edit Note") : ::T(u"Delete Note"), [&]() -> Result {
+      const Result failed = Result::Fail(::T(u"The note couldn't be stored in the workbook."));
       if (SheetPart(sheet, true).empty()) return failed;
       const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
       if (newComments.empty()) {
@@ -6182,11 +6183,11 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
   });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     const bool chart = s.Kind() == SheetKind::Chartsheet;
-    if (!chart && s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet's page setup can't be changed.");
-    if (chart && A::Text(s).rootStart.empty()) return Result::Fail(u"This chart sheet couldn't be read.");
+    if (!chart && s.Kind() != SheetKind::Worksheet) return Result::Fail(::T(u"This sheet's page setup can't be changed."));
+    if (chart && A::Text(s).rootStart.empty()) return Result::Fail(::T(u"This chart sheet couldn't be read."));
     // A chart sheet prints its chart on one page: no scaling, page order, gridlines or headings
     // (its part has no place for them).
     if (chart) {
@@ -6197,18 +6198,18 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
       fitToPage = false;
     }
     // Excel's limits (its Page Setup refuses the rest).
-    if (page.scale < 10 || page.scale > 400) return Result::Fail(u"The scale must be between 10 and 400 percent.");
-    if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(u"Fit to: at most 32,767 pages.");
+    if (page.scale < 10 || page.scale > 400) return Result::Fail(::T(u"The scale must be between 10 and 400 percent."));
+    if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(::T(u"Fit to: at most 32,767 pages."));
     const PageMargins& m = page.margins;
     for (double v : {m.left, m.right, m.top, m.bottom, m.header, m.footer})
-      if (!(v >= 0 && v < 49)) return Result::Fail(u"Margins must be between 0 and 49 inches.");
-    if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(u"The first page number is too large.");
+      if (!(v >= 0 && v < 49)) return Result::Fail(::T(u"Margins must be between 0 and 49 inches."));
+    if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(::T(u"The first page number is too large."));
     // Any character: written as Excel does, a control character as _xHHHH_ (one read from a file comes back so).
     for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter})
       if (Utf16Length(*t) > 255)
-        return Result::Fail(u"The text string you entered is too long. Reduce the number of characters used.");
+        return Result::Fail(::T(u"The text string you entered is too long. Reduce the number of characters used."));
     for (const std::string* t : {&page.paperWidth, &page.paperHeight})
-      if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
+      if (!XmlSafe(*t)) return Result::Fail(::T(u"The paper size can't be stored."));
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
     std::pair<const char*, std::string> parts[] = {
@@ -6231,7 +6232,7 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
       parts[1].second = pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p);
       if (same()) return Result{};
     }
-    return Run(*this, u"Page Setup", [&]() -> Result {
+    return Run(*this, ::T(u"Page Setup"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SavePage(sv);
@@ -6257,7 +6258,7 @@ Result Editor::SetPageBreaks(int sheet, const std::vector<PageBreak>& rowsIn, co
   });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(::T(u"This sheet couldn't be read."));
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
     if (s.Kind() != SheetKind::Worksheet) return NoSheet();
     // In order, one per row or column, and only where a page can start (not before the first).
@@ -6269,7 +6270,7 @@ Result Editor::SetPageBreaks(int sheet, const std::vector<PageBreak>& rowsIn, co
                   list->end());
       for (const PageBreak& b : *list)
         if (b.id == 0 || b.id >= limit) return BadRange();
-      if (list->size() > 1026) return Result::Fail(u"A sheet can have at most 1,026 page breaks each way.");
+      if (list->size() > 1026) return Result::Fail(::T(u"A sheet can have at most 1,026 page breaks each way."));
     }
     const auto same = [](const std::vector<PageBreak>& a, const std::vector<PageBreak>& b) {
       return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const PageBreak& x, const PageBreak& y) {
@@ -6277,7 +6278,7 @@ Result Editor::SetPageBreaks(int sheet, const std::vector<PageBreak>& rowsIn, co
       });
     };
     if (same(rows, s.RowBreaks()) && same(cols, s.ColBreaks())) return Result{};
-    return Run(*this, u"Page Breaks", [&]() -> Result {
+    return Run(*this, ::T(u"Page Breaks"), [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       st.SaveBreaks(sv);
@@ -6385,13 +6386,13 @@ Result Editor::SetName(const DefinedName& name) {
   Rec rec(*this, JournalOp::SetName, [&](JournalRecord& w) { w.S(name.name).I(name.sheet).S(name.formula).B(name.hidden); });
   return rec.Done([&]() -> Result {
     bool builtin = name.name.rfind("_xlnm.", 0) == 0;
-    if (!builtin && !ValidName(name.name)) return Result::Fail(u"That isn't a valid name.");
+    if (!builtin && !ValidName(name.name)) return Result::Fail(::T(u"That isn't a valid name."));
     if (name.sheet >= static_cast<int>(book_.SheetCount())) return NoSheet();
-    if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(u"The name needs a reference or a formula.");
+    if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(::T(u"The name needs a reference or a formula."));
     // As for a cell's formula: Excel would look for a workbook by that name, and a file can't name a
     // sheet it doesn't have (fuzz_xlsx: Sheet1:Sheet2!A1 without a Sheet1).
-    if (!MissingSheet(book_, name.formula).empty()) return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
-    return Run(*this, u"Define Name", [&]() -> Result {
+    if (!MissingSheet(book_, name.formula).empty()) return Result::Fail(::T(u"The formula names a sheet this workbook doesn't have."));
+    return Run(*this, ::T(u"Define Name"), [&]() -> Result {
       State& st = *s_;
       st.SaveBook(false, true);
       auto& names = A::Names(book_);
@@ -6411,9 +6412,9 @@ Result Editor::DeleteName(std::string_view name, int sheet) {
     auto& names = A::Names(book_);
     auto it = std::find_if(names.begin(), names.end(),
                            [&](const DefinedName& x) { return x.sheet == sheet && NameEqualsNoCase(x.name, name); });
-    if (it == names.end()) return Result::Fail(u"There's no such name.");
+    if (it == names.end()) return Result::Fail(::T(u"There's no such name."));
     size_t index = static_cast<size_t>(it - names.begin());
-    return Run(*this, u"Delete Name", [&]() -> Result {
+    return Run(*this, ::T(u"Delete Name"), [&]() -> Result {
       State& st = *s_;
       st.SaveBook(false, true);
       A::Names(book_).erase(A::Names(book_).begin() + static_cast<ptrdiff_t>(index));
@@ -6487,9 +6488,9 @@ Result Editor::Undo(size_t steps) {
   Rec rec(*this, JournalOp::Undo, [&](JournalRecord& w) { w.U(steps); });
   return rec.Done([&]() -> Result {
     State& st = *s_;
-    if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
-    if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
-    if (st.undo.empty()) return Result::Fail(u"There's nothing to undo.");
+    if (st.saving) return Result::Fail(::T(u"The workbook is being saved. Try again in a moment."));
+    if (!st.open.empty()) return Result::Fail(::T(u"An edit is still going on."));
+    if (st.undo.empty()) return Result::Fail(::T(u"There's nothing to undo."));
     std::vector<edit::Change> changes;
     for (size_t i = 0; i < steps && !st.undo.empty(); ++i) {
       Step step = std::move(st.undo.back());
@@ -6509,9 +6510,9 @@ Result Editor::Redo(size_t steps) {
   Rec rec(*this, JournalOp::Redo, [&](JournalRecord& w) { w.U(steps); });
   return rec.Done([&]() -> Result {
     State& st = *s_;
-    if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
-    if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
-    if (st.redo.empty()) return Result::Fail(u"There's nothing to redo.");
+    if (st.saving) return Result::Fail(::T(u"The workbook is being saved. Try again in a moment."));
+    if (!st.open.empty()) return Result::Fail(::T(u"An edit is still going on."));
+    if (st.redo.empty()) return Result::Fail(::T(u"There's nothing to redo."));
     std::vector<edit::Change> changes;
     for (size_t i = 0; i < steps && !st.redo.empty(); ++i) {
       Step step = std::move(st.redo.back());
@@ -6647,7 +6648,7 @@ Result Editor::RefreshPivots(PivotRefresh which, int sheet, CellAddr cell) {
       return no;
   Rec rec(*this, JournalOp::RefreshPivots, [&](JournalRecord& w) { w.U(static_cast<uint8_t>(which)).I(sheet).A(cell); });
   return rec.Done([&]() -> Result {
-    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    if (Saving()) return Result::Fail(::T(u"The workbook is being saved. Try again in a moment."));
     return RefreshPivotsIn(*this, book_, which, sheet, cell);
   }());
 }
@@ -6665,7 +6666,7 @@ Result Editor::InsertPivot(const NewPivotTable& p) {
     for (const NewPivotTable::Value& v : p.values) w.U(v.column).U(v.func);
   });
   return rec.Done([&]() -> Result {
-    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    if (Saving()) return Result::Fail(::T(u"The workbook is being saved. Try again in a moment."));
     return InsertPivotIn(*this, book_, p);
   }());
 }

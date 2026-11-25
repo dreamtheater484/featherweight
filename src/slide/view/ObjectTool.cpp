@@ -30,6 +30,7 @@
 #include "ui/Theme.h"
 
 #if __has_include("slide/edit/Edit.h")
+#include "core/Lang.h"
 #include "slide/edit/Edit.h"
 #define FW_SLIDE_EDIT 1
 #else
@@ -275,70 +276,70 @@ struct TableSize {
   int columns, rows;
 };
 constexpr TableSize kTables[] = {{2, 2}, {3, 2}, {3, 3}, {4, 3}, {4, 4}, {5, 4}, {5, 5}, {6, 6}};
-constexpr const wchar_t* kChartNames[] = {L"Column", L"Bar", L"Line", L"Pie"};
+constexpr UiText kChartNames[] = {N_(L"Column"), N_(L"Bar"), N_(L"Line"), N_(L"Pie")};
 
 struct ArrangeItem {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 constexpr ArrangeItem kArrange[] = {
-    {CmdBringToFront, L"Bring to Front", L"Ctrl+Shift+]"},
-    {CmdBringForward, L"Bring Forward", L"Ctrl+]"},
-    {CmdSendBackward, L"Send Backward", L"Ctrl+["},
-    {CmdSendToBack, L"Send to Back", L"Ctrl+Shift+["},
-    {CmdGroupObjects, L"Group", L"Ctrl+G"},
-    {CmdUngroupObjects, L"Ungroup", L"Ctrl+Shift+G"},
-    {CmdObjAlignLeft, L"Align Left", L""},
-    {CmdObjAlignCenter, L"Align Center", L""},
-    {CmdObjAlignRight, L"Align Right", L""},
-    {CmdObjAlignTop, L"Align Top", L""},
-    {CmdObjAlignMiddle, L"Align Middle", L""},
-    {CmdObjAlignBottom, L"Align Bottom", L""},
-    {CmdDistributeHorizontally, L"Distribute Horizontally", L""},
-    {CmdDistributeVertically, L"Distribute Vertically", L""},
-    {CmdAlignToSlide, L"Align to Slide", L""},
-    {CmdRotateRight90, L"Rotate Right 90°", L""},
-    {CmdRotateLeft90, L"Rotate Left 90°", L""},
-    {CmdFlipVertical, L"Flip Vertical", L""},
-    {CmdFlipHorizontal, L"Flip Horizontal", L""},
+    {CmdBringToFront, N_(L"Bring to Front"), L"Ctrl+Shift+]"},
+    {CmdBringForward, N_(L"Bring Forward"), L"Ctrl+]"},
+    {CmdSendBackward, N_(L"Send Backward"), L"Ctrl+["},
+    {CmdSendToBack, N_(L"Send to Back"), L"Ctrl+Shift+["},
+    {CmdGroupObjects, N_(L"Group"), L"Ctrl+G"},
+    {CmdUngroupObjects, N_(L"Ungroup"), L"Ctrl+Shift+G"},
+    {CmdObjAlignLeft, N_(L"Align Left"), L""},
+    {CmdObjAlignCenter, N_(L"Align Center"), L""},
+    {CmdObjAlignRight, N_(L"Align Right"), L""},
+    {CmdObjAlignTop, N_(L"Align Top"), L""},
+    {CmdObjAlignMiddle, N_(L"Align Middle"), L""},
+    {CmdObjAlignBottom, N_(L"Align Bottom"), L""},
+    {CmdDistributeHorizontally, N_(L"Distribute Horizontally"), L""},
+    {CmdDistributeVertically, N_(L"Distribute Vertically"), L""},
+    {CmdAlignToSlide, N_(L"Align to Slide"), L""},
+    {CmdRotateRight90, N_(L"Rotate Right 90°"), L""},
+    {CmdRotateLeft90, N_(L"Rotate Left 90°"), L""},
+    {CmdFlipVertical, N_(L"Flip Vertical"), L""},
+    {CmdFlipHorizontal, N_(L"Flip Horizontal"), L""},
 };
 
 struct NamedCommand {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 constexpr NamedCommand kOther[] = {
-    {CmdInsertShape, L"Insert shape", L""},
-    {CmdInsertPicture, L"Insert pictures", L""},
-    {CmdInsertVideo, L"Insert video", L""},
-    {CmdInsertAudio, L"Insert audio", L""},
-    {CmdMediaVolume, L"Volume", L""},
-    {CmdMediaLoop, L"Loop until stopped", L""},
-    {CmdMediaHide, L"Hide while not playing", L""},
-    {CmdMediaFullScreen, L"Play full screen", L""},
-    {CmdMediaAcrossSlides, L"Play across slides", L""},
-    {CmdMediaStart, L"Start", L""},
-    {CmdInsertTextBox, L"Insert a text box", L""},
-    {CmdInsertTable, L"Insert a table", L""},
-    {CmdInsertChart, L"Insert a chart", L""},
-    {CmdPictureCrop, L"Crop", L""},
-    {CmdObjectFill, L"Shape fill", L""},
-    {CmdObjectOutline, L"Shape outline", L""},
-    {CmdObjectOutlineWeight, L"Outline weight", L""},
-    {CmdObjectShadow, L"Shadow", L""},
-    {CmdSlideNoShadow, L"No shadow", L""},
-    {CmdTableRowAbove, L"Insert row above", L""},
-    {CmdTableRowBelow, L"Insert row below", L""},
-    {CmdTableColumnLeft, L"Insert column left", L""},
-    {CmdTableColumnRight, L"Insert column right", L""},
-    {CmdTableDeleteRow, L"Delete row", L""},
-    {CmdTableDeleteColumn, L"Delete column", L""},
-    {CmdTableMergeCells, L"Merge cells", L""},
-    {CmdTableSplitCell, L"Split cells", L""},
-    {CmdDuplicateObjects, L"Duplicate", L"Ctrl+D"},
-    {CmdArrangeMenu, L"Arrange", L""},
+    {CmdInsertShape, N_(L"Insert shape"), L""},
+    {CmdInsertPicture, N_(L"Insert pictures"), L""},
+    {CmdInsertVideo, N_(L"Insert video"), L""},
+    {CmdInsertAudio, N_(L"Insert audio"), L""},
+    {CmdMediaVolume, N_(L"Volume"), L""},
+    {CmdMediaLoop, N_(L"Loop until stopped"), L""},
+    {CmdMediaHide, N_(L"Hide while not playing"), L""},
+    {CmdMediaFullScreen, N_(L"Play full screen"), L""},
+    {CmdMediaAcrossSlides, N_(L"Play across slides"), L""},
+    {CmdMediaStart, N_(L"Start"), L""},
+    {CmdInsertTextBox, N_(L"Insert a text box"), L""},
+    {CmdInsertTable, N_(L"Insert a table"), L""},
+    {CmdInsertChart, N_(L"Insert a chart"), L""},
+    {CmdPictureCrop, N_(L"Crop"), L""},
+    {CmdObjectFill, N_(L"Shape fill"), L""},
+    {CmdObjectOutline, N_(L"Shape outline"), L""},
+    {CmdObjectOutlineWeight, N_(L"Outline weight"), L""},
+    {CmdObjectShadow, N_(L"Shadow"), L""},
+    {CmdSlideNoShadow, N_(L"No shadow"), L""},
+    {CmdTableRowAbove, N_(L"Insert row above"), L""},
+    {CmdTableRowBelow, N_(L"Insert row below"), L""},
+    {CmdTableColumnLeft, N_(L"Insert column left"), L""},
+    {CmdTableColumnRight, N_(L"Insert column right"), L""},
+    {CmdTableDeleteRow, N_(L"Delete row"), L""},
+    {CmdTableDeleteColumn, N_(L"Delete column"), L""},
+    {CmdTableMergeCells, N_(L"Merge cells"), L""},
+    {CmdTableSplitCell, N_(L"Split cells"), L""},
+    {CmdDuplicateObjects, N_(L"Duplicate"), L"Ctrl+D"},
+    {CmdArrangeMenu, N_(L"Arrange"), L""},
 };
 
 constexpr int kTableCmds[] = {CmdTableRowAbove,    CmdTableRowBelow,     CmdTableColumnLeft,
@@ -346,13 +347,13 @@ constexpr int kTableCmds[] = {CmdTableRowAbove,    CmdTableRowBelow,     CmdTabl
                                CmdTableMergeCells,  CmdTableSplitCell};
 
 constexpr float kWeights[] ={0.25f, 0.5f, 0.75f, 1, 1.5f, 2.25f, 3, 4.5f, 6};
-constexpr const wchar_t* kWeightNames[] = {L"¼ pt", L"½ pt", L"¾ pt", L"1 pt", L"1½ pt", L"2¼ pt", L"3 pt", L"4½ pt", L"6 pt"};
+constexpr UiText kWeightNames[] = {N_(L"¼ pt"), N_(L"½ pt"), N_(L"¾ pt"), N_(L"1 pt"), N_(L"1½ pt"), N_(L"2¼ pt"), N_(L"3 pt"), N_(L"4½ pt"), N_(L"6 pt")};
 struct Dash {
   const char* preset;
-  const wchar_t* name;
+  UiText name;
 };
-constexpr Dash kDashes[] = {{"solid", L"Solid"}, {"sysDot", L"Round dot"}, {"sysDash", L"Square dot"},
-                            {"dash", L"Dash"},   {"dashDot", L"Dash dot"},  {"lgDash", L"Long dash"}};
+constexpr Dash kDashes[] = {{"solid", N_(L"Solid")}, {"sysDot", N_(L"Round dot")}, {"sysDash", N_(L"Square dot")},
+                            {"dash", N_(L"Dash")},   {"dashDot", N_(L"Dash dot")},  {"lgDash", N_(L"Long dash")}};
 
 }  // namespace
 
@@ -725,12 +726,12 @@ void ObjectTool::FinishDrag(UINT mods) {
       const float dy = drag_.objects.empty() ? 0 : drag_.objects[0].now.rect.top - drag_.objects[0].start.rect.top;
       if (dx == 0 && dy == 0) return;
       if (drag_.copy) DuplicateSelection(dx, dy);
-      else CommitFrames(drag_.objects, u"Move");
+      else CommitFrames(drag_.objects, T(u"Move"));
       return;
     }
     case DragKind::Resize:
-    case DragKind::LineEnd: CommitFrames(drag_.objects, u"Resize"); return;
-    case DragKind::Rotate: CommitFrames(drag_.objects, u"Rotate"); return;
+    case DragKind::LineEnd: CommitFrames(drag_.objects, T(u"Resize")); return;
+    case DragKind::Rotate: CommitFrames(drag_.objects, T(u"Rotate")); return;
     case DragKind::Crop: {
 #if FW_SLIDE_EDIT
       if (drag_.objects.empty() || !Editable()) return;
@@ -738,10 +739,10 @@ void ObjectTool::FinishDrag(UINT mods) {
       fw::slide::edit::Editor* ed = deck->Editor();
       const Moving& m = drag_.objects[0];
       const ob::Crop c = ob::CropForFrame(drag_.cropStart, m.start.rect, m.now.rect);
-      fw::slide::edit::EditGroup group(*ed, u"Crop Picture");
+      fw::slide::edit::EditGroup group(*ed, T(u"Crop Picture"));
       fw::slide::edit::Crop ec{c.left, c.top, c.right, c.bottom};
       if (!ed->SetCrop(host_.current(), m.id, ec)) return;
-      if (!CommitFrames(drag_.objects, u"Crop Picture")) return;
+      if (!CommitFrames(drag_.objects, T(u"Crop Picture"))) return;
       group.done = true;
       Edited();
 #endif
@@ -861,7 +862,7 @@ HCURSOR ObjectTool::Cursor(float x, float y) const {
 
 std::wstring ObjectTool::Tooltip(float x, float y) const {
   uint32_t id = 0;
-  if (HandleAt(x, y, &id) == ob::Handle::Rotate) return L"Drag to turn; Shift: in 15° steps";
+  if (HandleAt(x, y, &id) == ob::Handle::Rotate) return T(L"Drag to turn; Shift: in 15° steps");
   return {};
 }
 
@@ -1143,10 +1144,10 @@ bool ObjectTool::Editable(bool say) const {
     }
     return true;
   }
-  if (say) Refused(why.empty() ? L"This presentation can't be edited." : W(why));
+  if (say) Refused(why.empty() ? T(L"This presentation can't be edited.") : W(why));
   return false;
 #else
-  if (say) Refused(L"Editing presentations isn't available in this build yet.");
+  if (say) Refused(T(L"Editing presentations isn't available in this build yet."));
   return false;
 #endif
 }
@@ -1205,7 +1206,7 @@ bool ObjectTool::Nudge(float dx, float dy) {
       m.now.rect = ob::Offset(o->frame.rect, dx, dy);
       moved.push_back(m);
     }
-  return CommitFrames(moved, u"Nudge");
+  return CommitFrames(moved, T(u"Nudge"));
 }
 
 bool ObjectTool::DeleteSelection() {
@@ -1273,7 +1274,7 @@ bool ObjectTool::AlignOrDistribute(int cmd) {
       changed.push_back(moved[i]);
     }
   if (changed.empty()) return true;
-  return CommitFrames(changed, cmd >= CmdDistributeHorizontally ? u"Distribute" : u"Align");
+  return CommitFrames(changed, cmd >= CmdDistributeHorizontally ? T(u"Distribute") : T(u"Align"));
 }
 
 bool ObjectTool::GroupSelection() {
@@ -1303,7 +1304,7 @@ bool ObjectTool::UngroupSelection() {
     if (const ob::ObjectInfo* o = map_.Find(id); o && o->kind == ob::ObjectKind::Group) groups.push_back(id);
   if (groups.empty()) return false;
   fw::slide::edit::Editor* ed = host_.deck()->Editor();
-  fw::slide::edit::EditGroup step(*ed, u"Ungroup");
+  fw::slide::edit::EditGroup step(*ed, T(u"Ungroup"));
   for (uint32_t g : groups) {
     std::vector<uint32_t> ids;
     const fw::slide::edit::Result r = ed->Ungroup(host_.current(), g, &ids);
@@ -1332,7 +1333,7 @@ bool ObjectTool::Turn(float degrees) {
       m.now.rotation = ob::NormalizeDegrees(o->frame.rotation + degrees);
       moved.push_back(m);
     }
-  return CommitFrames(moved, u"Rotate");
+  return CommitFrames(moved, T(u"Rotate"));
 }
 
 bool ObjectTool::Flip(bool horizontal) {
@@ -1347,7 +1348,7 @@ bool ObjectTool::Flip(bool horizontal) {
       m.now.rotation = ob::NormalizeDegrees(-o->frame.rotation);
       moved.push_back(m);
     }
-  return CommitFrames(moved, horizontal ? u"Flip Horizontal" : u"Flip Vertical");
+  return CommitFrames(moved, horizontal ? T(u"Flip Horizontal") : T(u"Flip Vertical"));
 }
 
 bool ObjectTool::Copy(bool cut) {
@@ -1457,7 +1458,7 @@ bool ObjectTool::DuplicateSelection(float dx, float dy) {
   Map();
   fw::slide::edit::Editor* ed = host_.deck()->Editor();
   const size_t slide = host_.current();
-  fw::slide::edit::EditGroup group(*ed, u"Duplicate");
+  fw::slide::edit::EditGroup group(*ed, T(u"Duplicate"));
   std::vector<uint32_t> made;
   for (const ob::ObjectInfo& o : map_.Objects()) {
     if (std::find(selection_.begin(), selection_.end(), o.id) == selection_.end()) continue;
@@ -1497,7 +1498,7 @@ bool ObjectTool::InsertPictures(const std::vector<std::wstring>& files, draw::Po
   for (const std::wstring& f : files) {
     std::vector<uint8_t> bytes = ReadFileBytes(f);
     if (bytes.empty()) {
-      Refused(L"Featherweight couldn't read " + f + L".");
+      Refused(T(L"Featherweight couldn't read ") + f + L".");
       continue;
     }
     any = InsertPictureBytes(std::move(bytes), at, centred) || any;
@@ -1513,7 +1514,7 @@ bool ObjectTool::InsertPictureBytes(std::vector<uint8_t> bytes, draw::Point at, 
   std::string error;
   std::shared_ptr<draw::Image> image = draw::Image::Open(bytes, draw::ImageLimits::Default(), &error);
   if (!image) {
-    Refused(L"That isn't a picture Featherweight can insert.");
+    Refused(T(L"That isn't a picture Featherweight can insert."));
     return false;
   }
   const draw::Size slide = deck->SlideSize();
@@ -1651,19 +1652,19 @@ bool ObjectTool::InsertChart(int type) {
   const draw::Size s = deck->SlideSize();
   const ob::ChartData data = ob::DefaultChartData();
   const ob::ChartType kind = static_cast<ob::ChartType>(std::clamp(type, 0, 3));
-  fw::slide::edit::EditGroup group(*ed, u"Insert Chart");
+  fw::slide::edit::EditGroup group(*ed, T(u"Insert Chart"));
   const std::string chartPart = ed->NewPartName("/ppt/charts/chart", ".xml");
   std::string chartXml = ob::ChartXml(kind, data, "rId1");
   const std::string relId = ed->AddPart(ed->SlidePart(slide), ob::kChartRelType, chartPart, ob::kChartContentType,
                                         std::vector<uint8_t>(chartXml.begin(), chartXml.end()));
   if (relId.empty()) {
-    Refused(L"The chart couldn't be added to this slide.");
+    Refused(T(L"The chart couldn't be added to this slide."));
     return false;
   }
   const std::string wbPart = ed->NewPartName("/ppt/embeddings/Microsoft_Excel_Worksheet", ".xlsx");
   const std::string wbId = ed->AddPart(chartPart, ob::kPackageRelType, wbPart, ob::kXlsxContentType, ob::ChartWorkbook(data));
   if (wbId.empty()) {
-    Refused(L"The chart's data couldn't be added.");
+    Refused(T(L"The chart's data couldn't be added."));
     return false;
   }
   if (wbId != "rId1") {
@@ -1733,14 +1734,14 @@ bool ObjectTool::TableEdit(int cmd, const int* cells) {
     case CmdTableDeleteColumn: r = ed->DeleteTableColumns(slide, id, c0, c1 - c0 + 1); break;
     case CmdTableMergeCells:
       if (r0 < 0 || (r0 == r1 && c0 == c1)) {
-        Refused(L"Choose two or more cells to merge first.");
+        Refused(T(L"Choose two or more cells to merge first."));
         return false;
       }
       r = ed->MergeTableCells(slide, id, r0, c0, r1, c1);
       break;
     case CmdTableSplitCell:
       if (r0 < 0) {
-        Refused(L"Click in the merged cell to split first.");
+        Refused(T(L"Click in the merged cell to split first."));
         return false;
       }
       r = ed->SplitTableCell(slide, id, r0, c0);
@@ -1818,7 +1819,7 @@ bool ObjectTool::SetFillColor(std::optional<uint32_t> rgb, bool none) {
   p.kind = none ? ob::Paint::Kind::None : rgb ? ob::Paint::Kind::Solid : ob::Paint::Kind::Automatic;
   p.rgb = rgb.value_or(0);
   std::wstring why;
-  const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Fill",
+  const bool ok = Restyle(host_.deck(), host_.current(), selection_, T(u"Shape Fill"),
                           [&](pugi::xml_node n) { return ob::SetFill(n, p); }, why);
   if (!ok && !why.empty()) Refused(why);
   if (ok) Edited();
@@ -1831,7 +1832,7 @@ bool ObjectTool::SetLineColor(std::optional<uint32_t> rgb, bool none) {
   p.kind = none ? ob::Paint::Kind::None : rgb ? ob::Paint::Kind::Solid : ob::Paint::Kind::Automatic;
   p.rgb = rgb.value_or(0);
   std::wstring why;
-  const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Outline",
+  const bool ok = Restyle(host_.deck(), host_.current(), selection_, T(u"Shape Outline"),
                           [&](pugi::xml_node n) { return ob::SetLine(n, p); }, why);
   if (!ok && !why.empty()) Refused(why);
   if (ok) Edited();
@@ -1841,7 +1842,7 @@ bool ObjectTool::SetLineColor(std::optional<uint32_t> rgb, bool none) {
 bool ObjectTool::SetLineWidth(float points) {
   if (selection_.empty() || !Editable()) return false;
   std::wstring why;
-  const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Outline",
+  const bool ok = Restyle(host_.deck(), host_.current(), selection_, T(u"Shape Outline"),
                           [&](pugi::xml_node n) { return ob::SetLineWidth(n, points); }, why);
   if (!ok && !why.empty()) Refused(why);
   if (ok) Edited();
@@ -1851,7 +1852,7 @@ bool ObjectTool::SetLineWidth(float points) {
 bool ObjectTool::SetShadow(bool on) {
   if (selection_.empty() || !Editable()) return false;
   std::wstring why;
-  const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shadow",
+  const bool ok = Restyle(host_.deck(), host_.current(), selection_, T(u"Shadow"),
                           [&](pugi::xml_node n) { return ob::SetShadow(n, on); }, why);
   if (!ok && !why.empty()) Refused(why);
   if (ok) Edited();
@@ -1994,7 +1995,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
     case CmdInsertCallout: s.enabled = editable && !textEditing_; break;
     case CmdDeleteObject:
       s.enabled = editable && any;
-      s.label = L"Delete";
+      s.label = T(L"Delete");
       break;
     case CmdCut:
     case CmdCopy:
@@ -2016,7 +2017,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
       fw::slide::edit::Editor* ed = host_.deck()->Editor();
       s.enabled = cmd == CmdUndo ? ed->CanUndo() : ed->CanRedo();
       const std::u16string name = cmd == CmdUndo ? ed->UndoName() : ed->RedoName();
-      s.label = (cmd == CmdUndo ? L"Undo " : L"Redo ") + W(name);
+      s.label = (cmd == CmdUndo ? T(L"Undo ") : T(L"Redo ")) + W(name);
       return true;
     }
 #endif
@@ -2164,16 +2165,16 @@ ToolItem ObjectTool::Tool(int cmd) {
       // Inserting also ends text editing, as the toolbar always let it.
       t.enabled = Editable(false);
       t.glyph = cmd == CmdInsertPicture ? icon::Picture : icon::TextBox;
-      t.tooltip = cmd == CmdInsertPicture ? L"Insert pictures" : L"Insert a text box";
+      t.tooltip = cmd == CmdInsertPicture ? T(L"Insert pictures") : T(L"Insert a text box");
       break;
     case CmdInsertVideo:
     case CmdInsertAudio:
       t.enabled = Editable(false);
       t.glyph = cmd == CmdInsertVideo ? L'\xE714' : L'\xE8D6';  // the icon font's Video and Audio
-      t.tooltip = cmd == CmdInsertVideo ? L"Insert a video from a file" : L"Insert audio from a file";
+      t.tooltip = cmd == CmdInsertVideo ? T(L"Insert a video from a file") : T(L"Insert audio from a file");
       break;
     case CmdInsertShape:
-      dropdown(L"Shapes", icon::Shapes, L"Insert a shape");
+      dropdown(T(L"Shapes"), icon::Shapes, T(L"Insert a shape"));
       t.enabled = Editable(false);
       t.width = 70;
       t.maxRows = 16;
@@ -2181,7 +2182,7 @@ ToolItem ObjectTool::Tool(int cmd) {
       t.onChange = [this](const ToolValue& v) { InsertShape(v.index); };
       break;
     case CmdInsertTable:
-      dropdown(L"Table", icon::Table, L"Insert a table (columns × rows)");
+      dropdown(T(L"Table"), icon::Table, T(L"Insert a table (columns × rows)"));
       t.enabled = Editable(false);
       for (const TableSize& ts : kTables) t.choices.push_back(std::to_wstring(ts.columns) + L" × " + std::to_wstring(ts.rows));
       t.onChange = [this](const ToolValue& v) {
@@ -2189,7 +2190,7 @@ ToolItem ObjectTool::Tool(int cmd) {
       };
       break;
     case CmdInsertChart:
-      dropdown(L"Chart", icon::Report, L"Insert a chart");
+      dropdown(T(L"Chart"), icon::Report, T(L"Insert a chart"));
       t.enabled = Editable(false);
       for (const wchar_t* n : kChartNames) t.choices.push_back(n);
       t.onChange = [this](const ToolValue& v) {
@@ -2201,9 +2202,9 @@ ToolItem ObjectTool::Tool(int cmd) {
       const bool fill = cmd == CmdObjectFill;
       t.kind = ToolKind::ColorPicker;
       t.glyph = fill ? icon::Color : icon::Brush;
-      t.tooltip = fill ? L"Shape fill" : L"Shape outline";
+      t.tooltip = fill ? T(L"Shape fill") : T(L"Shape outline");
       t.color = Rgb(0x4472C4);  // Office's accent 1
-      t.automaticLabel = fill ? L"No fill" : L"No outline";
+      t.automaticLabel = fill ? T(L"No fill") : T(L"No outline");
       t.automaticColor = D2D1::ColorF(0, 0, 0, 0);
       t.onChange = [this, fill, rgb](const ToolValue& v) {
         const std::optional<uint32_t> c = v.automatic ? std::nullopt : std::optional<uint32_t>(rgb(v));
@@ -2213,11 +2214,11 @@ ToolItem ObjectTool::Tool(int cmd) {
       break;
     }
     case CmdObjectOutlineWeight:
-      dropdown(L"Weight", 0, L"Outline weight and dashes, shadow");
+      dropdown(T(L"Weight"), 0, T(L"Outline weight and dashes, shadow"));
       for (const wchar_t* n : kWeightNames) t.choices.push_back(n);
-      for (const Dash& d : kDashes) t.choices.push_back(std::wstring(L"Dashes: ") + d.name);
-      t.choices.push_back(L"Shadow");
-      t.choices.push_back(L"No shadow");
+      for (const Dash& d : kDashes) t.choices.push_back(std::wstring(T(L"Dashes: ")) + d.name);
+      t.choices.push_back(T(L"Shadow"));
+      t.choices.push_back(T(L"No shadow"));
       t.onChange = [this](const ToolValue& v) {
         const int nw = static_cast<int>(std::size(kWeights)), nd = static_cast<int>(std::size(kDashes));
         if (v.index < 0) return;
@@ -2226,7 +2227,7 @@ ToolItem ObjectTool::Tool(int cmd) {
         } else if (v.index < nw + nd) {
           const char* preset = kDashes[v.index - nw].preset;
           std::wstring why;
-          const bool ok = Restyle(host_.deck(), host_.current(), selection_, u"Shape Outline",
+          const bool ok = Restyle(host_.deck(), host_.current(), selection_, T(u"Shape Outline"),
                                   [&](pugi::xml_node n) { return ob::SetLineDash(n, preset); }, why);
           if (!ok && !why.empty()) Refused(why);
           if (ok) Edited();
@@ -2237,7 +2238,7 @@ ToolItem ObjectTool::Tool(int cmd) {
       break;
     case CmdPictureCrop:
       t.glyph = icon::Crop;
-      t.tooltip = L"Crop the picture (drag its edges)";
+      t.tooltip = T(L"Crop the picture (drag its edges)");
       t.toggle = true;
       break;
     default: break;
@@ -2360,12 +2361,12 @@ bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {
   for (wchar_t& c : ext) c = static_cast<wchar_t>(std::towlower(c));
   const wchar_t* what = video ? L"video" : L"audio file";
   if (!fw::slide::show::PlayableMediaExtension(ext)) {
-    Refused(std::wstring(L"That isn't a ") + what + L" Featherweight can insert.");
+    Refused(std::wstring(T(L"That isn't a ")) + what + T(L" Featherweight can insert."));
     return false;
   }
   std::string read;
   if (!util::ReadFileBytes(file, read, kMaxMediaFile)) {
-    Refused(L"Featherweight couldn't read " + file + L" (files up to 1 GB can be inserted).");
+    Refused(T(L"Featherweight couldn't read ") + file + T(L" (files up to 1 GB can be inserted)."));
     return false;
   }
   std::vector<uint8_t> bytes(read.begin(), read.end());
@@ -2373,12 +2374,12 @@ bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {
   read.shrink_to_fit();
   fw::slide::show::MediaInfo info;
   if (!fw::slide::show::ReadMediaInfo(bytes, ext, video, &info)) {
-    Refused(std::wstring(L"Featherweight couldn't read that ") + what + L".");
+    Refused(std::wstring(T(L"Featherweight couldn't read that ")) + what + L".");
     return false;
   }
   std::vector<uint8_t> poster = video ? std::move(info.posterPng) : fw::slide::show::AudioIconPng(96);
   if (poster.empty()) {
-    Refused(std::wstring(L"Featherweight couldn't read that ") + what + L".");
+    Refused(std::wstring(T(L"Featherweight couldn't read that ")) + what + L".");
     return false;
   }
   // A video at its size (96 dpi) fitted to the slide, centred; an audio as PowerPoint's speaker, centred.
@@ -2447,12 +2448,12 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
     const int n = swscanf_s(arg.c_str(), L"%d,%d,%d,%d", &c[0], &c[1], &c[2], &c[3]);
     if (n != (op == L"tablemerge" ? 4 : 2) || c[0] < 0 || c[1] < 0) return fail(L"not cells row,col[,row,col]");
     if (n == 2) c[2] = c[0], c[3] = c[1];
-    if (!SelectedTable()) return fail(L"no table selected");
+    if (!SelectedTable()) return fail(T(L"no table selected"));
     return TableEdit(op == L"tablemerge" ? CmdTableMergeCells : CmdTableSplitCell, c) ? true : fail(L"not done");
   }
   if (op == L"shapefill") {
     if (arg.size() != 6 || !std::all_of(arg.begin(), arg.end(), [](wchar_t c) { return std::iswxdigit(c) != 0; }))
-      return fail(L"not a color RRGGBB");
+      return fail(T(L"not a color RRGGBB"));
     const uint32_t rgb = static_cast<uint32_t>(std::wcstoul(arg.c_str(), nullptr, 16));
     if (selection_.empty()) return fail(L"nothing selected");
     return SetFillColor(rgb, false) ? true : fail(L"not done");
@@ -2468,15 +2469,15 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   }
   if (what == L"chart") {
     for (int i = 0; i < 4; ++i)
-      if (fw::ToLower(rest) == fw::ToLower(kChartNames[i])) return InsertChart(i) ? true : fail(L"not done");
-    return fail(L"chart|column, bar, line or pie");
+      if (fw::ToLower(rest) == fw::ToLower(kChartNames[i].en)) return InsertChart(i) ? true : fail(L"not done");
+    return fail(T(L"chart|column, bar, line or pie"));
   }
   if (what == L"shape") {
     const size_t b2 = rest.find(L'|');
     draw::Rect r;
     if (b2 == std::wstring::npos || !ParseBox(rest.substr(b2 + 1), r)) return fail(L"shape|<preset>|x,y,w,h");
     const std::string preset = fw::WideToUtf8(rest.substr(0, b2));
-    if (!ob::IsLinePreset(preset) && !draw::Geometry::Preset(preset)) return fail(L"no such preset");
+    if (!ob::IsLinePreset(preset) && !draw::Geometry::Preset(preset)) return fail(T(L"no such preset"));
     return InsertPreset(preset, r) ? true : fail(L"not done");
   }
   if (what == L"textbox") {
@@ -2490,7 +2491,7 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   }
   if (what == L"video" || what == L"audio")  // insert:video|<file>, insert:audio|<file> (P3)
     return InsertMediaFile(rest, what == L"video") ? true : fail(L"not done");
-  return fail(L"insert:table, chart, shape, textbox, picture, video or audio");
+  return fail(T(L"insert:table, chart, shape, textbox, picture, video or audio"));
 }
 
 std::wstring PickMediaFile(HWND owner, bool video) {
@@ -2502,7 +2503,7 @@ std::wstring PickMediaFile(HWND owner, bool video) {
                           : L"Audio\0*.mp3;*.m4a;*.aac;*.wav;*.wma\0All files\0*.*\0";
   ofn.lpstrFile = buf.data();
   ofn.nMaxFile = static_cast<DWORD>(buf.size());
-  ofn.lpstrTitle = video ? L"Insert Video" : L"Insert Audio";
+  ofn.lpstrTitle = video ? T(L"Insert Video") : T(L"Insert Audio");
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
   return GetOpenFileNameW(&ofn) ? std::wstring(buf.data()) : std::wstring();
 }
@@ -2541,9 +2542,9 @@ void ObjectTool::ContextMenu(HMENU menu, float x, float y) {
     CommandState s;
     if (!Query(cmd, s)) return;
     std::wstring label = s.label.empty() ? L"" : s.label;
-    if (cmd == CmdCut) label = L"Cut";
-    if (cmd == CmdCopy) label = L"Copy";
-    if (cmd == CmdPaste) label = L"Paste";
+    if (cmd == CmdCut) label = T(L"Cut");
+    if (cmd == CmdCopy) label = T(L"Copy");
+    if (cmd == CmdPaste) label = T(L"Paste");
     if (!s.shortcut.empty()) label += L"\t" + s.shortcut;
     AppendMenuW(menu, MF_STRING | (s.enabled ? 0 : MF_GRAYED) | (s.checked ? MF_CHECKED : 0), cmd, label.c_str());
   };

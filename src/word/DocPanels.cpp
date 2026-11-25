@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/HeaderFooter.h"
 #include "ui/Gfx.h"
@@ -147,9 +148,9 @@ void DocPanelRows::DrawLabels(Canvas& c) const {
 // Links
 
 DocView::LinkPanel::LinkPanel(DocView& view) : v_(view) {
-  address_.label = L"Address";
-  address_.tooltip = L"A web or mail address, or a heading or bookmark in this document";
-  text_.label = L"Text to display";
+  address_.label = T(L"Address");
+  address_.tooltip = T(L"A web or mail address, or a heading or bookmark in this document");
+  text_.label = T(L"Text to display");
   text_.autoComplete = false;
   address_.onCommit = [this](const std::wstring&, int index) {
     // Picking a place shows its text when there's none yet.
@@ -162,12 +163,12 @@ DocView::LinkPanel::LinkPanel(DocView& view) : v_(view) {
   apply_.primary = true;
   apply_.onInvoke = [this] { Apply(); };
   address_.onEnter = text_.onEnter = [this] { Apply(); };
-  remove_.text = L"Remove link";
+  remove_.text = T(L"Remove link");
   remove_.onInvoke = [this] { Remove(); };
 }
 
 std::vector<Control*> DocView::LinkPanel::Layout(const D2D1_RECT_F& body, float ui) {
-  return LayOutRows({{L"Text to display", {&text_}}, {L"Address, or a place in this document", {&address_}},
+  return LayOutRows({{T(L"Text to display"), {&text_}}, {T(L"Address, or a place in this document"), {&address_}},
                      {L"", {&apply_, &remove_}}},
                     body, ui);
 }
@@ -187,12 +188,12 @@ void DocView::LinkPanel::Open() {
   places_.clear();
   std::vector<std::wstring> items;
   for (const Heading& h : v_.Headings()) {
-    items.push_back(L"Heading: " + std::wstring(static_cast<size_t>(h.level) * 2, L' ') + h.text);
+    items.push_back(T(L"Heading: ") + std::wstring(static_cast<size_t>(h.level) * 2, L' ') + h.text);
     places_.push_back({h.para, {}});
   }
   for (const edit::BookmarkInfo& b : edit::Bookmarks(doc)) {
     if (b.hidden) continue;
-    items.push_back(L"Bookmark: " + Wide(b.name));
+    items.push_back(T(L"Bookmark: ") + Wide(b.name));
     places_.push_back({kNone, b.name});
   }
   address_.items = std::move(items);
@@ -202,13 +203,13 @@ void DocView::LinkPanel::Open() {
     at_ = v_.focus_;
     address_.SetText(Wide(link->target));
     text_.SetText(v_.TextOf(ToText(link->from), ToText(link->to), 400));
-    apply_.text = L"Update link";
+    apply_.text = T(L"Update link");
   } else {
     address_.SetText(L"");
     const bool one = v_.anchor_.para == v_.focus_.para;
     text_.SetText(v_.HasSelection() && one ? v_.TextOf(std::min(v_.anchor_, v_.focus_), std::max(v_.anchor_, v_.focus_), 400)
                                            : L"");
-    apply_.text = L"Insert link";
+    apply_.text = T(L"Insert link");
   }
   remove_.visible = editing_;
 }
@@ -216,12 +217,12 @@ void DocView::LinkPanel::Open() {
 void DocView::LinkPanel::Apply() {
   const std::wstring typed = Trim(address_.Text());
   if (typed.empty()) {
-    note_ = L"Type an address, or pick a heading or bookmark.";
+    note_ = T(L"Type an address, or pick a heading or bookmark.");
     v_.host_.ViewInvalidate();
     return;
   }
   edit::Editor& ed = *v_.editor_;
-  ed.BeginGroup(u"Link");
+  ed.BeginGroup(T(u"Link"));
   std::string target;
   auto item = std::find(address_.items.begin(), address_.items.end(), typed);
   if (item != address_.items.end()) {
@@ -235,7 +236,7 @@ void DocView::LinkPanel::Apply() {
   edit::Result r;
   if (target.empty()) {
     r.ok = false;
-    r.message = u"That place can't be linked to.";
+    r.message = T(u"That place can't be linked to.");
   } else if (editing_) {
     r = edit::EditLink(ed, ToDoc(at_), target, shown);
   } else {
@@ -262,29 +263,29 @@ void DocView::LinkPanel::Remove() {
 // Bookmarks
 
 DocView::BookmarkPanel::BookmarkPanel(DocView& view) : v_(view) {
-  name_.label = L"Bookmark name";
+  name_.label = T(L"Bookmark name");
   name_.autoComplete = false;
-  list_.label = L"Bookmarks";
+  list_.label = T(L"Bookmarks");
   list_.rowHeight = 28;
   list_.onSelect = [this](int i) {
     if (i >= 0 && static_cast<size_t>(i) < marks_.size()) name_.SetText(Wide(marks_[static_cast<size_t>(i)].name));
   };
   list_.onActivate = [this](int) { GoTo(); };
-  add_.text = L"Add";
+  add_.text = T(L"Add");
   add_.primary = true;
   add_.onInvoke = [this] { Add(); };
   name_.onEnter = [this] { Add(); };
-  goTo_.text = L"Go to";
+  goTo_.text = T(L"Go to");
   goTo_.onInvoke = [this] { GoTo(); };
-  delete_.text = L"Delete";
+  delete_.text = T(L"Delete");
   delete_.onInvoke = [this] { Delete(); };
 }
 
 std::vector<Control*> DocView::BookmarkPanel::Layout(const D2D1_RECT_F& body, float ui) {
   const float listHeight = std::max(80.0f, (body.bottom - body.top) / ui - 220);
-  return LayOutRows({{L"Bookmark name (letters, digits and _)", {&name_}},
+  return LayOutRows({{T(L"Bookmark name (letters, digits and _)"), {&name_}},
                      {L"", {&add_, &goTo_, &delete_}},
-                     {L"In this document", {&list_}, listHeight}},
+                     {T(L"In this document"), {&list_}, listHeight}},
                     body, ui);
 }
 
@@ -317,14 +318,14 @@ void DocView::BookmarkPanel::Add() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::InsertBookmark(*v_.editor_, v_.SelFrom(), v_.SelTo(), name);
   v_.SyncFile();
-  note_ = r ? L"Added “" + Wide(name) + L"”." : W(r.message);
+  note_ = r ? T(L"Added “") + Wide(name) + L"”." : W(r.message);
   Refresh();
 }
 
 void DocView::BookmarkPanel::GoTo() {
   const auto b = edit::FindBookmark(*v_.doc_, fw::WideToUtf8(Trim(name_.Text())));
   if (!b) {
-    note_ = L"There's no bookmark with that name.";
+    note_ = T(L"There's no bookmark with that name.");
     v_.host_.ViewInvalidate();
     return;
   }
@@ -336,7 +337,7 @@ void DocView::BookmarkPanel::Delete() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::DeleteBookmark(*v_.editor_, name);
   v_.SyncFile();
-  note_ = r ? L"Deleted “" + Wide(name) + L"”." : W(r.message);
+  note_ = r ? T(L"Deleted “") + Wide(name) + L"”." : W(r.message);
   if (r) name_.SetText(L"");
   Refresh();
 }
@@ -349,36 +350,36 @@ constexpr std::string_view kFormats[] = {"decimal", "lowerRoman", "upperRoman", 
 }
 
 DocView::PageNumberPanel::PageNumberPanel(DocView& view) : v_(view) {
-  position_.label = L"Position";
-  position_.items = {L"Top of page (header)", L"Bottom of page (footer)", L"At the cursor"};
+  position_.label = T(L"Position");
+  position_.items = {T(L"Top of page (header)"), T(L"Bottom of page (footer)"), T(L"At the cursor")};
   position_.selected = 1;
-  align_.label = L"Alignment";
-  align_.items = {L"Left", L"Center", L"Right"};
+  align_.label = T(L"Alignment");
+  align_.items = {T(L"Left"), T(L"Center"), T(L"Right")};
   align_.selected = 1;
-  style_.label = L"Style";
-  style_.items = {L"1", L"Page 1 of 3"};
+  style_.label = T(L"Style");
+  style_.items = {L"1", T(L"Page 1 of 3")};
   style_.selected = 0;
-  insert_.text = L"Insert page number";
+  insert_.text = T(L"Insert page number");
   insert_.primary = true;
   insert_.onInvoke = [this] { Insert(); };
-  format_.label = L"Number format";
-  format_.items = {L"1, 2, 3", L"i, ii, iii", L"I, II, III", L"a, b, c", L"A, B, C"};
-  numbering_.label = L"Numbering";
-  numbering_.items = {L"Continue from the previous section", L"Start at"};
-  start_.label = L"Start at";
+  format_.label = T(L"Number format");
+  format_.items = {L"1, 2, 3", T(L"i, ii, iii"), L"I, II, III", L"a, b, c", L"A, B, C"};
+  numbering_.label = T(L"Numbering");
+  numbering_.items = {T(L"Continue from the previous section"), T(L"Start at")};
+  start_.label = T(L"Start at");
   start_.minValue = 0;
   start_.maxValue = 32767;
   start_.value = 1;
-  apply_.text = L"Apply to this section";
+  apply_.text = T(L"Apply to this section");
   apply_.onInvoke = [this] { ApplyFormat(); };
 }
 
 std::vector<Control*> DocView::PageNumberPanel::Layout(const D2D1_RECT_F& body, float ui) {
-  return LayOutRows({{L"Position", {&position_}},
-                     {L"Alignment and style", {&align_, &style_}},
+  return LayOutRows({{T(L"Position"), {&position_}},
+                     {T(L"Alignment and style"), {&align_, &style_}},
                      {L"", {&insert_}},
-                     {L"Number format", {&format_}},
-                     {L"Numbering", {&numbering_, &start_}},
+                     {T(L"Number format"), {&format_}},
+                     {T(L"Numbering"), {&numbering_, &start_}},
                      {L"", {&apply_}}},
                     body, ui);
 }
@@ -414,13 +415,13 @@ void DocView::PageNumberPanel::Insert() {
   const bool ofPages = style_.selected == 1;
   if (position_.selected == 2) {
     // At the cursor: the field (and "Page … of …") in the text.
-    ed.BeginGroup(u"Page Number");
+    ed.BeginGroup(T(u"Page Number"));
     fw::doc::Pos at = ToDoc(v_.focus_);
     edit::Result r;
-    if (ofPages && (r = ed.InsertText(at, u"Page "))) at = r.caret;
-    if (r && (r = edit::InsertField(ed, at, edit::kPageField, u"1", u"Page Number"))) at = r.caret;
+    if (ofPages && (r = ed.InsertText(at, T(u"Page ")))) at = r.caret;
+    if (r && (r = edit::InsertField(ed, at, edit::kPageField, u"1", T(u"Page Number")))) at = r.caret;
     if (r && ofPages && (r = ed.InsertText(at, u" of "))) at = r.caret;
-    if (r && ofPages && (r = edit::InsertField(ed, at, edit::kPagesField, u"1", u"Page Number"))) at = r.caret;
+    if (r && ofPages && (r = edit::InsertField(ed, at, edit::kPagesField, u"1", T(u"Page Number")))) at = r.caret;
     if (r) ed.EndGroup();
     else ed.CancelGroup();
     if (v_.Apply(r)) v_.host_.ViewShowPanel(nullptr);
@@ -453,7 +454,7 @@ void DocView::PageNumberPanel::ApplyFormat() {
   if (numbering_.selected == 1) start = static_cast<int32_t>(std::lround(start_.value));
   edit::Result r = edit::SetPageNumbering(*v_.editor_, Section(), kFormats[std::min(f, std::size(kFormats) - 1)], start);
   v_.SyncFile();
-  note_ = r ? L"Page numbering changed." : W(r.message);
+  note_ = r ? T(L"Page numbering changed.") : W(r.message);
   v_.caretRevision_ = UINT32_MAX;
   v_.TakeNewPages();
   v_.host_.ViewInvalidate();
@@ -499,7 +500,7 @@ void DocView::NavPanel::Draw(Canvas& c) {
   Refresh();
   const Palette& p = theme::P();
   const float u = ui_;
-  const wchar_t* names[2] = {L"Headings", L"Results"};
+  const wchar_t* names[2] = {T(L"Headings"), T(L"Results")};
   for (int t = 0; t < 2; ++t) {
     const bool on = (t == 1) == results_;
     std::wstring label = names[t];
@@ -512,7 +513,7 @@ void DocView::NavPanel::Draw(Canvas& c) {
   const D2D1_RECT_F list = RectF(body_.left, top, body_.right, body_.bottom);
   const size_t n = Count();
   if (n == 0) {
-    const wchar_t* empty = results_ ? L"Search with Ctrl+F: the results show here." : L"Text in heading styles shows here.";
+    const wchar_t* empty = results_ ? T(L"Search with Ctrl+F: the results show here.") : T(L"Text in heading styles shows here.");
     c.Text(empty, RectF(list.left + 16 * u, top + 4 * u, list.right - 16 * u, top + 28 * u), p.textSecondary, 12 * u);
     return;
   }
@@ -628,13 +629,13 @@ void DocView::NavPanel::Activate(int row) {
 
 void DocView::NavPanel::Describe(uia::Tree& t, int parent, const std::function<void()>& takeFocus) {
   Refresh();
-  const int list = t.Add(parent, 1, UIA_ListControlTypeId, results_ ? L"Search results" : L"Headings", body_);
+  const int list = t.Add(parent, 1, UIA_ListControlTypeId, results_ ? T(L"Search results") : T(L"Headings"), body_);
   t[list].focusable = true;
   t[list].focus = takeFocus;
   const float top = body_.top + 44 * ui_, row = 28 * ui_;
   for (size_t i = 0; i < Count() && i < 500; ++i) {
     const float y = top + static_cast<float>(i) * row - scroll_;
-    std::wstring name = results_ ? L"Result " + std::to_wstring(i + 1) : headings_[i].text;
+    std::wstring name = results_ ? T(L"Result ") + std::to_wstring(i + 1) : headings_[i].text;
     const int item = t.Add(list, static_cast<int64_t>(i) + 2, UIA_ListItemControlTypeId, name,
                            RectF(body_.left, y, body_.right, y + row));
     t[item].invoke = [this, i] { Activate(static_cast<int>(i)); };

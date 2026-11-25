@@ -5,6 +5,7 @@
 #include <cwctype>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
@@ -22,7 +23,7 @@ constexpr float kRowH = 52;      // a recent file: its name, and its folder unde
 constexpr float kCardH = 88;     // a New card
 constexpr float kChipH = 34;     // a template
 constexpr size_t kFilterFrom = 9;  // recent files from which the filter shows
-constexpr wchar_t kSubtitle[] = L"Open a file, or drop one anywhere in this window";
+constexpr UiText kSubtitle = N_(L"Open a file, or drop one anywhere in this window");
 
 // The page grows with the window: as designed up to 1366 × 700 DIPs, then by a fifth for each
 // doubling of the width (and of the height, so a wide, low window doesn't overflow), to 1.3.
@@ -110,7 +111,7 @@ void Move(D2D1_RECT_F& r, float dy) {
 }  // namespace
 
 EmptyState::EmptyState() {
-  filter_.placeholder = L"Filter recent files";
+  filter_.placeholder = T(L"Filter recent files");
   filter_.maxLength = 120;
   filter_.trailingInset = 28;  // the magnifier
 }
@@ -143,23 +144,23 @@ void EmptyState::BuildItems(const std::vector<std::wstring>& templates, bool sho
     it.tip = std::move(tip);
     return it;
   };
-  add(Part::Open, -1, fw::FileKind::Unknown, icon::FolderOpen, L"Open…", L"Open a file (Ctrl+O)").keys = L"Ctrl+O";
+  add(Part::Open, -1, fw::FileKind::Unknown, icon::FolderOpen, T(L"Open…"), T(L"Open a file (Ctrl+O)")).keys = L"Ctrl+O";
   bool anyEditor = false;
   for (const fw::FileKindInfo& k : fw::FileKinds()) {
     if (!fw::EditorShipped(k.kind)) continue;
     anyEditor = true;
     const bool doc = k.kind == fw::FileKind::Document;
-    Item& it = add(Part::New, static_cast<int>(k.kind), k.kind, KindGlyph(k.kind), L"Blank " + std::wstring(k.noun),
-                   L"New " + std::wstring(k.noun) + (doc ? L" (Ctrl+N)" : L""));
+    Item& it = add(Part::New, static_cast<int>(k.kind), k.kind, KindGlyph(k.kind), T(L"Blank ") + std::wstring(k.noun),
+                   T(L"New ") + std::wstring(k.noun) + (doc ? L" (Ctrl+N)" : L""));
     it.sub = k.extensions.empty() ? L"" : k.extensions[0];
     if (doc) it.keys = L"Ctrl+N";
   }
   if (fw::EditorShipped(fw::FileKind::Document)) {
     const wchar_t glyphs[kTemplateCount] = {icon::Mail, icon::Contact, icon::Report};
-    const wchar_t* tips[kTemplateCount] = {L"New letter, from a template", L"New CV, from a template",
-                                           L"New report, from a template"};
+    const wchar_t* tips[kTemplateCount] = {T(L"New letter, from a template"), T(L"New CV, from a template"),
+                                           T(L"New report, from a template")};
     for (int i = 0; i < kTemplateCount; ++i)
-      add(Part::Template, i, fw::FileKind::Document, glyphs[i], kTemplates[i], tips[i]);
+      add(Part::Template, i, fw::FileKind::Document, glyphs[i], std::wstring(kTemplates[i]), tips[i]);
   }
   for (size_t i = 0; i < templates.size(); ++i) {
     std::wstring name = fw::FileNameOf(templates[i]);
@@ -168,10 +169,10 @@ void EmptyState::BuildItems(const std::vector<std::wstring>& templates, bool sho
     add(Part::UserTemplate, static_cast<int>(i), kind, KindGlyph(kind), name, templates[i]);
   }
   if (anyEditor)
-    add(Part::More, -1, fw::FileKind::Unknown, icon::FolderOpen, L"More templates…",
-        L"Open a template from your templates folder");
-  if (!showRecent) add(Part::ShowHide, -1, fw::FileKind::Unknown, icon::View, L"Show recent files", L"Show recent files");
-  else if (recentCount > 0) add(Part::ShowHide, -1, fw::FileKind::Unknown, icon::Hide, L"", L"Hide recent files");
+    add(Part::More, -1, fw::FileKind::Unknown, icon::FolderOpen, T(L"More templates…"),
+        T(L"Open a template from your templates folder"));
+  if (!showRecent) add(Part::ShowHide, -1, fw::FileKind::Unknown, icon::View, T(L"Show recent files"), T(L"Show recent files"));
+  else if (recentCount > 0) add(Part::ShowHide, -1, fw::FileKind::Unknown, icon::Hide, L"", T(L"Hide recent files"));
 
   items_ = std::move(items);
   hoverItem_ = pressedItem_ = -1;
@@ -267,7 +268,7 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
   // The templates, in a strip under the cards: two lines at most, then "More templates…".
   if (!chips.empty()) {
     y += cards.empty() ? 44 * s : 18 * s;
-    const float labelW = std::ceil(measure.MeasureText(L"Templates", 13 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD)) + 20 * s;
+    const float labelW = std::ceil(measure.MeasureText(T(L"Templates"), 13 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD)) + 20 * s;
     const float h = std::round(kChipH * s), gap = 8 * s, x0 = left + labelW;
     templatesLabel_ = RectF(left, y, x0, y + h);
     auto chipW = [&](const Item& it) {
@@ -327,7 +328,7 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
   noteText_.clear();
   float centerH = 0;  // the height the page is centred by
   if (!showRecent) {
-    noteText_ = L"Recent files are hidden.";
+    noteText_ = T(L"Recent files are hidden.");
     note_ = RectF(left, y - 4 * s, right, y + 20 * s);
     y += 20 * s;
   } else {
@@ -351,8 +352,8 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
     if (order.empty()) {
       recentCard_ = RectF(left, y, right, y + std::round(64 * s));
       note_ = recentCard_;
-      noteText_ = recent.empty() ? L"Files you open show up here."
-                                 : L"No recent file’s name has “" + fw::Trim(filter_.Text()) + L"” in it.";
+      noteText_ = recent.empty() ? T(L"Files you open show up here.")
+                                 : T(L"No recent file’s name has “") + fw::Trim(filter_.Text()) + T(L"” in it.");
     } else {
       float ry = y + pad;
       for (size_t k = 0; k < order.size(); ++k) {
@@ -472,12 +473,12 @@ void EmptyState::Draw(Canvas& c, const std::vector<RecentFile>& recent, bool car
   logo::Draw(c, logo_.left, logo_.top, Width(logo_));
   c.Text(L"Featherweight", title_, p.text, 28 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
   c.Text(kSubtitle, subtitle_, p.textSecondary, 14 * s);
-  if (Shown(newLabel_)) c.Text(L"New", newLabel_, p.text, 16 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-  if (Shown(templatesLabel_)) c.Text(L"Templates", templatesLabel_, p.textSecondary, 13 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+  if (Shown(newLabel_)) c.Text(T(L"New"), newLabel_, p.text, 16 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+  if (Shown(templatesLabel_)) c.Text(T(L"Templates"), templatesLabel_, p.textSecondary, 13 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
   for (size_t i = 0; i < items_.size(); ++i)
     DrawItem(c, items_[i], focus_ == Focus::Item && focusItem_ == static_cast<int>(i) && focusVisible_);
 
-  c.Text(L"Recent", recentLabel_, p.text, 16 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+  c.Text(T(L"Recent"), recentLabel_, p.text, 16 * s, DWRITE_FONT_WEIGHT_SEMI_BOLD);
   if (filterShown_) {
     filter_.Draw(c, s, caretVisible);
     c.Icon(icon::Search, RectF(filter_.rc.right - 30 * s, filter_.rc.top, filter_.rc.right - 6 * s, filter_.rc.bottom),
@@ -825,8 +826,8 @@ std::wstring EmptyState::TooltipAt(int x, int y, const std::vector<RecentFile>& 
   if (row < 0 || rows_[row].recent >= static_cast<int>(recent.size())) return {};
   const RecentFile& f = recent[rows_[row].recent];
   switch (ButtonAt(row, x, y)) {
-    case kPinButton: return f.pinned ? L"Unpin from list" : L"Pin to list";
-    case kRemoveButton: return L"Remove from list";
+    case kPinButton: return f.pinned ? T(L"Unpin from list") : T(L"Pin to list");
+    case kRemoveButton: return T(L"Remove from list");
     default: return f.path;
   }
 }
@@ -850,7 +851,7 @@ void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile
     const int g = it.part == Part::New ? 0 : it.part == Part::Open || it.part == Part::ShowHide ? -1 : 1;
     int under = parent;
     if (g >= 0) {
-      if (groups[g] < 0) groups[g] = t.Add(parent, 3 + g, UIA_GroupControlTypeId, g == 0 ? L"New" : L"Templates", bounds[g]);
+      if (groups[g] < 0) groups[g] = t.Add(parent, 3 + g, UIA_GroupControlTypeId, g == 0 ? T(L"New") : T(L"Templates"), bounds[g]);
       under = groups[g];
     }
     const int node = t.Add(under, 10 + static_cast<int64_t>(i), UIA_ButtonControlTypeId, it.text.empty() ? it.tip : it.text, it.rc);
@@ -862,12 +863,12 @@ void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile
     n.focused = focus_ == Focus::Item && focusItem_ == static_cast<int>(i);
     n.focus = [this, i] { FocusOn(Focus::Item, static_cast<int>(i)); };
   }
-  if (filterShown_) uia::AddTextBox(t, parent, 5, filter_, L"Filter recent files", focusFilter);
+  if (filterShown_) uia::AddTextBox(t, parent, 5, filter_, T(L"Filter recent files"), focusFilter);
 
   const int rows = static_cast<int>(rows_.size());
   if (rows == 0) return;
   const D2D1_RECT_F all = RectF(rows_.front().rc.left, rows_.front().rc.top, rows_.front().rc.right, rows_.back().rc.bottom);
-  const int list = t.Add(parent, 2, UIA_ListControlTypeId, L"Recent", all);
+  const int list = t.Add(parent, 2, UIA_ListControlTypeId, T(L"Recent"), all);
   t[list].orientation = OrientationType_Vertical;
   t[list].selectionContainer = true;
   t[list].focusable = true;
@@ -880,7 +881,7 @@ void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile
     const int item = t.Add(list, i, UIA_ListItemControlTypeId, fw::FileNameOf(f.path), rows_[i].rc);
     uia::Node& n = t[item];
     n.help = f.path;
-    n.status = fw::RelativeTime(now - f.lastOpened) + (f.pinned ? L", pinned" : L"");
+    n.status = fw::RelativeTime(now - f.lastOpened) + (f.pinned ? T(L", pinned") : L"");
     n.invoke = [act, index] { act({Result::Kind::OpenRecent, index}); };
     n.positionInSet = i + 1;
     n.sizeOfSet = rows;
@@ -892,9 +893,9 @@ void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile
       Select(i);
       FocusOn(Focus::List, -1);
     };
-    const int pin = t.Add(item, 1, UIA_ButtonControlTypeId, f.pinned ? L"Unpin from list" : L"Pin to list", ButtonRect(i, kPinButton));
+    const int pin = t.Add(item, 1, UIA_ButtonControlTypeId, f.pinned ? T(L"Unpin from list") : T(L"Pin to list"), ButtonRect(i, kPinButton));
     t[pin].invoke = [act, index] { act({Result::Kind::PinRecent, index}); };
-    const int remove = t.Add(item, 2, UIA_ButtonControlTypeId, L"Remove from list", ButtonRect(i, kRemoveButton));
+    const int remove = t.Add(item, 2, UIA_ButtonControlTypeId, T(L"Remove from list"), ButtonRect(i, kRemoveButton));
     t[remove].invoke = [act, index] { act({Result::Kind::RemoveRecent, index}); };
   }
 }

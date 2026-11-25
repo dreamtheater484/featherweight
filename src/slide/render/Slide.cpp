@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "core/Lang.h"
 #include "draw/Shapes.h"
 #include "draw/Xml.h"
 #include "slide/render/SlideRender.h"
@@ -110,19 +111,19 @@ namespace {
 // What an empty placeholder says in the editor, by its type (PowerPoint's words).
 std::wstring PromptText(fw::slide::PlaceholderType t, bool notes) {
   using T = fw::slide::PlaceholderType;
-  if (notes) return t == T::Body ? L"Click to add notes" : L"";
+  if (notes) return t == T::Body ? ::T(L"Click to add notes") : L"";
   switch (t) {
     case T::Title:
-    case T::CenteredTitle: return L"Click to add title";
-    case T::Subtitle: return L"Click to add subtitle";
+    case T::CenteredTitle: return ::T(L"Click to add title");
+    case T::Subtitle: return ::T(L"Click to add subtitle");
     case T::Body:
-    case T::Object: return L"Click to add text";
-    case T::Picture: return L"Click icon to add picture";
-    case T::Table: return L"Click icon to add table";
-    case T::Chart: return L"Click icon to add chart";
-    case T::Media: return L"Click icon to add media";
+    case T::Object: return ::T(L"Click to add text");
+    case T::Picture: return ::T(L"Click icon to add picture");
+    case T::Table: return ::T(L"Click icon to add table");
+    case T::Chart: return ::T(L"Click icon to add chart");
+    case T::Media: return ::T(L"Click icon to add media");
     case T::Diagram:
-    case T::ClipArt: return L"Click icon to add a graphic";
+    case T::ClipArt: return ::T(L"Click icon to add a graphic");
     default: return L"";
   }
 }
@@ -484,8 +485,8 @@ void UseDeckFonts(text::Fonts& fonts, fw::slide::Presentation& deck, bool direct
       // One DirectWrite still can't outline would leave its text blank on screen: drawn in the
       // font's substitute instead, noted once in the debugger's log.
       if (directWrite && !draw::OutlinesInDirectWrite(sfnt)) {
-        OutputDebugStringW((L"Featherweight: embedded font " + f.typeface +
-                            L" has no outlines DirectWrite draws; its text is drawn in a substitute\n").c_str());
+        OutputDebugStringW((::T(L"Featherweight: embedded font ") + f.typeface +
+                            ::T(L" has no outlines DirectWrite draws; its text is drawn in a substitute\n")).c_str());
         continue;
       }
     }

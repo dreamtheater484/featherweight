@@ -10,6 +10,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
@@ -133,11 +134,11 @@ std::wstring HyperlinkFieldTarget(std::u16string_view code) {
 std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
   using Code = fw::pkg::Status::Code;
   switch (st.code) {
-    case Code::IoError: return name + L" couldn't be opened — the file couldn't be read.";
-    case Code::TooLarge: return name + L" couldn't be opened — it goes beyond the limits Featherweight sets for safety.";
-    case Code::Rejected: return name + L" couldn't be opened — it contains something Featherweight refuses for safety.";
-    case Code::Unsupported: return name + L" couldn't be opened — it uses something Featherweight doesn't support yet.";
-    default: return name + L" couldn't be opened — it seems to be damaged or isn't a Word document.";
+    case Code::IoError: return name + T(L" couldn't be opened — the file couldn't be read.");
+    case Code::TooLarge: return name + T(L" couldn't be opened — it goes beyond the limits Featherweight sets for safety.");
+    case Code::Rejected: return name + T(L" couldn't be opened — it contains something Featherweight refuses for safety.");
+    case Code::Unsupported: return name + T(L" couldn't be opened — it uses something Featherweight doesn't support yet.");
+    default: return name + T(L" couldn't be opened — it seems to be damaged or isn't a Word document.");
   }
 }
 
@@ -196,7 +197,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
   const bool doc = std::find(streams.begin(), streams.end(), "WordDocument") != streams.end();
   const bool locked = file && (doc ? crypto::IsEncryptedDoc(*file) : crypto::IsEncryptedPackage(*file));
   if (!file || (!doc && !locked)) {
-    error = name + L" couldn't be opened — it isn't a Word document Featherweight can open.";
+    error = name + T(L" couldn't be opened — it isn't a Word document Featherweight can open.");
     return OpenResult::Failed;
   }
   if (locked && password.empty()) {
@@ -221,7 +222,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
           },
           st, locked);
       if (bytes_.empty()) {
-        error = name + L" couldn't be opened. " + fw::Utf8ToWide(st.message);
+        error = name + T(L" couldn't be opened. ") + fw::Utf8ToWide(st.message);
         return OpenResult::Failed;
       }
       if (locked) key = crypto::NewKey(password);  // the .docx it's saved as keeps its password
@@ -238,11 +239,11 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
       if (!bytes_.empty()) break;
       [[fallthrough]];  // an empty package
     case crypto::Result::Damaged:
-      error = name + L" couldn't be opened — it seems to be damaged.";
+      error = name + T(L" couldn't be opened — it seems to be damaged.");
       return OpenResult::Failed;
     case crypto::Result::WrongPassword: needPassword_ = true; return OpenResult::WrongPassword;
     case crypto::Result::Unsupported:
-      error = name + L" couldn't be opened — it's protected in a way Featherweight doesn't support.";
+      error = name + T(L" couldn't be opened — it's protected in a way Featherweight doesn't support.");
       return OpenResult::Failed;
   }
   needPassword_ = false;
@@ -301,7 +302,7 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
       // The stamp first: a change while the file is read then shows as a change on disk.
       std::string file;
       if (!fw::pkg::StampOf(path_, {}, protectedStamp_) || !util::ReadFileBytes(path_, file, 1u << 30)) {
-        error = name + L" couldn't be opened — the file couldn't be read.";
+        error = name + T(L" couldn't be opened — the file couldn't be read.");
         return OpenResult::Failed;
       }
       protected_.assign(file.begin(), file.end());
@@ -321,7 +322,7 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
                          : fw::doc::docx::DocumentFromTemplate(source->Bytes(), bytes_);
     if (!source || !st.Ok()) {
       error = odf && st.code == fw::pkg::Status::Code::Damaged
-                  ? name + L" couldn't be opened — it seems to be damaged or isn't an OpenDocument text document."
+                  ? name + T(L" couldn't be opened — it seems to be damaged or isn't an OpenDocument text document.")
                   : OpenError(name, st);
       return OpenResult::Failed;
     }
@@ -508,10 +509,10 @@ void DocView::CollectAnnotations() {
           if (p != ch.to.para) gone += L' ';
         }
         if (gone.size() > 200) gone = gone.substr(0, 200) + L"…";
-        ch.text = std::wstring(r.kind == Kind::MoveFrom ? L"Moved away" : L"Deleted") + by +
+        ch.text = std::wstring(r.kind == Kind::MoveFrom ? T(L"Moved away") : T(L"Deleted")) + by +
                   (gone.empty() ? std::wstring() : L": “" + gone + L"”");
       } else {
-        ch.text = std::wstring(r.kind == Kind::MoveTo ? L"Moved here" : L"Inserted") + by;
+        ch.text = std::wstring(r.kind == Kind::MoveTo ? T(L"Moved here") : T(L"Inserted")) + by;
       }
       changes_.push_back(std::move(ch));
     }
@@ -595,23 +596,23 @@ void DocView::ShowNotices() {
   if (!imported_.empty()) {
     const size_t dot = imported_.find_last_of(L'.');
     const bool odf = fw::EndsWithNoCase(imported_, L".odt") || fw::EndsWithNoCase(imported_, L".ott");
-    text = imported_ + (odf ? L" is an OpenDocument text document" : L" is a Word 97–2003 document") +
+    text = imported_ + (odf ? T(L" is an OpenDocument text document") : T(L" is a Word 97–2003 document")) +
            L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
            L".docx and leaves it as it is.";
   }
   bool ink = false;
   for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;
-  if (ink) text += std::wstring(text.empty() ? L"" : L" ") + L"Ink drawings aren't shown yet.";
+  if (ink) text += std::wstring(text.empty() ? L"" : L" ") + T(L"Ink drawings aren't shown yet.");
   const auto& subs = fonts_->Substitutions();
   if (!subs.empty()) {
     std::wstring list;
     for (size_t i = 0; i < subs.size() && i < 3; ++i) {
       if (i) list += L", ";
-      list += subs[i].requested + L" (shown in " + subs[i].used + L")";
+      list += subs[i].requested + T(L" (shown in ") + subs[i].used + L")";
     }
     if (subs.size() > 3) list += L" and " + std::to_wstring(subs.size() - 3) + L" more";
     if (!text.empty()) text += L" ";
-    text += (subs.size() == 1 ? L"A font in this document isn't installed: " : L"Fonts in this document aren't installed: ") +
+    text += (subs.size() == 1 ? T(L"A font in this document isn't installed: ") : T(L"Fonts in this document aren't installed: ")) +
             list + L". Lines may break differently than in Word.";
   }
   if (!text.empty()) host_.ViewMessage(BannerKind::Info, text);
@@ -1283,7 +1284,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   if (OnRuler(x, y)) return RulerTooltip(x, y);
   Hit hit = HitAt(x, y);
   if (!hit.link.empty()) {
-    if (hit.link[0] == L'#') return L"Go to “" + hit.link.substr(1) + L"”";
+    if (hit.link[0] == L'#') return T(L"Go to “") + hit.link.substr(1) + L"”";
     return hit.link;
   }
   std::wstring tip;
@@ -1314,11 +1315,11 @@ void DocView::FollowLink(const std::wstring& link) {
       ScrollToPos(at, {at.para, at.offset + 1});
       return;
     }
-    host_.ViewMessage(BannerKind::Warning, L"The place this link points to isn't in the document.");
+    host_.ViewMessage(BannerKind::Warning, T(L"The place this link points to isn't in the document."));
     return;
   }
   if (!util::OpenExternalLink(link))
-    host_.ViewMessage(BannerKind::Warning, L"This link was blocked because it doesn’t point to a website.");
+    host_.ViewMessage(BannerKind::Warning, T(L"This link was blocked because it doesn’t point to a website."));
 }
 
 // ---------------------------------------------------------------------------
@@ -1365,7 +1366,7 @@ std::wstring DocView::TextOf(TextPos from, TextPos to, size_t limit) const {
 
 void DocView::Copy() {
   if (!Ready() || !HasSelection()) return;
-  if (PutOnClipboard()) host_.ViewMessage(BannerKind::Success, L"Copied");
+  if (PutOnClipboard()) host_.ViewMessage(BannerKind::Success, T(L"Copied"));
 }
 
 bool DocView::PutOnClipboard() {
@@ -1500,15 +1501,15 @@ SaveFormat DocView::SaveAsFormat() const {
   const fw::doc::Part* main = doc_ ? doc_->FindPart(fw::doc::PartKind::Document) : nullptr;
   if (fw::EndsWithNoCase(path_, L".docm") ||
       (main && doc_->Package().ContentTypeOf(main->name).find("macroEnabled") != std::string_view::npos))
-    return {L"Word macro-enabled document", L"*.docm", L"docm"};
-  return {L"Word document", L"*.docx", L"docx"};
+    return {T(L"Word macro-enabled document"), L"*.docm", L"docm"};
+  return {T(L"Word document"), L"*.docx", L"docx"};
 }
 
 // Word's other types, as copies (milestone D4).
 std::vector<SaveFormat> DocView::CopyFormats() const {
   return {{L"Rich Text Format", L"*.rtf", L"rtf"},
-          {L"Plain text (UTF-8)", L"*.txt", L"txt"},
-          {L"Plain text (UTF-16)", L"*.txt", L"txt"}};
+          {T(L"Plain text (UTF-8)"), L"*.txt", L"txt"},
+          {T(L"Plain text (UTF-16)"), L"*.txt", L"txt"}};
 }
 
 bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
@@ -1516,7 +1517,7 @@ bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& er
   const std::wstring name = fw::FileNameOf(path);
   // A copy never replaces the document it is a copy of.
   if (!path_.empty() && fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
-    error = name + L" is this document's own file. Choose another name for the copy.";
+    error = name + T(L" is this document's own file. Choose another name for the copy.");
     return false;
   }
   namespace edit = fw::doc::edit;
@@ -1524,7 +1525,7 @@ bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& er
                             : format == 1 ? edit::TextFile(*doc_, edit::TextEncoding::Utf8)
                                           : edit::TextFile(*doc_, edit::TextEncoding::Utf16);
   if (!util::WriteFileAtomic(path, bytes)) {
-    error = name + L" couldn't be saved. It may be open in another program, or the folder can't be written to.";
+    error = name + T(L" couldn't be saved. It may be open in another program, or the folder can't be written to.");
     return false;
   }
   return true;
@@ -1568,7 +1569,7 @@ PrintOutcome DocView::Print(HWND owner, const std::function<void(int, int)>& pro
   TakeNewPages();
   const int pageCount = static_cast<int>(pagination_->PageCount());
   if (pageCount == 0) {
-    message = L"This document has nothing to print.";
+    message = T(L"This document has nothing to print.");
     return PrintOutcome::Failed;
   }
   PRINTPAGERANGE ranges[16] = {};
@@ -1590,7 +1591,7 @@ PrintOutcome DocView::Print(HWND owner, const std::function<void(int, int)>& pro
   if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT || !pd.hDevNames) {
     cleanup();
     if (FAILED(hr)) {
-      message = L"The print dialog couldn’t be opened. Is a printer installed?";
+      message = T(L"The print dialog couldn’t be opened. Is a printer installed?");
       return PrintOutcome::Failed;
     }
     return PrintOutcome::Cancelled;
@@ -1625,7 +1626,7 @@ PrintOutcome DocView::PrintToFile(const std::wstring& path, std::wstring& messag
   Microsoft::WRL::ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE,
                                     FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &stream))) {
-    message = L"Couldn't create " + path;
+    message = T(L"Couldn't create ") + path;
     return PrintOutcome::Failed;
   }
   return PrintPages(L"Microsoft Print to PDF", nullptr, pages, stream.Get(), nullptr, message);
@@ -1635,7 +1636,7 @@ PrintOutcome DocView::PrintPages(const std::wstring& printer, const DEVMODEW* de
                                  IStream* output, const std::function<void(int, int)>& progress,
                                  std::wstring& message) {
   if (pages.empty()) {
-    message = L"This document has nothing to print.";
+    message = T(L"This document has nothing to print.");
     return PrintOutcome::Failed;
   }
   auto drawing = [this](draw::Painter& p, const layout::DrawingBox& box) { DrawDrawing(p, box); };
@@ -1651,17 +1652,17 @@ PrintOutcome DocView::PrintPages(const std::wstring& printer, const DEVMODEW* de
   }
   if (SUCCEEDED(hr)) hr = job.Finish();
   if (FAILED(hr)) {
-    message = L"Printing stopped because the printer reported an error.";
+    message = T(L"Printing stopped because the printer reported an error.");
     return PrintOutcome::Failed;
   }
   switch (job.Wait(120000)) {
-    case draw::PrintJob::Outcome::Canceled: message = L"Printing was canceled."; return PrintOutcome::Cancelled;
+    case draw::PrintJob::Outcome::Canceled: message = T(L"Printing was canceled."); return PrintOutcome::Cancelled;
     case draw::PrintJob::Outcome::Failed:
-      message = L"Printing stopped because the printer reported an error.";
+      message = T(L"Printing stopped because the printer reported an error.");
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? L"Sent 1 page to the printer" : L"Sent " + std::to_wstring(done) + L" pages to the printer";
+  message = done == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(done) + T(L" pages to the printer");
   return PrintOutcome::Printed;
 }
 
@@ -1672,60 +1673,60 @@ namespace {
 
 struct CommandName {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 constexpr CommandName kCommandNames[] = {
-    {CmdGoToPage, L"Go to page", L"Ctrl+G"},
-    {CmdNextPage, L"Next page", L"Page Down"},
-    {CmdPrevPage, L"Previous page", L"Page Up"},
-    {CmdFirstPage, L"First page", L"Ctrl+Home"},
-    {CmdLastPage, L"Last page", L"Ctrl+End"},
-    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
-    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
-    {CmdZoomAuto, L"Zoom automatically", L"Ctrl+0"},
-    {CmdZoomActual, L"Actual size", L"Ctrl+1"},
-    {CmdZoomFitPage, L"Fit page", L"Ctrl+2"},
-    {CmdZoomFitWidth, L"Fit width", L"Ctrl+3"},
-    {CmdViewSingle, L"Single page", L"Ctrl+6"},
-    {CmdViewContinuous, L"Continuous pages", L"Ctrl+7"},
-    {CmdViewFacing, L"Two pages", L"Ctrl+8"},
-    {CmdPresentation, L"Present", L"F5"},
-    {CmdToggleInvert, L"Night reading: dark pages", L""},
-    {CmdCut, L"Cut", L"Ctrl+X"},
-    {CmdCopy, L"Copy", L"Ctrl+C"},
-    {CmdPaste, L"Paste", L"Ctrl+V"},
-    {CmdPasteMerge, L"Paste, merging formatting", L""},
-    {CmdUndo, L"Undo", L"Ctrl+Z"},
-    {CmdRedo, L"Redo", L"Ctrl+Y"},
-    {CmdSelectAll, L"Select all", L"Ctrl+A"},
-    {CmdSpelling, L"Spelling: next error", L"F7"},
-    {CmdWordCount, L"Word count", L"Ctrl+Shift+G"},
-    {CmdLanguage, L"Language…", L""},
-    {CmdInsertPicture, L"Insert picture…", L""},
-    {CmdPictureInline, L"Picture: in line with text", L""},
-    {CmdPictureSquare, L"Picture: square wrapping", L""},
-    {CmdPictureTight, L"Picture: tight wrapping", L""},
-    {CmdPictureTopBottom, L"Picture: top and bottom", L""},
-    {CmdPictureBehind, L"Picture: behind text", L""},
-    {CmdPictureInFront, L"Picture: in front of text", L""},
-    {CmdPictureCrop, L"Crop picture", L""},
-    {CmdPictureRotate, L"Rotate picture 90°", L""},
-    {CmdPictureReset, L"Reset picture size", L""},
-    {CmdPicturePanel, L"Picture size, rotation and alt text…", L""},
-    {CmdInsertTextBox, L"Insert text box", L""},
-    {CmdInsertRectangle, L"Insert rectangle", L""},
-    {CmdInsertRoundedRectangle, L"Insert rounded rectangle", L""},
-    {CmdInsertOval, L"Insert oval", L""},
-    {CmdInsertLine, L"Insert line", L""},
-    {CmdInsertArrow, L"Insert arrow", L""},
-    {CmdInsertCallout, L"Insert callout", L""},
-    {CmdShapeAddText, L"Add text to shape", L""},
-    {CmdShapeEditText, L"Edit shape text", L""},
-    {CmdShapePanel, L"Shape wrap, size, fill and outline…", L""},
-    {CmdWatermarkPanel, L"Watermark…", L""},
-    {CmdWatermarkRemove, L"Remove watermark", L""},
+    {CmdGoToPage, N_(L"Go to page"), L"Ctrl+G"},
+    {CmdNextPage, N_(L"Next page"), N_(L"Page Down")},
+    {CmdPrevPage, N_(L"Previous page"), N_(L"Page Up")},
+    {CmdFirstPage, N_(L"First page"), L"Ctrl+Home"},
+    {CmdLastPage, N_(L"Last page"), L"Ctrl+End"},
+    {CmdZoomIn, N_(L"Zoom in"), L"Ctrl+="},
+    {CmdZoomOut, N_(L"Zoom out"), L"Ctrl+−"},
+    {CmdZoomAuto, N_(L"Zoom automatically"), L"Ctrl+0"},
+    {CmdZoomActual, N_(L"Actual size"), L"Ctrl+1"},
+    {CmdZoomFitPage, N_(L"Fit page"), L"Ctrl+2"},
+    {CmdZoomFitWidth, N_(L"Fit width"), L"Ctrl+3"},
+    {CmdViewSingle, N_(L"Single page"), L"Ctrl+6"},
+    {CmdViewContinuous, N_(L"Continuous pages"), L"Ctrl+7"},
+    {CmdViewFacing, N_(L"Two pages"), L"Ctrl+8"},
+    {CmdPresentation, N_(L"Present"), L"F5"},
+    {CmdToggleInvert, N_(L"Night reading: dark pages"), L""},
+    {CmdCut, N_(L"Cut"), L"Ctrl+X"},
+    {CmdCopy, N_(L"Copy"), L"Ctrl+C"},
+    {CmdPaste, N_(L"Paste"), L"Ctrl+V"},
+    {CmdPasteMerge, N_(L"Paste, merging formatting"), L""},
+    {CmdUndo, N_(L"Undo"), L"Ctrl+Z"},
+    {CmdRedo, N_(L"Redo"), L"Ctrl+Y"},
+    {CmdSelectAll, N_(L"Select all"), L"Ctrl+A"},
+    {CmdSpelling, N_(L"Spelling: next error"), L"F7"},
+    {CmdWordCount, N_(L"Word count"), L"Ctrl+Shift+G"},
+    {CmdLanguage, N_(L"Language…"), L""},
+    {CmdInsertPicture, N_(L"Insert picture…"), L""},
+    {CmdPictureInline, N_(L"Picture: in line with text"), L""},
+    {CmdPictureSquare, N_(L"Picture: square wrapping"), L""},
+    {CmdPictureTight, N_(L"Picture: tight wrapping"), L""},
+    {CmdPictureTopBottom, N_(L"Picture: top and bottom"), L""},
+    {CmdPictureBehind, N_(L"Picture: behind text"), L""},
+    {CmdPictureInFront, N_(L"Picture: in front of text"), L""},
+    {CmdPictureCrop, N_(L"Crop picture"), L""},
+    {CmdPictureRotate, N_(L"Rotate picture 90°"), L""},
+    {CmdPictureReset, N_(L"Reset picture size"), L""},
+    {CmdPicturePanel, N_(L"Picture size, rotation and alt text…"), L""},
+    {CmdInsertTextBox, N_(L"Insert text box"), L""},
+    {CmdInsertRectangle, N_(L"Insert rectangle"), L""},
+    {CmdInsertRoundedRectangle, N_(L"Insert rounded rectangle"), L""},
+    {CmdInsertOval, N_(L"Insert oval"), L""},
+    {CmdInsertLine, N_(L"Insert line"), L""},
+    {CmdInsertArrow, N_(L"Insert arrow"), L""},
+    {CmdInsertCallout, N_(L"Insert callout"), L""},
+    {CmdShapeAddText, N_(L"Add text to shape"), L""},
+    {CmdShapeEditText, N_(L"Edit shape text"), L""},
+    {CmdShapePanel, N_(L"Shape wrap, size, fill and outline…"), L""},
+    {CmdWatermarkPanel, N_(L"Watermark…"), L""},
+    {CmdWatermarkRemove, N_(L"Remove watermark"), L""},
 };
 
 }  // namespace
@@ -1800,13 +1801,13 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSpelling:
     case CmdWordCount: s = {Ready(), false}; break;
     case CmdLanguage: s = {Editing(), false}; break;
-    case CmdReplace: s = {Editing(), false}; s.label = L"Replace…"; s.shortcut = L"Ctrl+H"; break;  // the ribbon's Replace
-    case CmdZoomMenu: s = {Ready(), false}; s.label = L"Zoom"; break;                               // and Zoom ▾
+    case CmdReplace: s = {Editing(), false}; s.label = T(L"Replace…"); s.shortcut = L"Ctrl+H"; break;  // the ribbon's Replace
+    case CmdZoomMenu: s = {Ready(), false}; s.label = T(L"Zoom"); break;                               // and Zoom ▾
     case CmdObjectHeightBox:
     case CmdObjectWidthBox: {
       const uint32_t d = SelectedPicture();
       s = {Editing() && d != fw::doc::kNone && Movable(d), false};
-      s.label = cmd == CmdObjectHeightBox ? L"Height" : L"Width";
+      s.label = cmd == CmdObjectHeightBox ? T(L"Height") : T(L"Width");
       break;
     }
     case CmdRotateLeft:
@@ -1836,7 +1837,7 @@ CommandState DocView::QueryCommand(int cmd) {
   // (The names are copies: one each, so their iterators are of the same string.)
   if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
     const std::u16string name = cmd == CmdUndo ? editor_->UndoName() : editor_->RedoName();
-    s.label = (cmd == CmdUndo ? L"Undo " : L"Redo ") + fw::ToLower(std::wstring(name.begin(), name.end()));
+    s.label = (cmd == CmdUndo ? T(L"Undo ") : T(L"Redo ")) + fw::ToLower(std::wstring(name.begin(), name.end()));
   }
   return s;
 }
@@ -1933,11 +1934,11 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     t.tooltip = tooltip;
     return t;
   };
-  ToolItem save = item(CmdSave, icon::Save, editor_ || path_.empty() ? L"Save (Ctrl+S)"
-                                                                     : L"This document can't be edited; Save as makes a copy");
+  ToolItem save = item(CmdSave, icon::Save, editor_ || path_.empty() ? T(L"Save (Ctrl+S)")
+                                                                     : T(L"This document can't be edited; Save as makes a copy"));
   save.enabled = QueryCommand(CmdSave).enabled;
   save.joinNext = true;
-  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save as… (Ctrl+Shift+S)");
+  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, T(L"Save as… (Ctrl+Shift+S)"));
   saveAs.width = 18;
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print);
@@ -1950,7 +1951,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   wchar_t viewGlyph = viewMode_ == fw::ViewMode::Single   ? icon::ViewSingle
                       : viewMode_ == fw::ViewMode::Facing ? icon::ViewFacing
                                                           : icon::ViewContinuous;
-  ToolItem view = item(CmdViewMenu, viewGlyph, L"Page layout");
+  ToolItem view = item(CmdViewMenu, viewGlyph, T(L"Page layout"));
   view.width = 52;
   view.dropdown = true;
   view.priority = 1;
@@ -1959,7 +1960,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   find.toggle = true;
   find.priority = 5;
   find.sepBefore = true;
-  ToolItem night = item(CmdToggleInvert, icon::QuietHours, L"Night reading: dark pages");
+  ToolItem night = item(CmdToggleInvert, icon::QuietHours, T(L"Night reading: dark pages"));
   night.checked = ctx.inverted;
   night.toggle = true;
   night.priority = 3;
@@ -1982,33 +1983,33 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     table_->FillContextMenu(m);
-    AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
-    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", QueryCommand(CmdPaste).enabled);
-    AppendItem(m, CmdPasteMerge, L"Paste, merging formatting", QueryCommand(CmdPasteMerge).enabled);
+    AppendItem(m, CmdCut, T(L"Cut\tCtrl+X"), HasSelection());
+    AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"), HasSelection());
+    AppendItem(m, CmdPaste, T(L"Paste\tCtrl+V"), QueryCommand(CmdPaste).enabled);
+    AppendItem(m, CmdPasteMerge, T(L"Paste, merging formatting"), QueryCommand(CmdPasteMerge).enabled);
     AppendSeparator(m);
-    AppendItem(m, CmdParagraph, L"Paragraph…", QueryCommand(CmdParagraph).enabled);
+    AppendItem(m, CmdParagraph, T(L"Paragraph…"), QueryCommand(CmdParagraph).enabled);
     HMENU language = CreatePopupMenu();
     FillLanguageMenu(language);
-    menu::AppendSubmenu(m, language, L"Language", GetMenuItemCount(language) > 0);
+    menu::AppendSubmenu(m, language, T(L"Language"), GetMenuItemCount(language) > 0);
     AppendSeparator(m);
   } else if (HasSelection()) {
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
+    AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"));
     AppendSeparator(m);
   }
-  AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
+  AppendItem(m, CmdSelectAll, T(L"Select all\tCtrl+A"));
   AppendSeparator(m);
-  AppendItem(m, CmdZoomIn, format_ ? L"Zoom in" : L"Zoom in\tCtrl+=");
-  AppendItem(m, CmdZoomOut, page_ ? L"Zoom out\tCtrl+Num −" : L"Zoom out\tCtrl+−");
-  AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-  AppendItem(m, CmdZoomFitPage, format_ ? L"Fit page" : L"Fit page\tCtrl+2");
+  AppendItem(m, CmdZoomIn, format_ ? T(L"Zoom in") : L"Zoom in\tCtrl+=");
+  AppendItem(m, CmdZoomOut, page_ ? T(L"Zoom out\tCtrl+Num −") : T(L"Zoom out\tCtrl+−"));
+  AppendItem(m, CmdZoomFitWidth, T(L"Fit width\tCtrl+3"));
+  AppendItem(m, CmdZoomFitPage, format_ ? T(L"Fit page") : T(L"Fit page\tCtrl+2"));
   AppendSeparator(m);
-  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-  AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
+  AppendItem(m, CmdFind, T(L"Find…\tCtrl+F"));
+  AppendItem(m, CmdPrint, T(L"Print…\tCtrl+P"));
 }
 
 void DocView::BuildStatusBar(StatusBarModel& m) {
-  std::wstring pages = L"Page " + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
+  std::wstring pages = T(L"Page ") + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
   ProofStatus(m);  // words and language

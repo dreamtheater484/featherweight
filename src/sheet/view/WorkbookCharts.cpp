@@ -9,6 +9,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/data/Filter.h"
@@ -283,24 +284,24 @@ bool WorkbookView::PasteObjectClip() {
 
 bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   if (cmd < CmdInsertChart || cmd > CmdChartCombo) return false;
-  static const wchar_t* const kNames[] = {L"Column chart",   L"Bar chart",  L"Line chart",    L"Pie chart",
-                                          L"Doughnut chart", L"Area chart", L"Scatter chart", L"Combo chart"};
+  static const wchar_t* const kNames[] = {T(L"Column chart"),   T(L"Bar chart"),  T(L"Line chart"),    T(L"Pie chart"),
+                                          T(L"Doughnut chart"), T(L"Area chart"), T(L"Scatter chart"), T(L"Combo chart")};
   s.enabled = Ready() && !preview_ && !ChartSheet() && (Current().Kind() == SheetKind::Worksheet || !Current().PartName().empty());
   if (cmd == CmdMoveChart && ChartSheet()) {  // Move Chart > Object in
-    s.label = L"Move chart onto a sheet";
+    s.label = T(L"Move chart onto a sheet");
     s.enabled = Ready() && !preview_ && FirstWorksheet() >= 0;
     return true;
   }
   if (cmd == CmdInsertChart) {
-    s.label = L"Insert chart";
+    s.label = T(L"Insert chart");
     s.shortcut = L"Alt+F1";
   } else if (cmd == CmdChartBox) {
-    s.label = L"Chart";
+    s.label = T(L"Chart");
   } else if (cmd == CmdDeleteObject) {
-    s.label = L"Delete object";
+    s.label = T(L"Delete object");
     s.enabled = s.enabled && SelectedObject().has_value();
   } else if (cmd == CmdChartPanel || cmd == CmdMoveChart) {
-    s.label = cmd == CmdChartPanel ? L"Format chart" : L"Move chart to a new sheet";
+    s.label = cmd == CmdChartPanel ? T(L"Format chart") : T(L"Move chart to a new sheet");
     if (cmd == CmdChartPanel) s.shortcut = L"Ctrl+1";
     const std::optional<SheetObjects::Object> sel = SelectedObject();
     s.enabled = s.enabled && sel && sel->chart;
@@ -391,10 +392,10 @@ bool WorkbookView::ChartsCommand(int cmd) {
 
 namespace {
 
-const wchar_t* const kKinds[] = {L"Column", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
-const wchar_t* const kLegends[] = {L"None", L"Bottom", L"Right", L"Top", L"Left"};
+const wchar_t* const kKinds[] = {T(L"Column"), T(L"Bar"), T(L"Line"), T(L"Pie"), T(L"Doughnut"), T(L"Area"), T(L"Scatter"), T(L"Combo")};
+const wchar_t* const kLegends[] = {T(L"None"), T(L"Bottom"), T(L"Right"), T(L"Top"), T(L"Left")};
 constexpr char kLegendPos[] = {0, 'b', 'r', 't', 'l'};
-const wchar_t* const kPalettes[] = {L"Colorful", L"Blue", L"Orange", L"Gray", L"Green"};
+const wchar_t* const kPalettes[] = {T(L"Colorful"), T(L"Blue"), T(L"Orange"), T(L"Gray"), T(L"Green")};
 // Office's theme colors: its accents, then each accent's shades from dark to light.
 constexpr uint32_t kPaletteRgb[][6] = {{0x4472C4, 0xED7D31, 0xA5A5A5, 0xFFC000, 0x5B9BD5, 0x70AD47},
                                        {0x203864, 0x2F5597, 0x4472C4, 0x8FAADC, 0xB4C7E7, 0xDAE3F3},
@@ -440,9 +441,9 @@ class WorkbookView::ChartPanel : public PanelContent {
       e.colors = {{static_cast<uint32_t>(at_), -1, b(c.r) << 16 | b(c.g) << 8 | b(c.b)}};
       Edit(e);
     };
-    title_.text = L"Chart title";
-    axes_.text = L"Axis titles";
-    labels_.text = L"Data labels";
+    title_.text = T(L"Chart title");
+    axes_.text = T(L"Axis titles");
+    labels_.text = T(L"Data labels");
     for (PanelButton* b : {&title_, &axes_, &labels_}) b->toggle = true;
     title_.onInvoke = [this] {
       edit::ChartEdit e;
@@ -461,38 +462,38 @@ class WorkbookView::ChartPanel : public PanelContent {
       Edit(e);
     };
     for (ComboBox* b : {&titleText_, &xText_, &yText_, &range_, &name_, &values_, &cats_}) b->autoComplete = false;
-    use_.text = L"Use range";
+    use_.text = T(L"Use range");
     use_.onInvoke = [this] { UseRange(); };
-    add_.text = L"Add";
+    add_.text = T(L"Add");
     add_.onInvoke = [this] {
       Keep();
       list_.push_back({});
       at_ = static_cast<int>(list_.size()) - 1;
       Fill();
     };
-    remove_.text = L"Remove";
+    remove_.text = T(L"Remove");
     remove_.onInvoke = [this] {
       if (at_ < 0 || list_.size() < 2) return;
       list_.erase(list_.begin() + at_);
       at_ = std::min(at_, static_cast<int>(list_.size()) - 1);
       Fill();
     };
-    up_.text = L"Up";
+    up_.text = T(L"Up");
     up_.onInvoke = [this] { Swap(-1); };
-    down_.text = L"Down";
+    down_.text = T(L"Down");
     down_.onInvoke = [this] { Swap(1); };
-    apply_.text = L"Apply";
+    apply_.text = T(L"Apply");
     apply_.onInvoke = [this] { Apply(); };
-    delete_.text = L"Delete chart";
+    delete_.text = T(L"Delete chart");
     delete_.onInvoke = [this] {
       if (!v_.EditRefused(v_.Ed().DeleteObjects(static_cast<int>(sheet_), {id_}))) v_.host_.ViewShowPanel(nullptr);
     };
-    move_.text = L"Move to a new sheet";
+    move_.text = T(L"Move to a new sheet");
     move_.onInvoke = [this] { v_.MoveChartToSheet(id_); };
     for (PanelButton* b : {&use_, &add_, &remove_, &up_, &down_, &delete_, &move_}) b->textSize = 12;
   }
 
-  std::wstring Title() const override { return L"Chart"; }
+  std::wstring Title() const override { return T(L"Chart"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -535,8 +536,8 @@ class WorkbookView::ChartPanel : public PanelContent {
     float y = body_.top + 10 * u;
     labelsText_.clear();
     auto label = [&](const wchar_t* text, float x0, float x1) { labelsText_.push_back({text, RectF(x0, y, x1, y + 16 * u)}); };
-    label(L"Chart type", left, left + half);
-    label(L"Colors", left + half + gap, right);
+    label(T(L"Chart type"), left, left + half);
+    label(T(L"Colors"), left + half + gap, right);
     y += 20 * u;
     kind_.rc = RectF(left, y, left + half, y + 30 * u);
     palette_.rc = RectF(left + half + gap, y, right, y + 30 * u);
@@ -546,36 +547,36 @@ class WorkbookView::ChartPanel : public PanelContent {
     y += 36 * u;
     axes_.rc = RectF(left, y, right, y + 26 * u);
     y += 32 * u;
-    label(L"Horizontal", left, left + half);
-    label(L"Vertical", left + half + gap, right);
+    label(T(L"Horizontal"), left, left + half);
+    label(T(L"Vertical"), left + half + gap, right);
     y += 20 * u;
     xText_.rc = RectF(left, y, left + half, y + 30 * u);
     yText_.rc = RectF(left + half + gap, y, right, y + 30 * u);
     y += 40 * u;
-    label(L"Legend", left, left + half);
+    label(T(L"Legend"), left, left + half);
     y += 20 * u;
     legend_.rc = RectF(left, y, left + half, y + 30 * u);
     labels_.rc = RectF(left + half + gap, y + 2 * u, right, y + 28 * u);
     y += 44 * u;
-    label(L"Chart data range", left, right);
+    label(T(L"Chart data range"), left, right);
     y += 20 * u;
     range_.rc = RectF(left, y, right - 100 * u, y + 30 * u);
     use_.rc = RectF(right - 92 * u, y, right, y + 30 * u);
     y += 40 * u;
-    label(L"Series", left, right);
+    label(T(L"Series"), left, right);
     y += 20 * u;
     series_.rc = RectF(left, y, right - 48 * u, y + 30 * u);
     color_.rc = RectF(right - 40 * u, y, right, y + 30 * u);
     y += 38 * u;
-    label(L"Name", left, right);
+    label(T(L"Name"), left, right);
     y += 20 * u;
     name_.rc = RectF(left, y, right, y + 30 * u);
     y += 36 * u;
-    label(L"Values", left, right);
+    label(T(L"Values"), left, right);
     y += 20 * u;
     values_.rc = RectF(left, y, right, y + 30 * u);
     y += 36 * u;
-    label(L"Categories (horizontal axis labels)", left, right);
+    label(T(L"Categories (horizontal axis labels)"), left, right);
     y += 20 * u;
     cats_.rc = RectF(left, y, right, y + 30 * u);
     y += 38 * u;
@@ -598,7 +599,7 @@ class WorkbookView::ChartPanel : public PanelContent {
       // Its name as the chart shows it, while it's the one the chart has.
       const bool same = i < info_.series.size() && i < info_.names.size() && info_.series[i].name == list_[i].name;
       std::wstring n = Utf8ToWide(same && !info_.names[i].empty() ? info_.names[i] : list_[i].name);
-      names.push_back(L"Series " + std::to_wstring(i + 1) + (n.empty() ? L"" : L": " + n));
+      names.push_back(T(L"Series ") + std::to_wstring(i + 1) + (n.empty() ? L"" : L": " + n));
     }
     series_.items = names;
     series_.selected = at_;
@@ -651,7 +652,7 @@ class WorkbookView::ChartPanel : public PanelContent {
     int sheet = static_cast<int>(sheet_);
     if (spans.size() == 1 && !spans[0].sheet.empty()) sheet = v_.book_->FindSheet(WideToUtf8(spans[0].sheet));
     if (spans.size() != 1 || sheet < 0) {
-      v_.host_.ViewMessage(BannerKind::Warning, L"Type the chart's cells as a range, as A1:C5 or Sheet1!A1:C5.");
+      v_.host_.ViewMessage(BannerKind::Warning, T(L"Type the chart's cells as a range, as A1:C5 or Sheet1!A1:C5."));
       return;
     }
     const calc::RefSpan& r = spans[0];
@@ -660,7 +661,7 @@ class WorkbookView::ChartPanel : public PanelContent {
     edit::ChartEdit e;
     e.series = edit::charts::SeriesFor(v_.book_->GetSheet(static_cast<size_t>(sheet)), range);
     if (e.series->empty()) {
-      v_.host_.ViewMessage(BannerKind::Warning, L"Those cells have no numbers to chart.");
+      v_.host_.ViewMessage(BannerKind::Warning, T(L"Those cells have no numbers to chart."));
       return;
     }
     Edit(e);

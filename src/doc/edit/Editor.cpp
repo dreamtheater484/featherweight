@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "doc/edit/Forms.h"
 #include "doc/edit/Kept.h"
 #include "doc/edit/Notes.h"
@@ -576,23 +577,23 @@ struct EditorState {
   // ---------- Checks ----------
   bool Editable(uint32_t para, std::u16string& why) {
     if (para >= d.paras_.size()) {
-      why = u"That place isn't in the document.";
+      why = T(u"That place isn't in the document.");
       return false;
     }
     const Paragraph& p = d.paras_[para];
     const Story& st = d.stories_[p.story];
     if (st.part == kNone || st.part >= d.parts_.size() || !d.parts_[st.part].Editable() || !d.parts_[st.part].writable) {
-      why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
+      why = T(u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.");
       return false;
     }
     if (E(p.elem).flags & kDisplayOnly) {
-      why = u"This text is kept as the file has it, so it can't be edited.";
+      why = T(u"This text is kept as the file has it, so it can't be edited.");
       return false;
     }
     // A text box's story is written into its drawing's kept XML, in place of each copy of its text
     // (docx::Writer): only where the reader found every copy.
     if (st.drawing != kNone && !TextBoxEditable(d, p.story)) {
-      why = u"The text in this text box can't be edited: the file keeps it in a way Featherweight can't write back.";
+      why = T(u"The text in this text box can't be edited: the file keeps it in a way Featherweight can't write back.");
       return false;
     }
     return true;
@@ -959,7 +960,7 @@ struct EditorState {
     Result r;
     if (from.empty()) {
       r.ok = false;
-      r.message = undoing ? u"There's nothing to undo." : u"There's nothing to redo.";
+      r.message = undoing ? T(u"There's nothing to undo.") : T(u"There's nothing to redo.");
       return r;
     }
     Entry e = std::move(from.back());
@@ -1024,7 +1025,7 @@ struct EditorState {
         bool fits = run != kNoElem && NameOf(run) == kR && last && E(run).start + E(run).length == o;
         ElemId nr = fits ? NewElem(E(run).parent, kR) : kNoElem;
         if (nr == kNoElem) {
-          why = u"Text can't be typed here, next to this drawing.";
+          why = T(u"Text can't be typed here, next to this drawing.");
           return false;
         }
         LinkAfter(E(run).parent, run, nr);
@@ -1040,7 +1041,7 @@ struct EditorState {
         if (boundary && E(a).start + E(a).length == o) endsHere = a;
       }
       if (endsHere == kNoElem && LockedSdt(leaf) != kNoElem) {
-        why = u"The text of this content control is locked.";
+        why = T(u"The text of this content control is locked.");
         return false;
       }
       if (endsHere != kNoElem && run != kNoElem) {
@@ -1078,7 +1079,7 @@ struct EditorState {
       }
       ElemId nr = NewElem(E(top).parent, kR);
       if (nr == kNoElem) {
-        why = u"Text can't go here.";
+        why = T(u"Text can't go here.");
         return false;
       }
       LinkAfter(E(top).parent, top, nr);
@@ -1208,7 +1209,7 @@ struct EditorState {
     }
     ElemId item = NewElem(run, name);
     if (item == kNoElem) {
-      why = u"A picture can't go here.";
+      why = T(u"A picture can't go here.");
       return kNoElem;
     }
     E(item).length = 1;
@@ -1265,13 +1266,13 @@ struct EditorState {
         continue;
       }
       if (s >= o) break;
-      why = u"Something there can't be split.";
+      why = T(u"Something there can't be split.");
       return false;
     }
     const std::string wrapped = "<root>" + std::string(xml) + "</root>";
     pugi::xml_document doc;
     if (!doc.load_buffer(wrapped.data(), wrapped.size(), pugi::parse_default | pugi::parse_ws_pcdata)) {
-      why = u"This can't go here.";
+      why = T(u"This can't go here.");
       return false;
     }
     std::u16string& text = d.paras_[para].text;
@@ -1314,7 +1315,7 @@ struct EditorState {
       if (n.type() != pugi::node_element) continue;
       ElemId run = QName(n.name()) == kR ? build(container, n) : kNoElem;
       if (run == kNoElem) {
-        why = u"This can't go here.";
+        why = T(u"This can't go here.");
         return false;
       }
       LinkAfter(container, after, run);
@@ -1351,7 +1352,7 @@ struct EditorState {
     const ElemId run = NewElem(p, kR);
     const ElemId item = run == kNoElem ? kNoElem : NewElem(run, Name("drawing"));
     if (item == kNoElem) {
-      why = u"A drawing can't go here.";
+      why = T(u"A drawing can't go here.");
       return kNoElem;
     }
     LinkAfter(p, Child(p, kPPr), run);
@@ -1370,7 +1371,7 @@ struct EditorState {
   // the block holds nothing else. `leaf` is the drawing's element; the top display-only element
   // around it goes into `remove`.
   bool RemoveKept(uint32_t para, ElemId leaf, std::vector<ElemId>& remove, std::u16string& why) {
-    why = u"This drawing is kept with other content of the file, so it can't be deleted.";
+    why = T(u"This drawing is kept with other content of the file, so it can't be deleted.");
     ElemId top = leaf;
     while (E(top).parent != kNoElem && (E(E(top).parent).flags & kDisplayOnly)) top = E(top).parent;
     if (RoleOf(leaf) != Role::Object || E(leaf).length != 1 || E(top).length != 1) return false;
@@ -1420,22 +1421,22 @@ struct EditorState {
       bool inside = !covers && s <= a && b <= e;
       if (inside) {
         if (n == kSdt && Locked(id, false)) {
-          why = u"The text of this content control is locked.";
+          why = T(u"The text of this content control is locked.");
           return false;
         }
       } else if (covers) {
         if (n == kSdt && Locked(id, true)) {
-          why = u"This content control is locked, so it can't be deleted.";
+          why = T(u"This content control is locked, so it can't be deleted.");
           return false;
         }
         for (ElemId m : AllElems(para))
           if (Within(m, id) && RangeMarker(NameOf(m))) {
-            why = u"Part of this holds a bookmark or comment range, so it can't be deleted as a whole.";
+            why = T(u"Part of this holds a bookmark or comment range, so it can't be deleted as a whole.");
             return false;
           }
         remove.push_back(id);
       } else if (s < b && a < e) {
-        why = n == kFldSimple ? u"Select the whole field to delete it." : u"Select the whole content control to delete it.";
+        why = n == kFldSimple ? T(u"Select the whole field to delete it.") : T(u"Select the whole content control to delete it.");
         return false;
       }
     }
@@ -1462,10 +1463,10 @@ struct EditorState {
           continue;
         }
         why = n == Name("commentReference") || n == Name("annotationRef")
-                  ? u"Deleting a comment isn't possible yet. Leave its mark in place."
+                  ? T(u"Deleting a comment isn't possible yet. Leave its mark in place.")
               : n == Name("separator") || n == Name("continuationSeparator")
-                  ? u"The line above the notes can't be deleted."
-                  : u"A footnote or endnote can't be deleted here. Delete its number in the text.";
+                  ? T(u"The line above the notes can't be deleted.")
+                  : T(u"A footnote or endnote can't be deleted here. Delete its number in the text.");
         return false;
       }
       remove.push_back(l.id);
@@ -1660,7 +1661,7 @@ struct EditorState {
         last = c;
       } else if (s < o && o < s + l) {
         if (E(c).flags & kDisplayOnly) {
-          why = u"This part of the document can't be split.";
+          why = T(u"This part of the document can't be split.");
           return false;
         }
         ElemId copy;
@@ -1676,8 +1677,8 @@ struct EditorState {
             SetAttr(copy, kId, NewAnnotationId());
           if (!SplitChildren(c, copy, o, why)) return false;
         } else {
-          why = NameOf(c) == kFldSimple ? u"A field can't be split in two."
-                                        : u"A content control can't be split in two here.";
+          why = NameOf(c) == kFldSimple ? T(u"A field can't be split in two.")
+                                        : T(u"A content control can't be split in two here.");
           return false;
         }
         LinkAfter(to, last, copy);
@@ -1703,7 +1704,7 @@ struct EditorState {
           open.push_back(i);
         } else if (s[i] == 0x15 && !open.empty()) {
           if (open.back() < o && o <= i) {
-            why = u"A paragraph can't be split inside a field.";
+            why = T(u"A paragraph can't be split inside a field.");
             return false;
           }
           open.pop_back();
@@ -1711,7 +1712,7 @@ struct EditorState {
       }
     }
     if (InOneParagraphControl(para, o)) {
-      why = u"A date, list, plain-text or picture content control holds one paragraph, so it can't be split.";
+      why = T(u"A date, list, plain-text or picture content control holds one paragraph, so it can't be split.");
       return false;
     }
     // Text shown from a kept mc:AlternateContent block is written as that block, which stays with
@@ -1795,13 +1796,13 @@ struct EditorState {
   bool Join(uint32_t para, std::u16string& why) {
     uint32_t q = SiblingAfter(para);
     if (q == kNone) {
-      why = u"Paragraphs in different places (a table cell and the text around it) can't be joined.";
+      why = T(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
       return false;
     }
     ElemId p = d.paras_[para].elem, w = d.paras_[q].elem;
     ElemId pPr = Child(p, kPPr), qPr = Child(w, kPPr);
     if ((E(p).flags & kDisplayOnly) || (E(w).flags & kDisplayOnly)) {
-      why = u"This part of the document can't be edited.";
+      why = T(u"This part of the document can't be edited.");
       return false;
     }
     // A section break at the end of the first goes with its mark: its paragraphs join the next
@@ -1881,7 +1882,7 @@ struct EditorState {
     if (props == kNoElem) {
       props = AddInOrder(owner, propsName);
       if (props == kNoElem) {
-        why = u"These properties can't be set here.";
+        why = T(u"These properties can't be set here.");
         return false;
       }
     }
@@ -1904,7 +1905,7 @@ struct EditorState {
         }
         if (child == kNoElem) child = AddInOrder(cur, name);
         if (child == kNoElem) {
-          why = u"Featherweight doesn't know the property " + Msg(std::string(part).c_str()) + u".";
+          why = T(u"Featherweight doesn't know the property ") + Msg(std::string(part).c_str()) + u".";
           return false;
         }
         Unshare(child);
@@ -1912,10 +1913,10 @@ struct EditorState {
           if (item.attrs.empty() && Attr(child, kVal)) RemoveAttr(child, kVal);
           for (const auto& [attr, value] : item.attrs)
             if (!XmlSafe(value)) {
-              why = u"A property's value can't hold control characters.";
+              why = T(u"A property's value can't hold control characters.");
               return false;
             } else if (!SetAttr(child, Name(attr), value)) {
-              why = u"Featherweight doesn't know the attribute " + Msg(attr.c_str()) + u".";
+              why = T(u"Featherweight doesn't know the attribute ") + Msg(attr.c_str()) + u".";
               return false;
             }
           break;
@@ -1979,7 +1980,7 @@ struct EditorState {
   // with the properties; a revision's second half gets an id of its own. The caller reflows.
   bool Cut(ElemId c, uint32_t o, std::u16string& why) {
     if (!Splittable(NameOf(c)) || (E(c).flags & kDisplayOnly)) {
-      why = u"This part of the document can't be split here.";
+      why = T(u"This part of the document can't be split here.");
       return false;
     }
     ElemId copy = CloneShallow(c, E(c).parent);
@@ -2253,7 +2254,7 @@ struct EditorState {
           } else {
             const uint32_t s = E(c).start, e = s + E(c).length;
             if (CutsField(Pos{x.para, s}, Pos{x.para, e})) {
-              why = u"This change holds part of a field. Accept or reject the whole field.";
+              why = T(u"This change holds part of a field. Accept or reject the whole field.");
               return false;
             }
             const ElemId holder = E(c).parent;
@@ -2303,7 +2304,7 @@ struct EditorState {
             if (const ElemId c = Child(x.elem, x.name); c != kNoElem) DropProp(c);
             break;
           }
-          why = u"Featherweight can't accept or reject inserted, deleted or merged cells yet.";
+          why = T(u"Featherweight can't accept or reject inserted, deleted or merged cells yet.");
           return false;
       }
     }
@@ -2381,7 +2382,7 @@ struct EditorState {
     const ElemId parent = E(run).parent;
     const ElemId c = NewElem(parent, name);
     if (c == kNoElem) {
-      why = u"Changes can't be tracked here.";
+      why = T(u"Changes can't be tracked here.");
       return kNoElem;
     }
     Stamp(c);
@@ -2403,7 +2404,7 @@ struct EditorState {
       if (rPr == kNoElem) rPr = AddInOrder(pPr, kRPr);
     }
     if (rPr == kNoElem) {
-      why = u"Changes can't be tracked here.";
+      why = T(u"Changes can't be tracked here.");
       return false;
     }
     Unshare(rPr);
@@ -2412,7 +2413,7 @@ struct EditorState {
         if (const ElemId c = Child(rPr, old); c != kNoElem) DropProp(c);
     const ElemId m = AddInOrder(rPr, name);
     if (m == kNoElem) {
-      why = u"Changes can't be tracked here.";
+      why = T(u"Changes can't be tracked here.");
       return false;
     }
     Stamp(m);
@@ -2477,18 +2478,18 @@ struct EditorState {
     for (const LeafAt& l : Leaves(para)) {
       if (l.length == 0 || l.start + l.length <= a || l.start >= b) continue;
       if (E(l.id).flags & kDisplayOnly) {
-        why = u"Deleting this drawing isn't possible yet.";
+        why = T(u"Deleting this drawing isn't possible yet.");
         return false;
       }
       if (LockedSdt(l.id) != kNoElem) {
-        why = u"The text of this content control is locked.";
+        why = T(u"The text of this content control is locked.");
         return false;
       }
       if (Undeletable(NameOf(l.id))) {
         const uint32_t n = NameOf(l.id);
         why = n == Name("commentReference") || n == Name("annotationRef")
-                  ? u"Deleting a comment's mark isn't possible. Delete the comment in the Comments pane."
-                  : u"Deleting a footnote or endnote isn't possible yet. Leave its number in place.";
+                  ? T(u"Deleting a comment's mark isn't possible. Delete the comment in the Comments pane.")
+                  : T(u"Deleting a footnote or endnote isn't possible yet. Leave its number in place.");
         return false;
       }
     }
@@ -2555,7 +2556,7 @@ struct EditorState {
     ElemId props = Child(owner, propsName);
     if (props == kNoElem) props = AddInOrder(owner, propsName);
     if (props == kNoElem) {
-      why = u"These properties can't be set here.";
+      why = T(u"These properties can't be set here.");
       return false;
     }
     Unshare(props);
@@ -2564,7 +2565,7 @@ struct EditorState {
     const ElemId change = NewElem(props, changeName);
     const ElemId inner = change == kNoElem ? kNoElem : NewElem(change, propsName);
     if (inner == kNoElem) {
-      why = u"Changes can't be tracked here.";
+      why = T(u"Changes can't be tracked here.");
       return false;
     }
     Stamp(change);
@@ -2632,7 +2633,7 @@ struct EditorState {
                           kGridChange = Name("tblGridChange");
     g = {};
     g.tbl = tbl;
-    const std::u16string wrapped = u"This table has rows or cells inside content controls, so its shape can't be changed yet.";
+    const std::u16string wrapped = T(u"This table has rows or cells inside content controls, so its shape can't be changed yet.");
     for (ElemId c = E(tbl).first; c != kNoElem; c = E(c).next) {
       uint32_t n = NameOf(c);
       if (n == kTblPr || RangeMarker(n)) continue;
@@ -2640,7 +2641,7 @@ struct EditorState {
         g.tblGrid = c;
         for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
           if (NameOf(k) == kGridCol) g.cols.push_back(k);
-          else if (NameOf(k) == kGridChange) return why = u"This table's columns have tracked changes, so its shape can't be changed yet.", false;
+          else if (NameOf(k) == kGridChange) return why = T(u"This table's columns have tracked changes, so its shape can't be changed yet."), false;
         }
         continue;
       }
@@ -2661,18 +2662,18 @@ struct EditorState {
         Node tcPr = Node(&t, k).Child(kTcPr);
         cell.span = std::clamp(IntOr(tcPr.Child(kGridSpan), kVal, 1), 1, 1000);
         if (Node vm = tcPr.Child(kVMerge)) cell.v = vm.AttrOr(kVal) == "restart" ? VMerge::Restart : VMerge::Continue;
-        if (tcPr.Child(kHMerge)) return why = u"This table uses an old kind of merged cells, so its shape can't be changed yet.", false;
+        if (tcPr.Child(kHMerge)) return why = T(u"This table uses an old kind of merged cells, so its shape can't be changed yet."), false;
         if (tcPr.Child(kCellIns) || tcPr.Child(kCellDel) || tcPr.Child(kCellMerge))
-          return why = u"This table has tracked cell changes. Accept or reject them first.", false;
+          return why = T(u"This table has tracked cell changes. Accept or reject them first."), false;
         col += cell.span;
         row.cells.push_back(cell);
       }
-      if (row.cells.empty()) return why = u"This table has a row without cells, so its shape can't be changed.", false;
+      if (row.cells.empty()) return why = T(u"This table has a row without cells, so its shape can't be changed."), false;
       g.width = std::max(g.width, col + row.after);
       g.rows.push_back(std::move(row));
     }
-    if (g.rows.empty()) return why = u"This table has no rows.", false;
-    if (g.tblGrid == kNoElem) return why = u"This table has no grid, so its shape can't be changed yet.", false;
+    if (g.rows.empty()) return why = T(u"This table has no rows."), false;
+    if (g.tblGrid == kNoElem) return why = T(u"This table has no grid, so its shape can't be changed yet."), false;
     return true;
   }
   // The rows a cell's vertical merge covers: [top, bottom].
@@ -2715,13 +2716,13 @@ struct EditorState {
   };
   bool BlockOf(Pos a, Pos b, Grid& g, Block& bl, std::u16string& why) {
     ElemId tbl, tr, tc, tbl2, tr2, tc2;
-    if (!CellOf(a.para, tbl, tr, tc)) return why = u"Put the cursor in a table first.", false;
+    if (!CellOf(a.para, tbl, tr, tc)) return why = T(u"Put the cursor in a table first."), false;
     if (!CellOf(b.para, tbl2, tr2, tc2) || tbl2 != tbl) tr2 = tr, tc2 = tc;
     if (!ReadGrid(tbl, g, why)) return false;
     size_t ra = RowOf(g, tr), rb = RowOf(g, tr2);
-    if (ra == SIZE_MAX || rb == SIZE_MAX) return why = u"This table's shape can't be read.", false;
+    if (ra == SIZE_MAX || rb == SIZE_MAX) return why = T(u"This table's shape can't be read."), false;
     int ia = CellIndex(g, ra, tc), ib = CellIndex(g, rb, tc2);
-    if (ia < 0 || ib < 0) return why = u"This table's shape can't be read.", false;
+    if (ia < 0 || ib < 0) return why = T(u"This table's shape can't be read."), false;
     bl.row0 = std::min(ra, rb);
     bl.row1 = std::max(ra, rb);
     bl.col0 = std::min(g.rows[ra].cells[ia].col, g.rows[rb].cells[ib].col);
@@ -2761,12 +2762,12 @@ struct EditorState {
   bool TableParas(ElemId tbl, uint32_t& first, uint32_t& count, std::u16string& why) {
     std::vector<ElemId> ps;
     ParasIn(tbl, ps);
-    if (ps.empty()) return why = u"This table has no paragraphs.", false;
+    if (ps.empty()) return why = T(u"This table has no paragraphs."), false;
     first = E(ps.front()).start;
     count = static_cast<uint32_t>(ps.size());
     for (size_t i = 0; i < ps.size(); ++i)
       if (first + i >= d.paras_.size() || d.paras_[first + i].elem != ps[i] || (E(ps[i]).flags & kDisplayOnly))
-        return why = u"This table can't be changed: part of it is shown from content Featherweight keeps as it is.", false;
+        return why = T(u"This table can't be changed: part of it is shown from content Featherweight keeps as it is."), false;
     return true;
   }
 
@@ -3136,10 +3137,10 @@ struct EditorState {
       stack.pop_back();
       uint32_t n = NameOf(id);
       if (TakeNote(id)) continue;  // its note goes too (D4)
-      if (Undeletable(n)) return why = u"Comments in these cells would lose their place. Delete them first.", false;
+      if (Undeletable(n)) return why = T(u"Comments in these cells would lose their place. Delete them first."), false;
       if (n == kP) {
         if (E(id).start >= d.paras_.size() || d.paras_[E(id).start].elem != id || d.paras_[E(id).start].story != tx.story)
-          return why = u"Text boxes in these cells can't be deleted yet.", false;
+          return why = T(u"Text boxes in these cells can't be deleted yet."), false;
         const std::u16string& s = d.paras_[E(id).start].text;
         fields += static_cast<int>(std::count(s.begin(), s.end(), u'\x13')) - static_cast<int>(std::count(s.begin(), s.end(), u'\x15'));
       }
@@ -3153,7 +3154,7 @@ struct EditorState {
       for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
       std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(at), stack.end());
     }
-    if (fields != 0) return why = u"A field runs into these cells. Delete the field first.", false;
+    if (fields != 0) return why = T(u"A field runs into these cells. Delete the field first."), false;
     std::vector<ElemId> keep;
     for (ElemId m : markers) {
       uint32_t n = NameOf(m);
@@ -3163,7 +3164,7 @@ struct EditorState {
     }
     if (keep.empty()) return true;
     if (heir == kNoElem && inPlaceOf == kNoElem)
-      return why = u"A bookmark or comment range starts or ends here, so this can't be deleted yet.", false;
+      return why = T(u"A bookmark or comment range starts or ends here, so this can't be deleted yet."), false;
     const ElemId parent = inPlaceOf != kNoElem ? E(inPlaceOf).parent : heir;
     ElemId after = inPlaceOf != kNoElem ? PrevSibling(inPlaceOf) : Child(heir, kPPr);
     for (ElemId m : keep) {
@@ -3215,11 +3216,11 @@ Editor::~Editor() = default;
 
 bool Editor::CanEdit(std::u16string* why) const {
   if (!doc_.Editable()) {
-    if (why) *why = u"This document uses features Featherweight doesn't understand, so it's shown but can't be edited.";
+    if (why) *why = T(u"This document uses features Featherweight doesn't understand, so it's shown but can't be edited.");
     return false;
   }
   if (const Part* main = doc_.FindPart(PartKind::Document); main && !main->writable) {
-    if (why) *why = u"Featherweight can't write this document back exactly, so it's shown but can't be edited.";
+    if (why) *why = T(u"Featherweight can't write this document back exactly, so it's shown but can't be edited.");
     return false;
   }
   return true;
@@ -3275,8 +3276,8 @@ bool XmlSafe(std::string_view s) {
 }
 
 namespace {
-constexpr const char16_t* kUntrackedTable =
-    u"Featherweight can't track changes to a table's rows and columns yet. Turn off Track Changes to make this change.";
+constexpr UiText16 kUntrackedTable =
+    N_(u"Featherweight can't track changes to a table's rows and columns yet. Turn off Track Changes to make this change.");
 
 Result Fail(std::u16string why) {
   Result r;
@@ -3290,7 +3291,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(&at, &at, why) || !s.Editable(at.para, why)) return Fail(why);
-  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  if (at.offset > ParaLength(at.para)) return Fail(T(u"That place isn't in the paragraph."));
   if (text.empty()) {
     Result r;
     r.caret = at;
@@ -3327,7 +3328,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
   }
   if (s.track.on && !s.TrackInserted(at, pos, why)) return s.Abort(why);
   bool typing = lines.size() == 1;
-  s.Commit(false, at, pos, typing ? Kind::Typing : Kind::Other, typing ? u"Typing" : u"Insert");
+  s.Commit(false, at, pos, typing ? Kind::Typing : Kind::Other, typing ? T(u"Typing") : T(u"Insert"));
   s.Notify(listeners_);
   Result r;
   r.caret = pos;
@@ -3338,17 +3339,17 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info, bool 
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
-  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
-  if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
+  if (at.offset > ParaLength(at.para)) return Fail(T(u"That place isn't in the paragraph."));
+  if (!XmlSafe(xml)) return Fail(T(u"This picture can't be added."));
   Arm(at.para);
   // A w:pict's elements are kept one fragment each, as the reader keeps them (each declares what it uses).
   std::vector<std::string> pieces;
   if (vml) {
     pkg::XmlDom dom;
-    if (!dom.Parse("<fw>" + xml + "</fw>", doc_.Package().GetLimits()).Ok()) return Fail(u"This drawing can't be added.");
+    if (!dom.Parse("<fw>" + xml + "</fw>", doc_.Package().GetLimits()).Ok()) return Fail(T(u"This drawing can't be added."));
     for (pugi::xml_node c = dom.Root().first_child(); c; c = c.next_sibling())
       if (c.type() == pugi::node_element) pieces.push_back(pkg::RoundTripStore::SerializeFragment(c));
-    if (pieces.empty()) return Fail(u"This drawing can't be added.");
+    if (pieces.empty()) return Fail(T(u"This drawing can't be added."));
   } else {
     pieces.push_back(std::move(xml));
   }
@@ -3358,7 +3359,7 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info, bool 
   if (s.track.on && !s.TrackInserted(at, Pos{at.para, at.offset + 1}, why)) return s.Abort(why);
   s.AddDrawing(info, item, at.para);  // before Commit, which finds where it is
   Pos after{at.para, at.offset + 1};
-  s.Commit(false, at, after, Kind::Other, u"Insert picture");
+  s.Commit(false, at, after, Kind::Other, T(u"Insert picture"));
   s.Notify(listeners_);
   Result r;
   r.caret = after;
@@ -3369,13 +3370,13 @@ Result Editor::InsertKeptDrawing(uint32_t para, std::string block, const Drawing
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
-  if (!XmlSafe(block) || info.kept == 0) return Fail(u"This drawing can't be added.");
+  if (!XmlSafe(block) || info.kept == 0) return Fail(T(u"This drawing can't be added."));
   s.Begin(para, 1);
   ElemId item = s.InsertKept(para, std::move(block), info.kept, why);
   if (item == kNoElem) return s.Abort(why);
   s.AddKeptDrawing(info, item, para);  // before Commit, which finds where it is
   const Pos at{para, 0}, after{para, 1};
-  s.Commit(false, at, after, Kind::Other, u"Insert shape");
+  s.Commit(false, at, after, Kind::Other, T(u"Insert shape"));
   s.Notify(listeners_);
   Result r;
   r.caret = at;
@@ -3386,8 +3387,8 @@ Result Editor::InsertRuns(Pos at, std::string_view runsXml, std::u16string name)
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
-  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
-  if (!XmlSafe(runsXml)) return Fail(u"This can't go here.");
+  if (at.offset > ParaLength(at.para)) return Fail(T(u"That place isn't in the paragraph."));
+  if (!XmlSafe(runsXml)) return Fail(T(u"This can't go here."));
   const uint32_t before = ParaLength(at.para);
   s.Begin(at.para, 1);
   // With the text before it, as typing would go: in a link that ends there, not one that starts there.
@@ -3408,11 +3409,11 @@ Result Editor::WrapInField(Pos from, Pos to, std::string_view code, std::string_
   if (!CanEdit(&why) || !s.Editable(from.para, why) || !s.Editable(to.para, why)) return Fail(why);
   if (doc_.Para(from.para).story != doc_.Para(to.para).story || from.offset > ParaLength(from.para) ||
       to.offset > ParaLength(to.para))
-    return Fail(u"A field's ends go in one story.");
-  if (!XmlSafe(code) || !XmlSafe(rPr)) return Fail(u"A field's code can't hold control characters.");
-  if (s.CutsField(from, to)) return Fail(u"A field can't cross the edge of another one.");
+    return Fail(T(u"A field's ends go in one story."));
+  if (!XmlSafe(code) || !XmlSafe(rPr)) return Fail(T(u"A field's code can't hold control characters."));
+  if (s.CutsField(from, to)) return Fail(T(u"A field can't cross the edge of another one."));
   for (uint32_t p = from.para; p < to.para; ++p)
-    if (s.SiblingAfter(p) != p + 1) return Fail(u"A field's paragraphs must follow each other.");
+    if (s.SiblingAfter(p) != p + 1) return Fail(T(u"A field's paragraphs must follow each other."));
   std::string escaped;
   for (char c : code) escaped += c == '&' ? std::string("&amp;") : c == '<' ? std::string("&lt;") : c == '>' ? std::string("&gt;") : std::string(1, c);
   const std::string props(rPr);
@@ -3452,7 +3453,7 @@ std::u16string DropNotes(Editor& ed, std::vector<uint32_t> gone, Pos at) {
   std::erase_if(gone, [&](uint32_t story) { return NoteReference(d, story).has_value(); });
   if (gone.empty()) return {};
   TreeEdit te(ed, at);
-  te.Begin(u"Delete");
+  te.Begin(T(u"Delete"));
   bool before = false;
   for (uint32_t story : gone) {
     const std::vector<uint32_t> paras = d.StoryParagraphs(story);
@@ -3493,13 +3494,13 @@ Result Editor::Delete(Pos from, Pos to) {
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(&from, &to, why) || !s.Editable(from.para, why) || !s.Editable(to.para, why)) return Fail(why);
   if (doc_.Para(from.para).story != doc_.Para(to.para).story)
-    return Fail(u"A selection that leaves its story can't be deleted.");
+    return Fail(T(u"A selection that leaves its story can't be deleted."));
   if (from == to) {
     Result r;
     r.caret = from;
     return r;
   }
-  if (s.CutsField(from, to)) return Fail(u"Select the whole field to delete it.");
+  if (s.CutsField(from, to)) return Fail(T(u"Select the whole field to delete it."));
   Arm(from.para);
   if (s.track.on) return DeleteTracked(from, to);
   // Whole tables between the ends go first, as Delete table takes them; then the text around them.
@@ -3522,7 +3523,7 @@ Result Editor::Delete(Pos from, Pos to) {
       tables.push_back(s.E(p).start);
     }
     if (!tables.empty()) {
-      BeginGroup(u"Delete");
+      BeginGroup(T(u"Delete"));
       const size_t before = doc_.Paragraphs().size();
       for (auto it = tables.rbegin(); it != tables.rend(); ++it)
         if (Result r = DeleteTable(Pos{*it, 0}); !r) {
@@ -3542,7 +3543,7 @@ Result Editor::Delete(Pos from, Pos to) {
     while (chain.back() != to.para) {
       uint32_t next = s.SiblingAfter(chain.back());
       if (next == kNone || next > to.para)
-        return Fail(u"Deleting across a table or a content control isn't possible yet. Delete it separately.");
+        return Fail(T(u"Deleting across a table or a content control isn't possible yet. Delete it separately."));
       chain.push_back(next);
     }
   }
@@ -3557,7 +3558,7 @@ Result Editor::Delete(Pos from, Pos to) {
     for (uint32_t i = a; i < b && i < text.size() && !notes; ++i) notes = text[i] == u'\x02';
   }
   const bool group = kept.sectPr != kNoElem || notes;
-  if (group) BeginGroup(u"Delete");
+  if (group) BeginGroup(T(u"Delete"));
   GroupGuard ender{*this, group};
   TakingNotes taking(s);
   bool single = from.para == to.para && to.offset == from.offset + 1;
@@ -3574,7 +3575,7 @@ Result Editor::Delete(Pos from, Pos to) {
       if (!s.Join(from.para, why)) return s.Abort(why);
   }
   s.goneNotes = taking.was;
-  s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, u"Delete");
+  s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, T(u"Delete"));
   s.Notify(listeners_);
   AddReferences(kept, from);
   // The notes of the references deleted, in the same undo step.
@@ -3594,8 +3595,8 @@ Result Editor::DeleteTracked(Pos from, Pos to) {
   while (chain.back() != to.para) {
     const uint32_t next = s.SiblingAfter(chain.back());
     if (next == kNone || next > to.para)
-      return Fail(u"Deleting across a table or a content control while tracking changes isn't possible yet. "
-                  u"Delete its parts separately.");
+      return Fail(T(u"Deleting across a table or a content control while tracking changes isn't possible yet. "
+                  u"Delete its parts separately."));
     chain.push_back(next);
   }
   // Where the deleted text ends afterwards: as far from the paragraph's end, the paragraphs after
@@ -3621,7 +3622,7 @@ Result Editor::DeleteTracked(Pos from, Pos to) {
   }
   Pos end{static_cast<uint32_t>(doc_.Paragraphs().size() - after), 0};
   end.offset = ParaLength(end.para) - tail;
-  s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, u"Delete");
+  s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, T(u"Delete"));
   s.Notify(listeners_);
   Result r;
   r.caret = from;
@@ -3636,7 +3637,7 @@ Result Editor::InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view 
   if (Compare(to, from) < 0 || Compare(refAt, to) < 0 || refAt.para >= doc_.Paragraphs().size() ||
       doc_.Para(from.para).story != doc_.Para(refAt.para).story || refAt.offset > ParaLength(refAt.para) ||
       from.offset > ParaLength(from.para) || to.offset > ParaLength(to.para))
-    return Fail(u"A comment can't go there.");
+    return Fail(T(u"A comment can't go there."));
   s.Begin(from.para, refAt.para - from.para + 1);
   // Runs end where the marks go.
   for (const Pos& at : {from, to, refAt})
@@ -3653,7 +3654,7 @@ Result Editor::InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view 
   const ElemId run = end == kNoElem ? kNoElem
                      : place(refAt == to ? std::pair{s.E(end).parent, end} : s.PlaceAt(refAt.para, refAt.offset, false), kR);
   const ElemId ref = run == kNoElem ? kNoElem : s.NewElem(run, Name("commentReference"));
-  if (ref == kNoElem) return s.Abort(u"A comment can't go there.");
+  if (ref == kNoElem) return s.Abort(T(u"A comment can't go there."));
   s.SetAttr(start, kId, id);
   s.SetAttr(end, kId, id);
   s.SetAttr(ref, kId, id);
@@ -3667,7 +3668,7 @@ Result Editor::InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view 
   s.E(ref).length = 1;
   s.TextOf(refAt.para).insert(refAt.offset, 1, u'\x05');
   s.Reflow(refAt.para);
-  s.Commit(false, from, from, Kind::Other, u"Comment");
+  s.Commit(false, from, from, Kind::Other, T(u"Comment"));
   s.Notify(listeners_);
   Result r;
   r.caret = from;
@@ -3679,13 +3680,13 @@ Result Editor::CutInsertionsAround(Pos from, Pos to) {
   std::u16string why;
   Result r;
   r.caret = to;
-  if (from.para != to.para || from.para >= doc_.Paragraphs().size()) return Fail(u"This text can't be changed here.");
+  if (from.para != to.para || from.para >= doc_.Paragraphs().size()) return Fail(T(u"This text can't be changed here."));
   const uint32_t para = from.para;
   if (s.InsertionAcross(para, from.offset) == kNoElem && s.InsertionAcross(para, to.offset) == kNoElem) return r;
   if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
   s.Begin(para, 1);
   if (!s.CutInsertionsAt(para, from.offset, why) || !s.CutInsertionsAt(para, to.offset, why)) return s.Abort(why);
-  s.Commit(false, from, to, Kind::Other, u"Cut insertion");
+  s.Commit(false, from, to, Kind::Other, T(u"Cut insertion"));
   s.Notify(listeners_);
   return r;
 }
@@ -3706,7 +3707,7 @@ Result Editor::RemoveCommentMarks(std::string_view id) {
   Result r;
   if (lo == kNone) return r;
   if (doc_.Para(lo).story != doc_.Para(hi).story || !s.Editable(lo, why))
-    return Fail(why.empty() ? u"This comment's marks can't be taken out." : why);
+    return Fail(why.empty() ? T(u"This comment's marks can't be taken out.") : why);
   r.caret = Pos{lo, 0};
   s.Begin(lo, hi - lo + 1);
   static const uint32_t kStart = Name("commentRangeStart"), kEnd = Name("commentRangeEnd"), kRef = Name("commentReference");
@@ -3726,7 +3727,7 @@ Result Editor::RemoveCommentMarks(std::string_view id) {
       s.Reflow(p);
     }
   }
-  s.Commit(false, r.caret, r.caret, Kind::Other, u"Delete comment");
+  s.Commit(false, r.caret, r.caret, Kind::Other, T(u"Delete comment"));
   s.Notify(listeners_);
   return r;
 }
@@ -3745,7 +3746,7 @@ void Editor::Arm(uint32_t para) {
 void Editor::AddReferences(const KeptRefs& kept, Pos at) {
   if (kept.sectPr == kNoElem || kept.xml.empty()) return;
   TreeEdit te(*this, at);
-  te.Begin(u"Delete");
+  te.Begin(T(u"Delete"));
   te.Affects(at.para, at.para);
   for (const std::string& xml : kept.xml) te.AddXml(kept.sectPr, xml);
   te.Commit();
@@ -3754,7 +3755,7 @@ void Editor::AddReferences(const KeptRefs& kept, Pos at) {
 Result Editor::Replace(Pos from, Pos to, std::u16string_view text) {
   if (from == to) return InsertText(from, text);
   if (Compare(to, from) < 0) std::swap(from, to);
-  BeginGroup(u"Typing");
+  BeginGroup(T(u"Typing"));
   Result r = Delete(from, to);
   if (r) r = InsertText(r.end.para != kNone ? r.end : r.caret, text);
   if (r) EndGroup();
@@ -3766,13 +3767,13 @@ Result Editor::SplitParagraph(Pos at) {
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(&at, &at, why) || !s.Editable(at.para, why)) return Fail(why);
-  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  if (at.offset > ParaLength(at.para)) return Fail(T(u"That place isn't in the paragraph."));
   Arm(at.para);
   s.Begin(at.para, 1);
   if (!s.Split(at.para, at.offset, why)) return s.Abort(why);
   if (s.track.on && !s.TrackMark(at.para, kIns, why)) return s.Abort(why);
   Pos caret{at.para + 1, 0};
-  s.Commit(false, at, caret, Kind::Other, u"New paragraph");
+  s.Commit(false, at, caret, Kind::Other, T(u"New paragraph"));
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -3786,19 +3787,19 @@ Result Editor::JoinParagraphs(uint32_t para) {
   const Pos joinFrom{para, known ? ParaLength(para) : 0}, joinTo{known ? NextPara(para) : kNone, 0};
   if (!CanEdit(&why) || FormsRefuse(&joinFrom, &joinTo, why) || !s.Editable(para, why)) return Fail(why);
   uint32_t q = s.SiblingAfter(para);
-  if (q == kNone) return Fail(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
+  if (q == kNone) return Fail(T(u"Paragraphs in different places (a table cell and the text around it) can't be joined."));
   if (Tracking() && !reviewing_ && doc_.Stories()[doc_.Para(para).story].kind != StoryKind::Comment)
     return Delete(Pos{para, ParaLength(para)}, Pos{q, 0});
   Pos caret{para, ParaLength(para)};
   const KeptRefs kept = KeptReferences(doc_, {para});
-  if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
+  if (kept.sectPr != kNoElem) BeginGroup(T(u"Delete"));
   s.Begin(para, q - para + 1);
   if (!s.Join(para, why)) {
     Result failed = s.Abort(why);
     if (kept.sectPr != kNoElem) EndGroup();
     return failed;
   }
-  s.Commit(false, Pos{q, 0}, caret, Kind::Other, u"Delete");
+  s.Commit(false, Pos{q, 0}, caret, Kind::Other, T(u"Delete"));
   s.Notify(listeners_);
   AddReferences(kept, caret);
   if (kept.sectPr != kNoElem) EndGroup();
@@ -3832,7 +3833,7 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
     }
     s.Reflow(p);
   }
-  s.Commit(false, from, to, Kind::Other, u"Format");
+  s.Commit(false, from, to, Kind::Other, T(u"Format"));
   s.Notify(listeners_);
   return r;
 }
@@ -3843,8 +3844,8 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(from.para, why)) return Fail(why);
   if (from.para != to.para || from.offset >= to.offset || target.empty())
-    return Fail(u"Select text in one paragraph to make it a link.");
-  if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
+    return Fail(T(u"Select text in one paragraph to make it a link."));
+  if (!XmlSafe(target)) return Fail(T(u"A link's address can't hold control characters."));
   const uint32_t para = from.para;
   const ElemId p = doc_.Para(para).elem;
   Arm(from.para);
@@ -3856,12 +3857,12 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
     if (t.end > from.offset && t.start < to.offset &&
         (!t.run || t.hyperlink || t.simpleField || t.contentControl || (t.revision && !ownNew(t)) || t.fieldDepth > 0 ||
          t.displayOnly || (t.run.Parent().Id() != p && !ownNew(t))))
-      return Fail(u"This text can't be made a link.");
+      return Fail(T(u"This text can't be made a link."));
   // A web address is a relationship of the part.
   std::string rid;
   if (target[0] != '#') {
     const uint32_t part = doc_.Stories()[doc_.Para(para).story].part;
-    if (part >= doc_.Parts().size()) return Fail(u"This text can't be made a link.");
+    if (part >= doc_.Parts().size()) return Fail(T(u"This text can't be made a link."));
     const std::string& name = doc_.Parts()[part].name;
     const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
     pkg::RelationshipSet set;
@@ -3888,7 +3889,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
     if (cl == 0 ? (cs > from.offset && cs < to.offset) : (cs >= from.offset && cs + cl <= to.offset)) inside.push_back(c);
   }
   const ElemId h = inside.empty() ? kNoElem : s.NewElem(p, Name("hyperlink"));
-  if (h == kNoElem) return s.Abort(u"This text can't be made a link.");
+  if (h == kNoElem) return s.Abort(T(u"This text can't be made a link."));
   if (!rid.empty()) s.SetAttr(h, Name("r:id"), rid);
   else s.SetAttr(h, Name("anchor"), target.substr(1));
   s.SetAttr(h, Name("history"), "1");
@@ -3898,7 +3899,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
     s.Append(h, c);
   }
   s.Reflow(para);
-  s.Commit(false, from, to, Kind::Other, u"Link");
+  s.Commit(false, from, to, Kind::Other, T(u"Link"));
   s.Notify(listeners_);
   Result r;
   r.caret = to;
@@ -3923,7 +3924,7 @@ Result Editor::SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit)
     s.Reflow(p);
   }
   // List labels take the paragraph mark's formatting.
-  s.Commit(true, Pos{first, 0}, Pos{last, 0}, Kind::Other, u"Format");
+  s.Commit(true, Pos{first, 0}, Pos{last, 0}, Kind::Other, T(u"Format"));
   s.Notify(listeners_);
   Result r;
   r.caret = Pos{last, 0};
@@ -3944,7 +3945,7 @@ Result Editor::SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit)
     if (!s.ApplyProps(doc_.Para(p).elem, kPPr, edit, why)) return s.Abort(why);
     s.Reflow(p);
   }
-  s.Commit(true, Pos{first, 0}, Pos{last, 0}, Kind::Other, u"Format");
+  s.Commit(true, Pos{first, 0}, Pos{last, 0}, Kind::Other, T(u"Format"));
   s.Notify(listeners_);
   Result r;
   r.caret = Pos{last, 0};
@@ -4054,8 +4055,8 @@ Result Editor::SetTracking(bool on) {
   if (!CanEdit(&why)) return Fail(why);
   TreeEdit te(*this);
   const ElemId root = te.EnsurePart(PartKind::Settings);
-  if (root == kNoElem) return Fail(u"Track Changes can't be turned on in this document.");
-  te.Begin(on ? u"Track Changes on" : u"Track Changes off");
+  if (root == kNoElem) return Fail(T(u"Track Changes can't be turned on in this document."));
+  te.Begin(on ? T(u"Track Changes on") : T(u"Track Changes off"));
   if (on) te.Child(root, Name("trackRevisions"));
   else te.Remove(root, Name("trackRevisions"));
   te.Commit();
@@ -4097,8 +4098,8 @@ Result Editor::Review(uint32_t story, const ChangePicker& pick, bool accept, std
   if (hi + 1 < doc_.Paragraphs().size() && doc_.Para(hi + 1).story == story) ++hi;
   std::u16string why;
   if (!s.Editable(lo, why)) return Fail(why);
-  if (name.empty()) name = accept ? (items.size() == 1 ? u"Accept change" : u"Accept changes")
-                                  : (items.size() == 1 ? u"Reject change" : u"Reject changes");
+  if (name.empty()) name = accept ? (items.size() == 1 ? T(u"Accept change") : T(u"Accept changes"))
+                                  : (items.size() == 1 ? T(u"Reject change") : T(u"Reject changes"));
   BeginGroup(name);
   s.Begin(lo, hi - lo + 1, roots);
   std::vector<ElemId> rows;
@@ -4139,7 +4140,7 @@ Result Editor::ReviewChanges(Pos from, Pos to, bool accept) {
   if (Compare(to, from) < 0) std::swap(from, to);
   std::u16string why;
   if (!CanEdit(&why)) return Fail(why);
-  if (from.para >= doc_.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  if (from.para >= doc_.Paragraphs().size()) return Fail(T(u"That place isn't in the document."));
   const uint32_t story = doc_.Para(from.para).story;
   if (to.para >= doc_.Paragraphs().size() || doc_.Para(to.para).story != story) to = from;
   bool any = false;
@@ -4152,14 +4153,14 @@ Result Editor::ReviewChanges(Pos from, Pos to, bool accept) {
     return in;
   };
   Result r = Review(story, pick, accept, {}, from);
-  if (r && !any) return Fail(u"There's no tracked change here.");
+  if (r && !any) return Fail(T(u"There's no tracked change here."));
   return r;
 }
 
 Result Editor::ReviewAll(bool accept) {
   std::u16string why;
   if (!CanEdit(&why)) return Fail(why);
-  const std::u16string name = accept ? u"Accept all changes" : u"Reject all changes";
+  const std::u16string name = accept ? T(u"Accept all changes") : T(u"Reject all changes");
   BeginGroup(name);
   Pos caret;
   bool skipped = false;
@@ -4181,7 +4182,7 @@ Result Editor::ReviewAll(bool accept) {
   EndGroup();
   Result r;
   r.caret = caret;
-  if (skipped) r.message = u"Changes in text boxes stay as they are: Featherweight doesn't edit text boxes yet.";
+  if (skipped) r.message = T(u"Changes in text boxes stay as they are: Featherweight doesn't edit text boxes yet.");
   return r;
 }
 
@@ -4271,7 +4272,7 @@ Result Editor::EditTable(Pos from, Pos to, std::u16string name, const std::funct
   GroupGuard group{*this};
   TakingNotes taking(s);
   s.Begin(first, count, {o.tbl});
-  if (!op(o)) return s.Abort(o.why.empty() ? u"This table can't be changed that way." : o.why);
+  if (!op(o)) return s.Abort(o.why.empty() ? T(u"This table can't be changed that way.") : o.why);
   s.Resync(o.blocks);
   for (ElemId p : o.touched)
     if (s.Listed(p)) s.Reflow(s.E(p).start);
@@ -4404,15 +4405,15 @@ std::vector<Editor::CellInfo> Editor::TableCells(Pos at) const {
 // ---- New tables
 
 Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
-  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
-  if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(u"A table has 1 to 63 columns and 1 to 1,000 rows.");
+  if (at.offset > ParaLength(at.para)) return Fail(T(u"That place isn't in the paragraph."));
+  if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(T(u"A table has 1 to 63 columns and 1 to 1,000 rows."));
   ElemId p = doc_.Para(at.para).elem;
-  if (s.E(p).flags & kDisplayOnly) return Fail(u"A table can't go here.");
-  if (s.InOneParagraphControl(at.para, at.offset)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
+  if (s.E(p).flags & kDisplayOnly) return Fail(T(u"A table can't go here."));
+  if (s.InOneParagraphControl(at.para, at.offset)) return Fail(T(u"A table can't go in a date, list, plain-text or picture content control."));
   const int32_t width = s.AvailableWidth(at.para);
   s.Begin(at.para, 1);
   // Where it goes: before the paragraph at its start (unless a table is just before it), after it
@@ -4453,21 +4454,21 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
   for (uint32_t c = 0; c < cols; ++c) xml += "<w:gridCol w:w=\"" + std::to_string(col) + "\"/>";
   xml += "</w:tblGrid></w:tbl>";
   ElemId tbl = s.Make(parent, after, xml);
-  if (tbl == kNoElem) return s.Abort(u"A table can't go here.");
+  if (tbl == kNoElem) return s.Abort(T(u"A table can't go here."));
   s.roots.push_back(tbl);
   ElemId like = p != kNoElem ? p : second;
   ElemId lastRow = s.Child(tbl, kTblGrid);
   ElemId firstPara = kNoElem;
   for (uint32_t r = 0; r < rows; ++r) {
     ElemId tr = s.Make(tbl, lastRow, "<w:tr/>");
-    if (tr == kNoElem) return s.Abort(u"A table can't go here.");
+    if (tr == kNoElem) return s.Abort(T(u"A table can't go here."));
     lastRow = tr;
     ElemId lastCell = kNoElem;
     for (uint32_t c = 0; c < cols; ++c) {
       ElemId tc = s.Make(tr, lastCell, "<w:tc><w:tcPr><w:tcW w:w=\"" + std::to_string(col) + "\" w:type=\"dxa\"/></w:tcPr></w:tc>");
-      if (tc == kNoElem) return s.Abort(u"A table can't go here.");
+      if (tc == kNoElem) return s.Abort(T(u"A table can't go here."));
       ElemId cp = s.NewCellPara(tc, s.Child(tc, kTcPr), like);
-      if (cp == kNoElem) return s.Abort(u"A table can't go here.");
+      if (cp == kNoElem) return s.Abort(T(u"A table can't go here."));
       if (firstPara == kNoElem) firstPara = cp;
       lastCell = tc;
     }
@@ -4478,7 +4479,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
   if (second != kNoElem) blocks.push_back(second);
   s.Resync(blocks);
   Pos caret{s.E(firstPara).start, 0};
-  s.Commit(false, at, caret, Kind::Other, u"Insert table");
+  s.Commit(false, at, caret, Kind::Other, T(u"Insert table"));
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -4486,7 +4487,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
 }
 
 Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   EditorState& s = *impl_;
   std::u16string why;
   if (last < first) std::swap(first, last);
@@ -4495,14 +4496,14 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   std::vector<uint32_t> chain{first};
   while (chain.back() != last) {
     uint32_t next = s.SiblingAfter(chain.back());
-    if (next == kNone || next > last) return Fail(u"Select paragraphs that follow each other, without a table between them.");
+    if (next == kNone || next > last) return Fail(T(u"Select paragraphs that follow each other, without a table between them."));
     chain.push_back(next);
   }
   for (uint32_t p : chain) {
     ElemId pPr = s.Child(doc_.Para(p).elem, kPPr);
-    if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(u"Paragraphs with a section break can't go into a table.");
-    if (s.E(doc_.Para(p).elem).flags & kDisplayOnly) return Fail(u"These paragraphs can't go into a table.");
-    if (s.InOneParagraphControl(p, std::nullopt)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
+    if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(T(u"Paragraphs with a section break can't go into a table."));
+    if (s.E(doc_.Para(p).elem).flags & kDisplayOnly) return Fail(T(u"These paragraphs can't go into a table."));
+    if (s.InOneParagraphControl(p, std::nullopt)) return Fail(T(u"A table can't go in a date, list, plain-text or picture content control."));
   }
   const int32_t width = s.AvailableWidth(first);
   ElemId firstElem = doc_.Para(first).elem, parent = s.E(firstElem).parent;
@@ -4526,7 +4527,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   }
   size_t cols = 1;
   for (const auto& r : rows) cols = std::max(cols, r.size());
-  if (cols > 63) return s.Abort(u"A table has at most 63 columns.");
+  if (cols > 63) return s.Abort(T(u"A table has at most 63 columns."));
   const int32_t col = std::max(width / static_cast<int32_t>(cols), 20);
   std::string style;
   for (const Style& st : doc_.Styles())
@@ -4547,7 +4548,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   for (size_t c = 0; c < cols; ++c) xml += "<w:gridCol w:w=\"" + std::to_string(col) + "\"/>";
   xml += "</w:tblGrid></w:tbl>";
   ElemId tbl = s.Make(parent, s.PrevSibling(rows.front().front()), xml);
-  if (tbl == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+  if (tbl == kNoElem) return s.Abort(T(u"These paragraphs can't go into a table."));
   s.roots.push_back(tbl);
   ElemId lastRow = s.Child(tbl, kTblGrid);
   // Range markers between the paragraphs (a bookmark's end) go into the start of the next one.
@@ -4560,7 +4561,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
     ElemId lastCell = kNoElem;
     for (size_t c = 0; c < cols; ++c) {
       ElemId tc = s.Make(tr, lastCell, "<w:tc><w:tcPr><w:tcW w:w=\"" + std::to_string(col) + "\" w:type=\"dxa\"/></w:tcPr></w:tc>");
-      if (tc == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+      if (tc == kNoElem) return s.Abort(T(u"These paragraphs can't go into a table."));
       if (c < rows[r].size()) {
         ElemId w = rows[r][c];
         s.Unlink(w);
@@ -4574,7 +4575,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
           }
         }
       } else if (s.NewCellPara(tc, s.Child(tc, kTcPr), rows[r].back()) == kNoElem) {
-        return s.Abort(u"These paragraphs can't go into a table.");
+        return s.Abort(T(u"These paragraphs can't go into a table."));
       }
       lastCell = tc;
     }
@@ -4583,7 +4584,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   // A table ends neither its place nor touches another table: an empty paragraph after it.
   if (ElemId next = s.NextBlock(tbl); next == kNoElem || s.NameOf(next) == kTbl) {
     ElemId tail = s.NewElem(parent, kP);
-    if (tail == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+    if (tail == kNoElem) return s.Abort(T(u"These paragraphs can't go into a table."));
     s.LinkAfter(parent, tbl, tail);
     blocks.push_back(tail);
   }
@@ -4591,7 +4592,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   for (size_t r = 0; r < rows.size(); ++r)
     if (s.Listed(rows[r].front())) s.Reflow(s.E(rows[r].front()).start);
   Pos caret{s.E(rows.front().front()).start, 0};
-  s.Commit(false, Pos{first, 0}, caret, Kind::Other, u"Convert to table");
+  s.Commit(false, Pos{first, 0}, caret, Kind::Other, T(u"Convert to table"));
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -4599,7 +4600,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
 }
 
 Result Editor::TableToText(Pos at, char16_t separator) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
@@ -4614,7 +4615,7 @@ Result Editor::TableToText(Pos at, char16_t separator) {
     for (const GridCell& c : row.cells)
       for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next) {
         uint32_t n = s.NameOf(k);
-        if (n != kP && n != kTcPr && !RangeMarker(n)) return Fail(u"A table with tables or content controls in its cells can't become text yet.");
+        if (n != kP && n != kTcPr && !RangeMarker(n)) return Fail(T(u"A table with tables or content controls in its cells can't become text yet."));
       }
   s.Begin(first, count, {tbl});
   // Out of the table, in order, before it: then cells of a row are joined. Range markers between
@@ -4677,7 +4678,7 @@ Result Editor::TableToText(Pos at, char16_t separator) {
     if (s.NameOf(k) == kP && linked.count(k)) kept.push_back(k);
   s.Resync(kept);
   Pos caret{kept.empty() ? first : s.E(kept.front()).start, 0};
-  s.Commit(false, at, caret, Kind::Other, u"Convert to text");
+  s.Commit(false, at, caret, Kind::Other, T(u"Convert to text"));
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -4685,12 +4686,12 @@ Result Editor::TableToText(Pos at, char16_t separator) {
 }
 
 Result Editor::DeleteTable(Pos at) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   ElemId tbl, tr, tc;
-  if (!s.CellOf(at.para, tbl, tr, tc)) return Fail(u"Put the cursor in a table first.");
+  if (!s.CellOf(at.para, tbl, tr, tc)) return Fail(T(u"Put the cursor in a table first."));
   uint32_t first = 0, count = 0;
   if (!s.TableParas(tbl, first, count, why)) return Fail(why);
   const ElemId parent = s.E(tbl).parent;
@@ -4699,7 +4700,7 @@ Result Editor::DeleteTable(Pos at) {
   // tables, an empty paragraph takes the table's place.
   const bool nextPara = next != kNoElem && s.NameOf(next) == kP && s.E(next).start == first + count && s.Listed(next);
   // Notes referred to in the table go with it, in the same undo step (D4).
-  BeginGroup(u"Delete table");
+  BeginGroup(T(u"Delete table"));
   GroupGuard group{*this};
   TakingNotes taking(s);
   s.Begin(first, count + (nextPara ? 1 : 0), {tbl});
@@ -4707,7 +4708,7 @@ Result Editor::DeleteTable(Pos at) {
   ElemId fresh = kNoElem;
   if (!nextPara || (prev != kNoElem && s.NameOf(prev) == kTbl)) {
     fresh = s.NewElem(parent, kP);
-    if (fresh == kNoElem) return s.Abort(u"This table can't be deleted.");
+    if (fresh == kNoElem) return s.Abort(T(u"This table can't be deleted."));
     s.LinkAfter(parent, tbl, fresh);
     if (heir == kNoElem) heir = fresh;
   }
@@ -4721,7 +4722,7 @@ Result Editor::DeleteTable(Pos at) {
   if (s.Listed(heir)) s.Reflow(s.E(heir).start);
   Pos caret{s.E(blocks.front()).start, 0};
   s.goneNotes = taking.was;
-  s.Commit(false, at, caret, Kind::Other, u"Delete table");
+  s.Commit(false, at, caret, Kind::Other, T(u"Delete table"));
   s.Notify(listeners_);
   if (std::u16string refused = DropNotes(*this, taking.gone, caret); !refused.empty()) {
     group.cancel = true;
@@ -4735,8 +4736,8 @@ Result Editor::DeleteTable(Pos at) {
 // ---- Rows and columns
 
 Result Editor::InsertRows(Pos from, Pos to, bool below) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
-  return EditTable(from, to, below ? u"Insert rows below" : u"Insert rows above", [&](TableOp& o) {
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
+  return EditTable(from, to, below ? T(u"Insert rows below") : T(u"Insert rows above"), [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
     const size_t n = o.bl.row1 - o.bl.row0 + 1, ref = below ? o.bl.row1 : o.bl.row0;
@@ -4795,12 +4796,12 @@ Result Editor::InsertRows(Pos from, Pos to, bool below) {
 }
 
 Result Editor::InsertColumns(Pos from, Pos to, bool right) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
-  return EditTable(from, to, right ? u"Insert columns right" : u"Insert columns left", [&](TableOp& o) {
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
+  return EditTable(from, to, right ? T(u"Insert columns right") : T(u"Insert columns left"), [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
     const int32_t n = o.bl.col1 - o.bl.col0 + 1, b = right ? o.bl.col1 + 1 : o.bl.col0;
-    if (g.width + n > 63) return o.why = u"A table has at most 63 columns.", false;
+    if (g.width + n > 63) return o.why = T(u"A table has at most 63 columns."), false;
     std::vector<int32_t> widths = s.Widths(g);
     std::vector<int32_t> added(widths.begin() + o.bl.col0, widths.begin() + o.bl.col1 + 1);
     const ElemId caretRow = g.rows[o.bl.row0].tr;
@@ -4850,7 +4851,7 @@ Result Editor::InsertColumns(Pos from, Pos to, bool right) {
 }
 
 Result Editor::DeleteRows(Pos from, Pos to) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   {
     EditorState& s = *impl_;
     Grid g;
@@ -4858,7 +4859,7 @@ Result Editor::DeleteRows(Pos from, Pos to) {
     std::u16string why;
     if (s.BlockOf(from, to, g, bl, why) && bl.row0 == 0 && bl.row1 + 1 == g.rows.size()) return DeleteTable(from);
   }
-  return EditTable(from, to, u"Delete rows", [&](TableOp& o) {
+  return EditTable(from, to, T(u"Delete rows"), [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
     std::vector<ElemId> gone;
@@ -4879,7 +4880,7 @@ Result Editor::DeleteRows(Pos from, Pos to) {
 }
 
 Result Editor::DeleteColumns(Pos from, Pos to) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
   {
     EditorState& s = *impl_;
     Grid g;
@@ -4887,7 +4888,7 @@ Result Editor::DeleteColumns(Pos from, Pos to) {
     std::u16string why;
     if (s.BlockOf(from, to, g, bl, why) && bl.col0 == 0 && bl.col1 + 1 >= g.width) return DeleteTable(from);
   }
-  return EditTable(from, to, u"Delete columns", [&](TableOp& o) {
+  return EditTable(from, to, T(u"Delete columns"), [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
     const int32_t c0 = o.bl.col0, c1 = o.bl.col1;
@@ -4932,7 +4933,7 @@ Result Editor::DeleteColumns(Pos from, Pos to) {
       if (int32_t ov = overlap(0, row.before)) s.SetRowGrid(row.tr, Name("gridBefore"), row.before - ov);
       if (int32_t ov = overlap(row.End(), row.End() + row.after)) s.SetRowGrid(row.tr, Name("gridAfter"), row.after - ov);
     }
-    if (rowsGone.size() == g.rows.size()) return o.why = u"This would delete the whole table.", false;
+    if (rowsGone.size() == g.rows.size()) return o.why = T(u"This would delete the whole table."), false;
     for (ElemId tr : rowsGone) s.Drop(tr);
     if (anyHeir != kNoElem) o.touched.push_back(anyHeir);
     std::vector<int32_t> widths = s.Widths(g);
@@ -4961,7 +4962,7 @@ Result Editor::ClearCells(Pos from, Pos to) {
     Result r;
     r.caret = from;
     if (!block) return r;
-    BeginGroup(u"Delete");
+    BeginGroup(T(u"Delete"));
     for (auto it = block->cells.rbegin(); it != block->cells.rend(); ++it) {
       if (it->start == it->end) continue;
       if (Result d = Delete(it->start, it->end); !d) {
@@ -4972,7 +4973,7 @@ Result Editor::ClearCells(Pos from, Pos to) {
     EndGroup();
     return r;
   }
-  return EditTable(from, to, u"Delete", [&](TableOp& o) {
+  return EditTable(from, to, T(u"Delete"), [&](TableOp& o) {
     EditorState& s = o.s;
     for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
       for (const GridCell& c : o.g.rows[r].cells) {
@@ -4996,8 +4997,8 @@ Result Editor::ClearCells(Pos from, Pos to) {
 // ---- Merging and splitting
 
 Result Editor::MergeCells(Pos from, Pos to) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
-  return EditTable(from, to, u"Merge cells", [&](TableOp& o) {
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
+  return EditTable(from, to, T(u"Merge cells"), [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
     const auto& bl = o.bl;
@@ -5009,9 +5010,9 @@ Result Editor::MergeCells(Pos from, Pos to) {
         if (c.col <= bl.col1 && c.col + c.span - 1 >= bl.col0) cells.back().push_back(c);
       if (cells.back().empty() || cells.back().front().col != bl.col0 ||
           cells.back().back().col + cells.back().back().span - 1 != bl.col1)
-        return o.why = u"These cells can't be merged: their rows don't line up.", false;
+        return o.why = T(u"These cells can't be merged: their rows don't line up."), false;
     }
-    if (cells.size() == 1 && cells[0].size() == 1) return o.why = u"Select two or more cells to merge.", false;
+    if (cells.size() == 1 && cells[0].size() == 1) return o.why = T(u"Select two or more cells to merge."), false;
     const ElemId target = cells[0][0].tc;
     auto empty = [&](ElemId tc) {
       ElemId only = kNoElem;
@@ -5047,7 +5048,7 @@ Result Editor::MergeCells(Pos from, Pos to) {
         }
       }
     if (s.RangesOutOfOrder(o.tbl) > disorder)
-      return o.why = u"A comment or bookmark runs from these cells to others, so they can't be merged.", false;
+      return o.why = T(u"A comment or bookmark runs from these cells to others, so they can't be merged."), false;
     // The first row: one cell across the block; the rows below: one cell continuing it.
     const int32_t span = bl.col1 - bl.col0 + 1;
     for (size_t r = 0; r < cells.size(); ++r) {
@@ -5079,14 +5080,14 @@ Result Editor::MergeCells(Pos from, Pos to) {
 }
 
 Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
-  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
-  if (rows < 1 || cols < 1 || rows > 100 || cols > 63) return Fail(u"Split a cell into 1 to 100 rows and 1 to 63 columns.");
+  if (Tracking() && !reviewing_) return Fail(std::u16string(kUntrackedTable));
+  if (rows < 1 || cols < 1 || rows > 100 || cols > 63) return Fail(T(u"Split a cell into 1 to 100 rows and 1 to 63 columns."));
   if (rows == 1 && cols == 1) {
     Result r;
     r.caret = at;
     return r;
   }
-  return EditTable(at, at, u"Split cells", [&](TableOp& o) {
+  return EditTable(at, at, T(u"Split cells"), [&](TableOp& o) {
     EditorState& s = o.s;
     ElemId tbl, tr, tc;
     s.CellOf(at.para, tbl, tr, tc);
@@ -5100,7 +5101,7 @@ Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
     const size_t height = bottom - top + 1;
     std::vector<ElemId> pieceRows;  // the rows the pieces' cells are in, top to bottom
     if (rows > 1 && height > 1) {
-      if (height % rows != 0) return o.why = u"A merged cell splits into a number of rows that divides its own.", false;
+      if (height % rows != 0) return o.why = T(u"A merged cell splits into a number of rows that divides its own."), false;
       const size_t group = height / rows;
       for (size_t k = 0; k < height; ++k) {
         ElemId c = o.g.rows[top + k].cells[o.g.At(top + k, cell.col)].tc;
@@ -5146,7 +5147,7 @@ Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
     std::vector<int32_t> widths = s.Widths(o.g);
     int32_t span = cell.span;
     if (span < static_cast<int32_t>(cols)) {
-      if (o.g.width + static_cast<int32_t>(cols) - span > 63) return o.why = u"A table has at most 63 columns.", false;
+      if (o.g.width + static_cast<int32_t>(cols) - span > 63) return o.why = T(u"A table has at most 63 columns."), false;
       // The cell's width cut evenly: each new line splits the grid column it falls in.
       int64_t left = 0;
       for (int32_t k = 0; k < cell.col; ++k) left += widths[k];
@@ -5223,8 +5224,8 @@ Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
 // ---- Sizes
 
 Result Editor::SetColumnWidth(Pos from, Pos to, int32_t twips) {
-  if (twips < 20 || twips > 31680) return Fail(u"A column is between 0.01 and 22 inches wide.");
-  return EditTable(from, to, u"Column width", [&](TableOp& o) {
+  if (twips < 20 || twips > 31680) return Fail(T(u"A column is between 0.01 and 22 inches wide."));
+  return EditTable(from, to, T(u"Column width"), [&](TableOp& o) {
     std::vector<int32_t> widths = o.s.Widths(o.g);
     for (int32_t c = o.bl.col0; c <= o.bl.col1 && c < static_cast<int32_t>(widths.size()); ++c) widths[c] = twips;
     o.s.WriteGrid(o.tbl, widths);
@@ -5234,12 +5235,12 @@ Result Editor::SetColumnWidth(Pos from, Pos to, int32_t twips) {
 }
 
 Result Editor::MoveColumnBorder(Pos at, int32_t line, int32_t delta) {
-  return EditTable(at, at, u"Column width", [&](TableOp& o) {
+  return EditTable(at, at, T(u"Column width"), [&](TableOp& o) {
     EditorState& s = o.s;
     std::vector<int32_t> widths = s.Widths(o.g);
     const int32_t n = static_cast<int32_t>(widths.size());
     constexpr int32_t kMin = 144;  // a tenth of an inch: room for the cell's margins
-    if (line < 0 || line > n || n == 0) return o.why = u"There's no column border there.", false;
+    if (line < 0 || line > n || n == 0) return o.why = T(u"There's no column border there."), false;
     if (line == n) {
       widths[n - 1] = std::max(kMin, widths[n - 1] + delta);
     } else if (line == 0) {
@@ -5261,9 +5262,9 @@ Result Editor::MoveColumnBorder(Pos at, int32_t line, int32_t delta) {
 }
 
 Result Editor::SetRowHeight(Pos from, Pos to, int32_t twips, std::string_view rule) {
-  if (twips < 0 || twips > 31680) return Fail(u"A row is at most 22 inches high.");
-  if (!rule.empty() && rule != "atLeast" && rule != "exact") return Fail(u"A row's height is at least or exactly a size.");
-  return EditTable(from, to, u"Row height", [&](TableOp& o) {
+  if (twips < 0 || twips > 31680) return Fail(T(u"A row is at most 22 inches high."));
+  if (!rule.empty() && rule != "atLeast" && rule != "exact") return Fail(T(u"A row's height is at least or exactly a size."));
+  return EditTable(from, to, T(u"Row height"), [&](TableOp& o) {
     EditorState& s = o.s;
     for (size_t r = o.bl.row0; r <= o.bl.row1; ++r) {
       ElemId tr = o.g.rows[r].tr;
@@ -5312,7 +5313,7 @@ Result Editor::AutoFit(Pos at, Fit fit, const std::vector<int32_t>& given) {
         break;
       }
       case Fit::Contents: {
-        if (given.size() != widths.size()) return o.why = u"The table's columns couldn't be measured.", false;
+        if (given.size() != widths.size()) return o.why = T(u"The table's columns couldn't be measured."), false;
         for (size_t k = 0; k < widths.size(); ++k) widths[k] = std::clamp(given[k], 144, 31680);
         s.RemoveProp(tblPr, kLayout);
         s.SetProp(tblPr, "<w:tblW w:w=\"0\" w:type=\"auto\"/>");
@@ -5327,7 +5328,7 @@ Result Editor::AutoFit(Pos at, Fit fit, const std::vector<int32_t>& given) {
 // ---- Properties
 
 Result Editor::SetCellProps(Pos from, Pos to, const PropEdit& edit) {
-  return EditTable(from, to, u"Format cells", [&](TableOp& o) {
+  return EditTable(from, to, T(u"Format cells"), [&](TableOp& o) {
     for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
       for (const GridCell& c : o.g.rows[r].cells) {
         if (c.col > o.bl.col1 || c.col + c.span - 1 < o.bl.col0) continue;
@@ -5338,7 +5339,7 @@ Result Editor::SetCellProps(Pos from, Pos to, const PropEdit& edit) {
 }
 
 Result Editor::SetRowProps(Pos from, Pos to, const PropEdit& edit) {
-  return EditTable(from, to, u"Format rows", [&](TableOp& o) {
+  return EditTable(from, to, T(u"Format rows"), [&](TableOp& o) {
     for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
       if (!o.s.ApplyProps(o.g.rows[r].tr, kTrPr, edit, o.why)) return false;
     return true;
@@ -5346,13 +5347,13 @@ Result Editor::SetRowProps(Pos from, Pos to, const PropEdit& edit) {
 }
 
 Result Editor::SetTableProps(Pos at, const PropEdit& edit) {
-  return EditTable(at, at, u"Format table", [&](TableOp& o) { return o.s.ApplyProps(o.tbl, kTblPr, edit, o.why); });
+  return EditTable(at, at, T(u"Format table"), [&](TableOp& o) { return o.s.ApplyProps(o.tbl, kTblPr, edit, o.why); });
 }
 
 Result Editor::SetCellBorders(Pos from, Pos to, CellBorders which, std::string_view style, int32_t eighths,
                               std::string_view color) {
-  if (!XmlSafe(style) || !XmlSafe(color) || eighths < 2 || eighths > 96) return Fail(u"That isn't a border Word knows.");
-  return EditTable(from, to, u"Borders", [&](TableOp& o) {
+  if (!XmlSafe(style) || !XmlSafe(color) || eighths < 2 || eighths > 96) return Fail(T(u"That isn't a border Word knows."));
+  return EditTable(from, to, T(u"Borders"), [&](TableOp& o) {
     const auto& bl = o.bl;
     for (size_t r = bl.row0; r <= bl.row1; ++r)
       for (size_t i = 0; i < o.g.rows[r].cells.size(); ++i) {
