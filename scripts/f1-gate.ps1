@@ -412,8 +412,11 @@ Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 o
   # pushes to those). Without ref the API answers for the default branch only.
   $pushed = @(Invoke-Git branch -r --contains $script:ciHead | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
   # With -CiCommit this checkout's branch only carries that commit; it was analysed where it was pushed.
-  $own = if ($CiCommit) { @() } else { @(Invoke-Git rev-parse --abbrev-ref HEAD) }
-  $branch = @($own + @("claude/f1-int", "main") + $pushed | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
+  # (A list built with +=: an if's one-item result is a string, and string + array concatenates.)
+  $tryBranches = @()
+  if (-not $CiCommit) { $tryBranches += "$(Invoke-Git rev-parse --abbrev-ref HEAD)" }
+  $tryBranches += @("claude/f1-int", "main") + $pushed
+  $branch = @($tryBranches | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
   if (-not $branch) { return Failed "this commit isn't on a pushed branch" }
   $ref = "refs/heads/$branch"
   # The alerts API answers "none open" for a branch CodeQL never analysed: the analysis of this commit (or of one
