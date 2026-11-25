@@ -113,15 +113,16 @@ TEST(Hyphenation_OtherLanguages) {
   // Every shipped set loads and hyphenates a long word of its language.
   const std::pair<const wchar_t*, const wchar_t*> words[] = {
       {L"es", L"silabación"}, {L"it", L"sillabazione"}, {L"pt-BR", L"hifenização"}, {L"da", L"orddeling"},
-      {L"sv", L"avstavning"}, {L"nb", L"orddeling"},    {L"nn-NO", L"orddeling"},   {L"fi", L"tavutus"},
-      {L"en-GB", L"hyphenation"}};
+      {L"nb", L"orddeling"},  {L"nn-NO", L"orddeling"},   {L"en-GB", L"hyphenation"}};
   for (const auto& [tag, word] : words) {
     const Hyphenator* h = Hyphenator::For(tag);
     CHECK(h != nullptr);
     if (h) CHECK(!h->Points(word).empty());
   }
   CHECK(Hyphenator::For(L"pl-PL") == nullptr);
-  CHECK(Hyphenator::Languages().size() == 12);
+  // Swedish and Finnish aren't shipped (F1): their patterns' licences ask for the files as they are.
+  CHECK(Hyphenator::For(L"sv-SE") == nullptr && Hyphenator::For(L"fi-FI") == nullptr);
+  CHECK(Hyphenator::Languages().size() == 10);
 }
 
 TEST(Hyphenation_PatternText) {
