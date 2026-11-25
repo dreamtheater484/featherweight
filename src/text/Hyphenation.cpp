@@ -36,9 +36,7 @@ constexpr Language kLanguages[] = {
     {L"it", "it", {L"it"}, 2, 2, false},
     {L"pt", "pt", {L"pt"}, 2, 3, false},
     {L"da", "da", {L"da"}, 2, 2, false},
-    {L"sv", "sv", {L"sv"}, 2, 2, false},
     {L"nb", "nb", {L"nb", L"nn", L"no"}, 2, 2, false},
-    {L"fi", "fi", {L"fi"}, 2, 2, false},
 };
 constexpr size_t kLanguageCount = sizeof(kLanguages) / sizeof(kLanguages[0]);
 

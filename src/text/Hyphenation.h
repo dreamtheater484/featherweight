@@ -9,8 +9,9 @@
 // automatic hyphenation changes line breaks and page counts for whole documents.
 //
 // Patterns ship for English (US and UK), Dutch (OpenTaal), German (reformed spelling), French,
-// Spanish, Italian, Portuguese, Danish, Swedish, Norwegian (Bokmål and Nynorsk) and Finnish, from
-// hyph-utf8 except Dutch; THIRD_PARTY_NOTICES.md lists them with their licences. They are compressed
+// Spanish, Italian, Portuguese, Danish and Norwegian (Bokmål and Nynorsk), from hyph-utf8 except
+// Dutch; THIRD_PARTY_NOTICES.md lists them with their licences. Not Swedish and Finnish (F1): their
+// licences ask for the files as they are, and these are hyph-utf8's derivatives without comments. They are compressed
 // inside the program and a language's are unpacked the first time it's hyphenated.
 namespace fw::text {
 
