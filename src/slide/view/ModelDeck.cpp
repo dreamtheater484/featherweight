@@ -392,7 +392,7 @@ bool ReadLegacyPresentation(const std::wstring& path, std::wstring_view password
   if (pptx.empty() && locked && status.code == pkg::Status::Code::Rejected) return true;  // the wrong password
   if (pptx.empty())
     error = status.message.empty() ? T(L"This file isn't a presentation Featherweight can open, or it is damaged.")
-                                   : T(L"It couldn't be opened — ") + Utf8ToWide(status.message);
+                                   : Fmt(T(L"It couldn't be opened — {0}"), {Utf8ToWide(status.message)});
   return true;
 }
 

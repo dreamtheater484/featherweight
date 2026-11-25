@@ -41,6 +41,15 @@ TEST(Lang_EnglishReturnsItsArgument) {
   CHECK(std::wcscmp(fw::lang::Current(), L"en") == 0);
 }
 
+TEST(Lang_FmtFillsPlaceholders) {
+  CHECK(Fmt(L"Page {0} of {1}", {L"3", L"12"}) == L"Page 3 of 12");
+  CHECK(Fmt(L"{1} {0}", {L"a", L"b"}) == L"b a");  // a language may turn them round
+  CHECK(Fmt(L"{0} and {0}", {L"x"}) == L"x and x");
+  CHECK(Fmt(L"{2} {x} {", {L"a"}) == L" {x} {");  // a missing argument is empty; other braces stay
+  CHECK(Fmt("{0} parts", {std::string("12")}) == "12 parts");
+  CHECK(Fmt(u"Undo {0}", {u"Typing"}) == u"Undo Typing");
+}
+
 TEST(Lang_ContextSeparatesKeys) {
   CHECK(catalog::Hash(0, L"verb", L"Open") != catalog::Hash(0, nullptr, L"Open"));
   CHECK(catalog::Hash(1, nullptr, L"Open") != catalog::Hash(0, nullptr, L"Open"));

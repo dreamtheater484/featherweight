@@ -1233,7 +1233,7 @@ std::wstring Ribbon::TooltipAt(int x, int y) const {
     case PartKind::Collapse: return collapsed_ ? T(L"Keep the ribbon shown (Ctrl+F1)") : T(L"Collapse the ribbon (Ctrl+F1)");
     case PartKind::Launcher: {
       const CommandState s = Query(Tab()->groups[p.group].launcher);
-      return s.label.empty() ? Tab()->groups[p.group].name + L" options" : s.Tooltip();
+      return s.label.empty() ? Fmt(T(L"{0} options"), {Tab()->groups[p.group].name}) : s.Tooltip();
     }
     case PartKind::GroupButton: return Tab()->groups[p.group].name;
     case PartKind::GalleryUp: return T(L"Previous row");
@@ -1550,7 +1550,7 @@ void Ribbon::Describe(uia::Tree& t, int parent) {
       case PartKind::Launcher:
       case PartKind::GroupButton: {
         const RibbonItem* it = ItemAt(p.group, p.item);
-        const std::wstring name = p.kind == PartKind::Launcher ? Tab()->groups[p.group].name + L" options"
+        const std::wstring name = p.kind == PartKind::Launcher ? Fmt(T(L"{0} options"), {Tab()->groups[p.group].name})
                                   : p.kind == PartKind::GroupButton ? Tab()->groups[p.group].name
                                   : it ? LabelOf(*it) : L"";
         int n = t.Add(bar, 20000 + static_cast<int64_t>(i), UIA_ButtonControlTypeId, name, p.rc);

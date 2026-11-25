@@ -82,4 +82,9 @@ void Init(const std::wstring& chosen);
 // The language in use ("en" until Init chose another).
 const wchar_t* Current();
 
+// A shortcut's key names as the language's keyboards write them: "Ctrl+Shift+S" is "Strg+Umschalt+S"
+// in German. Only names joined by "+" change ("Bold (Ctrl+B)", "\tCtrl+Enter"); each comes from the
+// catalog with the context "key". In English `text` comes back as it is.
+std::wstring KeyNames(std::wstring_view text);
+
 }  // namespace fw::lang

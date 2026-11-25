@@ -340,7 +340,8 @@ void Writer::Walk(ElemId root) {
 Status Writer::Write(std::string& out) {
   if (!part_.writable)
     return Status::Fail(Status::Code::Unsupported,
-                        "Part " + part_.name.substr(1) + T(" redeclares a namespace prefix inside it, so it is kept as it is."));
+                        Fmt(T("Part {0} redeclares a namespace prefix inside it, so it is kept as it is."),
+                            {part_.name.substr(1)}));
   Walk(part_.root);
   if (!failed_.Ok()) return failed_;
   out = w_.Take();

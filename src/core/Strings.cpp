@@ -133,18 +133,18 @@ std::wstring FormatPercent(double factor) {
 std::wstring RelativeTime(int64_t secondsAgo) {
   if (secondsAgo < 60) return T(L"Just now");
   int64_t minutes = secondsAgo / 60;
-  if (minutes < 60) return minutes == 1 ? T(L"1 minute ago") : std::to_wstring(minutes) + L" minutes ago";
+  if (minutes < 60) return minutes == 1 ? T(L"1 minute ago") : Fmt(T(L"{0} minutes ago"), {std::to_wstring(minutes)});
   int64_t hours = minutes / 60;
-  if (hours < 24) return hours == 1 ? T(L"1 hour ago") : std::to_wstring(hours) + L" hours ago";
+  if (hours < 24) return hours == 1 ? T(L"1 hour ago") : Fmt(T(L"{0} hours ago"), {std::to_wstring(hours)});
   int64_t days = hours / 24;
   if (days == 1) return T(L"Yesterday");
-  if (days < 7) return std::to_wstring(days) + L" days ago";
+  if (days < 7) return Fmt(T(L"{0} days ago"), {std::to_wstring(days)});
   int64_t weeks = days / 7;
-  if (days < 31) return weeks == 1 ? T(L"Last week") : std::to_wstring(weeks) + L" weeks ago";
+  if (days < 31) return weeks == 1 ? T(L"Last week") : Fmt(T(L"{0} weeks ago"), {std::to_wstring(weeks)});
   int64_t months = days / 30;
-  if (days < 365) return months <= 1 ? T(L"Last month") : std::to_wstring(months) + L" months ago";
+  if (days < 365) return months <= 1 ? T(L"Last month") : Fmt(T(L"{0} months ago"), {std::to_wstring(months)});
   int64_t years = days / 365;
-  return years == 1 ? T(L"Last year") : std::to_wstring(years) + L" years ago";
+  return years == 1 ? T(L"Last year") : Fmt(T(L"{0} years ago"), {std::to_wstring(years)});
 }
 
 bool ParseInt(std::wstring_view s, int& out) {

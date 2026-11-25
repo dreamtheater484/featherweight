@@ -129,7 +129,7 @@ bool Document::LibraryAvailable() {
 
 OpenResult Document::Open(const std::wstring& path, const std::wstring& password, std::unique_ptr<Document>& out,
                           std::wstring& error) {
-  const std::wstring name = L"“" + fw::FileNameOf(path) + L"”";
+  const std::wstring name = fw::FileNameOf(path);
   if (!LibraryAvailable()) {
     error = T(L"Featherweight's PDF engine (pdfium.dll) is missing. Please reinstall Featherweight.");
     return OpenResult::Failed;
@@ -140,19 +140,20 @@ OpenResult Document::Open(const std::wstring& path, const std::wstring& password
   HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
-    error = name + T(L" couldn't be opened — ") + FriendlyOpenError(GetLastError());
+    const std::wstring why = FriendlyOpenError(GetLastError());
+    error = Fmt(T(L"“{0}” couldn't be opened — {1}"), {name, why});
     return OpenResult::Failed;
   }
   LARGE_INTEGER size{};
   GetFileSizeEx(h, &size);
   if (size.QuadPart == 0) {
     CloseHandle(h);
-    error = name + T(L" couldn't be opened — the file is empty.");
+    error = Fmt(T(L"“{0}” couldn't be opened — the file is empty."), {name});
     return OpenResult::Failed;
   }
   if (static_cast<unsigned long long>(size.QuadPart) >= 0xFFFFFFFFull) {
     CloseHandle(h);
-    error = name + T(L" is too large to open (more than 4 GB).");
+    error = Fmt(T(L"“{0}” is too large to open (more than 4 GB)."), {name});
     return OpenResult::Failed;
   }
 
@@ -168,7 +169,7 @@ OpenResult Document::Open(const std::wstring& path, const std::wstring& password
     }
     CloseHandle(h);
     if (!ok) {
-      error = name + T(L" couldn't be read completely.");
+      error = Fmt(T(L"“{0}” couldn't be read completely."), {name});
       return OpenResult::Failed;
     }
   } else {
@@ -198,13 +199,13 @@ OpenResult Document::Open(const std::wstring& path, const std::wstring& password
       case FPDF_ERR_PASSWORD:
         return password.empty() ? OpenResult::NeedPassword : OpenResult::WrongPassword;
       case FPDF_ERR_SECURITY:
-        error = name + T(L" uses a kind of protection Featherweight doesn't support.");
+        error = Fmt(T(L"“{0}” uses a kind of protection Featherweight doesn't support."), {name});
         break;
       case FPDF_ERR_FILE:
-        error = name + T(L" couldn't be opened — the file couldn't be read.");
+        error = Fmt(T(L"“{0}” couldn't be opened — the file couldn't be read."), {name});
         break;
       default:
-        error = name + T(L" couldn't be opened — it seems to be damaged or isn't a PDF.");
+        error = Fmt(T(L"“{0}” couldn't be opened — it seems to be damaged or isn't a PDF."), {name});
         break;
     }
     return OpenResult::Failed;
@@ -469,7 +470,7 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
     DWORD e = GetLastError();
     error = (e == ERROR_ACCESS_DENIED || e == ERROR_WRITE_PROTECT)
                 ? T(L"Featherweight can't save in this folder.")
-                : T(L"The file couldn't be saved. ") + util::LastErrorMessage(e);
+                : Fmt(T(L"The file couldn't be saved. {0}"), {util::LastErrorMessage(e)});
     return false;
   }
 
@@ -490,7 +491,7 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
     error = (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_USER_MAPPED_FILE)
                 ? T(L"Another program is using the file, so it couldn't be replaced.")
                 : (e == ERROR_ACCESS_DENIED) ? T(L"Featherweight can't save in this folder.")
-                                             : T(L"The file couldn't be saved. ") + util::LastErrorMessage(e);
+                                             : Fmt(T(L"The file couldn't be saved. {0}"), {util::LastErrorMessage(e)});
     return false;
   }
   path_ = path;
@@ -546,10 +547,12 @@ bool Document::ExportFlattened(const std::wstring& path, std::wstring& error) {
   if (!ok) {
     const DWORD e = GetLastError();
     DeleteFileW(tmp.c_str());
-    error = (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION)
-                ? T(L"The PDF couldn't be saved: another program has ") + fw::FileNameOf(path) + L" open."
-            : (e == ERROR_ACCESS_DENIED || e == ERROR_WRITE_PROTECT) ? T(L"Featherweight can't save in this folder.")
-                                                                    : T(L"The PDF couldn't be saved. ") + util::LastErrorMessage(e);
+    if (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION)
+      error = Fmt(T(L"The PDF couldn't be saved: another program has {0} open."), {fw::FileNameOf(path)});
+    else if (e == ERROR_ACCESS_DENIED || e == ERROR_WRITE_PROTECT)
+      error = T(L"Featherweight can't save in this folder.");
+    else
+      error = Fmt(T(L"The PDF couldn't be saved. {0}"), {util::LastErrorMessage(e)});
   }
   return ok;
 }

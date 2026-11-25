@@ -342,7 +342,7 @@ bool WorkbookView::NamesPanel::Script(const std::wstring& op, const std::wstring
     for (size_t k = 0; k < shown_.size(); ++k)
       if (NameEqualsNoCase(rows_[shown_[k]].name, name)) found = static_cast<int>(k);
     if (found < 0) {
-      why = T(L"name: there's no name ") + arg.substr(1);
+      why = L"name: there's no name " + arg.substr(1);  // lang: no (a script's error, as the file's others)
       return false;
     }
     list_.SetSelected(found);

@@ -399,8 +399,9 @@ bool PresentationView::DesignPanel::OnWheel(int delta, float x, float y) {
 
 std::wstring PresentationView::DesignPanel::TooltipAt(float x, float y) {
   const Hit h = At(x, y);
-  if (h.theme >= 0) return std::wstring(T(L"Apply the ")) + BuiltInThemes()[static_cast<size_t>(h.theme)].name + T(L" theme to the presentation");
-  if (h.colors >= 0) return std::wstring(T(L"Use the ")) + ColorSchemes()[static_cast<size_t>(h.colors)].name + L" theme colors";
+  if (h.theme >= 0)
+    return Fmt(T(L"Apply the {0} theme to the presentation"), {BuiltInThemes()[static_cast<size_t>(h.theme)].name});
+  if (h.colors >= 0) return Fmt(T(L"Use the {0} theme colors"), {ColorSchemes()[static_cast<size_t>(h.colors)].name});
   return {};
 }
 

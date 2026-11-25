@@ -79,7 +79,7 @@ bool PresentationView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
   edit::Editor* ed = deck_->Editor();
   if (!ed) {
-    error = Title() + T(L" can't be saved.");
+    error = Fmt(T(L"{0} can't be saved."), {Title()});
     return false;
   }
   // What is being typed is part of what's saved: notes still in the notes pane go to the slide (the

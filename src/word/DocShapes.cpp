@@ -84,7 +84,11 @@ bool DocView::Movable(uint32_t drawing) const {
 std::u16string DocView::WhyNotMovable(uint32_t drawing) const {
   // The shape tools say why for shapes; for anything they don't take, the picture tools do.
   const std::u16string& why = ShapeInfoOf(drawing).why;
-  if (!why.empty() && why.rfind(u"Only shapes", 0) != 0) return why;
+  // The shape tools' "not a shape" reasons (src/doc/edit/Shapes.cpp), as translated there.
+  const bool notShape = why == T(u"Only shapes and text boxes can be changed here.") ||
+                        why == T(u"Only shapes and text boxes can be changed here. This is a picture, a group, a chart or "
+                                 u"another kind of drawing.");
+  if (!why.empty() && !notShape) return why;
   return PictureInfoOf(drawing).why;
 }
 
@@ -183,7 +187,8 @@ bool DocView::PickPictureFile(std::vector<uint8_t>& bytes, const wchar_t* title)
   CoTaskMemFree(path);
   std::string data;
   if (!util::ReadFileBytes(file, data, kMaxPictureFile)) {
-    host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(file) + T(L"” couldn't be read, or is too big to add."));
+    host_.ViewMessage(BannerKind::Warning,
+                      Fmt(T(L"“{0}” couldn't be read, or is too big to add."), {fw::FileNameOf(file)}));
     return false;
   }
   bytes.assign(data.begin(), data.end());

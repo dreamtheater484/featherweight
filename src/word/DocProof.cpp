@@ -49,7 +49,7 @@ std::wstring Thousands(uint64_t n) {
   return out;
 }
 
-std::wstring Words(uint64_t n) { return Thousands(n) + (n == 1 ? L" word" : L" words"); }
+std::wstring Words(uint64_t n) { return n == 1 ? T(L"1 word") : Fmt(T(L"{0} words"), {Thousands(n)}); }
 
 // A menu item's text as it is: & would underline the next letter.
 std::wstring MenuText(std::wstring s) {
@@ -308,7 +308,8 @@ void DocView::FillLanguageMenu(HMENU m) {
   // The text's own language, when Windows has no dictionary for it.
   if (current && !listed && !current->empty()) {
     if (!langs.empty()) menu::AppendSeparator(m);
-    menu::AppendItem(m, 0, MenuText(proof::LanguageName(*current)) + T(L" (no spelling dictionary)"), false, true, true);
+    menu::AppendItem(m, 0, Fmt(T(L"{0} (no spelling dictionary)"), {MenuText(proof::LanguageName(*current))}), false,
+                     true, true);
   }
 }
 
@@ -481,7 +482,8 @@ void DocView::ProofStatus(StatusBarModel& m) {
         selWordsTo_ = b;
         selWordsEdits_ = edits_;
       }
-      m.segments.push_back(Thousands(selWords_) + L" of " + Words(words_));
+      m.segments.push_back(words_ == 1 ? Fmt(T(L"{0} of 1 word"), {Thousands(selWords_)})
+                                       : Fmt(T(L"{0} of {1} words"), {Thousands(selWords_), Thousands(words_)}));
     } else {
       m.segments.push_back(Words(words_));
     }

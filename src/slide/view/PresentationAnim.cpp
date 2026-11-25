@@ -56,7 +56,7 @@ std::wstring Seconds(double ms) {
 std::wstring AnimLabel(ed::Anim a) {
   std::wstring n = W(ed::AnimName(a));
   if (ed::ClassOf(a) == ed::AnimClass::Exit && (a == ed::Anim::FadeOut || a == ed::Anim::SplitOut || a == ed::Anim::WipeOut || a == ed::Anim::ZoomOut))
-    n += L" (exit)";
+    n = Fmt(T(L"{0} (exit)"), {n});
   return n;
 }
 
@@ -287,8 +287,10 @@ void PresentationView::AnimationPane::Sync() {
   const Slide* slide = deck && slide_ < deck->SlideCount() ? const_cast<Presentation*>(deck)->GetSlide(slide_) : nullptr;
   for (const ed::AnimEffect& a : seq_) {
     const Shape* sh = slide ? FindShapeIn(slide->shapes, a.shape) : nullptr;
-    std::wstring name = sh && !sh->name.empty() ? fw::Utf8ToWide(sh->name) : a.shape ? T(L"Shape ") + std::to_wstring(a.shape) : T(L"Sound");
-    if (a.paragraph >= 0) name += T(L", paragraph ") + std::to_wstring(a.paragraph + 1);
+    std::wstring name = sh && !sh->name.empty() ? fw::Utf8ToWide(sh->name)
+                        : a.shape               ? Fmt(T(L"Shape {0}"), {std::to_wstring(a.shape)})
+                                                : T(L"Sound");
+    if (a.paragraph >= 0) name += Fmt(T(L", paragraph {0}"), {std::to_wstring(a.paragraph + 1)});
     names_.push_back((a.anim == ed::Anim::Other ? std::wstring(T(L"Custom")) : W(ed::AnimName(a.anim))) + L": " + name);
   }
 }
@@ -437,7 +439,7 @@ std::wstring PresentationView::AnimationPane::TooltipAt(float x, float y) {
   const ed::AnimEffect& a = seq_[i];
   const wchar_t* start = a.trigger == ed::AnimTrigger::OnClick ? T(L"On Click") : a.trigger == ed::AnimTrigger::WithPrevious ? T(L"With Previous") : T(L"After Previous");
   std::wstring t = names_[i] + L"\n" + start + L", " + Seconds(a.durationMs);
-  if (a.delayMs > 0) t += T(L", after a delay of ") + Seconds(a.delayMs);
+  if (a.delayMs > 0) t += Fmt(T(L", after a delay of {0}"), {Seconds(a.delayMs)});
   if (!a.editable) t += T(L"\nFeatherweight keeps this effect as it is; it can be moved, retimed or removed.");
   return t;
 }
@@ -785,7 +787,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdTransitionOption);
     s.enabled = ready && i < opts.size();
     s.checked = s.enabled && tr.option == static_cast<int>(i);
-    s.label = i < opts.size() ? W(opts[i]) : T(L"Effect option ") + std::to_wstring(i + 1);
+    s.label = i < opts.size() ? W(opts[i]) : Fmt(T(L"Effect option {0}"), {std::to_wstring(i + 1)});
     return true;
   }
   if (cmd >= CmdAnimOption && cmd < CmdAnimOption + 8) {
@@ -803,7 +805,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdAnimOption);
     s.enabled = editable && i < opts.size();
     s.checked = s.enabled && option == static_cast<int>(i);
-    s.label = i < opts.size() ? W(opts[i]) : T(L"Effect option ") + std::to_wstring(i + 1);
+    s.label = i < opts.size() ? W(opts[i]) : Fmt(T(L"Effect option {0}"), {std::to_wstring(i + 1)});
     return true;
   }
   switch (cmd) {
@@ -1047,7 +1049,7 @@ bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& 
       fwprintf(stderr, L"animdump: %zu. shape %u%ls %ls option %d, %ls, %.0f ms, delay %.0f ms%ls\n", i + 1, a.shape,
                paragraph.c_str(), W(ed::AnimName(a.anim)).c_str(), a.option,
                a.trigger == ed::AnimTrigger::OnClick ? L"click" : a.trigger == ed::AnimTrigger::WithPrevious ? L"with" : L"after",
-               a.durationMs, a.delayMs, std::find(targets.begin(), targets.end(), i) != targets.end() ? T(L", selected") : L"");
+               a.durationMs, a.delayMs, std::find(targets.begin(), targets.end(), i) != targets.end() ? L", selected" : L"");  // lang: no
     }
     fflush(stderr);
   }

@@ -392,10 +392,12 @@ bool WorkbookView::ChartsCommand(int cmd) {
 
 namespace {
 
-const wchar_t* const kKinds[] = {T(L"Column"), T(L"Bar"), T(L"Line"), T(L"Pie"), T(L"Doughnut"), T(L"Area"), T(L"Scatter"), T(L"Combo")};
-const wchar_t* const kLegends[] = {T(L"None"), T(L"Bottom"), T(L"Right"), T(L"Top"), T(L"Left")};
+// Translated when read (UiText): built before main, before the language is chosen.
+constexpr UiText kKinds[] = {N_(L"Column"), N_(L"Bar"),  N_(L"Line"),    N_(L"Pie"),
+                             N_(L"Doughnut"), N_(L"Area"), N_(L"Scatter"), N_(L"Combo")};
+constexpr UiText kLegends[] = {N_(L"None"), N_(L"Bottom"), N_(L"Right"), N_(L"Top"), N_(L"Left")};
 constexpr char kLegendPos[] = {0, 'b', 'r', 't', 'l'};
-const wchar_t* const kPalettes[] = {T(L"Colorful"), T(L"Blue"), T(L"Orange"), T(L"Gray"), T(L"Green")};
+constexpr UiText kPalettes[] = {N_(L"Colorful"), N_(L"Blue"), N_(L"Orange"), N_(L"Gray"), N_(L"Green")};
 // Office's theme colors: its accents, then each accent's shades from dark to light.
 constexpr uint32_t kPaletteRgb[][6] = {{0x4472C4, 0xED7D31, 0xA5A5A5, 0xFFC000, 0x5B9BD5, 0x70AD47},
                                        {0x203864, 0x2F5597, 0x4472C4, 0x8FAADC, 0xB4C7E7, 0xDAE3F3},
@@ -404,8 +406,10 @@ constexpr uint32_t kPaletteRgb[][6] = {{0x4472C4, 0xED7D31, 0xA5A5A5, 0xFFC000, 
                                        {0x385723, 0x548235, 0x70AD47, 0xA9D18E, 0xC5E0B4, 0xE2F0D9}};
 
 template <size_t N>
-std::vector<std::wstring> Names(const wchar_t* const (&names)[N]) {
-  return std::vector<std::wstring>(names, names + N);
+std::vector<std::wstring> Names(const UiText (&names)[N]) {
+  std::vector<std::wstring> out;
+  for (const UiText& n : names) out.emplace_back(n);
+  return out;
 }
 
 std::wstring AsTyped(const std::string& f) { return f.empty() ? std::wstring() : (f[0] == '=' ? L"" : L"=") + Utf8ToWide(f); }
@@ -599,7 +603,7 @@ class WorkbookView::ChartPanel : public PanelContent {
       // Its name as the chart shows it, while it's the one the chart has.
       const bool same = i < info_.series.size() && i < info_.names.size() && info_.series[i].name == list_[i].name;
       std::wstring n = Utf8ToWide(same && !info_.names[i].empty() ? info_.names[i] : list_[i].name);
-      names.push_back(T(L"Series ") + std::to_wstring(i + 1) + (n.empty() ? L"" : L": " + n));
+      names.push_back(Fmt(T(L"Series {0}"), {std::to_wstring(i + 1)}) + (n.empty() ? L"" : L": " + n));
     }
     series_.items = names;
     series_.selected = at_;

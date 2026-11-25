@@ -607,7 +607,8 @@ bool DocView::InsertPictureFiles(const std::vector<std::wstring>& files, int x, 
     if (!IsPictureFile(path)) continue;
     std::string data;
     if (!util::ReadFileBytes(path, data, kMaxPictureFile)) {
-      host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(path) + T(L"” couldn't be read, or is too big to add."));
+      host_.ViewMessage(BannerKind::Warning,
+                        Fmt(T(L"“{0}” couldn't be read, or is too big to add."), {fw::FileNameOf(path)}));
       continue;
     }
     const std::wstring name = fw::FileNameOf(path);

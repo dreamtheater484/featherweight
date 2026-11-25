@@ -124,14 +124,15 @@ std::unique_ptr<Snapshot> Snapshot::Open(const std::wstring& path, const Options
     if (h == INVALID_HANDLE_VALUE) {
       DWORD err = GetLastError();
       status = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND
-                   ? Status::Fail(Status::Code::NotFound, name + T(" doesn't exist anymore."))
-                   : Status::Fail(Status::Code::IoError, name + T(" couldn't be opened. Another program may be using it."));
+                   ? Status::Fail(Status::Code::NotFound, Fmt(T("{0} doesn't exist anymore."), {name}))
+                   : Status::Fail(Status::Code::IoError,
+                                  Fmt(T("{0} couldn't be opened. Another program may be using it."), {name}));
       return nullptr;
     }
     FileInfo before;
     if (!QueryInfo(h, before)) {
       CloseHandle(h);
-      status = Status::Fail(Status::Code::IoError, name + " couldn't be read.");
+      status = Status::Fail(Status::Code::IoError, Fmt(T("{0} couldn't be read."), {name}));
       return nullptr;
     }
 
@@ -146,7 +147,8 @@ std::unique_ptr<Snapshot> Snapshot::Open(const std::wstring& path, const Options
     } else {
       if (options.recoveryDir.empty()) {
         CloseHandle(h);
-        status = Status::Fail(Status::Code::IoError, T("There's no recovery folder to keep a copy of ") + name + ".");
+        status =
+            Status::Fail(Status::Code::IoError, Fmt(T("There's no recovery folder to keep a copy of {0}."), {name}));
         return nullptr;
       }
       CreateDirectoryW(options.recoveryDir.c_str(), nullptr);
@@ -155,7 +157,7 @@ std::unique_ptr<Snapshot> Snapshot::Open(const std::wstring& path, const Options
                                 FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
       if (copy == INVALID_HANDLE_VALUE) {
         CloseHandle(h);
-        status = Status::Fail(Status::Code::IoError, T("A private copy of ") + name + " couldn't be made.");
+        status = Status::Fail(Status::Code::IoError, Fmt(T("A private copy of {0} couldn't be made."), {name}));
         return nullptr;
       }
       snap->copy_ = copy;
@@ -168,7 +170,7 @@ std::unique_ptr<Snapshot> Snapshot::Open(const std::wstring& path, const Options
         if (read && !WriteExact(copy, buffer.data(), n)) {
           CloseHandle(h);
           status = Status::Fail(Status::Code::IoError,
-                                T("There isn't enough space to keep a private copy of ") + name + ".");
+                                Fmt(T("There isn't enough space to keep a private copy of {0}."), {name}));
           return nullptr;
         }
         hasher.Add(buffer.data(), n);
@@ -184,7 +186,8 @@ std::unique_ptr<Snapshot> Snapshot::Open(const std::wstring& path, const Options
       return snap;
     }
   }
-  status = Status::Fail(Status::Code::Changed, name + T(" changed while it was being opened. Try again in a moment."));
+  status = Status::Fail(Status::Code::Changed,
+                        Fmt(T("{0} changed while it was being opened. Try again in a moment."), {name}));
   return nullptr;
 }
 

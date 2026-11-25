@@ -208,6 +208,53 @@ void Init(const std::wstring& chosen) {
 
 const wchar_t* Current() { return g_current; }
 
+namespace {
+// A key's name in the language, or nullptr for a letter, a digit, F1 or a name that stays.
+const wchar_t* KeyName(std::wstring_view k) {
+  if (k == L"Ctrl") return T(L"Ctrl", L"key");
+  if (k == L"Shift") return T(L"Shift", L"key");
+  if (k == L"Alt") return T(L"Alt", L"key");
+  if (k == L"Enter") return T(L"Enter", L"key");
+  if (k == L"Tab") return T(L"Tab", L"key");
+  if (k == L"Space") return T(L"Space", L"key");
+  if (k == L"Up") return T(L"Up", L"key");
+  if (k == L"Down") return T(L"Down", L"key");
+  if (k == L"Left") return T(L"Left", L"key");
+  if (k == L"Right") return T(L"Right", L"key");
+  if (k == L"Home") return T(L"Home", L"key");
+  if (k == L"End") return T(L"End", L"key");
+  if (k == L"PgUp") return T(L"PgUp", L"key");
+  if (k == L"PgDn") return T(L"PgDn", L"key");
+  if (k == L"Delete") return T(L"Delete", L"key");
+  if (k == L"Del") return T(L"Del", L"key");
+  if (k == L"Esc") return T(L"Esc", L"key");
+  if (k == L"Backspace") return T(L"Backspace", L"key");
+  if (k == L"Insert") return T(L"Insert", L"key");
+  return nullptr;
+}
+}  // namespace
+
+std::wstring KeyNames(std::wstring_view text) {
+  if (g_current[0] == L'e' && g_current[1] == L'n' && !g_current[2]) return std::wstring(text);
+  std::wstring out;
+  out.reserve(text.size() + 8);
+  for (size_t i = 0; i < text.size();) {
+    if (!iswalpha(text[i]) || (i > 0 && iswalnum(text[i - 1]))) {
+      out += text[i++];
+      continue;
+    }
+    size_t j = i;
+    while (j < text.size() && iswalnum(text[j])) ++j;
+    const std::wstring_view word = text.substr(i, j - i);
+    const bool joined = (j < text.size() && text[j] == L'+') || (i > 0 && text[i - 1] == L'+');
+    const wchar_t* name = joined ? KeyName(word) : nullptr;
+    if (name) out += name;
+    else out.append(word);
+    i = j;
+  }
+  return out;
+}
+
 }  // namespace fw::lang
 
 using fw::lang::g_table;

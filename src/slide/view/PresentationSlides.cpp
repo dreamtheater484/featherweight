@@ -594,7 +594,8 @@ bool PresentationView::CopySlides(bool cut) {
   clip.slides = slides;
   clip.sequence = util::ClipboardSequence();
   if (slides.size() > 1)
-    host_.ViewMessage(BannerKind::Success, (cut ? T(L"Cut ") : T(L"Copied ")) + std::to_wstring(slides.size()) + L" slides");
+    host_.ViewMessage(BannerKind::Success,
+                      Fmt(cut ? T(L"Cut {0} slides") : T(L"Copied {0} slides"), {std::to_wstring(slides.size())}));
   return !cut || DeleteSlides(slides);
 }
 

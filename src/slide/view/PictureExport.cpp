@@ -66,25 +66,26 @@ int PresentationView::ExportSlidePictures(const std::wstring& path, bool all, un
   const UINT w = std::clamp(width, 16u, 8192u);
   if (!all) {
     if (WriteSlidePng(*deck_, current_, w, path)) {
-      message = T(L"Exported slide ") + std::to_wstring(current_ + 1) + L" to " + FileNameOf(path);
+      message = Fmt(T(L"Exported slide {0} to {1}"), {std::to_wstring(current_ + 1), FileNameOf(path)});
       return 1;
     }
-    message = FileNameOf(path) + T(L" couldn't be written.");
+    message = Fmt(T(L"{0} couldn't be written."), {FileNameOf(path)});
     return 0;
   }
   // A folder named as the file, beside it.
   std::wstring dir = path;
   if (const size_t dot = dir.rfind(L'.'); dot != std::wstring::npos && dot > dir.find_last_of(L"\\/") + 1) dir.resize(dot);
   if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-    message = T(L"The folder ") + FileNameOf(dir) + T(L" couldn't be made.");
+    message = Fmt(T(L"The folder {0} couldn't be made."), {FileNameOf(dir)});
     return 0;
   }
   int written = 0;
   for (size_t i = 0; i < SlideCount(); ++i)
     written += WriteSlidePng(*deck_, i, w, dir + L"\\Slide" + std::to_wstring(i + 1) + L".png") ? 1 : 0;
   message = written == static_cast<int>(SlideCount())
-                ? T(L"Exported ") + std::to_wstring(written) + T(L" slides to the folder ") + FileNameOf(dir)
-                : std::to_wstring(SlideCount() - written) + T(L" slides couldn't be written to the folder ") + FileNameOf(dir) + L".";
+                ? Fmt(T(L"Exported {0} slides to the folder {1}"), {std::to_wstring(written), FileNameOf(dir)})
+                : Fmt(T(L"{0} slides couldn't be written to the folder {1}."),
+                      {std::to_wstring(SlideCount() - written), FileNameOf(dir)});
   return written;
 }
 
@@ -117,7 +118,7 @@ bool PresentationView::PictureCommand(int cmd, CommandState* state) {
     custom->StartVisualGroup(kWidthBox + 10, T(L"Width:"));
     custom->AddComboBox(kWidthBox);
     for (DWORD i = 0; i < std::size(kWidths); ++i) {
-      custom->AddControlItem(kWidthBox, i, (std::to_wstring(kWidths[i]) + L" pixels").c_str());
+      custom->AddControlItem(kWidthBox, i, Fmt(T(L"{0} pixels"), {std::to_wstring(kWidths[i])}).c_str());
       if (kWidths[i] == pictureWidth_) custom->SetSelectedControlItem(kWidthBox, i);
     }
     custom->EndVisualGroup();

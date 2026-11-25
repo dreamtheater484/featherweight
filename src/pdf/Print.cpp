@@ -205,7 +205,8 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
     message = T(L"Printing stopped because the printer reported an error.");
     return PrintOutcome::Failed;
   }
-  message = toPrint.size() == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(toPrint.size()) + T(L" pages to the printer");
+  message = toPrint.size() == 1 ? std::wstring(T(L"Sent 1 page to the printer"))
+                                : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(toPrint.size())});
   return PrintOutcome::Printed;
 }
 

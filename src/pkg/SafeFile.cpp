@@ -133,11 +133,11 @@ std::wstring SafeWriteTempPath(const std::wstring& path) {
 
 SaveResult SafeWrite(const std::wstring& path, std::span<const uint8_t> bytes, const SaveFaults* faults) {
   const std::string name = WideToUtf8(FileNameOf(path));
-  const std::string unchanged = name + " wasn't changed.";
+  const std::string unchanged = Fmt(T("{0} wasn't changed."), {name});
   const DWORD oldAttrs = GetFileAttributesW(path.c_str());
   const bool exists = oldAttrs != INVALID_FILE_ATTRIBUTES && !(oldAttrs & FILE_ATTRIBUTE_DIRECTORY);
   if (exists && (oldAttrs & FILE_ATTRIBUTE_READONLY))
-    return Fail(SaveFailure::ReadOnly, name + " is read-only, so it can't be replaced.");
+    return Fail(SaveFailure::ReadOnly, Fmt(T("{0} is read-only, so it can't be replaced."), {name}));
 
   RemoveStaleTemps(path);
   const std::wstring tmp = SafeWriteTempPath(path);
@@ -147,9 +147,10 @@ SaveResult SafeWrite(const std::wstring& path, std::span<const uint8_t> bytes, c
                  : CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
     DWORD e = GetLastError();
-    if (IsDiskFull(e)) return Fail(SaveFailure::DiskFull, T("There isn't enough space on the disk to save ") + name + ".");
+    if (IsDiskFull(e))
+      return Fail(SaveFailure::DiskFull, Fmt(T("There isn't enough space on the disk to save {0}."), {name}));
     if (IsDenied(e)) return Fail(SaveFailure::Folder, T("Featherweight can't save in this folder."));
-    return Fail(SaveFailure::Other, name + " couldn't be saved: " + SystemMessage(e) + ".");
+    return Fail(SaveFailure::Other, Fmt(T("{0} couldn't be saved: {1}."), {name, SystemMessage(e)}));
   }
 
   auto abandon = [&](SaveFailure failure, std::string message) {
@@ -164,21 +165,25 @@ SaveResult SafeWrite(const std::wstring& path, std::span<const uint8_t> bytes, c
   if (!WriteAll(h, bytes, faults)) {
     DWORD e = GetLastError();
     if (IsDiskFull(e))
-      return abandon(SaveFailure::DiskFull, T("There isn't enough space on the disk to save ") + name + ". " + unchanged);
-    return abandon(SaveFailure::Other, name + " couldn't be written: " + SystemMessage(e) + ". " + unchanged);
+      return abandon(SaveFailure::DiskFull,
+                     Fmt(T("There isn't enough space on the disk to save {0}."), {name}) + " " + unchanged);
+    return abandon(SaveFailure::Other,
+                   Fmt(T("{0} couldn't be written: {1}."), {name, SystemMessage(e)}) + " " + unchanged);
   }
   if (Inject(faults, SaveFaults::Step::Flush) || !FlushFileBuffers(h)) {
     DWORD e = GetLastError();
     if (IsDiskFull(e))
-      return abandon(SaveFailure::DiskFull, T("There isn't enough space on the disk to save ") + name + ". " + unchanged);
-    return abandon(SaveFailure::Other, name + T(" couldn't be written to the disk. ") + unchanged);
+      return abandon(SaveFailure::DiskFull,
+                     Fmt(T("There isn't enough space on the disk to save {0}."), {name}) + " " + unchanged);
+    return abandon(SaveFailure::Other, Fmt(T("{0} couldn't be written to the disk."), {name}) + " " + unchanged);
   }
   CloseHandle(h);
   h = INVALID_HANDLE_VALUE;
 
   if (Inject(faults, SaveFaults::Step::Verify) || !ReadsBackSame(tmp, bytes))
-    return abandon(SaveFailure::Verify, name + T(" couldn't be saved: the copy on the disk didn't read back correctly. ") +
-                                            unchanged);
+    return abandon(SaveFailure::Verify,
+                   Fmt(T("{0} couldn't be saved: the copy on the disk didn't read back correctly."), {name}) + " " +
+                       unchanged);
 
   // A crash here leaves the original as it was and the hidden temporary file, which the next save removes.
   if (faults && faults->step == SaveFaults::Step::Crash) return Fail(SaveFailure::Other, T("Stopped before replacing."));
@@ -206,8 +211,9 @@ SaveResult SafeWrite(const std::wstring& path, std::span<const uint8_t> bytes, c
       // The original was renamed but the new file couldn't take its place: put the original back.
       if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
           GetFileAttributesW(old.c_str()) != INVALID_FILE_ATTRIBUTES && !MoveFileExW(old.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH)) {
-        return Fail(SaveFailure::Other, name + T(" couldn't be replaced, and the original is now named ") +
-                                            WideToUtf8(FileNameOf(old)) + T(" in the same folder."));
+        return Fail(SaveFailure::Other,
+                    Fmt(T("{0} couldn't be replaced, and the original is now named {1} in the same folder."),
+                        {name, WideToUtf8(FileNameOf(old))}));
       }
       // Another program may hold the file with delete sharing (sync clients do), which ReplaceFileW
       // refuses. The new file is whole, so swap it in by name, with the original's attributes. Not
@@ -229,11 +235,14 @@ SaveResult SafeWrite(const std::wstring& path, std::span<const uint8_t> bytes, c
   if (!replaced) {
     DWORD e = GetLastError();
     if (IsInUse(e))
-      return abandon(SaveFailure::InUse, T("Another program is using ") + name + ", so it couldn't be replaced. " + unchanged);
-    if (IsDenied(e)) return abandon(SaveFailure::Folder, T("Featherweight can't save in this folder. ") + unchanged);
+      return abandon(SaveFailure::InUse,
+                     Fmt(T("Another program is using {0}, so it couldn't be replaced."), {name}) + " " + unchanged);
+    if (IsDenied(e))
+      return abandon(SaveFailure::Folder, std::string(T("Featherweight can't save in this folder.")) + " " + unchanged);
     if (e == ERROR_ALREADY_EXISTS || e == ERROR_FILE_EXISTS)
-      return abandon(SaveFailure::InUse, T("Another program created ") + name + T(" while it was being saved."));
-    return abandon(SaveFailure::Other, name + " couldn't be replaced: " + SystemMessage(e) + ". " + unchanged);
+      return abandon(SaveFailure::InUse, Fmt(T("Another program created {0} while it was being saved."), {name}));
+    return abandon(SaveFailure::Other,
+                   Fmt(T("{0} couldn't be replaced: {1}."), {name, SystemMessage(e)}) + " " + unchanged);
   }
   // ReplaceFileW keeps the original's ACLs, creation time and streams; its attributes (hidden,
   // say) are put back here, since the temporary file was hidden.

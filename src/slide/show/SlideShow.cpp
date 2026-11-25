@@ -1280,7 +1280,7 @@ void Show::Follow(const Hyperlink& link) {
         message(T(L"This link was blocked because it doesn’t point to a website."));
         break;
       }
-      if (confirm(T(L"Open ") + url + L"?", T(L"Open")) && !util::OpenExternalLink(url))
+      if (confirm(Fmt(T(L"Open {0}?"), {url}), T(L"Open")) && !util::OpenExternalLink(url))
         message(T(L"Windows couldn’t open this link."));
       break;
     }
@@ -1298,7 +1298,7 @@ void Show::Follow(const Hyperlink& link) {
         message(T(L"For your safety, Featherweight only opens the kinds of file it reads from links in a slide show."));
         break;
       }
-      if (confirm(T(L"End the slide show and open ") + name + L"?", T(L"Open"))) {
+      if (confirm(Fmt(T(L"End the slide show and open {0}?"), {name}), T(L"Open"))) {
         fileToOpen_ = path;
         PostStop();
       }
@@ -2150,8 +2150,9 @@ std::vector<std::wstring> Monitors() {
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(list.handles[i], &mi);
     wchar_t buf[96];
-    swprintf(buf, 96, T(L"%zu: %ld × %ld%s"), i + 1, mi.rcMonitor.right - mi.rcMonitor.left,
-             mi.rcMonitor.bottom - mi.rcMonitor.top, (mi.dwFlags & MONITORINFOF_PRIMARY) ? L" (main)" : L"");
+    const bool primary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    swprintf(buf, 96, primary ? T(L"%zu: %ld × %ld (main)") : T(L"%zu: %ld × %ld"), i + 1,
+             mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top);
     names.push_back(buf);
   }
   return names;
@@ -2166,7 +2167,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
       snapshot ? fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), st) : nullptr;
   std::unique_ptr<Presentation> deck = package ? Read(std::move(package), st) : nullptr;
   if (!deck) {
-    MessageBoxW(nullptr, (T(L"Featherweight couldn’t open ") + path + L".").c_str(), L"Featherweight", MB_ICONERROR);
+    MessageBoxW(nullptr, Fmt(T(L"Featherweight couldn’t open {0}."), {path}).c_str(), L"Featherweight", MB_ICONERROR);
     return 1;
   }
   std::unique_ptr<SlideRenderer> renderer = MakeRenderer(*deck);

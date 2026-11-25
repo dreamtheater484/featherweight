@@ -318,7 +318,7 @@ void DocView::BookmarkPanel::Add() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::InsertBookmark(*v_.editor_, v_.SelFrom(), v_.SelTo(), name);
   v_.SyncFile();
-  note_ = r ? T(L"Added “") + Wide(name) + L"”." : W(r.message);
+  note_ = r ? Fmt(T(L"Added “{0}”."), {Wide(name)}) : W(r.message);
   Refresh();
 }
 
@@ -337,7 +337,7 @@ void DocView::BookmarkPanel::Delete() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::DeleteBookmark(*v_.editor_, name);
   v_.SyncFile();
-  note_ = r ? T(L"Deleted “") + Wide(name) + L"”." : W(r.message);
+  note_ = r ? Fmt(T(L"Deleted “{0}”."), {Wide(name)}) : W(r.message);
   if (r) name_.SetText(L"");
   Refresh();
 }
@@ -635,7 +635,7 @@ void DocView::NavPanel::Describe(uia::Tree& t, int parent, const std::function<v
   const float top = body_.top + 44 * ui_, row = 28 * ui_;
   for (size_t i = 0; i < Count() && i < 500; ++i) {
     const float y = top + static_cast<float>(i) * row - scroll_;
-    std::wstring name = results_ ? T(L"Result ") + std::to_wstring(i + 1) : headings_[i].text;
+    std::wstring name = results_ ? Fmt(T(L"Result {0}"), {std::to_wstring(i + 1)}) : headings_[i].text;
     const int item = t.Add(list, static_cast<int64_t>(i) + 2, UIA_ListItemControlTypeId, name,
                            RectF(body_.left, y, body_.right, y + row));
     t[item].invoke = [this, i] { Activate(static_cast<int>(i)); };

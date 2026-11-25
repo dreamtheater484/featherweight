@@ -252,7 +252,7 @@ ui::FilePage::Model App::CurrentFilePage() {
   auto& fresh = m.entries[FP::kNew];
   for (const fw::FileKindInfo& k : fw::FileKinds())
     if (fw::EditorShipped(k.kind))
-      fresh.push_back(entry(CmdNewFile + static_cast<int>(k.kind), T(L"Blank ") + std::wstring(k.noun), kindGlyph(k.kind),
+      fresh.push_back(entry(CmdNewFile + static_cast<int>(k.kind), fw::Phrase(k.kind, fw::KindPhrase::Blank), kindGlyph(k.kind),
                             k.kind == fw::FileKind::Document ? L"Ctrl+N" : L""));
   const bool docs = fw::EditorShipped(fw::FileKind::Document);
   if (docs || !userTemplates_.empty()) fresh.push_back(heading(T(L"Templates")));
@@ -607,6 +607,54 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     Report(L"ribboncheck: " + std::to_wstring(items) + L" items in " + std::to_wstring(raw.tabs.size()) + L" tabs; " +
            std::to_wstring(baseline) + L" baseline commands; reachable " + report + L"; " + std::to_wstring(problems.size()) +
            L" problems\n");
+    if (!problems.empty()) scriptFailed_ = true;
+    return true;
+  }
+  if (op == L"clipcheck") {
+    // clipcheck (F1, f1-lang): the window drawn with each ribbon tab, then each File page section;
+    // every label that doesn't fit its box is a problem. With the pseudo-language (--lang qps) only the
+    // interface's own texts count (in its brackets): a file's name or a cell's text may be cut.
+    std::vector<gfx::ClippedText> clipped;
+    std::vector<std::pair<std::wstring, std::wstring>> problems;  // where, what
+    const bool pseudo = std::wstring_view(fw::lang::Current()) == L"qps";
+    int surfaces = 0;
+    auto look = [&](const std::wstring& where) {
+      ++surfaces;
+      clipped.clear();
+      gfx::WatchClipping(&clipped);
+      DrawSnapshotFrame();
+      gfx::WatchClipping(nullptr);
+      for (const gfx::ClippedText& c : clipped) {
+        if (pseudo && c.text.find(L'·') == std::wstring::npos) continue;
+        const std::wstring what = L"\"" + c.text + L"\" needs " + std::to_wstring(std::lround(c.need)) + L" px, has " +
+                                  std::to_wstring(std::lround(c.room));
+        if (std::none_of(problems.begin(), problems.end(), [&](const auto& p) { return p.second == what; }))
+          problems.push_back({where, what});
+      }
+    };
+    const std::wstring was = ribbon_.Selected();
+    std::vector<std::wstring> tabNames;
+    for (const RibbonTab& t : ribbon_.Model().tabs) tabNames.push_back(t.name);
+    for (const std::wstring& name : tabNames) {
+      ribbon_.Select(name);
+      Layout();
+      look(name);
+    }
+    ribbon_.Select(was);
+    Layout();
+    if (ribbonShown_ && !presentation_) {
+      OpenFilePage();
+      for (int s = 0; s < ui::FilePage::kSectionCount; ++s) {
+        filePage_.Open(static_cast<ui::FilePage::Section>(s));
+        Layout();
+        look(std::wstring(T(L"File")) + L" › " + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(s)));
+      }
+      CloseFilePage();
+    }
+    for (const auto& [where, what] : problems) Report(L"clipcheck: " + where + L": " + what + L"\n");
+    // The summary tools/strings/clipping.ps1 reads: the language actually in use, what was drawn, what didn't fit.
+    Report(L"clipcheck: language " + std::wstring(fw::lang::Current()) + L", " + std::to_wstring(surfaces) + L" surfaces, " +
+           std::to_wstring(problems.size()) + L" clipped\n");
     if (!problems.empty()) scriptFailed_ = true;
     return true;
   }

@@ -678,7 +678,7 @@ HCURSOR PdfView::CursorAt(int x, int y) {
 
 std::wstring PdfView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
-  if (int m = MarkerAt(x, y); m >= 0) return T(L"Note on page ") + std::to_wstring(notes_[m].page + 1);
+  if (int m = MarkerAt(x, y); m >= 0) return Fmt(T(L"Note on page {0}"), {std::to_wstring(notes_[m].page + 1)});
   if (selBar_) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y))
@@ -691,7 +691,7 @@ std::wstring PdfView::TooltipAt(int x, int y) {
   LinkTarget t = doc_->LinkAt(page, px, py);
   switch (t.kind) {
     case LinkTarget::Kind::Uri: return t.uri;
-    case LinkTarget::Kind::Page: return T(L"Go to page ") + std::to_wstring(t.page + 1);
+    case LinkTarget::Kind::Page: return Fmt(T(L"Go to page {0}"), {std::to_wstring(t.page + 1)});
     case LinkTarget::Kind::Blocked: return T(L"Links to files and programs are blocked");
     default: return {};
   }
@@ -931,8 +931,8 @@ bool PdfView::ExportPdf(const std::wstring& path, std::wstring& message) {
   }
   if (!doc_->ExportFlattened(path, message)) return false;
   const int count = doc_->PageCount();
-  message = count == 1 ? T(L"Exported 1 page to ") + fw::FileNameOf(path)
-                       : T(L"Exported ") + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
+  message = count == 1 ? Fmt(T(L"Exported 1 page to {0}"), {fw::FileNameOf(path)})
+                       : Fmt(T(L"Exported {0} pages to {1}"), {std::to_wstring(count), fw::FileNameOf(path)});
   return true;
 }
 

@@ -14,28 +14,12 @@ msgstr ""
 msgid "\nFeatherweight keeps this effect as it is; it can be moved, retimed or removed."
 msgstr ""
 
-#: src/slide/view/ObjectTool.cpp
-msgid " (files up to 1 GB can be inserted)."
-msgstr ""
-
-#: src/word/DocProof.cpp
-msgid " (no spelling dictionary)"
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " (shown in "
-msgstr ""
-
 #: src/FileSession.cpp
 msgid " Changes you make here can be saved as a copy."
 msgstr ""
 
 #: src/App.cpp
 msgid " Choose another place to save it."
-msgstr ""
-
-#: src/slide/view/ObjectTool.cpp
-msgid " Featherweight can insert."
 msgstr ""
 
 #: src/slide/view/PresentationCommands.cpp
@@ -46,376 +30,8 @@ msgstr ""
 msgid " Reloading it discards your changes here."
 msgstr ""
 
-#: src/word/DocReview.cpp
-msgid " Track changes (Ctrl+Shift+E)"
-msgstr ""
-
-#: src/word/DocStyles.cpp
-msgid " after these."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " attributes, which is more than Featherweight allows."
-msgstr ""
-
-#: src/doc/edit/Notes.cpp
-msgid " can't be added to this document."
-msgstr ""
-
-#: src/slide/view/PresentationSave.cpp
-msgid " can't be saved."
-msgstr ""
-
-#: src/sheet/view/WorkbookCommands.cpp
-msgid " can't be saved: it couldn't be read in full."
-msgstr ""
-
-#: src/doc/edit/Notes.cpp
-msgid " can't go inside a field."
-msgstr ""
-
-#: src/pkg/Snapshot.cpp
-msgid " changed while it was being opened. Try again in a moment."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " contains a document type definition (DTD). Office files never do, so Featherweight won't open it."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " contains a name longer than "
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " contains a piece of text longer than "
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " contains an attribute longer than "
-msgstr ""
-
-#: src/slide/view/PictureExport.cpp
-msgid " couldn't be made."
-msgstr ""
-
-#: src/pdf/Document.cpp src/sheet/view/WorkbookView.cpp
-msgid " couldn't be opened — "
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
-msgid " couldn't be opened — it contains something Featherweight refuses for safety."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
-msgid " couldn't be opened — it goes beyond the limits Featherweight sets for safety."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " couldn't be opened — it has no sheet to show."
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " couldn't be opened — it isn't a Word document Featherweight can open."
-msgstr ""
-
-#: src/slide/view/PresentationProtect.cpp
-msgid " couldn't be opened — it isn't a presentation Featherweight can open, or it is damaged."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " couldn't be opened — it isn't an Excel workbook Featherweight can open."
-msgstr ""
-
-#: src/pdf/Document.cpp
-msgid " couldn't be opened — it seems to be damaged or isn't a PDF."
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " couldn't be opened — it seems to be damaged or isn't a Word document."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " couldn't be opened — it seems to be damaged or isn't an Excel workbook."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " couldn't be opened — it seems to be damaged or isn't an OpenDocument text document."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp src/slide/view/PresentationProtect.cpp src/word/DocView.cpp
-msgid " couldn't be opened — it seems to be damaged."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
-msgid " couldn't be opened — it uses something Featherweight doesn't support yet."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp src/slide/view/PresentationProtect.cpp src/word/DocView.cpp
-msgid " couldn't be opened — it's protected in a way Featherweight doesn't support."
-msgstr ""
-
-#: src/pdf/Document.cpp src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
-msgid " couldn't be opened — the file couldn't be read."
-msgstr ""
-
-#: src/pdf/Document.cpp
-msgid " couldn't be opened — the file is empty."
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " couldn't be opened. "
-msgstr ""
-
-#: src/pkg/Snapshot.cpp
-msgid " couldn't be opened. Another program may be using it."
-msgstr ""
-
-#: src/pdf/Document.cpp
-msgid " couldn't be read completely."
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " couldn't be read in full: only its first rows show, and it can't be saved."
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid " couldn't be replaced, and the original is now named "
-msgstr ""
-
-#: src/FileSession.cpp
-msgid " couldn't be saved — Windows couldn't encrypt it."
-msgstr ""
-
-#: src/App.cpp
-msgid " couldn't be saved."
-msgstr ""
-
-#: src/sheet/view/WorkbookFile.cpp src/slide/view/PresentationFile.cpp src/word/DocFile.cpp
-msgid " couldn't be saved. "
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " couldn't be saved. It may be open in another program, or the folder can't be written to."
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid " couldn't be saved: the copy on the disk didn't read back correctly. "
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid " couldn't be written to the disk. "
-msgstr ""
-
-#: src/slide/view/PictureExport.cpp
-msgid " couldn't be written."
-msgstr ""
-
-#: src/AppFiles.cpp
-msgid " documents couldn’t be recovered."
-msgstr ""
-
-#: src/AppFiles.cpp
-msgid " documents were saved."
-msgstr ""
-
-#: src/pkg/Snapshot.cpp
-msgid " doesn't exist anymore."
-msgstr ""
-
-#: src/sheet/view/WorkbookFilter.cpp
-msgid " duplicate values found and removed; "
-msgstr ""
-
-#: src/App.cpp
-msgid " files couldn’t be opened. They may be damaged."
-msgstr ""
-
-#: src/doc/edit/Notes.cpp
-msgid " goes in the document's text, not in a header, a footer, a note, a comment or a text box."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " has an element with more than "
-msgstr ""
-
-#: src/sheet/xlsx/Save.cpp
-msgid " holds macros, which only a macro-enabled workbook (.xlsm) keeps."
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid " in the same folder."
-msgstr ""
-
-#: src/slide/view/PresentationView.cpp
-msgid " is a PowerPoint 97–2003 presentation"
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " is a Word 97–2003 document"
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " is an Excel 97–2003 workbook"
-msgstr ""
-
-#: src/slide/view/PresentationView.cpp
-msgid " is an OpenDocument presentation"
-msgstr ""
-
-#: src/sheet/view/WorkbookView.cpp
-msgid " is an OpenDocument spreadsheet"
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " is an OpenDocument text document"
-msgstr ""
-
-#: src/App.cpp
-msgid " is available."
-msgstr ""
-
-#: src/sheet/view/WorkbookFile.cpp src/slide/view/PresentationFile.cpp
-msgid " is being saved already."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " is damaged near line "
-msgstr ""
-
-#: src/slide/view/PresentationView.cpp
-msgid " is hidden: the slide show skips it"
-msgstr ""
-
-#: src/FileSession.cpp
-msgid " is in use by "
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " is nested more than "
-msgstr ""
-
-#: src/FileSession.cpp
-msgid " is open in another program, so it can't be replaced."
-msgstr ""
-
-#: src/FileSession.cpp
-msgid " is open in another program."
-msgstr ""
-
-#: src/App.cpp
-msgid " is ready. It will be used the next time you start Featherweight."
-msgstr ""
-
-#: src/word/DocView.cpp
-msgid " is this document's own file. Choose another name for the copy."
-msgstr ""
-
-#: src/sheet/view/WorkbookCommands.cpp
-msgid " is this workbook's own file. Choose another name for the copy."
-msgstr ""
-
-#: src/pdf/Document.cpp
-msgid " is too large to open (more than 4 GB)."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " levels deep, which is more than Featherweight allows."
-msgstr ""
-
-#: src/pdf/Print.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocView.cpp
-msgid " pages to the printer"
-msgstr ""
-
-#: src/pkg/Zip.cpp
-msgid " parts, which is more than Featherweight allows."
-msgstr ""
-
-#: src/doc/docx/Writer.cpp
-msgid " redeclares a namespace prefix inside it, so it is kept as it is."
-msgstr ""
-
-#: src/slide/view/PictureExport.cpp
-msgid " slides couldn't be written to the folder "
-msgstr ""
-
-#: src/slide/view/PictureExport.cpp
-msgid " slides to the folder "
-msgstr ""
-
-#: src/sheet/data/Rules.cpp
-msgid " std dev above Average"
-msgstr ""
-
-#: src/sheet/data/Rules.cpp
-msgid " std dev below Average"
-msgstr ""
-
-#: src/pkg/XmlPull.cpp
-msgid " text encoding, which Office files don't use."
-msgstr ""
-
-#: src/slide/view/PresentationDesign.cpp
-msgid " theme to the presentation"
-msgstr ""
-
-#: src/sheet/view/WorkbookFilter.cpp
-msgid " unique values remain."
-msgstr ""
-
-#: src/pkg/Zip.cpp
-msgid " unpacks to more than "
-msgstr ""
-
-#: src/pkg/Zip.cpp
-msgid " uses a kind of compression that Office files don't use."
-msgstr ""
-
-#: src/pdf/Document.cpp
-msgid " uses a kind of protection Featherweight doesn't support."
-msgstr ""
-
-#: src/FileSession.cpp
-msgid " was changed by another program after you opened it."
-msgstr ""
-
-#: src/AppFiles.cpp
-msgid " was changed by another program."
-msgstr ""
-
-#: src/AppFiles.cpp
-msgid " was moved or deleted. Save it again to keep it."
-msgstr ""
-
-#: src/sheet/view/WorkbookCommands.cpp
-msgid " wasn't saved: finish or cancel what you're typing in the cell first."
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid " while it was being saved."
-msgstr ""
-
-#: src/App.cpp
-msgid " with Featherweight by default?"
-msgstr ""
-
-#: src/sheet/view/WorkbookFile.cpp
-msgid " would keep only the values of the first sheet. Save a copy as CSV instead."
-msgstr ""
-
 #: src/sheet/view/WorkbookReview.cpp
 msgid " · resolved"
-msgstr ""
-
-#: src/App.cpp
-msgid " – Featherweight"
-msgstr ""
-
-#: src/word/DocHeaders.cpp
-msgid " – Section "
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -431,7 +47,11 @@ msgid "%.2f lines"
 msgstr ""
 
 #: src/slide/show/SlideShow.cpp
-msgid "%zu: %ld × %ld%s"
+msgid "%zu: %ld × %ld"
+msgstr ""
+
+#: src/slide/show/SlideShow.cpp
+msgid "%zu: %ld × %ld (main)"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -567,35 +187,15 @@ msgid "(no note)"
 msgstr ""
 
 #: src/slide/view/PresentationAnim.cpp
-msgid ", after a delay of "
-msgstr ""
-
-#: src/ui/ColorPicker.cpp
-msgid ", blue "
-msgstr ""
-
-#: src/ui/ColorPicker.cpp
-msgid ", green "
+msgid ", after a delay of {0}"
 msgstr ""
 
 #: src/slide/view/PresentationAnim.cpp
-msgid ", paragraph "
+msgid ", paragraph {0}"
 msgstr ""
 
 #: src/ui/EmptyState.cpp
 msgid ", pinned"
-msgstr ""
-
-#: src/slide/view/PresentationAnim.cpp
-msgid ", selected"
-msgstr ""
-
-#: src/FileSession.cpp
-msgid ", so it can't be replaced."
-msgstr ""
-
-#: src/pkg/XmlPull.cpp src/pkg/Zip.cpp
-msgid ", which is more than Featherweight allows."
 msgstr ""
 
 #: src/core/Strings.cpp
@@ -620,6 +220,10 @@ msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "1 when two numbers are equal, else 0."
+msgstr ""
+
+#: src/word/DocProof.cpp
+msgid "1 word"
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -688,18 +292,6 @@ msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "75% gray"
-msgstr ""
-
-#: src/word/DocRuler.cpp
-msgid ": a click on the ruler sets one. Click here for another kind."
-msgstr ""
-
-#: src/slide/Reader.cpp
-msgid ": an embedded font Featherweight can't read"
-msgstr ""
-
-#: src/slide/Reader.cpp
-msgid ": not a theme Featherweight can read"
 msgstr ""
 
 #: src/sheet/edit/PivotInsert.cpp
@@ -907,7 +499,7 @@ msgid "A field's paragraphs must follow each other."
 msgstr ""
 
 #: src/word/DocView.cpp
-msgid "A font in this document isn't installed: "
+msgid "A font in this document isn't installed: {0}. Lines may break differently than in Word."
 msgstr ""
 
 #: src/word/DocFormat.cpp
@@ -915,7 +507,15 @@ msgid "A font's name can't hold control characters."
 msgstr ""
 
 #: src/doc/edit/Notes.cpp
-msgid "A footnote"
+msgid "A footnote can't be added to this document."
+msgstr ""
+
+#: src/doc/edit/Notes.cpp
+msgid "A footnote can't go inside a field."
+msgstr ""
+
+#: src/doc/edit/Notes.cpp
+msgid "A footnote goes in the document's text, not in a header, a footer, a note, a comment or a text box."
 msgstr ""
 
 #: src/doc/edit/Editor.cpp
@@ -1087,7 +687,7 @@ msgid "A price written as a fraction, as a decimal number."
 msgstr ""
 
 #: src/pkg/Snapshot.cpp
-msgid "A private copy of "
+msgid "A private copy of {0} couldn't be made."
 msgstr ""
 
 #: src/doc/edit/Editor.cpp
@@ -1390,6 +990,10 @@ msgstr ""
 msgid "Above Average"
 msgstr ""
 
+#: src/sheet/data/Rules.cpp
+msgid "Above Average or equal"
+msgstr ""
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Above average"
 msgstr ""
@@ -1515,7 +1119,7 @@ msgid "Add to print area"
 msgstr ""
 
 #: src/word/DocPanels.cpp
-msgid "Added “"
+msgid "Added “{0}”."
 msgstr ""
 
 #: src/sheet/view/WorkbookReview.cpp src/word/DocPanels.cpp
@@ -1735,7 +1339,15 @@ msgid "An edit is still going on."
 msgstr ""
 
 #: src/doc/edit/Notes.cpp
-msgid "An endnote"
+msgid "An endnote can't be added to this document."
+msgstr ""
+
+#: src/doc/edit/Notes.cpp
+msgid "An endnote can't go inside a field."
+msgstr ""
+
+#: src/doc/edit/Notes.cpp
+msgid "An endnote goes in the document's text, not in a header, a footer, a note, a comment or a text box."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -1799,15 +1411,15 @@ msgid "Animations"
 msgstr ""
 
 #: src/pkg/SafeFile.cpp
-msgid "Another program created "
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid "Another program is using "
+msgid "Another program created {0} while it was being saved."
 msgstr ""
 
 #: src/pdf/Document.cpp
 msgid "Another program is using the file, so it couldn't be replaced."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "Another program is using {0}, so it couldn't be replaced."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -1855,7 +1467,7 @@ msgid "Apply sets the selected slides; Apply to all sets every slide."
 msgstr ""
 
 #: src/slide/view/PresentationDesign.cpp
-msgid "Apply the "
+msgid "Apply the {0} theme to the presentation"
 msgstr ""
 
 #: src/slide/view/PresentationAnim.cpp
@@ -2098,6 +1710,10 @@ msgstr ""
 msgid "Below Average"
 msgstr ""
 
+#: src/sheet/data/Rules.cpp
+msgid "Below Average or equal"
+msgstr ""
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Below average"
 msgstr ""
@@ -2126,8 +1742,16 @@ msgstr ""
 msgid "Black, Text 1"
 msgstr ""
 
-#: src/AppRibbon.cpp src/ui/EmptyState.cpp
-msgid "Blank "
+#: src/core/FileKinds.cpp
+msgid "Blank document"
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Blank presentation"
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Blank spreadsheet"
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
@@ -2166,10 +1790,6 @@ msgstr ""
 msgid "Bold italic"
 msgstr ""
 
-#: src/sheet/view/WorkbookFile.cpp
-msgid "Book"
-msgstr ""
-
 #: src/doc/edit/Inline.cpp src/word/DocRibbon.cpp
 msgid "Bookmark"
 msgstr ""
@@ -2194,6 +1814,10 @@ msgstr ""
 msgid "Bookmarks…"
 msgstr ""
 
+#: src/sheet/view/WorkbookFile.cpp
+msgid "Book{0}"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Border"
 msgstr ""
@@ -2212,10 +1836,6 @@ msgstr ""
 
 #: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookPageSetup.cpp src/word/DocTable.cpp
 msgid "Bottom"
-msgstr ""
-
-#: src/sheet/data/Rules.cpp
-msgid "Bottom "
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -2260,6 +1880,14 @@ msgstr ""
 
 #: src/slide/view/SlideDesign.cpp
 msgid "Bottom to top"
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "Bottom {0}"
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "Bottom {0}%"
 msgstr ""
 
 #: src/word/DocFormat.cpp
@@ -2379,23 +2007,31 @@ msgid "Cell Styles"
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
-msgid "Cell Value "
+msgid "Cell Value begins with \"{0}\""
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
-msgid "Cell Value begins with \""
+msgid "Cell Value between {0} and {1}"
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
-msgid "Cell Value contains \""
+msgid "Cell Value contains \"{0}\""
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
-msgid "Cell Value does not contain \""
+msgid "Cell Value does not contain \"{0}\""
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
-msgid "Cell Value ends with \""
+msgid "Cell Value ends with \"{0}\""
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "Cell Value not between {0} and {1}"
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "Cell Value {0} {1}"
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp
@@ -2787,7 +2423,7 @@ msgid "Click to reply; its marker is outlined on the slide"
 msgstr ""
 
 #: src/word/DocRuler.cpp
-msgid "Click to set a "
+msgid "Click to set a {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
@@ -2874,10 +2510,6 @@ msgstr ""
 msgid "Column"
 msgstr ""
 
-#: src/sheet/view/WorkbookFilter.h
-msgid "Column "
-msgstr ""
-
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Column &Width…"
 msgstr ""
@@ -2908,6 +2540,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookSheetOps.cpp
 msgid "Column width…"
+msgstr ""
+
+#: src/sheet/view/WorkbookFilter.h
+msgid "Column {0}"
 msgstr ""
 
 #: src/doc/edit/Page.cpp src/sheet/view/WorkbookFilter.h src/sheet/view/WorkbookPivots.cpp src/word/DocPage.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
@@ -2959,7 +2595,7 @@ msgid "Comment deleted."
 msgstr ""
 
 #: src/sheet/view/WorkbookReview.cpp
-msgid "Comment on "
+msgid "Comment on {0}"
 msgstr ""
 
 #: src/sheet/view/PrintLayout.cpp
@@ -3114,10 +2750,6 @@ msgstr ""
 msgid "Copied"
 msgstr ""
 
-#: src/slide/view/PresentationSlides.cpp
-msgid "Copied "
-msgstr ""
-
 #: src/slide/view/PresentationCommands.cpp
 msgid "Copied the slide"
 msgstr ""
@@ -3132,6 +2764,10 @@ msgstr ""
 
 #: src/slide/view/PresentationCommands.cpp
 msgid "Copied the speaker notes"
+msgstr ""
+
+#: src/slide/view/PresentationSlides.cpp
+msgid "Copied {0} slides"
 msgstr ""
 
 #: src/pdf/PdfView.cpp src/sheet/view/WorkbookCommands.cpp src/sheet/view/WorkbookRibbon.cpp src/slide/view/ObjectTool.cpp src/slide/view/PresentationCommands.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationText.cpp src/word/DocEdit.cpp src/word/DocRibbon.cpp src/word/DocView.cpp
@@ -3179,7 +2815,7 @@ msgid "Copy speaker notes"
 msgstr ""
 
 #: src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocView.cpp
-msgid "Couldn't create "
+msgid "Couldn't create {0}"
 msgstr ""
 
 #: src/Updater.cpp
@@ -3282,6 +2918,10 @@ msgstr ""
 msgid "Crop the picture (drag its edges)"
 msgstr ""
 
+#: src/slide/view/PresentationView.cpp
+msgid "Ctrl+click to follow the link"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Currency"
 msgstr ""
@@ -3322,10 +2962,6 @@ msgstr ""
 msgid "Cut\tCtrl+X"
 msgstr ""
 
-#: src/slide/view/PresentationSlides.cpp
-msgid "Cut "
-msgstr ""
-
 #: src/doc/edit/Editor.cpp
 msgid "Cut insertion"
 msgstr ""
@@ -3340,6 +2976,10 @@ msgstr ""
 
 #: src/slide/view/PresentationSlides.cpp
 msgid "Cut slides\tCtrl+X"
+msgstr ""
+
+#: src/slide/view/PresentationSlides.cpp
+msgid "Cut {0} slides"
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -3531,7 +3171,7 @@ msgid "Decrease list level"
 msgstr ""
 
 #: src/word/DocStyles.cpp
-msgid "Default stops every "
+msgid "Default stops every {0} after these."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp src/sheet/view/WorkbookNames.cpp src/sheet/view/WorkbookRibbon.cpp
@@ -3735,15 +3375,19 @@ msgid "Deleted"
 msgstr ""
 
 #: src/AppFiles.cpp
-msgid "Deleted "
-msgstr ""
-
-#: src/AppFiles.cpp
 msgid "Deleted 1 backup"
 msgstr ""
 
+#: src/word/DocView.cpp
+msgid "Deleted by {0}"
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "Deleted {0} backups"
+msgstr ""
+
 #: src/word/DocPanels.cpp
-msgid "Deleted “"
+msgid "Deleted “{0}”."
 msgstr ""
 
 #: src/slide/view/PresentationComments.cpp
@@ -3899,7 +3543,7 @@ msgid "Document"
 msgstr ""
 
 #: src/FileSession.h src/word/DocFile.h
-msgid "Document "
+msgid "Document {0}"
 msgstr ""
 
 #: src/AppRibbon.cpp src/core/FileKinds.cpp
@@ -4139,7 +3783,7 @@ msgid "Effect Options"
 msgstr ""
 
 #: src/slide/view/PresentationAnim.cpp
-msgid "Effect option "
+msgid "Effect option {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
@@ -4191,7 +3835,7 @@ msgid "End show\tEsc"
 msgstr ""
 
 #: src/slide/show/SlideShow.cpp
-msgid "End the slide show and open "
+msgid "End the slide show and open {0}?"
 msgstr ""
 
 #: src/doc/edit/Notes.cpp src/word/DocNotes.cpp
@@ -4267,7 +3911,11 @@ msgid "Esc"
 msgstr ""
 
 #: src/word/DocHeaders.cpp
-msgid "Even page "
+msgid "Even page footer"
+msgstr ""
+
+#: src/word/DocHeaders.cpp
+msgid "Even page header"
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp
@@ -4350,16 +3998,20 @@ msgstr ""
 msgid "Export the current slide as PNG"
 msgstr ""
 
-#: src/pdf/PdfView.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PictureExport.cpp src/slide/view/PresentationPrint.cpp src/word/DocPdf.cpp
-msgid "Exported "
-msgstr ""
-
 #: src/pdf/PdfView.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocPdf.cpp
-msgid "Exported 1 page to "
+msgid "Exported 1 page to {0}"
 msgstr ""
 
 #: src/slide/view/PictureExport.cpp
-msgid "Exported slide "
+msgid "Exported slide {0} to {1}"
+msgstr ""
+
+#: src/pdf/PdfView.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocPdf.cpp
+msgid "Exported {0} pages to {1}"
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "Exported {0} slides to the folder {1}"
 msgstr ""
 
 #: src/App.cpp
@@ -4379,7 +4031,7 @@ msgid "Featherweight can't delete a whole table this way yet."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
-msgid "Featherweight can't insert or delete cells on this sheet yet: it has "
+msgid "Featherweight can't insert or delete cells on this sheet yet: it has {0}."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -4392,10 +4044,6 @@ msgstr ""
 
 #: src/pdf/Document.cpp src/pkg/SafeFile.cpp src/word/DocPdf.cpp
 msgid "Featherweight can't save in this folder."
-msgstr ""
-
-#: src/pkg/SafeFile.cpp
-msgid "Featherweight can't save in this folder. "
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -4415,27 +4063,47 @@ msgid "Featherweight changes its language the next time it starts."
 msgstr ""
 
 #: src/AppFiles.cpp
-msgid "Featherweight closed before "
+msgid "Featherweight closed before {0} documents were saved."
 msgstr ""
 
 #: src/AppFiles.cpp
-msgid "Featherweight closed before “"
+msgid "Featherweight closed before “{0}” was saved."
 msgstr ""
 
 #: src/slide/view/ObjectTool.cpp
-msgid "Featherweight couldn't read "
+msgid "Featherweight couldn't read that audio file."
 msgstr ""
 
 #: src/slide/view/ObjectTool.cpp
-msgid "Featherweight couldn't read that "
+msgid "Featherweight couldn't read that video."
+msgstr ""
+
+#: src/slide/view/ObjectTool.cpp
+msgid "Featherweight couldn't read {0} (files up to 1 GB can be inserted)."
+msgstr ""
+
+#: src/slide/view/ObjectTool.cpp
+msgid "Featherweight couldn't read {0}."
 msgstr ""
 
 #: src/slide/show/SlideShow.cpp
-msgid "Featherweight couldn’t open "
+msgid "Featherweight couldn’t open {0}."
 msgstr ""
 
-#: src/App.cpp
-msgid "Featherweight couldn’t register itself as a "
+#: src/core/FileKinds.cpp
+msgid "Featherweight couldn’t register itself as a PDF app."
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Featherweight couldn’t register itself as a document app."
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Featherweight couldn’t register itself as a presentation app."
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Featherweight couldn’t register itself as a spreadsheet app."
 msgstr ""
 
 #: src/App.cpp
@@ -4447,11 +4115,11 @@ msgid "Featherweight doesn't know that number format."
 msgstr ""
 
 #: src/doc/edit/Editor.cpp
-msgid "Featherweight doesn't know the attribute "
+msgid "Featherweight doesn't know the attribute {0}."
 msgstr ""
 
 #: src/doc/edit/Editor.cpp
-msgid "Featherweight doesn't know the property "
+msgid "Featherweight doesn't know the property {0}."
 msgstr ""
 
 #: src/App.cpp
@@ -4459,7 +4127,15 @@ msgid "Featherweight is up to date."
 msgstr ""
 
 #: src/App.cpp
-msgid "Featherweight was updated to "
+msgid "Featherweight was updated to {0}"
+msgstr ""
+
+#: src/App.cpp
+msgid "Featherweight {0} is available."
+msgstr ""
+
+#: src/App.cpp
+msgid "Featherweight {0} is ready. It will be used the next time you start Featherweight."
 msgstr ""
 
 #: src/pdf/Document.cpp
@@ -4484,10 +4160,6 @@ msgstr ""
 
 #: src/AppShell.cpp
 msgid "File (new, open, save, print, options)"
-msgstr ""
-
-#: src/AppShell.cpp
-msgid "File › "
 msgstr ""
 
 #: src/ui/Ribbon.cpp
@@ -4611,7 +4283,11 @@ msgid "First page"
 msgstr ""
 
 #: src/word/DocHeaders.cpp
-msgid "First page "
+msgid "First page footer"
+msgstr ""
+
+#: src/word/DocHeaders.cpp
+msgid "First page header"
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp
@@ -4759,7 +4435,7 @@ msgid "Font style, underline and color"
 msgstr ""
 
 #: src/word/DocView.cpp
-msgid "Fonts in this document aren't installed: "
+msgid "Fonts in this document aren't installed: {0}. Lines may break differently than in Word."
 msgstr ""
 
 #: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/slide/view/PresentationDesign.cpp src/word/DocHeaders.cpp src/word/DocRibbon.cpp
@@ -4800,10 +4476,6 @@ msgstr ""
 
 #: src/word/DocRibbon.cpp
 msgid "Format\nShape"
-msgstr ""
-
-#: src/sheet/view/WorkbookShapes.cpp
-msgid "Format "
 msgstr ""
 
 #: src/slide/edit/DesignOps.cpp src/slide/edit/SlideDesignOps.cpp src/slide/view/PresentationDesign.cpp
@@ -4908,6 +4580,10 @@ msgstr ""
 
 #: src/doc/edit/Editor.cpp
 msgid "Format table"
+msgstr ""
+
+#: src/sheet/view/WorkbookShapes.cpp
+msgid "Format {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookSheetOps.cpp
@@ -5046,16 +4722,16 @@ msgstr ""
 msgid "Go to page"
 msgstr ""
 
-#: src/pdf/PdfView.cpp
-msgid "Go to page "
-msgstr ""
-
 #: src/ui/Toolbar.cpp
 msgid "Go to page (Ctrl+G)"
 msgstr ""
 
+#: src/pdf/PdfView.cpp
+msgid "Go to page {0}"
+msgstr ""
+
 #: src/word/DocView.cpp
-msgid "Go to “"
+msgid "Go to “{0}”"
 msgstr ""
 
 #: src/ui/ColorPicker.cpp
@@ -5251,7 +4927,7 @@ msgid "Height of the selected rows"
 msgstr ""
 
 #: src/sheet/view/WorkbookPanels.cpp
-msgid "Height: "
+msgid "Height: {0} ({1} pixels)"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
@@ -5483,7 +5159,7 @@ msgid "In points. 0 hides the rows."
 msgstr ""
 
 #: src/App.cpp
-msgid "In the Settings window that just opened, choose Featherweight for "
+msgid "In the Settings window that just opened, choose Featherweight for {0} files."
 msgstr ""
 
 #: src/sheet/data/Rules.h
@@ -5946,6 +5622,10 @@ msgstr ""
 msgid "Inserted"
 msgstr ""
 
+#: src/word/DocView.cpp
+msgid "Inserted by {0}"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Inside"
 msgstr ""
@@ -5955,7 +5635,7 @@ msgid "Inside borders"
 msgstr ""
 
 #: src/slide/view/ModelDeck.cpp
-msgid "It couldn't be opened — "
+msgid "It couldn't be opened — {0}"
 msgstr ""
 
 #: src/slide/view/ModelDeck.cpp
@@ -6007,11 +5687,7 @@ msgid "Justify"
 msgstr ""
 
 #: src/App.cpp
-msgid "Keep "
-msgstr ""
-
-#: src/App.cpp
-msgid "Keep as ."
+msgid "Keep as .{0}"
 msgstr ""
 
 #: src/App.cpp
@@ -6040,6 +5716,10 @@ msgstr ""
 
 #: src/word/DocPage.cpp
 msgid "Keep with next"
+msgstr ""
+
+#: src/App.cpp
+msgid "Keep {0}"
 msgstr ""
 
 #: src/word/DocShapes.cpp
@@ -6703,7 +6383,15 @@ msgid "Moved away"
 msgstr ""
 
 #: src/word/DocView.cpp
+msgid "Moved away by {0}"
+msgstr ""
+
+#: src/word/DocView.cpp
 msgid "Moved here"
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "Moved here by {0}"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -6802,10 +6490,6 @@ msgstr ""
 msgid "New\nSlide"
 msgstr ""
 
-#: src/App.cpp src/ui/EmptyState.cpp
-msgid "New "
-msgstr ""
-
 #: src/ui/EmptyState.cpp
 msgid "New CV, from a template"
 msgstr ""
@@ -6830,6 +6514,10 @@ msgstr ""
 msgid "New comment\tCtrl+Alt+M"
 msgstr ""
 
+#: src/core/FileKinds.cpp
+msgid "New document"
+msgstr ""
+
 #: src/App.cpp
 msgid "New from template"
 msgstr ""
@@ -6850,6 +6538,10 @@ msgstr ""
 msgid "New paragraph"
 msgstr ""
 
+#: src/core/FileKinds.cpp
+msgid "New presentation"
+msgstr ""
+
 #: src/ui/EmptyState.cpp
 msgid "New report, from a template"
 msgstr ""
@@ -6864,6 +6556,10 @@ msgstr ""
 
 #: src/slide/view/PresentationSlides.cpp
 msgid "New slide\tCtrl+M"
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "New spreadsheet"
 msgstr ""
 
 #: src/doc/edit/Styles.cpp src/word/DocStyles.cpp
@@ -6991,7 +6687,7 @@ msgid "No commands match"
 msgstr ""
 
 #: src/ui/CommandSearch.cpp
-msgid "No commands match “"
+msgid "No commands match “{0}”"
 msgstr ""
 
 #: src/slide/view/PresentationComments.cpp
@@ -7039,7 +6735,7 @@ msgid "No outline"
 msgstr ""
 
 #: src/ui/EmptyState.cpp
-msgid "No recent file’s name has “"
+msgid "No recent file’s name has “{0}” in it."
 msgstr ""
 
 #: src/App.cpp
@@ -7079,7 +6775,7 @@ msgid "No spelling errors."
 msgstr ""
 
 #: src/word/DocStyles.cpp
-msgid "No tab stops of its own: tabs go to the default stops, every "
+msgid "No tab stops of its own: tabs go to the default stops, every {0}."
 msgstr ""
 
 #: src/doc/edit/Toc.cpp
@@ -7130,12 +6826,16 @@ msgstr ""
 msgid "Note"
 msgstr ""
 
-#: src/sheet/view/WorkbookReview.cpp
-msgid "Note on "
+#: src/pdf/PdfView.cpp
+msgid "Note on page {0}"
 msgstr ""
 
-#: src/pdf/PdfView.cpp
-msgid "Note on page "
+#: src/sheet/view/WorkbookReview.cpp
+msgid "Note on {0}"
+msgstr ""
+
+#: src/sheet/view/WorkbookReview.cpp
+msgid "Note on {0} by {1}"
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp src/sheet/view/WorkbookRibbon.cpp src/slide/show/PresenterView.cpp src/slide/view/PresentationCommands.cpp src/slide/view/PresentationRibbon.cpp
@@ -7195,7 +6895,11 @@ msgid "Oct"
 msgstr ""
 
 #: src/word/DocHeaders.cpp
-msgid "Odd page "
+msgid "Odd page footer"
+msgstr ""
+
+#: src/word/DocHeaders.cpp
+msgid "Odd page header"
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp
@@ -7274,11 +6978,11 @@ msgstr ""
 msgid "Only pictures can be cropped."
 msgstr ""
 
-#: src/doc/edit/Shapes.cpp
+#: src/doc/edit/Shapes.cpp src/word/DocShapes.cpp
 msgid "Only shapes and text boxes can be changed here."
 msgstr ""
 
-#: src/doc/edit/Shapes.cpp
+#: src/doc/edit/Shapes.cpp src/word/DocShapes.cpp
 msgid "Only shapes and text boxes can be changed here. This is a picture, a group, a chart or another kind of drawing."
 msgstr ""
 
@@ -7290,12 +6994,12 @@ msgstr ""
 msgid "Open"
 msgstr ""
 
-#: src/App.cpp src/slide/show/SlideShow.cpp
-msgid "Open "
-msgstr ""
-
 #: src/ui/Toolbar.cpp
 msgid "Open (Ctrl+O)"
+msgstr ""
+
+#: src/core/FileKinds.cpp
+msgid "Open PDFs with Featherweight by default?"
 msgstr ""
 
 #: src/ui/EmptyState.cpp src/ui/TitleBar.cpp
@@ -7314,6 +7018,10 @@ msgstr ""
 msgid "Open again."
 msgstr ""
 
+#: src/core/FileKinds.cpp
+msgid "Open documents with Featherweight by default?"
+msgstr ""
+
 #: src/App.cpp
 msgid "Open file location"
 msgstr ""
@@ -7330,12 +7038,24 @@ msgstr ""
 msgid "Open note"
 msgstr ""
 
+#: src/core/FileKinds.cpp
+msgid "Open presentations with Featherweight by default?"
+msgstr ""
+
 #: src/App.cpp
 msgid "Open recent"
 msgstr ""
 
+#: src/core/FileKinds.cpp
+msgid "Open spreadsheets with Featherweight by default?"
+msgstr ""
+
 #: src/AppRibbon.cpp
 msgid "Open the file as it was before Featherweight first saved over it"
+msgstr ""
+
+#: src/slide/show/SlideShow.cpp
+msgid "Open {0}?"
 msgstr ""
 
 #: src/ui/EmptyState.cpp
@@ -7451,7 +7171,7 @@ msgid "PDF documents"
 msgstr ""
 
 #: src/App.cpp
-msgid "PDF engine: PDFium (build "
+msgid "PDF engine: PDFium (build {0})"
 msgstr ""
 
 #: src/slide/view/PictureExport.cpp
@@ -7470,7 +7190,7 @@ msgstr ""
 msgid "Page\nNumber"
 msgstr ""
 
-#: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/word/DocPanels.cpp src/word/DocView.cpp
+#: src/word/DocPanels.cpp
 msgid "Page "
 msgstr ""
 
@@ -7582,6 +7302,14 @@ msgstr ""
 msgid "Page width"
 msgstr ""
 
+#: src/sheet/view/WorkbookPageSetup.cpp
+msgid "Page {0}"
+msgstr ""
+
+#: src/doc/edit/HeaderFooter.cpp src/word/DocView.cpp
+msgid "Page {0} of {1}"
+msgstr ""
+
 #: src/word/DocRibbon.cpp
 msgid "Pages"
 msgstr ""
@@ -7594,12 +7322,12 @@ msgstr ""
 msgid "Paper"
 msgstr ""
 
-#: src/sheet/view/WorkbookPageSetup.cpp
-msgid "Paper "
-msgstr ""
-
 #: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
 msgid "Paper size"
+msgstr ""
+
+#: src/sheet/view/WorkbookPageSetup.cpp
+msgid "Paper {0}"
 msgstr ""
 
 #: src/doc/edit/Format.cpp src/slide/edit/TextOps.cpp src/slide/view/PresentationRibbon.cpp src/word/DocPage.cpp src/word/DocRibbon.cpp
@@ -7636,6 +7364,30 @@ msgstr ""
 
 #: src/doc/edit/Editor.cpp
 msgid "Part of this holds a bookmark or comment range, so it can't be deleted as a whole."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "Part {0}"
+msgstr ""
+
+#: src/doc/docx/Reader.cpp src/pkg/Package.cpp src/pkg/XmlDom.cpp src/pkg/Zip.cpp
+msgid "Part {0} is damaged."
+msgstr ""
+
+#: src/pkg/Package.cpp
+msgid "Part {0} is missing."
+msgstr ""
+
+#: src/doc/docx/Writer.cpp
+msgid "Part {0} redeclares a namespace prefix inside it, so it is kept as it is."
+msgstr ""
+
+#: src/pkg/Zip.cpp
+msgid "Part {0} unpacks to more than {1}, which is more than Featherweight allows."
+msgstr ""
+
+#: src/pkg/Zip.cpp
+msgid "Part {0} uses a kind of compression that Office files don't use."
 msgstr ""
 
 #: src/PasswordCard.cpp src/sheet/view/WorkbookReview.cpp src/slide/view/PresentationProtect.cpp
@@ -7727,7 +7479,7 @@ msgid "Pasted in this presentation's design: keeping the source formatting comes
 msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp
-msgid "Path and "
+msgid "Path and {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
@@ -7982,12 +7734,16 @@ msgstr ""
 msgid "Present from this slide\tShift+F5"
 msgstr ""
 
-#: src/core/FileKinds.cpp src/slide/view/PresentationFile.cpp src/slide/view/PresentationView.cpp
+#: src/core/FileKinds.cpp src/slide/view/PresentationView.cpp
 msgid "Presentation"
 msgstr ""
 
 #: src/AppRibbon.cpp src/core/FileKinds.cpp
 msgid "Presentations"
+msgstr ""
+
+#: src/slide/view/PresentationFile.cpp
+msgid "Presentation{0}"
 msgstr ""
 
 #: src/slide/view/PresentationCommands.cpp
@@ -8171,7 +7927,7 @@ msgid "Printing was canceled."
 msgstr ""
 
 #: src/App.cpp
-msgid "Printing… page "
+msgid "Printing… page {0} of {1}"
 msgstr ""
 
 #: src/App.cpp src/pdf/PdfView.cpp src/sheet/view/WorkbookSheetOps.cpp src/word/DocView.cpp
@@ -8298,10 +8054,6 @@ msgstr ""
 msgid "Red"
 msgstr ""
 
-#: src/ui/ColorPicker.cpp
-msgid "Red "
-msgstr ""
-
 #: src/sheet/data/Rules.h
 msgid "Red (solid)"
 msgstr ""
@@ -8326,12 +8078,16 @@ msgstr ""
 msgid "Red Text"
 msgstr ""
 
+#: src/ui/ColorPicker.cpp
+msgid "Red {0}, green {1}, blue {2}"
+msgstr ""
+
 #: src/sheet/view/WorkbookCommands.cpp src/word/DocView.cpp
 msgid "Redo"
 msgstr ""
 
-#: src/slide/view/ObjectTool.cpp src/word/DocView.cpp
-msgid "Redo "
+#: src/sheet/view/WorkbookCommands.cpp src/slide/view/ObjectTool.cpp src/word/DocView.cpp
+msgid "Redo {0}"
 msgstr ""
 
 #: src/slide/view/PresentationProtect.cpp
@@ -8551,11 +8307,11 @@ msgid "Replace with"
 msgstr ""
 
 #: src/App.cpp
-msgid "Replaced "
+msgid "Replaced 1 match"
 msgstr ""
 
 #: src/App.cpp
-msgid "Replaced 1 match"
+msgid "Replaced {0} matches"
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -8695,7 +8451,7 @@ msgid "Restore original"
 msgstr ""
 
 #: src/word/DocPanels.cpp
-msgid "Result "
+msgid "Result {0}"
 msgstr ""
 
 #: src/word/DocPanels.cpp
@@ -8947,11 +8703,11 @@ msgid "Save as"
 msgstr ""
 
 #: src/App.cpp
-msgid "Save as "
+msgid "Save as .{0}"
 msgstr ""
 
 #: src/App.cpp
-msgid "Save as ."
+msgid "Save as {0}"
 msgstr ""
 
 #: src/App.cpp src/AppShell.cpp
@@ -8979,7 +8735,7 @@ msgid "Saved"
 msgstr ""
 
 #: src/App.cpp
-msgid "Saved a copy as "
+msgid "Saved a copy as {0}"
 msgstr ""
 
 #: src/word/DocReview.cpp
@@ -9211,11 +8967,11 @@ msgid "Send to Back"
 msgstr ""
 
 #: src/pdf/Print.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocView.cpp
-msgid "Sent "
+msgid "Sent 1 page to the printer"
 msgstr ""
 
 #: src/pdf/Print.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocView.cpp
-msgid "Sent 1 page to the printer"
+msgid "Sent {0} pages to the printer"
 msgstr ""
 
 #: src/word/DocFormat.cpp
@@ -9231,7 +8987,7 @@ msgid "Series"
 msgstr ""
 
 #: src/sheet/view/WorkbookCharts.cpp
-msgid "Series "
+msgid "Series {0}"
 msgstr ""
 
 #: src/word/DocStyles.cpp
@@ -9264,10 +9020,6 @@ msgstr ""
 
 #: src/word/ShapePanels.h
 msgid "Shape"
-msgstr ""
-
-#: src/slide/view/PresentationAnim.cpp
-msgid "Shape "
 msgstr ""
 
 #: src/slide/view/PresentationRibbon.cpp
@@ -9304,6 +9056,10 @@ msgstr ""
 
 #: src/word/DocView.cpp
 msgid "Shape wrap, size, fill and outline…"
+msgstr ""
+
+#: src/slide/view/PresentationAnim.cpp
+msgid "Shape {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp src/slide/view/ObjectTool.cpp src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
@@ -9510,10 +9266,6 @@ msgstr ""
 msgid "Slide\nSize"
 msgstr ""
 
-#: src/slide/view/PresentationCommands.cpp src/slide/view/PresentationText.cpp src/slide/view/PresentationView.cpp
-msgid "Slide "
-msgstr ""
-
 #: src/slide/show/PresenterView.cpp
 msgid "Slide %zu of %zu"
 msgstr ""
@@ -9544,6 +9296,18 @@ msgstr ""
 
 #: src/slide/view/PresentationDesign.cpp
 msgid "Slide size: "
+msgstr ""
+
+#: src/slide/view/PresentationText.cpp
+msgid "Slide {0}"
+msgstr ""
+
+#: src/slide/view/PresentationView.cpp
+msgid "Slide {0} is hidden: the slide show skips it"
+msgstr ""
+
+#: src/slide/view/PresentationCommands.cpp
+msgid "Slide {0} of {1}"
 msgstr ""
 
 #: src/slide/view/PresentationRibbon.cpp
@@ -9784,6 +9548,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocFormat.cpp src/word/DocRibbon.cpp
 msgid "Styles"
+msgstr ""
+
+#: src/word/DocStyles.cpp
+msgid "Style{0}"
 msgstr ""
 
 #: src/doc/edit/Format.cpp src/sheet/view/WorkbookFormat.cpp src/slide/view/PresentationText.cpp src/slide/view/TextFormat.cpp src/word/DocFormat.cpp src/word/DocRibbon.cpp
@@ -10135,7 +9903,7 @@ msgid "That height can't be set."
 msgstr ""
 
 #: src/slide/view/ObjectTool.cpp
-msgid "That isn't a "
+msgid "That isn't a audio file Featherweight can insert."
 msgstr ""
 
 #: src/doc/edit/Editor.cpp
@@ -10188,6 +9956,10 @@ msgstr ""
 
 #: src/sheet/edit/Edit.cpp
 msgid "That isn't a valid name."
+msgstr ""
+
+#: src/slide/view/ObjectTool.cpp
+msgid "That isn't a video Featherweight can insert."
 msgstr ""
 
 #: src/slide/edit/MediaOps.cpp
@@ -10350,12 +10122,16 @@ msgstr ""
 msgid "The PDF couldn't be saved."
 msgstr ""
 
-#: src/pdf/Document.cpp src/word/DocPdf.cpp
+#: src/word/DocPdf.cpp
 msgid "The PDF couldn't be saved. "
 msgstr ""
 
+#: src/pdf/Document.cpp
+msgid "The PDF couldn't be saved. {0}"
+msgstr ""
+
 #: src/pdf/Document.cpp src/word/DocPdf.cpp
-msgid "The PDF couldn't be saved: another program has "
+msgid "The PDF couldn't be saved: another program has {0} open."
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -10383,7 +10159,7 @@ msgid "The PivotTable needs a header row and at least one row of data."
 msgstr ""
 
 #: src/sheet/pivot/PivotLayout.cpp
-msgid "The PivotTable's source no longer has the column “"
+msgid "The PivotTable's source no longer has the column “{0}”. Featherweight refreshes PivotTables whose source keeps its columns."
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -10651,7 +10427,7 @@ msgid "The file couldn't be read."
 msgstr ""
 
 #: src/pdf/Document.cpp
-msgid "The file couldn't be saved. "
+msgid "The file couldn't be saved. {0}"
 msgstr ""
 
 #: src/pkg/Zip.cpp
@@ -10683,7 +10459,7 @@ msgid "The first section has no section before it."
 msgstr ""
 
 #: src/slide/view/PictureExport.cpp
-msgid "The folder "
+msgid "The folder {0} couldn't be made."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -10915,7 +10691,7 @@ msgid "The minute, 0 to 59."
 msgstr ""
 
 #: src/sheet/xlsx/Writer.cpp
-msgid "The model doesn't write "
+msgid "The model doesn't write {0}."
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -11191,7 +10967,7 @@ msgid "The present value of an investment."
 msgstr ""
 
 #: src/slide/Reader.cpp
-msgid "The presentation can't be opened, because a part of it is damaged ("
+msgid "The presentation can't be opened, because a part of it is damaged ({0})."
 msgstr ""
 
 #: src/slide/view/ModelDeck.cpp
@@ -11372,6 +11148,10 @@ msgstr ""
 
 #: src/sheet/xlsx/Reader.cpp
 msgid "The shared strings are too large."
+msgstr ""
+
+#: src/sheet/xlsx/Save.cpp
+msgid "The sheet {0} holds macros, which only a macro-enabled workbook (.xlsm) keeps."
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -11787,11 +11567,11 @@ msgid "There isn't enough memory to write it."
 msgstr ""
 
 #: src/pkg/SafeFile.cpp
-msgid "There isn't enough space on the disk to save "
+msgid "There isn't enough space on the disk to save {0}."
 msgstr ""
 
 #: src/pkg/Snapshot.cpp
-msgid "There isn't enough space to keep a private copy of "
+msgid "There isn't enough space to keep a private copy of {0}."
 msgstr ""
 
 #: src/sheet/calc/Entry.cpp
@@ -11839,7 +11619,7 @@ msgid "There's no note here."
 msgstr ""
 
 #: src/pkg/Snapshot.cpp
-msgid "There's no recovery folder to keep a copy of "
+msgid "There's no recovery folder to keep a copy of {0}."
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp
@@ -12022,6 +11802,14 @@ msgstr ""
 msgid "This Word document is too large to open."
 msgstr ""
 
+#: src/pkg/XmlPull.cpp
+msgid "This XML"
+msgstr ""
+
+#: src/pkg/XmlDom.cpp
+msgid "This XML is damaged."
+msgstr ""
+
 #: src/slide/edit/TimingOps.cpp
 msgid "This animation can't be changed in Featherweight."
 msgstr ""
@@ -12187,11 +11975,11 @@ msgid "This file"
 msgstr ""
 
 #: src/pkg/Package.cpp src/pkg/Zip.cpp
-msgid "This file contains two parts named "
+msgid "This file contains two parts named {0}."
 msgstr ""
 
 #: src/pkg/Zip.cpp
-msgid "This file has more than "
+msgid "This file has more than {0} parts, which is more than Featherweight allows."
 msgstr ""
 
 #: src/pkg/Zip.cpp
@@ -12223,7 +12011,7 @@ msgid "This file isn't an Excel workbook."
 msgstr ""
 
 #: src/pkg/Zip.cpp
-msgid "This file unpacks to more than "
+msgid "This file unpacks to more than {0}, which is more than Featherweight allows."
 msgstr ""
 
 #: src/pkg/Zip.cpp
@@ -12722,10 +12510,6 @@ msgstr ""
 msgid "Top"
 msgstr ""
 
-#: src/sheet/data/Rules.cpp
-msgid "Top "
-msgstr ""
-
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Top Align"
 msgstr ""
@@ -12770,6 +12554,14 @@ msgstr ""
 msgid "Top to bottom"
 msgstr ""
 
+#: src/sheet/data/Rules.cpp
+msgid "Top {0}"
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "Top {0}%"
+msgstr ""
+
 #: src/word/DocPage.cpp
 msgid "Top, bottom"
 msgstr ""
@@ -12812,6 +12604,10 @@ msgstr ""
 
 #: src/word/DocReview.cpp
 msgid "Track changes"
+msgstr ""
+
+#: src/word/DocReview.cpp
+msgid "Track changes (Ctrl+Shift+E)"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -12950,8 +12746,8 @@ msgstr ""
 msgid "Undo"
 msgstr ""
 
-#: src/slide/view/ObjectTool.cpp src/word/DocView.cpp
-msgid "Undo "
+#: src/sheet/view/WorkbookCommands.cpp src/slide/view/ObjectTool.cpp src/word/DocView.cpp
+msgid "Undo {0}"
 msgstr ""
 
 #: src/Updater.cpp
@@ -13139,7 +12935,7 @@ msgid "Use range"
 msgstr ""
 
 #: src/slide/view/PresentationDesign.cpp
-msgid "Use the "
+msgid "Use the {0} theme colors"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -13183,7 +12979,7 @@ msgid "Variants"
 msgstr ""
 
 #: src/App.cpp
-msgid "Version "
+msgid "Version {0}"
 msgstr ""
 
 #: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/slide/edit/TimingOps.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
@@ -13395,7 +13191,7 @@ msgid "Width:"
 msgstr ""
 
 #: src/sheet/view/WorkbookPanels.cpp
-msgid "Width: "
+msgid "Width: {0} ({1} pixels)"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -13411,7 +13207,7 @@ msgid "Windows reported: "
 msgstr ""
 
 #: src/AppShell.cpp
-msgid "Windows' language"
+msgid "Windows' language ({0})"
 msgstr ""
 
 #: src/word/DocProof.cpp
@@ -13556,6 +13352,10 @@ msgstr ""
 
 #: src/pdf/PdfView.cpp src/sheet/view/WorkbookCommands.cpp src/slide/view/PresentationCommands.cpp src/ui/StatusBar.cpp src/word/DocView.cpp
 msgid "Zoom in"
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "Zoom in\tCtrl+="
 msgstr ""
 
 #: src/pdf/PdfView.cpp src/sheet/view/WorkbookCommands.cpp src/slide/view/PresentationCommands.cpp src/ui/StatusBar.cpp src/word/DocView.cpp
@@ -13714,10 +13514,6 @@ msgstr ""
 msgid "contains"
 msgstr ""
 
-#: src/slide/view/PresentationPrint.cpp
-msgid "couldn't be written"
-msgstr ""
-
 #: src/sheet/edit/Refs.cpp
 msgid "custom views"
 msgstr ""
@@ -13766,10 +13562,6 @@ msgstr ""
 msgid "expression, value1, result1, ..."
 msgstr ""
 
-#: src/slide/view/PresentationPrint.cpp
-msgid "failed to draw"
-msgstr ""
-
 #: src/sheet/view/WorkbookFill.cpp
 msgid "fill: needs a range on this sheet, as B3:M3."
 msgstr ""
@@ -13784,10 +13576,6 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp
 msgid "greater than or equal to"
-msgstr ""
-
-#: src/slide/view/PresentationPrint.cpp
-msgid "has no bitmap to draw on"
 msgstr ""
 
 #: src/word/DocPanels.cpp
@@ -13926,10 +13714,6 @@ msgstr ""
 msgid "locked cells can't be changed, hidden formulas"
 msgstr ""
 
-#: src/sheet/view/WorkbookNames.cpp
-msgid "name: there's no name "
-msgstr ""
-
 #: src/sheet/calc/Parser.cpp
 msgid "nested too deeply"
 msgstr ""
@@ -13992,6 +13776,10 @@ msgstr ""
 
 #: src/sheet/calc/Parser.cpp
 msgid "number too long"
+msgstr ""
+
+#: src/ui/Toolbar.cpp
+msgid "of {0}"
 msgstr ""
 
 #: src/sheet/edit/Edit.cpp src/sheet/edit/Refs.cpp
@@ -14086,6 +13874,370 @@ msgstr ""
 msgid "you don't have permission to open it."
 msgstr ""
 
+#: src/slide/view/PresentationAnim.cpp
+msgid "{0} (exit)"
+msgstr ""
+
+#: src/slide/view/PresentationCommands.cpp
+msgid "{0} (hidden)"
+msgstr ""
+
+#: src/word/DocProof.cpp
+msgid "{0} (no spelling dictionary)"
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} (shown in {1})"
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} and {1} more"
+msgstr ""
+
+#: src/word/DocTable.cpp
+msgid "{0} by {1}"
+msgstr ""
+
+#: src/slide/view/PresentationSave.cpp
+msgid "{0} can't be saved."
+msgstr ""
+
+#: src/sheet/view/WorkbookCommands.cpp
+msgid "{0} can't be saved: it couldn't be read in full."
+msgstr ""
+
+#: src/pkg/Snapshot.cpp
+msgid "{0} changed while it was being opened. Try again in a moment."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} contains a document type definition (DTD). Office files never do, so Featherweight won't open it."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} contains a name longer than {1}, which is more than Featherweight allows."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} contains a piece of text longer than {1}, which is more than Featherweight allows."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} contains an attribute longer than {1}, which is more than Featherweight allows."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — it contains something Featherweight refuses for safety."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — it goes beyond the limits Featherweight sets for safety."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be opened — it has no sheet to show."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} couldn't be opened — it isn't a Word document Featherweight can open."
+msgstr ""
+
+#: src/slide/view/PresentationProtect.cpp
+msgid "{0} couldn't be opened — it isn't a presentation Featherweight can open, or it is damaged."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be opened — it isn't an Excel workbook Featherweight can open."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} couldn't be opened — it seems to be damaged or isn't a Word document."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be opened — it seems to be damaged or isn't an Excel workbook."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} couldn't be opened — it seems to be damaged or isn't an OpenDocument text document."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/slide/view/PresentationProtect.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — it seems to be damaged."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — it uses something Featherweight doesn't support yet."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/slide/view/PresentationProtect.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — it's protected in a way Featherweight doesn't support."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp src/word/DocView.cpp
+msgid "{0} couldn't be opened — the file couldn't be read."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be opened — {1}"
+msgstr ""
+
+#: src/pkg/Snapshot.cpp
+msgid "{0} couldn't be opened. Another program may be using it."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} couldn't be opened. {1}"
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} couldn't be read in full: only its first rows show, and it can't be saved."
+msgstr ""
+
+#: src/pkg/Snapshot.cpp
+msgid "{0} couldn't be read."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be replaced, and the original is now named {1} in the same folder."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be replaced: {1}."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} couldn't be saved — Windows couldn't encrypt it."
+msgstr ""
+
+#: src/App.cpp
+msgid "{0} couldn't be saved."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} couldn't be saved. It may be open in another program, or the folder can't be written to."
+msgstr ""
+
+#: src/sheet/view/WorkbookFile.cpp src/slide/view/PresentationFile.cpp src/word/DocFile.cpp
+msgid "{0} couldn't be saved. {1}"
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be saved: the copy on the disk didn't read back correctly."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be saved: {1}."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be written to the disk."
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "{0} couldn't be written."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} couldn't be written: {1}."
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} days ago"
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "{0} documents couldn’t be recovered."
+msgstr ""
+
+#: src/pkg/Snapshot.cpp
+msgid "{0} doesn't exist anymore."
+msgstr ""
+
+#: src/sheet/view/WorkbookFilter.cpp
+msgid "{0} duplicate values found and removed; {1} unique values remain."
+msgstr ""
+
+#: src/App.cpp
+msgid "{0} files couldn’t be opened. They may be damaged."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} has an element with more than {1} attributes, which is more than Featherweight allows."
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} hours ago"
+msgstr ""
+
+#: src/slide/view/PresentationView.cpp
+msgid "{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} is a Word 97–2003 document. Saving makes a new {1}.docx and leaves it as it is."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} is an Excel 97–2003 workbook. Saving makes a new {1}.xlsx and leaves it as it is."
+msgstr ""
+
+#: src/slide/view/PresentationView.cpp
+msgid "{0} is an OpenDocument presentation. Saving makes a new {1}.pptx and leaves it as it is."
+msgstr ""
+
+#: src/sheet/view/WorkbookView.cpp
+msgid "{0} is an OpenDocument spreadsheet. Saving makes a new {1}.xlsx and leaves it as it is."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} is an OpenDocument text document. Saving makes a new {1}.docx and leaves it as it is."
+msgstr ""
+
+#: src/sheet/view/WorkbookFile.cpp src/slide/view/PresentationFile.cpp
+msgid "{0} is being saved already."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} is damaged near line {1}: {2}."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} is in use by {1}, so it can't be replaced."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} is in use by {1}."
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} is nested more than {1} levels deep, which is more than Featherweight allows."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} is open in another program, so it can't be replaced."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} is open in another program."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} is read-only, so it can't be replaced."
+msgstr ""
+
+#: src/word/DocView.cpp
+msgid "{0} is this document's own file. Choose another name for the copy."
+msgstr ""
+
+#: src/sheet/view/WorkbookCommands.cpp
+msgid "{0} is this workbook's own file. Choose another name for the copy."
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} minutes ago"
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} months ago"
+msgstr ""
+
+#: src/word/DocProof.cpp
+msgid "{0} of 1 word"
+msgstr ""
+
+#: src/word/DocProof.cpp
+msgid "{0} of {1} words"
+msgstr ""
+
+#: src/ui/Ribbon.cpp
+msgid "{0} options"
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "{0} pixels"
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "{0} slides couldn't be written to the folder {1}."
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "{0} std dev above Average"
+msgstr ""
+
+#: src/sheet/data/Rules.cpp
+msgid "{0} std dev below Average"
+msgstr ""
+
+#: src/pkg/XmlPull.cpp
+msgid "{0} uses the {1} text encoding, which Office files don't use."
+msgstr ""
+
+#: src/FileSession.cpp
+msgid "{0} was changed by another program after you opened it."
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "{0} was changed by another program."
+msgstr ""
+
+#: src/AppFiles.cpp
+msgid "{0} was moved or deleted. Save it again to keep it."
+msgstr ""
+
+#: src/pkg/SafeFile.cpp
+msgid "{0} wasn't changed."
+msgstr ""
+
+#: src/sheet/view/WorkbookCommands.cpp
+msgid "{0} wasn't saved: finish or cancel what you're typing in the cell first."
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} weeks ago"
+msgstr ""
+
+#: src/word/DocProof.cpp
+msgid "{0} words"
+msgstr ""
+
+#: src/sheet/view/WorkbookFile.cpp
+msgid "{0} would keep only the values of the first sheet. Save a copy as CSV instead."
+msgstr ""
+
+#: src/core/Strings.cpp
+msgid "{0} years ago"
+msgstr ""
+
+#: src/word/DocTable.cpp
+msgid "{0} × {1} table"
+msgstr ""
+
+#: src/word/DocHeaders.cpp
+msgid "{0} – Section {1}"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "{0}: a click on the ruler sets one. Click here for another kind."
+msgstr ""
+
+#: src/slide/Reader.cpp
+msgid "{0}: an embedded font Featherweight can't read"
+msgstr ""
+
+#: src/slide/Reader.cpp
+msgid "{0}: not a theme Featherweight can read"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "{0}: {1}. Drag it off the ruler to remove it; right-click for its kind and leader."
+msgstr ""
+
 #: src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp
 msgid "¼ pt"
 msgstr ""
@@ -14102,30 +14254,46 @@ msgstr ""
 msgid "—"
 msgstr ""
 
+#: src/pdf/Document.cpp
+msgid "“{0}” couldn't be opened — it seems to be damaged or isn't a PDF."
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” couldn't be opened — the file couldn't be read."
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” couldn't be opened — the file is empty."
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” couldn't be opened — {1}"
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” couldn't be read completely."
+msgstr ""
+
+#: src/word/DocPictures.cpp src/word/DocShapes.cpp
+msgid "“{0}” couldn't be read, or is too big to add."
+msgstr ""
+
+#: src/sheet/view/WorkbookShapes.cpp
+msgid "“{0}” couldn't be read, or isn't a picture Featherweight adds."
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” is too large to open (more than 4 GB)."
+msgstr ""
+
+#: src/pdf/Document.cpp
+msgid "“{0}” uses a kind of protection Featherweight doesn't support."
+msgstr ""
+
 #: src/App.cpp
 msgid "” and its folder can’t be found."
 msgstr ""
 
-#: src/word/DocPictures.cpp src/word/DocShapes.cpp
-msgid "” couldn't be read, or is too big to add."
-msgstr ""
-
-#: src/sheet/view/WorkbookShapes.cpp
-msgid "” couldn't be read, or isn't a picture Featherweight adds."
-msgstr ""
-
-#: src/ui/EmptyState.cpp
-msgid "” in it."
-msgstr ""
-
 #: src/PasswordCard.cpp
 msgid "” is protected"
-msgstr ""
-
-#: src/AppFiles.cpp
-msgid "” was saved."
-msgstr ""
-
-#: src/sheet/pivot/PivotLayout.cpp
-msgid "”. Featherweight refreshes PivotTables whose source keeps its columns."
 msgstr ""

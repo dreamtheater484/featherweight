@@ -319,12 +319,13 @@ void WorkbookView::DrawSizeGuide(gfx::Canvas& c) {
   D2D1_POINT_2F at{};
   if (e.rows) {
     c.Fill({rowHeader_.left, to - 0.5f * u, cells_.right, to + 0.5f * u}, p.text);
-    label = T(L"Height: ") + FormatGeneral(px * 0.75, 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
+    label = Fmt(T(L"Height: {0} ({1} pixels)"), {FormatGeneral(px * 0.75, 15, text_->Locale()), std::to_wstring(px)});
     at = {rowHeader_.right + 4 * u, to - 26 * u};
   } else {
     const float x = Mirror(to);
     c.Fill({x - 0.5f * u, colHeader_.top, x + 0.5f * u, cells_.bottom}, p.text);
-    label = T(L"Width: ") + FormatGeneral(DisplayWidth(px), 15, text_->Locale()) + L" (" + std::to_wstring(px) + L" pixels)";
+    label = Fmt(T(L"Width: {0} ({1} pixels)"),
+                {FormatGeneral(DisplayWidth(px), 15, text_->Locale()), std::to_wstring(px)});
     at = {x + 4 * u, colHeader_.top - 24 * u};
   }
   const float size = 12 * u, pad = 6 * u;

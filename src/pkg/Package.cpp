@@ -185,7 +185,8 @@ std::unique_ptr<Package> Package::Open(std::unique_ptr<Snapshot> snapshot, const
     part.name = "/" + entries[i].name;
     part.entry = i;
     if (!pkg->index_.emplace(PartKey(part.name), pkg->parts_.size()).second) {
-      status = Status::Fail(Status::Code::Damaged, T("This file contains two parts named ") + entries[i].name + ".");
+      status =
+          Status::Fail(Status::Code::Damaged, Fmt(T("This file contains two parts named {0}."), {entries[i].name}));
       return nullptr;
     }
     pkg->entryToPart_[i] = pkg->parts_.size();
@@ -220,7 +221,7 @@ Status ParseContentTypes(std::string_view xml, const Limits& limits, ContentType
   Status s = dom.Parse(xml, limits, ZipNameOf(kContentTypesPart));
   if (!s.Ok()) return s;
   if (!IsElement(dom.Root(), kContentTypesNs, "Types"))
-    return Status::Fail(Status::Code::Damaged, "Part [Content_Types].xml is damaged.");
+    return Status::Fail(Status::Code::Damaged, Fmt(T("Part {0} is damaged."), {ZipNameOf(kContentTypesPart)}));
   for (auto child : dom.Root().children()) {
     if (IsElement(child, kContentTypesNs, "Default"))
       out.defaults.emplace_back(child.attribute("Extension").value(), child.attribute("ContentType").value());
@@ -236,7 +237,7 @@ Status ParseRelationships(std::string_view xml, std::string_view source, const L
   Status s = dom.Parse(xml, limits, label);
   if (!s.Ok()) return s;
   if (!IsElement(dom.Root(), kRelationshipsNs, "Relationships"))
-    return Status::Fail(Status::Code::Damaged, "Part " + std::string(label) + " is damaged.");
+    return Status::Fail(Status::Code::Damaged, Fmt(T("Part {0} is damaged."), {label}));
   out.source.assign(source);
   for (auto child : dom.Root().children()) {
     if (!IsElement(child, kRelationshipsNs, "Relationship")) continue;
@@ -288,7 +289,7 @@ Part* Package::FindPartMutable(std::string_view name) {
 
 Status Package::ReadPart(std::string_view name, std::vector<uint8_t>& out) const {
   const Part* p = FindPart(name);
-  if (!p) return Status::Fail(Status::Code::NotFound, "Part " + std::string(ZipNameOf(name)) + " is missing.");
+  if (!p) return Status::Fail(Status::Code::NotFound, Fmt(T("Part {0} is missing."), {ZipNameOf(name)}));
   if (p->modified || p->entry == Part::kNoEntry) {
     out = p->data;
     return Status{};
@@ -298,7 +299,7 @@ Status Package::ReadPart(std::string_view name, std::vector<uint8_t>& out) const
 
 Status Package::ReadPartPrefix(std::string_view name, size_t max, std::vector<uint8_t>& out) const {
   const Part* p = FindPart(name);
-  if (!p) return Status::Fail(Status::Code::NotFound, "Part " + std::string(ZipNameOf(name)) + " is missing.");
+  if (!p) return Status::Fail(Status::Code::NotFound, Fmt(T("Part {0} is missing."), {ZipNameOf(name)}));
   if (p->modified || p->entry == Part::kNoEntry) {
     out.assign(p->data.begin(), p->data.begin() + static_cast<std::ptrdiff_t>(std::min(max, p->data.size())));
     return Status{};

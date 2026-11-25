@@ -298,9 +298,10 @@ bool WorkbookView::RemoveDuplicates(const Range& range, bool header, const std::
     host_.ViewInvalidate();
   }
   // Excel's report, in its words.
-  host_.ViewMessage(BannerKind::Info, removed ? std::to_wstring(removed) + T(L" duplicate values found and removed; ") +
-                                                    std::to_wstring(unique) + T(L" unique values remain.")
-                                              : T(L"No duplicate values found."));
+  host_.ViewMessage(BannerKind::Info,
+                    removed ? Fmt(T(L"{0} duplicate values found and removed; {1} unique values remain."),
+                                  {std::to_wstring(removed), std::to_wstring(unique)})
+                            : T(L"No duplicate values found."));
   return true;
 }
 

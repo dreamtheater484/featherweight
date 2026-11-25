@@ -102,8 +102,8 @@ const NamedColor kStandardColors[kColumns] = {
     {Rgb(0x7030A0), N_(L"Purple")}};
 
 std::wstring RgbName(D2D1_COLOR_F c) {
-  return T(L"Red ") + std::to_wstring(Byte(c.r)) + T(L", green ") + std::to_wstring(Byte(c.g)) + T(L", blue ") +
-         std::to_wstring(Byte(c.b));
+  return Fmt(T(L"Red {0}, green {1}, blue {2}"),
+             {std::to_wstring(Byte(c.r)), std::to_wstring(Byte(c.g)), std::to_wstring(Byte(c.b))});
 }
 
 void HoverTo(Anim& a, bool on) {

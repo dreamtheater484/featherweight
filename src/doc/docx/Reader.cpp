@@ -1182,7 +1182,8 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
     if (e == Event::Comment) prolog.push_back(CommentFragment(pull.Text()));
     else if (e == Event::ProcessingInstruction) prolog.push_back(PIFragment(pull.QName(), pull.Text()));
   }
-  if (e != Event::StartElement) return Status::Fail(Status::Code::Damaged, "Part " + name.substr(1) + " is damaged.");
+  if (e != Event::StartElement)
+    return Status::Fail(Status::Code::Damaged, Fmt(T("Part {0} is damaged."), {name.substr(1)}));
   if (std::string decl = DeclarationFragment(pull.Source()); !decl.empty()) prolog.insert(prolog.begin(), std::move(decl));
 
   const Schema& s = Schema::Get();

@@ -529,18 +529,18 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region) {
   const std::string& t = rule.type;
   if (!parsed) return Utf8ToWide(t);
   if (t == "cellIs") {
-    static constexpr const wchar_t* kWords[] = {L"between", L"not between", L"=", L"<>", L">", L"<", L">=", L"<="};
+    static constexpr const wchar_t* kSigns[] = {L"", L"", L"=", L"<>", L">", L"<", L">=", L"<="};
     const CfOp op = OpOf(AttrOf(r, "operator"));
-    std::wstring s = T(L"Cell Value ") + std::wstring(kWords[static_cast<size_t>(op)]) + L" " + formula(0);
-    if (op == CfOp::Between || op == CfOp::NotBetween) s += L" and " + formula(1);
-    return s;
+    if (op == CfOp::Between) return Fmt(T(L"Cell Value between {0} and {1}"), {formula(0), formula(1)});
+    if (op == CfOp::NotBetween) return Fmt(T(L"Cell Value not between {0} and {1}"), {formula(0), formula(1)});
+    return Fmt(T(L"Cell Value {0} {1}"), {kSigns[static_cast<size_t>(op)], formula(0)});
   }
   if (t == "expression") return L"Formula: =" + formula(0);
   const std::wstring text = Utf8ToWide(AttrOf(r, "text"));
-  if (t == "containsText") return T(L"Cell Value contains \"") + text + L"\"";
-  if (t == "notContainsText") return T(L"Cell Value does not contain \"") + text + L"\"";
-  if (t == "beginsWith") return T(L"Cell Value begins with \"") + text + L"\"";
-  if (t == "endsWith") return T(L"Cell Value ends with \"") + text + L"\"";
+  if (t == "containsText") return Fmt(T(L"Cell Value contains \"{0}\""), {text});
+  if (t == "notContainsText") return Fmt(T(L"Cell Value does not contain \"{0}\""), {text});
+  if (t == "beginsWith") return Fmt(T(L"Cell Value begins with \"{0}\""), {text});
+  if (t == "endsWith") return Fmt(T(L"Cell Value ends with \"{0}\""), {text});
   if (t == "timePeriod") {
     static constexpr const char* kPeriods[] = {"yesterday", "today",    "tomorrow",  "last7Days", "lastWeek",
                                                "thisWeek",  "nextWeek", "lastMonth", "thisMonth", "nextMonth"};
@@ -552,16 +552,18 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region) {
   if (t == "duplicateValues") return T(L"Duplicate Values");
   if (t == "uniqueValues") return T(L"Unique Values");
   if (t == "top10") {
-    std::wstring s = BoolOf(r, "bottom", false) ? T(L"Bottom ") : T(L"Top ");
-    s += Utf8ToWide(AttrOf(r, "rank").empty() ? std::string("10") : AttrOf(r, "rank"));
-    if (BoolOf(r, "percent", false)) s += L"%";
-    return s;
+    const bool bottom = BoolOf(r, "bottom", false);
+    const std::wstring n = Utf8ToWide(AttrOf(r, "rank").empty() ? std::string("10") : AttrOf(r, "rank"));
+    if (BoolOf(r, "percent", false)) return Fmt(bottom ? T(L"Bottom {0}%") : T(L"Top {0}%"), {n});
+    return Fmt(bottom ? T(L"Bottom {0}") : T(L"Top {0}"), {n});
   }
   if (t == "aboveAverage") {
     const bool above = BoolOf(r, "aboveAverage", true), equal = BoolOf(r, "equalAverage", false);
     const std::string sd = AttrOf(r, "stdDev");
-    if (!sd.empty()) return Utf8ToWide(sd) + (above ? T(L" std dev above Average") : T(L" std dev below Average"));
-    return std::wstring(above ? T(L"Above Average") : T(L"Below Average")) + (equal ? L" or equal" : L"");
+    if (!sd.empty())
+      return Fmt(above ? T(L"{0} std dev above Average") : T(L"{0} std dev below Average"), {Utf8ToWide(sd)});
+    if (equal) return above ? T(L"Above Average or equal") : T(L"Below Average or equal");
+    return above ? T(L"Above Average") : T(L"Below Average");
   }
   if (t == "colorScale") return T(L"Graded Color Scale");
   if (t == "dataBar") return T(L"Data Bar");

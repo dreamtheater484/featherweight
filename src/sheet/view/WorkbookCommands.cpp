@@ -282,8 +282,9 @@ CommandState WorkbookView::QueryCommand(int cmd) {
       s.enabled = ready && edit_ && (cmd == CmdUndo ? edit_->CanUndo() : edit_->CanRedo());
       s.shortcut = cmd == CmdUndo ? L"Ctrl+Z" : L"Ctrl+Y";
       const std::u16string name = s.enabled ? (cmd == CmdUndo ? edit_->UndoName() : edit_->RedoName()) : u"";
-      s.label = (cmd == CmdUndo ? T(L"Undo") : T(L"Redo")) +
-                (name.empty() ? std::wstring() : L" " + fw::ToLower(std::wstring(name.begin(), name.end())));
+      const std::wstring step = fw::ToLower(std::wstring(name.begin(), name.end()));
+      s.label = name.empty() ? std::wstring(cmd == CmdUndo ? T(L"Undo") : T(L"Redo"))
+                             : Fmt(cmd == CmdUndo ? T(L"Undo {0}") : T(L"Redo {0}"), {step});
       break;
     }
     case CmdRotateLeft:
@@ -918,13 +919,13 @@ bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
   if (bigLoad_) WorkDone();
   if (partial_) {
-    error = Title() + T(L" can't be saved: it couldn't be read in full.");
+    error = Fmt(T(L"{0} can't be saved: it couldn't be read in full."), {Title()});
     return false;
   }
   // What is being typed is part of what's saved, as in Excel's Ctrl+S; a formula that can't be
   // entered stops the save with its reason.
   if (editor_.Active() && !renaming_ && !CommitEdit(false)) {
-    error = Title() + T(L" wasn't saved: finish or cancel what you're typing in the cell first.");
+    error = Fmt(T(L"{0} wasn't saved: finish or cancel what you're typing in the cell first."), {Title()});
     return false;
   }
   return true;
@@ -1007,7 +1008,7 @@ std::vector<SaveFormat> WorkbookView::CopyFormats() const {
 bool WorkbookView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
   if (!Ready() || format != 0) return false;
   if (EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
-    error = FileNameOf(path) + T(L" is this workbook's own file. Choose another name for the copy.");
+    error = Fmt(T(L"{0} is this workbook's own file. Choose another name for the copy."), {FileNameOf(path)});
     return false;
   }
   csv::Options o;

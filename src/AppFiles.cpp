@@ -121,8 +121,8 @@ void App::OfferRecovery() {
   if (orphans_.empty()) return;
   const std::wstring text =
       orphans_.size() == 1
-          ? T(L"Featherweight closed before “") + orphans_.front().title + T(L"” was saved.")
-          : T(L"Featherweight closed before ") + std::to_wstring(orphans_.size()) + T(L" documents were saved.");
+          ? Fmt(T(L"Featherweight closed before “{0}” was saved."), {orphans_.front().title})
+          : Fmt(T(L"Featherweight closed before {0} documents were saved."), {std::to_wstring(orphans_.size())});
   banner_.Show(BannerKind::Warning, text, {{kActRecover, T(L"Recover"), true}, {kActDiscard, T(L"Discard")}});
 }
 
@@ -186,8 +186,9 @@ void App::RecoverDocuments(bool open) {
   }
   if (toActivate >= 0) ActivateTab(toActivate);
   if (failed)
-    banner_.Show(BannerKind::Error, failed == 1 ? T(L"A document couldn’t be recovered.") :
-                                                  std::to_wstring(failed) + T(L" documents couldn’t be recovered."),
+    banner_.Show(BannerKind::Error,
+                 failed == 1 ? std::wstring(T(L"A document couldn’t be recovered."))
+                             : Fmt(T(L"{0} documents couldn’t be recovered."), {std::to_wstring(failed)}),
                  {}, 8000);
   else if (partial)
     banner_.Show(BannerKind::Warning, T(L"The last changes to a recovered file couldn’t all be made again. Check it before you save."),
@@ -211,11 +212,12 @@ void App::ShowFileNotice(TabContent* v, FileChange change) {
   fileNotice_ = change;
   if (change == FileChange::Changed)
     banner_.Show(BannerKind::Warning,
-                 v->Title() + T(L" was changed by another program.") +
+                 Fmt(T(L"{0} was changed by another program."), {v->Title()}) +
                      (v->Modified() ? T(L" Reloading it discards your changes here.") : L""),
                  {{kActReload, T(L"Reload"), true}, {kActNotNow, T(L"Keep this version")}}, 0, v);
   else if (change == FileChange::Missing)
-    banner_.Show(BannerKind::Warning, v->Title() + T(L" was moved or deleted. Save it again to keep it."), {}, 0, v);
+    banner_.Show(BannerKind::Warning, Fmt(T(L"{0} was moved or deleted. Save it again to keep it."), {v->Title()}), {},
+                 0, v);
 }
 
 void App::ReloadActive() {
@@ -273,8 +275,9 @@ void App::RestoreOriginal() {
 void App::DeleteBackups() {
   const size_t n = backups::DeleteAll(DocFile::Config().backups);
   banner_.Show(BannerKind::Success,
-               n == 0 ? std::wstring(T(L"There are no backups."))
-                      : n == 1 ? std::wstring(T(L"Deleted 1 backup")) : T(L"Deleted ") + std::to_wstring(n) + L" backups",
+               n == 0   ? std::wstring(T(L"There are no backups."))
+               : n == 1 ? std::wstring(T(L"Deleted 1 backup"))
+                        : Fmt(T(L"Deleted {0} backups"), {std::to_wstring(n)}),
                {}, 2400);
 }
 

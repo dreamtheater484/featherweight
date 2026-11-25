@@ -396,7 +396,7 @@ class WorkbookView::DataPanel : public PanelContent {
     for (uint32_t c = range_.firstCol; c <= range_.lastCol; ++c) {
       std::wstring n = header_.checked ? data::ShownText(*v_.book_, v_.Current(), range_.firstRow, c, v_.text_->Locale())
                                        : std::wstring();
-      if (n.empty()) n = T(L"Column ") + Utf8ToWide(ColumnName(c));
+      if (n.empty()) n = Fmt(T(L"Column {0}"), {Utf8ToWide(ColumnName(c))});
       names.push_back(n);
     }
     for (int k = 0; k < 3; ++k) {

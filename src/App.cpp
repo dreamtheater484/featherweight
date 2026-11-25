@@ -1581,7 +1581,7 @@ void App::Execute(int cmd) {
         const int n = v->ReplaceAll(search_.WithBox().Text());
         banner_.Show(n > 0 ? BannerKind::Success : BannerKind::Info,
                      n == 0 ? std::wstring(T(L"Nothing was replaced")) : n == 1 ? std::wstring(T(L"Replaced 1 match"))
-                                                                     : T(L"Replaced ") + std::to_wstring(n) + L" matches",
+                                                                     : Fmt(T(L"Replaced {0} matches"), {std::to_wstring(n)}),
                      {}, 2500);
       }
       break;
@@ -1712,7 +1712,7 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
 
 // "New document\tCtrl+N": Ctrl+N makes a new document (AppShortcut).
 static std::wstring NewLabel(const fw::FileKindInfo& k) {
-  return T(L"New ") + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
+  return fw::Phrase(k.kind, fw::KindPhrase::New) + std::wstring(k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
 }
 
 // "New from template": the built-in templates, once the Word editor ships, and the user's own
@@ -1907,7 +1907,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
     banner_.Show(BannerKind::Error, errors.front(), {}, 8000);
   } else if (errors.size() > 1) {
     banner_.Show(BannerKind::Error,
-                 std::to_wstring(errors.size()) + T(L" files couldn’t be opened. They may be damaged."),
+                 Fmt(T(L"{0} files couldn’t be opened. They may be damaged."), {std::to_wstring(errors.size())}),
                  {}, 8000);
   }
   if (toActivate >= 0) ActivateTab(toActivate);
@@ -2099,11 +2099,11 @@ std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& fo
 bool App::SaveCopy(TabContent* view, const std::wstring& path, size_t format) {
   std::wstring error;
   if (!view->SaveCopy(path, format, error)) {
-    banner_.Show(BannerKind::Error, error.empty() ? fw::FileNameOf(path) + T(L" couldn't be saved.") : error);
+    banner_.Show(BannerKind::Error, error.empty() ? Fmt(T(L"{0} couldn't be saved."), {fw::FileNameOf(path)}) : error);
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
-  banner_.Show(BannerKind::Success, T(L"Saved a copy as ") + fw::FileNameOf(path), {}, 2400);
+  banner_.Show(BannerKind::Success, Fmt(T(L"Saved a copy as {0}"), {fw::FileNameOf(path)}), {}, 2400);
   InvalidateRect(hwnd_, nullptr, FALSE);
   return true;
 }
@@ -2132,7 +2132,7 @@ void App::ActivateTab(int index) {
   FocusBox(v->PasswordBox());
   KeyFocusMoved();
   Layout();
-  std::wstring title = v->Title() + T(L" – Featherweight");
+  std::wstring title = v->Title() + L" – Featherweight";  // lang: no (the app's name)
   SetWindowTextW(hwnd_, title.c_str());
   if (!snapshot_) CheckActiveFile();
   InvalidateRect(hwnd_, nullptr, FALSE);
@@ -2239,8 +2239,10 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
     // A CSV file: keep the workbook (Save As .xlsx), or write the data only (s4 friction W7).
     const bool data = ext == L"CSV" || ext == L"TSV";
     banner_.Show(BannerKind::Warning, loss,
-                 {{kActSaveAs, std::wstring(data ? T(L"Keep as .") : T(L"Save as .")) + v->SaveAsFormat().ext, true},
-                  {kActKeepFormat, data ? T(L"Save as ") + ext : ext.empty() ? T(L"Keep it") : T(L"Keep ") + ext}});
+                 {{kActSaveAs, Fmt(data ? T(L"Keep as .{0}") : T(L"Save as .{0}"), {v->SaveAsFormat().ext}), true},
+                  {kActKeepFormat, data          ? Fmt(T(L"Save as {0}"), {ext})
+                                   : ext.empty() ? std::wstring(T(L"Keep it"))
+                                                 : Fmt(T(L"Keep {0}"), {ext})}});
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
@@ -2321,7 +2323,7 @@ void App::PrintActive() {
       hwnd_,
       [this](int done, int total) {
         banner_.Show(BannerKind::Info,
-                     T(L"Printing… page ") + std::to_wstring(done + 1) + L" of " + std::to_wstring(total));
+                     Fmt(T(L"Printing… page {0} of {1}"), {std::to_wstring(done + 1), std::to_wstring(total)}));
         Layout();
         RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
       },
@@ -2583,7 +2585,7 @@ void App::StartupNotices() {
   }
 
   if (updated) {
-    banner_.Show(BannerKind::Success, T(L"Featherweight was updated to ") + current, {}, 6000);
+    banner_.Show(BannerKind::Success, Fmt(T(L"Featherweight was updated to {0}"), {current}), {}, 6000);
   } else if (!firstRun) {
     // Offered once per kind of file, from the second start on (so the very first impression is
     // just the app), and one kind per start.
@@ -2592,7 +2594,7 @@ void App::StartupNotices() {
       if (offered || fileassoc::IsDefault(kind)) continue;
       offered = true;
       banner_.Show(BannerKind::Info,
-                   T(L"Open ") + std::wstring(fw::Info(kind).plural) + T(L" with Featherweight by default?"),
+                   fw::Phrase(kind, fw::KindPhrase::OpenByDefault),
                    {{kActMakeDefault + static_cast<int>(kind), T(L"Make default"), true}, {kActNotNow, T(L"Not now")}});
       break;
     }
@@ -2605,12 +2607,10 @@ void App::MakeDefaultApp(fw::FileKind kind) {
   if (fileassoc::Register(util::ExePath())) {
     fileassoc::OpenDefaultAppsSettings();
     banner_.Show(BannerKind::Info,
-                 T(L"In the Settings window that just opened, choose Featherweight for ") + std::wstring(k.extensions[0]) +
-                     L" files.",
+                 Fmt(T(L"In the Settings window that just opened, choose Featherweight for {0} files."), {k.extensions[0]}),
                  {}, 9000);
   } else {
-    banner_.Show(BannerKind::Error,
-                 T(L"Featherweight couldn’t register itself as a ") + std::wstring(k.noun) + L" app.");
+    banner_.Show(BannerKind::Error, fw::Phrase(kind, fw::KindPhrase::CouldNotRegister));
   }
 }
 
@@ -2637,7 +2637,7 @@ void App::OnUpdaterDone() {
     case Updater::Status::Installed:
       if (manualUpdateCheck_)
         banner_.Show(BannerKind::Success,
-                     L"Featherweight " + r.version + T(L" is ready. It will be used the next time you start Featherweight."),
+                     Fmt(T(L"Featherweight {0} is ready. It will be used the next time you start Featherweight."), {r.version}),
                      {}, 8000);
       break;
     case Updater::Status::Available:
@@ -2646,7 +2646,7 @@ void App::OnUpdaterDone() {
         if (Updater::CanSelfUpdate()) actions.push_back({kActUpdate, T(L"Update"), true});
         else actions.push_back({kActDownload, T(L"Download"), true});
         actions.push_back({kActSkip, T(L"Skip this version")});
-        banner_.Show(BannerKind::Info, L"Featherweight " + r.version + T(L" is available."), actions);
+        banner_.Show(BannerKind::Info, Fmt(T(L"Featherweight {0} is available."), {r.version}), actions);
       }
       break;
     case Updater::Status::Failed:
@@ -2659,10 +2659,10 @@ void App::OnUpdaterDone() {
 }
 
 void App::ShowAbout() {
-  std::wstring content = std::wstring(T(L"Version ")) + FW_VERSION_WSTRING + L"\n\n" +
+  std::wstring content = Fmt(T(L"Version {0}"), {FW_VERSION_WSTRING}) + L"\n\n" +
                          T(L"A light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.") +
-                         L"\n\n" + T(L"PDF engine: PDFium (build ") + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
-                         L")\nMIT License © 2026 Roy Clerx\n\n"
+                         L"\n\n" + Fmt(T(L"PDF engine: PDFium (build {0})"), {fw::Utf8ToWide(FW_PDFIUM_BUILD)}) +
+                         L"\nMIT License © 2026 Roy Clerx\n\n"
                          L"<a href=\"https://github.com/dreamtheater484/featherweight\">github.com/dreamtheater484/featherweight</a>";
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
   cfg.hwndParent = hwnd_;

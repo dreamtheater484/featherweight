@@ -92,7 +92,7 @@ CommandState App::QueryCommand(int cmd) {
     l.visible = l.enabled = !code.empty();
     for (const fw::lang::Language& lang : all)
       if (code == lang.code)
-        l.label = cmd == CmdLanguageWindows ? std::wstring(T(L"Windows' language")) + L" (" + lang.name + L")" : lang.name;
+        l.label = cmd == CmdLanguageWindows ? Fmt(T(L"Windows' language ({0})"), {lang.name}) : lang.name;
     l.checked = cmd == CmdLanguageWindows ? settings_.language.empty() : settings_.language == code;
     return l;
   }
@@ -173,7 +173,8 @@ std::vector<CommandEntry> App::SearchableCommands() {
     places = ribbon_.Commands();
     const ui::FilePage::Model fm = CurrentFilePage();
     for (int sec = 0; sec < ui::FilePage::kSectionCount; ++sec) {
-      const std::wstring where = std::wstring(T(L"File \u203A ")) + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(sec));
+      const std::wstring where =
+          std::wstring(T(L"File")) + L" \u203A " + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(sec));
       if (fm.run[sec]) places.push_back({fm.run[sec], T(L"File")});
       for (const auto& e : fm.entries[sec])
         if (e.cmd && (e.cmd < CmdRecent || e.cmd >= CmdRecent + Settings::kMaxRecent)) places.push_back({e.cmd, where});

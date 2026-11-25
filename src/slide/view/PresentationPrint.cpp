@@ -148,7 +148,7 @@ PrintOutcome PresentationView::PrintToFile(const std::wstring& path, std::wstrin
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {
-    message = T(L"Couldn't create ") + path;
+    message = Fmt(T(L"Couldn't create {0}"), {path});
     return PrintOutcome::Failed;
   }
   return PrintTo(L"Microsoft Print to PDF", nullptr, {-1}, stream.Get(), {}, message);
@@ -199,7 +199,8 @@ PrintOutcome PresentationView::PrintTo(const std::wstring& printer, const DEVMOD
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(done) + T(L" pages to the printer");
+  message = done == 1 ? T(L"Sent 1 page to the printer")
+                      : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(done)});
   return PrintOutcome::Printed;
 }
 
@@ -248,8 +249,8 @@ bool PresentationView::ExportPdf(const std::wstring& path, std::wstring& message
     message = T(L"The PDF couldn't be saved.");
     return false;
   }
-  message = pages.size() == 1 ? T(L"Exported 1 page to ") + FileNameOf(path)
-                              : T(L"Exported ") + std::to_wstring(pages.size()) + L" pages to " + FileNameOf(path);
+  message = pages.size() == 1 ? Fmt(T(L"Exported 1 page to {0}"), {FileNameOf(path)})
+                              : Fmt(T(L"Exported {0} pages to {1}"), {std::to_wstring(pages.size()), FileNameOf(path)});
   return true;
 }
 
@@ -289,7 +290,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
         96.f, 96.f);
     if (FAILED(gfx::WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) ||
         FAILED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc))) {
-      fail(T(L"has no bitmap to draw on"));
+      fail(L"has no bitmap to draw on");  // lang: no (the pagepngs: log)
       continue;
     }
     const HRESULT drawn = draw::DrawFrame(dc.Get(), [&](bool fallback) {
@@ -301,7 +302,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
       PaintPage(*deck_, page, print_, PageFonts(), painter);
     });
     if (FAILED(drawn)) {
-      fail(T(L"failed to draw"));
+      fail(L"failed to draw");  // lang: no (the pagepngs: log)
       continue;
     }
     const std::wstring file = dir + L"\\page-" + std::to_wstring(number) + L".png";
@@ -313,7 +314,7 @@ int PresentationView::RenderPagesForTesting(const std::wstring& dir, float dpi, 
         FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
         FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
         FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
-      fail(T(L"couldn't be written"));
+      fail(L"couldn't be written");  // lang: no (the pagepngs: log)
       continue;
     }
     ++written;

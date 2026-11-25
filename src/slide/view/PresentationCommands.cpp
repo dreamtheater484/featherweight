@@ -371,8 +371,9 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
 
 void PresentationView::BuildStatusBar(StatusBarModel& m) {
   const size_t n = SlideCount();
-  std::wstring slide = n ? T(L"Slide ") + std::to_wstring(current_ + 1) + L" of " + std::to_wstring(n) : T(L"No slides");
-  if (n && deck_->Hidden(current_)) slide += L" (hidden)";
+  std::wstring slide =
+      n ? Fmt(T(L"Slide {0} of {1}"), {std::to_wstring(current_ + 1), std::to_wstring(n)}) : T(L"No slides");
+  if (n && deck_->Hidden(current_)) slide = Fmt(T(L"{0} (hidden)"), {slide});
   m.segments.push_back(slide);
   if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(T(L"Read-only"));
   m.zoom = n > 0;

@@ -1,5 +1,7 @@
 #include "doc/edit/HeaderFooter.h"
 
+#include <algorithm>
+
 #include "core/Lang.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Forms.h"
@@ -219,10 +221,19 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
     r = std::move(next);
     if (r) at = r.caret;
   };
-  if (r && ofPages) step(editor.InsertText(at, T(u"Page ")));
-  if (r) step(InsertField(editor, at, kPageField, u"1", T(u"Page Number")));
-  if (r && ofPages) step(editor.InsertText(at, u" of "));
-  if (r && ofPages) step(InsertField(editor, at, kPagesField, u"1", T(u"Page Number")));
+  // "Page {0} of {1}" whole, in the interface's language: its words as text, the page's field at {0}
+  // and the page count's at {1}.
+  const std::u16string_view pattern = ofPages ? T(u"Page {0} of {1}") : u"{0}";
+  for (size_t i = 0; r && i < pattern.size();) {
+    const size_t field = std::min(pattern.find(u"{0}", i), pattern.find(u"{1}", i));
+    if (field > i) {
+      step(editor.InsertText(at, pattern.substr(i, field - i)));
+      i = std::min(field, pattern.size());
+    } else {
+      step(InsertField(editor, at, pattern[i + 1] == u'1' ? kPagesField : kPageField, u"1", T(u"Page Number")));
+      i += 3;
+    }
+  }
   if (r) {
     TreeEdit te(editor, at);
     ParaFormat f;

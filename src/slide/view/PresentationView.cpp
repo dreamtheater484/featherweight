@@ -146,9 +146,11 @@ OpenResult PresentationView::Load(const std::wstring& password, std::wstring& er
     const size_t dot = path_.find_last_of(L'.');
     const std::wstring stem = FileNameOf(dot == std::wstring::npos ? path_ : path_.substr(0, dot));
     File().Copy(imported_, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".pptx", false);
-    host_.ViewMessage(BannerKind::Info, imported_ +
-                                            (odf ? T(L" is an OpenDocument presentation") : T(L" is a PowerPoint 97–2003 presentation")) +
-                                            L". Saving makes a new " + stem + L".pptx and leaves it as it is.");
+    host_.ViewMessage(
+        BannerKind::Info,
+        Fmt(odf ? T(L"{0} is an OpenDocument presentation. Saving makes a new {1}.pptx and leaves it as it is.")
+                : T(L"{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."),
+            {imported_, stem}));
     untitled_ = imported_;
     path_.clear();  // Save is Save As
   }
@@ -819,10 +821,10 @@ std::wstring PresentationView::TooltipAt(int x, int y) {
     if (std::wstring tip = commentsPanel_->Tooltip(static_cast<float>(x), static_cast<float>(y)); !tip.empty()) return tip;
   if (const SlideLink* link = LinkAt(x, y)) {
     std::wstring tip = link->tooltip.empty() ? link->url : link->tooltip;
-    return tip + (tip.empty() ? L"" : L"\n") + L"Ctrl+click to follow the link";
+    return tip + (tip.empty() ? L"" : L"\n") + T(L"Ctrl+click to follow the link");
   }
   if (const int t = ThumbAt(x, y); t >= 0 && deck_->Hidden(static_cast<size_t>(t)))
-    return T(L"Slide ") + std::to_wstring(t + 1) + T(L" is hidden: the slide show skips it");
+    return Fmt(T(L"Slide {0} is hidden: the slide show skips it"), {std::to_wstring(t + 1)});
   return {};
 }
 

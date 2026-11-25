@@ -337,7 +337,8 @@ std::vector<Control*> DocView::ReviewPanel::Layout(const D2D1_RECT_F& body, floa
 void DocView::ReviewPanel::Refresh() {
   seen_ = v_.editStamp_;
   const bool editing = v_.Editing() && v_.editor_;
-  track_.text = std::wstring(editing && v_.editor_->Tracking() ? L"☑" : L"☐") + T(L" Track changes (Ctrl+Shift+E)");
+  track_.text =
+      std::wstring(editing && v_.editor_->Tracking() ? L"☑ " : L"☐ ") + T(L"Track changes (Ctrl+Shift+E)");
   track_.enabled = editing;
   markup_.selected = static_cast<int>(v_.markup_ == Markup::Simple ? 0 : v_.markup_ == Markup::All ? 1 : v_.markup_ == Markup::None ? 2 : 3);
   const bool any = !v_.changes_.empty() || v_.allChanges_ > 0;
@@ -385,7 +386,7 @@ void DocView::ReviewPanel::Refresh() {
   post_.text = editing_.empty() ? T(L"Comment") : T(L"Save");
   box_.label = !editing_.empty() ? T(L"Comment") : replying_ && picked ? T(L"Reply") : T(L"Comment");
   if (cards_.empty()) note_ = editing ? T(L"No comments yet. Select text and type one above.") : T(L"No comments.");
-  else if (note_.starts_with(L"No comments")) note_.clear();
+  else if (note_ == T(L"No comments yet. Select text and type one above.") || note_ == T(L"No comments.")) note_.clear();
 }
 
 void DocView::ReviewPanel::PlaceCards() {

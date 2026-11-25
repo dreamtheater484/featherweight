@@ -1004,7 +1004,7 @@ std::wstring SlideItem(Deck& deck, size_t i) {
     }
     break;
   }
-  return T(L"Slide ") + std::to_wstring(i + 1) + (title.empty() ? L"" : L": " + title);
+  return Fmt(T(L"Slide {0}"), {std::to_wstring(i + 1)}) + (title.empty() ? L"" : L": " + title);
 }
 
 }  // namespace

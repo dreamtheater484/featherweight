@@ -315,7 +315,7 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   right.push_back({&more_, nullptr, ToolKind::Button, kBtn * u, 9, false, nullptr});
 
   // Center group width.
-  pageLabelText_ = m.pageCount > 0 ? L"of " + std::to_wstring(m.pageCount) : L"";
+  pageLabelText_ = m.pageCount > 0 ? Fmt(T(L"of {0}"), {std::to_wstring(m.pageCount)}) : L"";
   float labelW = 0;
   if (!pageLabelText_.empty()) {
     IDWriteTextFormat* fmt = Canvas::Format(13 * u, DWRITE_FONT_WEIGHT_REGULAR, false);

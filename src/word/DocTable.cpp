@@ -118,7 +118,8 @@ class DocTable::GridPicker : public Control {
     const float u = Ui();
     popup_.Begin(c, u);
     const D2D1_RECT_F in = popup_.Inner(u);
-    const std::wstring title = rows_ > 0 ? std::to_wstring(cols_) + L" × " + std::to_wstring(rows_) + L" table" : T(L"Insert table");
+    const std::wstring title =
+        rows_ > 0 ? Fmt(T(L"{0} × {1} table"), {std::to_wstring(cols_), std::to_wstring(rows_)}) : T(L"Insert table");
     c.Text(title, RectF(in.left + 8 * u, in.top, in.right - 8 * u, in.top + 28 * u), p.text, 13 * u);
     for (int r = 0; r < kRows; ++r)
       for (int k = 0; k < kCols; ++k) {
@@ -218,7 +219,7 @@ class DocTable::GridPicker : public Control {
       int pane = t.Add(i, 1, UIA_PaneControlTypeId, T(L"Table size"), popup_.rc);
       t[pane].layer = 2;
       t[pane].hasValue = true;
-      t[pane].value = std::to_wstring(cols_) + L" by " + std::to_wstring(rows_);
+      t[pane].value = Fmt(T(L"{0} by {1}"), {std::to_wstring(cols_), std::to_wstring(rows_)});
     }
   }
 

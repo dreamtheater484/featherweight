@@ -394,7 +394,7 @@ Status WritePart(const Workbook& book, std::string_view partName, std::string& o
     SheetWriter(s, out, s.Text()).Write();
     return {};
   }
-  return Status::Fail(Status::Code::NotFound, T("The model doesn't write ") + std::string(partName) + ".");
+  return Status::Fail(Status::Code::NotFound, Fmt(T("The model doesn't write {0}."), {partName}));
 }
 
 }  // namespace fw::sheet::xlsx

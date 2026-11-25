@@ -58,7 +58,7 @@ bool WriteAtomically(const std::wstring& path, const std::vector<uint8_t>& bytes
     const DWORD e = GetLastError();
     DeleteFileW(tmp.c_str());
     error = (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_ACCESS_DENIED)
-                ? T(L"The PDF couldn't be saved: another program has ") + fw::FileNameOf(path) + L" open."
+                ? Fmt(T(L"The PDF couldn't be saved: another program has {0} open."), {fw::FileNameOf(path)})
                 : T(L"The PDF couldn't be saved. ") + util::LastErrorMessage(e);
   }
   return ok;
@@ -145,8 +145,8 @@ bool DocView::ExportPdf(const std::wstring& path, std::wstring& message) {
   pdf.SetInfo(U16(title), U16(author));
   const std::vector<uint8_t> bytes = pdf.Finish();
   if (!WriteAtomically(path, bytes, message)) return false;
-  message = count == 1 ? T(L"Exported 1 page to ") + fw::FileNameOf(path)
-                       : T(L"Exported ") + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
+  message = count == 1 ? Fmt(T(L"Exported 1 page to {0}"), {fw::FileNameOf(path)})
+                       : Fmt(T(L"Exported {0} pages to {1}"), {std::to_wstring(count), fw::FileNameOf(path)});
   return true;
 }
 

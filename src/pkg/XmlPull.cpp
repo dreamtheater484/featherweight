@@ -133,7 +133,7 @@ std::string_view QNameLocal(std::string_view qname) {
 }
 
 XmlPull::XmlPull(std::string_view xml, const Limits& limits, std::string_view label)
-    : limits_(limits), label_(label.empty() ? "This XML" : "Part " + std::string(label)) {
+    : limits_(limits), label_(label) {
   auto b = [&](size_t i) { return i < xml.size() ? static_cast<unsigned char>(xml[i]) : 0x100u; };
   bool utf16 = false, bigEndian = false;
   size_t skip = 0;
@@ -166,15 +166,20 @@ XmlPull::XmlPull(std::string_view xml, const Limits& limits, std::string_view la
   }
 }
 
-XmlPull::Event XmlPull::Fail(Status::Code code, std::string_view what) {
-  status_ = Status::Fail(code, label_ + std::string(what));
+XmlPull::Event XmlPull::Fail(Status::Code code, std::string_view message) {
+  status_ = Status::Fail(code, std::string(message));
   event_ = Event::Error;
   return event_;
 }
 
 XmlPull::Event XmlPull::Damaged(std::string_view why) {
   size_t line = 1 + static_cast<size_t>(std::count(src_.begin(), src_.begin() + std::min(pos_, src_.size()), '\n'));
-  return Fail(Status::Code::Damaged, T(" is damaged near line ") + std::to_string(line) + ": " + std::string(why) + ".");
+  return Fail(Status::Code::Damaged,
+              Fmt(T("{0} is damaged near line {1}: {2}."), {Subject(), std::to_string(line), why}));
+}
+
+std::string XmlPull::Subject() const {
+  return label_.empty() ? std::string(T("This XML")) : Fmt(T("Part {0}"), {label_});
 }
 
 std::string_view XmlPull::Prefix() const { return QNamePrefix(qname_); }
@@ -306,8 +311,9 @@ XmlPull::Event XmlPull::Next() {
       continue;
     }
     if (raw.size() > limits_.maxStringLength)
-      return Fail(Status::Code::TooLarge, T(" contains a piece of text longer than ") + FormatBytes(limits_.maxStringLength) +
-                                              T(", which is more than Featherweight allows."));
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} contains a piece of text longer than {1}, which is more than Featherweight allows."),
+                      {Subject(), FormatBytes(limits_.maxStringLength)}));
     if (!Decode(raw, false, textBuf_, text_)) return Damaged(T("it uses an entity that isn't defined"));
     pos_ = end;
     return event_ = Event::Text;
@@ -317,8 +323,9 @@ XmlPull::Event XmlPull::Next() {
 XmlPull::Event XmlPull::ParseMarkup() {
   std::string_view rest = src_.substr(pos_);
   auto tooLong = [&] {
-    return Fail(Status::Code::TooLarge, T(" contains a piece of text longer than ") + FormatBytes(limits_.maxStringLength) +
-                                            T(", which is more than Featherweight allows."));
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} contains a piece of text longer than {1}, which is more than Featherweight allows."),
+                    {Subject(), FormatBytes(limits_.maxStringLength)}));
   };
   if (rest.starts_with("<?")) {
     size_t end = rest.find("?>");
@@ -361,7 +368,8 @@ XmlPull::Event XmlPull::ParseMarkup() {
   }
   if (rest.starts_with("<!DOCTYPE") || rest.starts_with("<!doctype"))
     return Fail(Status::Code::Rejected,
-                T(" contains a document type definition (DTD). Office files never do, so Featherweight won't open it."));
+                Fmt(T("{0} contains a document type definition (DTD). Office files never do, so Featherweight won't open it."),
+                    {Subject()}));
   if (rest.starts_with("<!")) return Damaged(T("it contains unexpected markup"));
   if (rest.starts_with("</")) return ParseEndTag();
   return ParseStartTag();
@@ -401,7 +409,7 @@ bool XmlPull::ParseDeclaration(std::string_view body) {
       known = known || EqualsNoCaseAscii(value, ok);
     if (!known) {
       Fail(Status::Code::Unsupported,
-           " uses the " + std::string(value) + T(" text encoding, which Office files don't use."));
+           Fmt(T("{0} uses the {1} text encoding, which Office files don't use."), {Subject(), value}));
       return false;
     }
   }
@@ -430,8 +438,9 @@ XmlPull::Event XmlPull::ParseStartTag() {
   std::string_view name = ParseName();
   if (!IsQName(name)) return Damaged(T("a tag is malformed"));
   if (name.size() > limits_.maxStringLength)
-    return Fail(Status::Code::TooLarge, T(" contains a name longer than ") + FormatBytes(limits_.maxStringLength) +
-                                            T(", which is more than Featherweight allows."));
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} contains a name longer than {1}, which is more than Featherweight allows."),
+                    {Subject(), FormatBytes(limits_.maxStringLength)}));
 
   // Raw attributes first; values are decoded once their number is known, so the decoded
   // strings never move while views into them exist.
@@ -465,17 +474,20 @@ XmlPull::Event XmlPull::ParseStartTag() {
     std::string_view value = src_.substr(pos_, end - pos_);
     if (value.find('<') != std::string_view::npos) return Damaged("an attribute value contains '<'");
     if (value.size() > limits_.maxStringLength || aname.size() > limits_.maxStringLength)
-      return Fail(Status::Code::TooLarge, T(" contains an attribute longer than ") + FormatBytes(limits_.maxStringLength) +
-                                              T(", which is more than Featherweight allows."));
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} contains an attribute longer than {1}, which is more than Featherweight allows."),
+                      {Subject(), FormatBytes(limits_.maxStringLength)}));
     pos_ = end + 1;
     raws.push_back({aname, value});
     if (raws.size() > limits_.maxAttributes)
-      return Fail(Status::Code::TooLarge, T(" has an element with more than ") + std::to_string(limits_.maxAttributes) +
-                                              T(" attributes, which is more than Featherweight allows."));
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} has an element with more than {1} attributes, which is more than Featherweight allows."),
+                      {Subject(), std::to_string(limits_.maxAttributes)}));
   }
   if (stack_.size() + 1 > limits_.maxDepth)
-    return Fail(Status::Code::TooLarge, T(" is nested more than ") + std::to_string(limits_.maxDepth) +
-                                            T(" levels deep, which is more than Featherweight allows."));
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} is nested more than {1} levels deep, which is more than Featherweight allows."),
+                    {Subject(), std::to_string(limits_.maxDepth)}));
 
   attrs_.clear();
   if (attrBuf_.size() < raws.size()) attrBuf_.resize(raws.size());

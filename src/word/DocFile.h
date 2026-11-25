@@ -15,7 +15,7 @@ class Document;
 // recovery autosaves), with the document written as .docx. DocView owns one and stays the tab.
 class DocFile : public FileSession {
  public:
-  DocFile() : FileSession(T(L"Document ")) {}
+  DocFile() : FileSession(T(L"Document {0}")) {}
 
   // Where Save As starts: the file, a recovered document's original, or for a new document the
   // first words of its text in the Documents folder.

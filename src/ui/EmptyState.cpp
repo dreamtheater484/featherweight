@@ -80,11 +80,13 @@ void DrawCard(Canvas& c, const D2D1_RECT_F& r, float radius, float s, float elev
 }
 
 // A shortcut as a small key cap: "Ctrl+N".
-float KeysWidth(Canvas& c, std::wstring_view keys, float s) {
+float KeysWidth(Canvas& c, std::wstring_view en, float s) {
+  const std::wstring keys = fw::lang::KeyNames(en);  // Strg+O in German
   return keys.empty() ? 0 : std::ceil(c.MeasureText(keys, 11.5f * s)) + 14 * s;
 }
-void DrawKeys(Canvas& c, std::wstring_view keys, float right, float cy, float s, D2D1_COLOR_F text, D2D1_COLOR_F line) {
-  const float w = KeysWidth(c, keys, s);
+void DrawKeys(Canvas& c, std::wstring_view en, float right, float cy, float s, D2D1_COLOR_F text, D2D1_COLOR_F line) {
+  const std::wstring keys = fw::lang::KeyNames(en);
+  const float w = KeysWidth(c, en, s);
   const D2D1_RECT_F r = RectF(std::round(right - w), std::round(cy - 11 * s), std::round(right), std::round(cy + 11 * s));
   c.StrokeRound(Inflate(r, -0.5f, -0.5f), 4 * s, line, 1);
   c.Text(keys, r, text, 11.5f * s, DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
@@ -150,8 +152,8 @@ void EmptyState::BuildItems(const std::vector<std::wstring>& templates, bool sho
     if (!fw::EditorShipped(k.kind)) continue;
     anyEditor = true;
     const bool doc = k.kind == fw::FileKind::Document;
-    Item& it = add(Part::New, static_cast<int>(k.kind), k.kind, KindGlyph(k.kind), T(L"Blank ") + std::wstring(k.noun),
-                   T(L"New ") + std::wstring(k.noun) + (doc ? L" (Ctrl+N)" : L""));
+    Item& it = add(Part::New, static_cast<int>(k.kind), k.kind, KindGlyph(k.kind), fw::Phrase(k.kind, fw::KindPhrase::Blank),
+                   fw::Phrase(k.kind, fw::KindPhrase::New) + std::wstring(doc ? L" (Ctrl+N)" : L""));
     it.sub = k.extensions.empty() ? L"" : k.extensions[0];
     if (doc) it.keys = L"Ctrl+N";
   }
@@ -353,7 +355,7 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
       recentCard_ = RectF(left, y, right, y + std::round(64 * s));
       note_ = recentCard_;
       noteText_ = recent.empty() ? T(L"Files you open show up here.")
-                                 : T(L"No recent file’s name has “") + fw::Trim(filter_.Text()) + T(L"” in it.");
+                                 : Fmt(T(L"No recent file’s name has “{0}” in it."), {fw::Trim(filter_.Text())});
     } else {
       float ry = y + pad;
       for (size_t k = 0; k < order.size(); ++k) {

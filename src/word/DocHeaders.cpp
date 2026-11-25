@@ -141,12 +141,12 @@ std::wstring DocView::HeaderFooterLabel(int page, bool footer) const {
   const layout::Page& p = pagination_->GetPage(page);
   const bool first = page == 0 || pagination_->GetPage(page - 1).section != p.section;
   const HdrFtrType type = edit::PageType(*doc_, p.section, first, p.number);
-  std::wstring label = type == HdrFtrType::First ? T(L"First page ")
-                       : type == HdrFtrType::Even ? T(L"Even page ")
-                       : doc_->Settings().evenAndOddHeaders ? T(L"Odd page ")
-                                                            : L"";
-  label += footer ? (label.empty() ? T(L"Footer") : L"footer") : (label.empty() ? T(L"Header") : L"header");
-  if (doc_->Sections().size() > 1) label += T(L" – Section ") + std::to_wstring(p.section + 1);
+  const wchar_t* label = type == HdrFtrType::First ? (footer ? T(L"First page footer") : T(L"First page header"))
+                         : type == HdrFtrType::Even ? (footer ? T(L"Even page footer") : T(L"Even page header"))
+                         : doc_->Settings().evenAndOddHeaders ? (footer ? T(L"Odd page footer") : T(L"Odd page header"))
+                         : footer                             ? T(L"Footer")
+                                                              : T(L"Header");
+  if (doc_->Sections().size() > 1) return Fmt(T(L"{0} – Section {1}"), {label, std::to_wstring(p.section + 1)});
   return label;
 }
 

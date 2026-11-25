@@ -32,6 +32,11 @@ struct FileKindInfo {
 
 std::span<const FileKindInfo> FileKinds();
 const FileKindInfo& Info(FileKind kind);
+
+// What the interface says about a kind, translated and whole: languages can't glue "New " to a noun
+// ("Neues Dokument", "Nueva presentación").
+enum class KindPhrase { New, Blank, OpenByDefault, CouldNotRegister };
+const wchar_t* Phrase(FileKind kind, KindPhrase phrase);
 // By extension, including the formats that come later; Unknown for anything else.
 FileKind KindOfPath(std::wstring_view path);
 

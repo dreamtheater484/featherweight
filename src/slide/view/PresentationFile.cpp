@@ -23,7 +23,7 @@ struct PresentationFile::Running {
   pkg::SaveResult result;
 };
 
-PresentationFile::PresentationFile() : FileSession(T(L"Presentation"), fw::pkg::OwnerStyle::Word) {}
+PresentationFile::PresentationFile() : FileSession(T(L"Presentation{0}"), fw::pkg::OwnerStyle::Word) {}
 
 PresentationFile::~PresentationFile() {
   if (run_ && run_->worker.joinable()) run_->worker.join();
@@ -55,7 +55,7 @@ std::wstring PresentationFile::SuggestedPath(const fw::slide::Presentation& deck
 bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wstring& path, std::function<void()> done,
                                  std::wstring& error) {
   if (run_) {
-    error = Title() + T(L" is being saved already.");
+    error = Fmt(T(L"{0} is being saved already."), {Title()});
     return false;
   }
   auto r = std::make_unique<Running>();
@@ -63,7 +63,7 @@ bool PresentationFile::StartSave(fw::slide::edit::Editor& editor, const std::wst
   const fw::slide::Presentation& deck = editor.Deck();
   pkg::Status st = fw::slide::edit::PrepareSave(editor, r->plan, FormatOf(r->job.target, deck.Format()));
   if (!st.Ok()) {
-    error = r->job.name + T(L" couldn't be saved. ") + fw::Utf8ToWide(st.message);
+    error = Fmt(T(L"{0} couldn't be saved. {1}"), {r->job.name, fw::Utf8ToWide(st.message)});
     return false;
   }
   r->editor = &editor;
@@ -91,7 +91,7 @@ bool PresentationFile::FinishSave(std::wstring& error) {
   if (run_->worker.joinable()) run_->worker.join();
   std::unique_ptr<Running> r = std::move(run_);
   if (!r->written.Ok()) {
-    error = r->job.name + T(L" couldn't be saved. ") + fw::Utf8ToWide(r->written.message);
+    error = Fmt(T(L"{0} couldn't be saved. {1}"), {r->job.name, fw::Utf8ToWide(r->written.message)});
     return false;
   }
   if (!r->result.Ok()) {

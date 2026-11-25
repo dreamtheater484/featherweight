@@ -1063,8 +1063,8 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     for (size_t i = 0; i < book.SheetCount(); ++i)
       if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
         return Status::Fail(Status::Code::Unsupported,
-                            "The sheet " + book.GetSheet(i).Name() +
-                                ::T(" holds macros, which only a macro-enabled workbook (.xlsm) keeps."));
+                            ::Fmt(::T("The sheet {0} holds macros, which only a macro-enabled workbook (.xlsm) keeps."),
+                                  {book.GetSheet(i).Name()}));
   const std::string& wbPart = book.WorkbookPart();
   std::vector<uint8_t> bytes;
   auto put = [&](std::string name, std::vector<uint8_t> data) { plan.changes.replace.push_back({std::move(name), std::move(data)}); };

@@ -756,15 +756,15 @@ std::wstring DocView::RulerTooltip(int x, int y) {
   const float o = r.Origin();
   switch (hit.part) {
     case RulerPart::Corner:
-      return std::wstring(TabName(rulerTab_)) + T(L": a click on the ruler sets one. Click here for another kind.");
-    case RulerPart::Strip: return std::wstring(T(L"Click to set a ")) + fw::ToLower(std::wstring(TabName(rulerTab_)));
+      return Fmt(T(L"{0}: a click on the ruler sets one. Click here for another kind."), {TabName(rulerTab_)});
+    case RulerPart::Strip: return Fmt(T(L"Click to set a {0}"), {fw::ToLower(std::wstring(TabName(rulerTab_)))});
     case RulerPart::FirstLine: return T(L"First line indent: ") + Length(r.first - o);
     case RulerPart::Hanging: return T(L"Hanging indent: ") + Length(r.indent - o);
     case RulerPart::LeftIndent: return T(L"Left indent: ") + Length(r.indent - o);
     case RulerPart::RightIndent: return T(L"Right indent: ") + Length(r.right - o);
     case RulerPart::Tab:
-      return std::wstring(TabName(r.tabs[hit.index].align)) + L": " + Length(r.frameL + Pt(r.tabs[hit.index].pos) - o) +
-             L". Drag it off the ruler to remove it; right-click for its kind and leader.";
+      return Fmt(T(L"{0}: {1}. Drag it off the ruler to remove it; right-click for its kind and leader."),
+                 {TabName(r.tabs[hit.index].align), Length(r.frameL + Pt(r.tabs[hit.index].pos) - o)});
     case RulerPart::MarginLeft: return T(L"Left margin: ") + Length(r.marginL);
     case RulerPart::MarginRight: return T(L"Right margin: ") + Length(r.width - r.marginR);
     case RulerPart::MarginTop: return T(L"Top margin: ") + Length(r.marginT);

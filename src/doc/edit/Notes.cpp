@@ -45,12 +45,16 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  const std::u16string what = endnote ? T(u"An endnote") : T(u"A footnote");
+  // Whole sentences for each kind of note, so each language makes its words agree with the note's.
+  const char16_t* cantAdd =
+      endnote ? T(u"An endnote can't be added to this document.") : T(u"A footnote can't be added to this document.");
   if (at.para >= doc.Paragraphs().size() || at.offset > doc.Para(at.para).text.size())
     return Fail(T(u"That place isn't in the document."));
   if (doc.Para(at.para).story != doc.MainStory())
-    return Fail(what + T(u" goes in the document's text, not in a header, a footer, a note, a comment or a text box."));
-  if (InsideField(doc, at)) return Fail(what + T(u" can't go inside a field."));
+    return Fail(endnote ? T(u"An endnote goes in the document's text, not in a header, a footer, a note, a comment or a text box.")
+                        : T(u"A footnote goes in the document's text, not in a header, a footer, a note, a comment or a text box."));
+  if (InsideField(doc, at))
+    return Fail(endnote ? T(u"An endnote can't go inside a field.") : T(u"A footnote can't go inside a field."));
   const StoryKind kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
   const std::u16string name = endnote ? T(u"Endnote") : T(u"Footnote");
   const std::string tag = endnote ? "endnote" : "footnote";
@@ -66,7 +70,7 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   if (!r) return r;
   if (parts.EnsurePart(PartKind::Styles) == kNoElem) return Fail(T(u"This document's styles can't change."));
   const ElemId root = parts.EnsurePart(endnote ? PartKind::Endnotes : PartKind::Footnotes);
-  if (root == kNoElem) return Fail(what + T(u" can't be added to this document."));
+  if (root == kNoElem) return Fail(cantAdd);
 
   // Then the styles, the reference's, and the note, its paragraph after every other: the caret goes
   // after its number and space. The notes after it number again from the reference's page.
@@ -85,12 +89,12 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const uint32_t story = te.AddNote(root, endnote, id, textStyle, markStyle);
   if (story == kNone) {
     te.Abort();
-    return Fail(what + T(u" can't be added to this document."));
+    return Fail(cantAdd);
   }
   te.Commit();
   if (!te.Refused().empty()) return Fail(te.Refused());
   const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
-  if (paras.empty()) return Fail(what + T(u" can't be added to this document."));
+  if (paras.empty()) return Fail(cantAdd);
   group.done = true;
   Result out;
   out.caret = {paras.front(), std::min<uint32_t>(2, static_cast<uint32_t>(doc.Para(paras.front()).text.size()))};

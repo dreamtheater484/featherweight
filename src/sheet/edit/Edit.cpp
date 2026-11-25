@@ -2530,8 +2530,8 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
 
     // ---- What Excel refuses, and what Featherweight can't move yet.
     auto cantYet = [](std::u16string_view what) {
-      return Result::Fail(::T(u"Featherweight can't insert or delete cells on this sheet yet: it has ") + std::u16string(what) +
-                          u".");
+      return Result::Fail(
+          ::Fmt(::T(u"Featherweight can't insert or delete cells on this sheet yet: it has {0}."), {what}));
     };
     if (std::u16string what = refs::CheckSheetXml(A::Text(s)); !what.empty()) return cantYet(what);
     std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part

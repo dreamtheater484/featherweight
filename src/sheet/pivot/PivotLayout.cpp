@@ -155,8 +155,9 @@ bool RefreshCache(Workbook& book, Cache& cache, const std::vector<bool>& axisFie
     if (column[f] == SIZE_MAX && f < n && std::find(column.begin(), column.end(), f) == column.end()) column[f] = f;
   for (size_t f = 0; f < cache.fields.size(); ++f)
     if (column[f] == SIZE_MAX || cache.fields[f].kept) {
-      why = T(u"The PivotTable's source no longer has the column “") + std::u16string(cache.fields[f].name.begin(), cache.fields[f].name.end()) +
-            T(u"”. Featherweight refreshes PivotTables whose source keeps its columns.");
+      why = Fmt(T(u"The PivotTable's source no longer has the column “{0}”. Featherweight refreshes PivotTables "
+                  u"whose source keeps its columns."),
+                {std::u16string(cache.fields[f].name.begin(), cache.fields[f].name.end())});
       if (cache.fields[f].kept) why = T(u"This PivotTable uses features Featherweight keeps but doesn't refresh.");
       return false;
     }

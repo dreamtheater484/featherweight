@@ -1905,7 +1905,7 @@ struct EditorState {
         }
         if (child == kNoElem) child = AddInOrder(cur, name);
         if (child == kNoElem) {
-          why = T(u"Featherweight doesn't know the property ") + Msg(std::string(part).c_str()) + u".";
+          why = Fmt(T(u"Featherweight doesn't know the property {0}."), {Msg(std::string(part).c_str())});
           return false;
         }
         Unshare(child);
@@ -1916,7 +1916,7 @@ struct EditorState {
               why = T(u"A property's value can't hold control characters.");
               return false;
             } else if (!SetAttr(child, Name(attr), value)) {
-              why = T(u"Featherweight doesn't know the attribute ") + Msg(attr.c_str()) + u".";
+              why = Fmt(T(u"Featherweight doesn't know the attribute {0}."), {Msg(attr.c_str())});
               return false;
             }
           break;

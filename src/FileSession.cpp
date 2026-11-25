@@ -48,7 +48,7 @@ void FileSession::Copy(std::wstring title, std::wstring suggested, bool dirty) {
 std::wstring FileSession::Title() const {
   switch (origin_) {
     case Origin::File: return fw::FileNameOf(path_);
-    case Origin::New: return newName_ + std::to_wstring(number_);
+    case Origin::New: return Fmt(newName_.c_str(), {std::to_wstring(number_)});
     case Origin::Copy: return title_;
   }
   return {};
@@ -92,13 +92,13 @@ bool FileSession::BeginSave(const std::wstring& path, SaveJob& job, std::wstring
   if (sameFile) {
     // Two versions are never mixed (plan §3): the file must be as we last read or wrote it.
     if (pkg::CheckDisk(path_, stamp_) != pkg::Snapshot::DiskState::Unchanged) {
-      error = job.name + T(L" was changed by another program after you opened it.");
+      error = Fmt(T(L"{0} was changed by another program after you opened it."), {job.name});
       return false;
     }
     inUse_ = pkg::CheckInUse(path_, Config().user, owner_);
     if (inUse_.locked) {
-      error = inUse_.user.empty() ? job.name + T(L" is open in another program, so it can't be replaced.")
-                                  : job.name + T(L" is in use by ") + inUse_.user + T(L", so it can't be replaced.");
+      error = inUse_.user.empty() ? Fmt(T(L"{0} is open in another program, so it can't be replaced."), {job.name})
+                                  : Fmt(T(L"{0} is in use by {1}, so it can't be replaced."), {job.name, inUse_.user});
       return false;
     }
   }
@@ -118,7 +118,7 @@ pkg::SaveResult FileSession::WriteSave(const SaveJob& job, std::vector<uint8_t> 
     if (bytes.empty()) {
       pkg::SaveResult failed;
       failed.failure = pkg::SaveFailure::Other;
-      failed.message = fw::WideToUtf8(job.name + T(L" couldn't be saved — Windows couldn't encrypt it."));
+      failed.message = fw::WideToUtf8(Fmt(T(L"{0} couldn't be saved — Windows couldn't encrypt it."), {job.name}));
       return failed;
     }
   }
@@ -203,7 +203,8 @@ void FileSession::AutosaveProtected(std::span<const uint8_t> file) {
 std::wstring FileSession::InUseMessage() const {
   if (!inUse_.locked) return {};
   const std::wstring name = Title();
-  return (inUse_.user.empty() ? name + T(L" is open in another program.") : name + T(L" is in use by ") + inUse_.user + L".") +
+  return (inUse_.user.empty() ? Fmt(T(L"{0} is open in another program."), {name})
+                              : Fmt(T(L"{0} is in use by {1}."), {name, inUse_.user})) +
          T(L" Changes you make here can be saved as a copy.");
 }
 

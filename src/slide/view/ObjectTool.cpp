@@ -1498,7 +1498,7 @@ bool ObjectTool::InsertPictures(const std::vector<std::wstring>& files, draw::Po
   for (const std::wstring& f : files) {
     std::vector<uint8_t> bytes = ReadFileBytes(f);
     if (bytes.empty()) {
-      Refused(T(L"Featherweight couldn't read ") + f + L".");
+      Refused(Fmt(T(L"Featherweight couldn't read {0}."), {f}));
       continue;
     }
     any = InsertPictureBytes(std::move(bytes), at, centred) || any;
@@ -2017,7 +2017,7 @@ bool ObjectTool::Query(int cmd, CommandState& s) {
       fw::slide::edit::Editor* ed = host_.deck()->Editor();
       s.enabled = cmd == CmdUndo ? ed->CanUndo() : ed->CanRedo();
       const std::u16string name = cmd == CmdUndo ? ed->UndoName() : ed->RedoName();
-      s.label = (cmd == CmdUndo ? T(L"Undo ") : T(L"Redo ")) + W(name);
+      s.label = Fmt(cmd == CmdUndo ? T(L"Undo {0}") : T(L"Redo {0}"), {W(name)});
       return true;
     }
 #endif
@@ -2359,27 +2359,29 @@ bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {
   const size_t dot = file.find_last_of(L'.');
   std::wstring ext = dot == std::wstring::npos ? std::wstring() : file.substr(dot);
   for (wchar_t& c : ext) c = static_cast<wchar_t>(std::towlower(c));
-  const wchar_t* what = video ? L"video" : L"audio file";
   if (!fw::slide::show::PlayableMediaExtension(ext)) {
-    Refused(std::wstring(T(L"That isn't a ")) + what + T(L" Featherweight can insert."));
+    Refused(video ? T(L"That isn't a video Featherweight can insert.")
+                  : T(L"That isn't a audio file Featherweight can insert."));
     return false;
   }
   std::string read;
   if (!util::ReadFileBytes(file, read, kMaxMediaFile)) {
-    Refused(T(L"Featherweight couldn't read ") + file + T(L" (files up to 1 GB can be inserted)."));
+    Refused(Fmt(T(L"Featherweight couldn't read {0} (files up to 1 GB can be inserted)."), {file}));
     return false;
   }
   std::vector<uint8_t> bytes(read.begin(), read.end());
   read.clear();
   read.shrink_to_fit();
+  const wchar_t* unread =
+      video ? T(L"Featherweight couldn't read that video.") : T(L"Featherweight couldn't read that audio file.");
   fw::slide::show::MediaInfo info;
   if (!fw::slide::show::ReadMediaInfo(bytes, ext, video, &info)) {
-    Refused(std::wstring(T(L"Featherweight couldn't read that ")) + what + L".");
+    Refused(unread);
     return false;
   }
   std::vector<uint8_t> poster = video ? std::move(info.posterPng) : fw::slide::show::AudioIconPng(96);
   if (poster.empty()) {
-    Refused(std::wstring(T(L"Featherweight couldn't read that ")) + what + L".");
+    Refused(unread);
     return false;
   }
   // A video at its size (96 dpi) fitted to the slide, centred; an audio as PowerPoint's speaker, centred.

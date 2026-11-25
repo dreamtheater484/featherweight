@@ -63,7 +63,8 @@ OpenResult PresentationView::Unlock(const std::wstring& password, std::vector<ui
   const std::wstring name = Title();
   auto cf = pkg::CompoundFile::Open(protected_);
   if (!cf || !crypto::IsEncryptedPackage(*cf)) {
-    error = name + T(L" couldn't be opened — it isn't a presentation Featherweight can open, or it is damaged.");
+    error = Fmt(T(L"{0} couldn't be opened — it isn't a presentation Featherweight can open, or it is damaged."),
+                {name});
     return OpenResult::Failed;
   }
   if (password.empty()) {
@@ -75,13 +76,13 @@ OpenResult PresentationView::Unlock(const std::wstring& password, std::vector<ui
       if (!plain.empty()) break;
       [[fallthrough]];  // an empty package
     case crypto::Result::Damaged:
-      error = name + T(L" couldn't be opened — it seems to be damaged.");
+      error = Fmt(T(L"{0} couldn't be opened — it seems to be damaged."), {name});
       return OpenResult::Failed;
     case crypto::Result::WrongPassword:
       needPassword_ = true;
       return OpenResult::WrongPassword;
     case crypto::Result::Unsupported:
-      error = name + T(L" couldn't be opened — it's protected in a way Featherweight doesn't support.");
+      error = Fmt(T(L"{0} couldn't be opened — it's protected in a way Featherweight doesn't support."), {name});
       return OpenResult::Failed;
   }
   needPassword_ = false;

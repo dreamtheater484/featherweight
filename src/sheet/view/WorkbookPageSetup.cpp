@@ -149,7 +149,7 @@ std::vector<HfPreset> Presets(const std::wstring& sheet, const std::wstring& fil
           {sheet, "&C&A"},
           {T(L"Confidential, date, Page 1"), "&LConfidential&C&D&RPage &P"},
           {file, "&C&F"},
-          {T(L"Path and ") + file, "&C&Z&F"}};
+          {Fmt(T(L"Path and {0}"), {file}), "&C&Z&F"}};
 }
 
 // Lengths in the user's units: centimeters where Windows measures metric, else inches.
@@ -410,7 +410,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     const auto* paper = std::find_if(std::begin(kPapers), std::end(kPapers), [&](const Paper& x) { return x.code == p.paperSize; });
     paper_.ReplaceText(!p.paperWidth.empty() ? Utf8ToWide(p.paperWidth + " x " + p.paperHeight)
                        : paper != std::end(kPapers) ? std::wstring(paper->name)
-                                                     : T(L"Paper ") + std::to_wstring(p.paperSize));
+                                                     : Fmt(T(L"Paper {0}"), {std::to_wstring(p.paperSize)}));
     const int scaling = ScalingOf(s);
     scaling_.ReplaceText(scaling < 0 ? std::wstring(T(L"Custom")) : kScalings[scaling]);
     scale_.ReplaceText(std::to_wstring(p.scale));
@@ -1029,8 +1029,9 @@ void WorkbookView::DrawPageBreakPreview(Canvas& c) {
       // "Page N", large and pale, in the page's middle.
       const float size = std::clamp(std::min(Width(r), Height(r)) / 6, 12 * static_cast<float>(ui_), 96 * static_cast<float>(ui_));
       const float cy = (r.top + r.bottom) / 2;
-      c.Text(T(L"Page ") + std::to_wstring(page->number), RectF(r.left, cy - size * 0.7f, r.right, cy + size * 0.7f),
-             Rgb(0x7F7F7F, 0.45f), size, DWRITE_FONT_WEIGHT_BOLD, Align::Center);
+      c.Text(Fmt(T(L"Page {0}"), {std::to_wstring(page->number)}),
+             RectF(r.left, cy - size * 0.7f, r.right, cy + size * 0.7f), Rgb(0x7F7F7F, 0.45f), size,
+             DWRITE_FONT_WEIGHT_BOLD, Align::Center);
       // Its edges: a break between pages dashed (an automatic one) or solid (a manual one).
       auto edge = [&](float x1, float y1, float x2, float y2, bool rows, uint32_t at) {
         const bool inner = Inner(*pages, rows, at) && at > 0;

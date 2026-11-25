@@ -445,8 +445,10 @@ class WorkbookView::NotePanel : public PanelContent {
 
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
-    const std::wstring by = author_.empty() ? std::wstring() : L" by " + Utf8ToWide(author_);
-    c.Text(T(L"Note on ") + Utf8ToWide(CellName(cell_.row, cell_.col)) + by, labelRc_, p.textSecondary, 12 * ui_);
+    const std::wstring cell = Utf8ToWide(CellName(cell_.row, cell_.col));
+    const std::wstring head = author_.empty() ? Fmt(T(L"Note on {0}"), {cell})
+                                              : Fmt(T(L"Note on {0} by {1}"), {cell, Utf8ToWide(author_)});
+    c.Text(head, labelRc_, p.textSecondary, 12 * ui_);
     c.Text(T(L"Box width and height, in points"), sizeRc_, p.textSecondary, 12 * ui_);
     c.TextWrapped(T(L"Enter saves. A ¶ starts a new line in the note. A new size puts the box beside the cell."), noteRc_,
                   p.textSecondary, 12 * ui_, 3);
@@ -555,7 +557,7 @@ class WorkbookView::CommentPanel : public PanelContent {
 
   void Draw(Canvas& c) override {
     const Palette& p = theme::P();
-    std::wstring head = T(L"Comment on ") + Utf8ToWide(CellName(cell_.row, cell_.col));
+    std::wstring head = Fmt(T(L"Comment on {0}"), {Utf8ToWide(CellName(cell_.row, cell_.col))});
     if (thread_ && thread_->resolved) head += T(L" · resolved");
     c.Text(head, labelRc_, p.textSecondary, 12 * ui_);
     if (thread_) {

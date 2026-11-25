@@ -198,9 +198,9 @@ class DocStyles::TabsPanel : public PanelContent, DocPanelRows {
       c->enabled = can;
     clear_.enabled = can && Near().has_value();
     clearAll_.enabled = can && !stops_.empty();
-    note_ = stops_.empty() ? ::T(L"No tab stops of its own: tabs go to the default stops, every ") +
-                                 Length(s_.Doc().Settings().defaultTabStop.Value()) + L"."
-                           : ::T(L"Default stops every ") + Length(s_.Doc().Settings().defaultTabStop.Value()) + ::T(L" after these.");
+    const std::wstring every = Length(s_.Doc().Settings().defaultTabStop.Value());
+    note_ = stops_.empty() ? ::Fmt(::T(L"No tab stops of its own: tabs go to the default stops, every {0}."), {every})
+                           : ::Fmt(::T(L"Default stops every {0} after these."), {every});
   }
 
   void Pick(int i) {
@@ -295,7 +295,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
       // "Style1", "Style2"... as Word names them.
       std::wstring name;
       for (int n = 1; n < 1000; ++n) {
-        name = ::T(L"Style") + std::to_wstring(n);
+        name = ::Fmt(::T(L"Style{0}"), {std::to_wstring(n)});
         if (!s_.Doc().FindStyle(fw::WideToUtf8(name))) break;
       }
       name_.SetText(name);

@@ -155,7 +155,7 @@ class WorkbookView::ShapePanel : public PanelContent {
     alt_.onCommit = [this](const std::wstring& t, int) { Apply(data::kFormatAltText, [&](ObjectFormat& f) { f.altText = WideToUtf8(t); }); };
   }
 
-  std::wstring Title() const override { return name_.empty() ? T(L"Format object") : T(L"Format ") + name_; }
+  std::wstring Title() const override { return name_.empty() ? T(L"Format object") : Fmt(T(L"Format {0}"), {name_}); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -361,7 +361,8 @@ bool WorkbookView::InsertPictureFiles(const std::vector<std::wstring>& files) {
   for (const std::wstring& path : files) {
     std::string bytes;
     if (!IsPictureFile(path) || !util::ReadFileBytes(path, bytes, kMaxPictureFile)) {
-      host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(path) + T(L"” couldn't be read, or isn't a picture Featherweight adds."));
+      host_.ViewMessage(BannerKind::Warning, Fmt(T(L"“{0}” couldn't be read, or isn't a picture Featherweight adds."),
+                                                 {fw::FileNameOf(path)}));
       continue;
     }
     if (!InsertPictureBytes(bytes, "")) break;

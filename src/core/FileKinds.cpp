@@ -26,6 +26,17 @@ const FileKindInfo kKinds[] = {
 };
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kFileKindCount);
 
+// By kind, then KindPhrase. PDFs are never made new.
+constexpr UiText kPhrases[kFileKindCount][4] = {
+    {L"", L"", N_(L"Open PDFs with Featherweight by default?"), N_(L"Featherweight couldn’t register itself as a PDF app.")},
+    {N_(L"New document"), N_(L"Blank document"), N_(L"Open documents with Featherweight by default?"),
+     N_(L"Featherweight couldn’t register itself as a document app.")},
+    {N_(L"New spreadsheet"), N_(L"Blank spreadsheet"), N_(L"Open spreadsheets with Featherweight by default?"),
+     N_(L"Featherweight couldn’t register itself as a spreadsheet app.")},
+    {N_(L"New presentation"), N_(L"Blank presentation"), N_(L"Open presentations with Featherweight by default?"),
+     N_(L"Featherweight couldn’t register itself as a presentation app.")},
+};
+
 bool g_editorForTesting[kFileKindCount] = {};
 
 bool Valid(FileKind kind) { return static_cast<int>(kind) >= 0 && static_cast<int>(kind) < kFileKindCount; }
@@ -35,6 +46,10 @@ bool Valid(FileKind kind) { return static_cast<int>(kind) >= 0 && static_cast<in
 std::span<const FileKindInfo> FileKinds() { return kKinds; }
 
 const FileKindInfo& Info(FileKind kind) { return kKinds[Valid(kind) ? static_cast<int>(kind) : 0]; }
+
+const wchar_t* Phrase(FileKind kind, KindPhrase phrase) {
+  return kPhrases[Valid(kind) ? static_cast<int>(kind) : 0][static_cast<int>(phrase)];
+}
 
 FileKind KindOfPath(std::wstring_view path) {
   for (const FileKindInfo& k : kKinds) {

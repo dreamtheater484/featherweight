@@ -134,11 +134,14 @@ std::wstring HyperlinkFieldTarget(std::u16string_view code) {
 std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
   using Code = fw::pkg::Status::Code;
   switch (st.code) {
-    case Code::IoError: return name + T(L" couldn't be opened — the file couldn't be read.");
-    case Code::TooLarge: return name + T(L" couldn't be opened — it goes beyond the limits Featherweight sets for safety.");
-    case Code::Rejected: return name + T(L" couldn't be opened — it contains something Featherweight refuses for safety.");
-    case Code::Unsupported: return name + T(L" couldn't be opened — it uses something Featherweight doesn't support yet.");
-    default: return name + T(L" couldn't be opened — it seems to be damaged or isn't a Word document.");
+    case Code::IoError: return Fmt(T(L"{0} couldn't be opened — the file couldn't be read."), {name});
+    case Code::TooLarge:
+      return Fmt(T(L"{0} couldn't be opened — it goes beyond the limits Featherweight sets for safety."), {name});
+    case Code::Rejected:
+      return Fmt(T(L"{0} couldn't be opened — it contains something Featherweight refuses for safety."), {name});
+    case Code::Unsupported:
+      return Fmt(T(L"{0} couldn't be opened — it uses something Featherweight doesn't support yet."), {name});
+    default: return Fmt(T(L"{0} couldn't be opened — it seems to be damaged or isn't a Word document."), {name});
   }
 }
 
@@ -197,7 +200,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
   const bool doc = std::find(streams.begin(), streams.end(), "WordDocument") != streams.end();
   const bool locked = file && (doc ? crypto::IsEncryptedDoc(*file) : crypto::IsEncryptedPackage(*file));
   if (!file || (!doc && !locked)) {
-    error = name + T(L" couldn't be opened — it isn't a Word document Featherweight can open.");
+    error = Fmt(T(L"{0} couldn't be opened — it isn't a Word document Featherweight can open."), {name});
     return OpenResult::Failed;
   }
   if (locked && password.empty()) {
@@ -222,7 +225,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
           },
           st, locked);
       if (bytes_.empty()) {
-        error = name + T(L" couldn't be opened. ") + fw::Utf8ToWide(st.message);
+        error = Fmt(T(L"{0} couldn't be opened. {1}"), {name, fw::Utf8ToWide(st.message)});
         return OpenResult::Failed;
       }
       if (locked) key = crypto::NewKey(password);  // the .docx it's saved as keeps its password
@@ -239,11 +242,11 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
       if (!bytes_.empty()) break;
       [[fallthrough]];  // an empty package
     case crypto::Result::Damaged:
-      error = name + T(L" couldn't be opened — it seems to be damaged.");
+      error = Fmt(T(L"{0} couldn't be opened — it seems to be damaged."), {name});
       return OpenResult::Failed;
     case crypto::Result::WrongPassword: needPassword_ = true; return OpenResult::WrongPassword;
     case crypto::Result::Unsupported:
-      error = name + T(L" couldn't be opened — it's protected in a way Featherweight doesn't support.");
+      error = Fmt(T(L"{0} couldn't be opened — it's protected in a way Featherweight doesn't support."), {name});
       return OpenResult::Failed;
   }
   needPassword_ = false;
@@ -302,7 +305,7 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
       // The stamp first: a change while the file is read then shows as a change on disk.
       std::string file;
       if (!fw::pkg::StampOf(path_, {}, protectedStamp_) || !util::ReadFileBytes(path_, file, 1u << 30)) {
-        error = name + T(L" couldn't be opened — the file couldn't be read.");
+        error = Fmt(T(L"{0} couldn't be opened — the file couldn't be read."), {name});
         return OpenResult::Failed;
       }
       protected_.assign(file.begin(), file.end());
@@ -322,7 +325,8 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
                          : fw::doc::docx::DocumentFromTemplate(source->Bytes(), bytes_);
     if (!source || !st.Ok()) {
       error = odf && st.code == fw::pkg::Status::Code::Damaged
-                  ? name + T(L" couldn't be opened — it seems to be damaged or isn't an OpenDocument text document.")
+                  ? Fmt(T(L"{0} couldn't be opened — it seems to be damaged or isn't an OpenDocument text document."),
+                        {name})
                   : OpenError(name, st);
       return OpenResult::Failed;
     }
@@ -498,7 +502,8 @@ void DocView::CollectAnnotations() {
         changes_.push_back(std::move(ch));
         continue;
       }
-      std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
+      const std::wstring by = Wide(r.author);
+      const bool anon = by.empty();
       if (ch.deletion) {
         std::wstring gone;
         for (uint32_t p = ch.from.para; p <= ch.to.para && gone.size() < 200; ++p) {
@@ -510,10 +515,12 @@ void DocView::CollectAnnotations() {
           if (p != ch.to.para) gone += L' ';
         }
         if (gone.size() > 200) gone = gone.substr(0, 200) + L"…";
-        ch.text = std::wstring(r.kind == Kind::MoveFrom ? T(L"Moved away") : T(L"Deleted")) + by +
-                  (gone.empty() ? std::wstring() : L": “" + gone + L"”");
+        ch.text = r.kind == Kind::MoveFrom ? (anon ? T(L"Moved away") : Fmt(T(L"Moved away by {0}"), {by}))
+                                           : (anon ? T(L"Deleted") : Fmt(T(L"Deleted by {0}"), {by}));
+        if (!gone.empty()) ch.text += L": “" + gone + L"”";
       } else {
-        ch.text = std::wstring(r.kind == Kind::MoveTo ? T(L"Moved here") : T(L"Inserted")) + by;
+        ch.text = r.kind == Kind::MoveTo ? (anon ? T(L"Moved here") : Fmt(T(L"Moved here by {0}"), {by}))
+                                         : (anon ? T(L"Inserted") : Fmt(T(L"Inserted by {0}"), {by}));
       }
       changes_.push_back(std::move(ch));
     }
@@ -597,9 +604,9 @@ void DocView::ShowNotices() {
   if (!imported_.empty()) {
     const size_t dot = imported_.find_last_of(L'.');
     const bool odf = fw::EndsWithNoCase(imported_, L".odt") || fw::EndsWithNoCase(imported_, L".ott");
-    text = imported_ + (odf ? T(L" is an OpenDocument text document") : T(L" is a Word 97–2003 document")) +
-           L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
-           L".docx and leaves it as it is.";
+    text = Fmt(odf ? T(L"{0} is an OpenDocument text document. Saving makes a new {1}.docx and leaves it as it is.")
+                   : T(L"{0} is a Word 97–2003 document. Saving makes a new {1}.docx and leaves it as it is."),
+               {imported_, dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)});
   }
   bool ink = false;
   for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;
@@ -609,12 +616,14 @@ void DocView::ShowNotices() {
     std::wstring list;
     for (size_t i = 0; i < subs.size() && i < 3; ++i) {
       if (i) list += L", ";
-      list += subs[i].requested + T(L" (shown in ") + subs[i].used + L")";
+      list += Fmt(T(L"{0} (shown in {1})"), {subs[i].requested, subs[i].used});
     }
-    if (subs.size() > 3) list += L" and " + std::to_wstring(subs.size() - 3) + L" more";
+    if (subs.size() > 3) list = Fmt(T(L"{0} and {1} more"), {list, std::to_wstring(subs.size() - 3)});
     if (!text.empty()) text += L" ";
-    text += (subs.size() == 1 ? T(L"A font in this document isn't installed: ") : T(L"Fonts in this document aren't installed: ")) +
-            list + L". Lines may break differently than in Word.";
+    text += Fmt(subs.size() == 1
+                    ? T(L"A font in this document isn't installed: {0}. Lines may break differently than in Word.")
+                    : T(L"Fonts in this document aren't installed: {0}. Lines may break differently than in Word."),
+                {list});
   }
   if (!text.empty()) host_.ViewMessage(BannerKind::Info, text);
 }
@@ -1291,7 +1300,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   if (OnRuler(x, y)) return RulerTooltip(x, y);
   Hit hit = HitAt(x, y);
   if (!hit.link.empty()) {
-    if (hit.link[0] == L'#') return T(L"Go to “") + hit.link.substr(1) + L"”";
+    if (hit.link[0] == L'#') return Fmt(T(L"Go to “{0}”"), {hit.link.substr(1)});
     return hit.link;
   }
   std::wstring tip;
@@ -1524,7 +1533,7 @@ bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& er
   const std::wstring name = fw::FileNameOf(path);
   // A copy never replaces the document it is a copy of.
   if (!path_.empty() && fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
-    error = name + T(L" is this document's own file. Choose another name for the copy.");
+    error = Fmt(T(L"{0} is this document's own file. Choose another name for the copy."), {name});
     return false;
   }
   namespace edit = fw::doc::edit;
@@ -1532,7 +1541,8 @@ bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& er
                             : format == 1 ? edit::TextFile(*doc_, edit::TextEncoding::Utf8)
                                           : edit::TextFile(*doc_, edit::TextEncoding::Utf16);
   if (!util::WriteFileAtomic(path, bytes)) {
-    error = name + T(L" couldn't be saved. It may be open in another program, or the folder can't be written to.");
+    error = Fmt(T(L"{0} couldn't be saved. It may be open in another program, or the folder can't be written to."),
+                {name});
     return false;
   }
   return true;
@@ -1633,7 +1643,7 @@ PrintOutcome DocView::PrintToFile(const std::wstring& path, std::wstring& messag
   Microsoft::WRL::ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE,
                                     FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &stream))) {
-    message = T(L"Couldn't create ") + path;
+    message = Fmt(T(L"Couldn't create {0}"), {path});
     return PrintOutcome::Failed;
   }
   return PrintPages(L"Microsoft Print to PDF", nullptr, pages, stream.Get(), nullptr, message);
@@ -1669,7 +1679,8 @@ PrintOutcome DocView::PrintPages(const std::wstring& printer, const DEVMODEW* de
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(done) + T(L" pages to the printer");
+  message = done == 1 ? T(L"Sent 1 page to the printer")
+                      : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(done)});
   return PrintOutcome::Printed;
 }
 
@@ -1844,7 +1855,8 @@ CommandState DocView::QueryCommand(int cmd) {
   // (The names are copies: one each, so their iterators are of the same string.)
   if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
     const std::u16string name = cmd == CmdUndo ? editor_->UndoName() : editor_->RedoName();
-    s.label = (cmd == CmdUndo ? T(L"Undo ") : T(L"Redo ")) + fw::ToLower(std::wstring(name.begin(), name.end()));
+    s.label = Fmt(cmd == CmdUndo ? T(L"Undo {0}") : T(L"Redo {0}"),
+                  {fw::ToLower(std::wstring(name.begin(), name.end()))});
   }
   return s;
 }
@@ -2006,7 +2018,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   }
   AppendItem(m, CmdSelectAll, T(L"Select all\tCtrl+A"));
   AppendSeparator(m);
-  AppendItem(m, CmdZoomIn, format_ ? T(L"Zoom in") : L"Zoom in\tCtrl+=");
+  AppendItem(m, CmdZoomIn, format_ ? T(L"Zoom in") : T(L"Zoom in\tCtrl+="));
   AppendItem(m, CmdZoomOut, page_ ? T(L"Zoom out\tCtrl+Num −") : T(L"Zoom out\tCtrl+−"));
   AppendItem(m, CmdZoomFitWidth, T(L"Fit width\tCtrl+3"));
   AppendItem(m, CmdZoomFitPage, format_ ? T(L"Fit page") : T(L"Fit page\tCtrl+2"));
@@ -2016,7 +2028,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
 }
 
 void DocView::BuildStatusBar(StatusBarModel& m) {
-  std::wstring pages = T(L"Page ") + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
+  std::wstring pages = Fmt(T(L"Page {0} of {1}"), {std::to_wstring(currentPage_ + 1), std::to_wstring(PageCount())});
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
   ProofStatus(m);  // words and language

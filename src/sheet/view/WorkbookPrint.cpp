@@ -239,7 +239,7 @@ PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& m
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {
-    message = T(L"Couldn't create ") + path;
+    message = Fmt(T(L"Couldn't create {0}"), {path});
     return PrintOutcome::Failed;
   }
   draw::PrintJob job;
@@ -285,7 +285,8 @@ PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODE
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? T(L"Sent 1 page to the printer") : T(L"Sent ") + std::to_wstring(done) + T(L" pages to the printer");
+  message = done == 1 ? T(L"Sent 1 page to the printer")
+                      : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(done)});
   return PrintOutcome::Printed;
 }
 
@@ -314,8 +315,8 @@ bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
     message = T(L"The PDF couldn't be saved.");
     return false;
   }
-  message = count == 1 ? T(L"Exported 1 page to ") + FileNameOf(path)
-                       : T(L"Exported ") + std::to_wstring(count) + L" pages to " + FileNameOf(path);
+  message = count == 1 ? Fmt(T(L"Exported 1 page to {0}"), {FileNameOf(path)})
+                       : Fmt(T(L"Exported {0} pages to {1}"), {std::to_wstring(count), FileNameOf(path)});
   return true;
 }
 

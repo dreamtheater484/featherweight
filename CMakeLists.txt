@@ -190,6 +190,8 @@ if(FW_BUILD_TESTS)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME strings_marked COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/strings/mark.py" --check)
+    # Each language's catalog: placeholders, shortcuts, line breaks and access keys as the English's.
+    add_test(NAME strings_catalogs COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/strings/check.py")
   endif()
 endif()
 

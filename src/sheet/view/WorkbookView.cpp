@@ -60,11 +60,14 @@ class ScreenGeometry : public Geometry {
 std::wstring OpenError(const std::wstring& name, const pkg::Status& st) {
   using Code = pkg::Status::Code;
   switch (st.code) {
-    case Code::IoError: return name + T(L" couldn't be opened — the file couldn't be read.");
-    case Code::TooLarge: return name + T(L" couldn't be opened — it goes beyond the limits Featherweight sets for safety.");
-    case Code::Rejected: return name + T(L" couldn't be opened — it contains something Featherweight refuses for safety.");
-    case Code::Unsupported: return name + T(L" couldn't be opened — it uses something Featherweight doesn't support yet.");
-    default: return name + T(L" couldn't be opened — it seems to be damaged or isn't an Excel workbook.");
+    case Code::IoError: return Fmt(T(L"{0} couldn't be opened — the file couldn't be read."), {name});
+    case Code::TooLarge:
+      return Fmt(T(L"{0} couldn't be opened — it goes beyond the limits Featherweight sets for safety."), {name});
+    case Code::Rejected:
+      return Fmt(T(L"{0} couldn't be opened — it contains something Featherweight refuses for safety."), {name});
+    case Code::Unsupported:
+      return Fmt(T(L"{0} couldn't be opened — it uses something Featherweight doesn't support yet."), {name});
+    default: return Fmt(T(L"{0} couldn't be opened — it seems to be damaged or isn't an Excel workbook."), {name});
   }
 }
 
@@ -123,8 +126,9 @@ void WorkbookView::WorkDone() {
     }
   } else {
     partial_ = true;
-    host_.ViewMessage(BannerKind::Error,
-                      Title() + T(L" couldn't be read in full: only its first rows show, and it can't be saved."));
+    host_.ViewMessage(
+        BannerKind::Error,
+        Fmt(T(L"{0} couldn't be read in full: only its first rows show, and it can't be saved."), {Title()}));
   }
   load.reset();
   text_->Clear();
@@ -252,7 +256,8 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
     });
     if (!st.Ok()) {
       error = st.code == pkg::Status::Code::Damaged || st.code == pkg::Status::Code::Unsupported
-                  ? name + T(L" couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet.")
+                  ? Fmt(T(L"{0} couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."),
+                        {name})
                   : OpenError(name, st);
       return OpenResult::Failed;
     }
@@ -308,10 +313,11 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
   if (r == OpenResult::Ok && !imported_.empty()) {
     const bool odf = EndsWithNoCase(imported_, L".ods") || EndsWithNoCase(imported_, L".ots");
     const size_t dot = imported_.find_last_of(L'.');
-    host_.ViewMessage(BannerKind::Info,
-                      imported_ + (odf ? T(L" is an OpenDocument spreadsheet") : T(L" is an Excel 97–2003 workbook")) +
-                          L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
-                          L".xlsx and leaves it as it is.");
+    const std::wstring stem = dot == std::wstring::npos ? imported_ : imported_.substr(0, dot);
+    const wchar_t* says =
+        odf ? T(L"{0} is an OpenDocument spreadsheet. Saving makes a new {1}.xlsx and leaves it as it is.")
+            : T(L"{0} is an Excel 97–2003 workbook. Saving makes a new {1}.xlsx and leaves it as it is.");
+    host_.ViewMessage(BannerKind::Info, Fmt(says, {imported_, stem}));
   }
   return r;
 }
@@ -324,7 +330,7 @@ OpenResult WorkbookView::Unlock(const std::wstring& password, std::vector<uint8_
   const std::wstring name = Title();
   auto cf = pkg::CompoundFile::Open(protected_);
   if (!cf) {
-    error = name + T(L" couldn't be opened — it seems to be damaged or isn't an Excel workbook.");
+    error = Fmt(T(L"{0} couldn't be opened — it seems to be damaged or isn't an Excel workbook."), {name});
     return OpenResult::Failed;
   }
   crypto::Key key;
@@ -342,7 +348,7 @@ OpenResult WorkbookView::Unlock(const std::wstring& password, std::vector<uint8_
         needPassword_ = true;
         return OpenResult::WrongPassword;
       }
-      error = name + T(L" couldn't be opened — ") + Utf8ToWide(st.message);
+      error = Fmt(T(L"{0} couldn't be opened — {1}"), {name, Utf8ToWide(st.message)});
       return OpenResult::Failed;
     }
     if (locked) key = crypto::NewKey(password);  // the .xlsx it's saved as keeps its password
@@ -362,17 +368,17 @@ OpenResult WorkbookView::Unlock(const std::wstring& password, std::vector<uint8_
         if (!plain.empty()) break;
         [[fallthrough]];  // an empty package
       case crypto::Result::Damaged:
-        error = name + T(L" couldn't be opened — it seems to be damaged.");
+        error = Fmt(T(L"{0} couldn't be opened — it seems to be damaged."), {name});
         return OpenResult::Failed;
       case crypto::Result::WrongPassword:
         needPassword_ = true;
         return OpenResult::WrongPassword;
       case crypto::Result::Unsupported:
-        error = name + T(L" couldn't be opened — it's protected in a way Featherweight doesn't support.");
+        error = Fmt(T(L"{0} couldn't be opened — it's protected in a way Featherweight doesn't support."), {name});
         return OpenResult::Failed;
     }
   } else {
-    error = name + T(L" couldn't be opened — it isn't an Excel workbook Featherweight can open.");
+    error = Fmt(T(L"{0} couldn't be opened — it isn't an Excel workbook Featherweight can open."), {name});
     return OpenResult::Failed;
   }
   needPassword_ = false;
@@ -419,7 +425,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   if (first >= book_->SheetCount() || !SheetShown(first)) first = NextShownSheet(book_->SheetCount() - 1, 1);
   if (book_->SheetCount() == 0 || first >= book_->SheetCount() || !SheetShown(first)) {
     book_.reset();
-    error = name + T(L" couldn't be opened — it has no sheet to show.");
+    error = Fmt(T(L"{0} couldn't be opened — it has no sheet to show."), {name});
     return OpenResult::Failed;
   }
   sheet_ = first;
