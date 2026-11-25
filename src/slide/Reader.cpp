@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/Sfnt.h"
 #include "slide/Internal.h"
@@ -234,7 +235,7 @@ Master* Loader::LoadMaster(Presentation& deck, const std::string& name, PartKind
       if (deck.ReadPart(themePart, bytes)) {
         theme = draw::Theme::Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
       }
-      if (!theme) deck.problems_.push_back(themePart + ": not a theme Featherweight can read");
+      if (!theme) deck.problems_.push_back(Fmt(T("{0}: not a theme Featherweight can read"), {themePart}));
       it = deck.themes_.emplace(key, theme).first;
     }
     m->theme = it->second;
@@ -416,7 +417,7 @@ void Loader::ReadSlideList(Presentation& deck, pugi::xml_node root) {
     if (!Is(id, kP, "sldId")) return true;
     std::string part = TargetOf(rels, RelId(id, "id"));
     if (part.empty()) {
-      deck.problems_.push_back("A slide in the slide list has no part; it was left out.");
+      deck.problems_.push_back(T("A slide in the slide list has no part; it was left out."));
       return true;
     }
     Presentation::SlideRef ref;
@@ -474,7 +475,7 @@ void Loader::ReadSlideList(Presentation& deck, pugi::xml_node root) {
 std::unique_ptr<Presentation> Loader::Read(std::unique_ptr<pkg::Package> package, pkg::Status& status) {
   status = {};
   if (!package) {
-    status = pkg::Status::Fail(pkg::Status::Code::Damaged, "The file isn't a presentation.");
+    status = pkg::Status::Fail(pkg::Status::Code::Damaged, T("The file isn't a presentation."));
     return nullptr;
   }
   std::unique_ptr<Presentation> deck(new Presentation());
@@ -487,10 +488,11 @@ std::unique_ptr<Presentation> Loader::Read(std::unique_ptr<pkg::Package> package
   pugi::xml_node root = deck->presentationDom_ ? deck->presentationDom_->Root() : pugi::xml_node();
   if (!root || !Is(root, kP, "presentation")) {
     if (!problem.empty()) {
-      status = pkg::Status::Fail(pkg::Status::Code::Damaged,
-                                 "The presentation can't be opened, because a part of it is damaged (" + problem + ").");
+      status = pkg::Status::Fail(
+          pkg::Status::Code::Damaged,
+          Fmt(T("The presentation can't be opened, because a part of it is damaged ({0})."), {problem}));
     } else {
-      status = pkg::Status::Fail(pkg::Status::Code::Unsupported, "The file isn't a PowerPoint presentation.");
+      status = pkg::Status::Fail(pkg::Status::Code::Unsupported, T("The file isn't a PowerPoint presentation."));
     }
     return nullptr;
   }
@@ -865,7 +867,7 @@ const std::vector<EmbeddedFont>& Presentation::EmbeddedFonts() {
       f.italic = i == 2 || i == 3;
       f.sfnt = draw::sfnt::DecodeEot(bytes);
       if (f.sfnt.empty()) {
-        problems_.push_back(parts[i] + ": an embedded font Featherweight can't read");
+        problems_.push_back(Fmt(T("{0}: an embedded font Featherweight can't read"), {parts[i]}));
         continue;
       }
       fonts_.push_back(std::move(f));

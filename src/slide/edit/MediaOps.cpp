@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "core/Lang.h"
 #include "pkg/XmlDom.h"
 #include "pkg/XmlWriter.h"
 #include "slide/edit/EditInternal.h"
@@ -243,11 +244,11 @@ bool Editor::GetMediaPlayback(size_t slide, uint32_t id, MediaPlayback* out, boo
 }
 
 Result Editor::SetMediaPlayback(size_t slide, uint32_t id, const MediaPlayback& p) {
-  Call call(*this, u"Playback");
+  Call call(*this, T(u"Playback"));
   Impl& m = *impl_;
   const std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
-  if (!MediaNodeOf(m.Root(part), id)) return call.End(Result::Fail(u"That isn't a video or audio the slide plays."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
+  if (!MediaNodeOf(m.Root(part), id)) return call.End(Result::Fail(T(u"That isn't a video or audio the slide plays.")));
   pugi::xml_node node = MediaNodeOf(m.Edit(part), id);
   pugi::xml_node c = P(node, "cMediaNode");
   const bool video = LocalNameOf(node) == "video";
@@ -304,9 +305,9 @@ bool Editor::GetMediaFile(size_t slide, uint32_t id, std::vector<uint8_t>* bytes
 }
 
 Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start, double durationMs) {
-  Call call(*this, u"Start");  // one step: the edits below join it
+  Call call(*this, T(u"Start"));  // one step: the edits below join it
   MediaStart now;
-  if (!GetMediaStart(slide, id, &now)) return call.End(Result::Fail(u"That isn't a video or audio the slide plays."));
+  if (!GetMediaStart(slide, id, &now)) return call.End(Result::Fail(T(u"That isn't a video or audio the slide plays.")));
   if (now == start) return call.End(Result{});
   std::u16string why;
   auto playStep = [&]() -> int {
@@ -324,7 +325,7 @@ Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start, double
     Impl& m = *impl_;
     const std::string part = m.SlidePart(slide);
     if (!AddPlayStep(m.Edit(part), id, durationMs) || (step = playStep()) < 0)
-      return call.End(Result::Fail(u"The slide's animations can't be read, so the video's start can't change."));
+      return call.End(Result::Fail(T(u"The slide's animations can't be read, so the video's start can't change.")));
   }
   AnimTimingPatch patch;
   patch.trigger = start == MediaStart::InClickSequence ? AnimTrigger::OnClick : AnimTrigger::AfterPrevious;
@@ -332,21 +333,21 @@ Result Editor::SetMediaStart(size_t slide, uint32_t id, MediaStart start, double
 }
 
 Result Editor::InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r, uint32_t* id) {
-  Call call(*this, media.video ? u"Insert Video" : u"Insert Audio");
+  Call call(*this, media.video ? T(u"Insert Video") : T(u"Insert Audio"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   std::string ext = media.extension;
   if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
   for (char& c : ext) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
   std::string_view type = MediaType(ext, media.video);
   if (type.empty()) {
-    return call.End(Result::Fail(media.video ? u"A presentation can't hold a video of that kind."
-                                             : u"A presentation can't hold a sound of that kind."));
+    return call.End(Result::Fail(media.video ? T(u"A presentation can't hold a video of that kind.")
+                                             : T(u"A presentation can't hold a sound of that kind.")));
   }
-  if (media.bytes.empty()) return call.End(Result::Fail(u"That file is empty."));
+  if (media.bytes.empty()) return call.End(Result::Fail(T(u"That file is empty.")));
   auto [posterExt, posterType] = PictureType(media.poster);
-  if (posterExt != "png" && posterExt != "jpeg") return call.End(Result::Fail(u"The poster frame isn't a PNG or JPEG picture."));
+  if (posterExt != "png" && posterExt != "jpeg") return call.End(Result::Fail(T(u"The poster frame isn't a PNG or JPEG picture.")));
 
   std::string file = StoreMedia(m, std::move(media.bytes), "/ppt/media/media", ext, type);
   std::string poster = StoreMedia(m, std::move(media.poster), "/ppt/media/image", posterExt, posterType);
@@ -368,12 +369,12 @@ Result Editor::InsertMedia(size_t slide, MediaInsert media, const draw::Rect& r,
                     "\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>" + XfrmXml(r) +
                     "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>";
   pugi::xml_document doc;
-  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(u"The video's shape can't be made."));
+  if (!ParseFragment(xml, doc)) return call.End(Result::Fail(T(u"The video's shape can't be made.")));
   uint32_t placed = 0;
   Result res = PutShape(m, part, doc.document_element(), -1, &placed);
   if (!res.ok) return call.End(res);
   if (!AddMediaTiming(m.Edit(part), placed, media.video, media.durationMs)) {
-    return call.End(Result::Fail(u"The slide's animations can't be read, so the video can't be added to them."));
+    return call.End(Result::Fail(T(u"The slide's animations can't be read, so the video can't be added to them.")));
   }
   if (id) *id = placed;
   return call.End(res);

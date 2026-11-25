@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "slide/edit/TimingOps.h"
 #include "slide/show/ShowDraw.h"
 #include "slide/show/SlideRenderer.h"
@@ -25,7 +26,7 @@ namespace fw::slide::view {
 class PresentationView::AnimationPane : public PanelContent {
  public:
   explicit AnimationPane(PresentationView& v);
-  std::wstring Title() const override { return L"Animation Pane"; }
+  std::wstring Title() const override { return T(L"Animation Pane"); }
   // The slide's sequence again, when the deck or the slide changed.
   void Sync();
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;

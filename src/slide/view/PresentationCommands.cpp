@@ -11,6 +11,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Layout.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
@@ -36,41 +37,41 @@ namespace {
 
 struct CommandName {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 constexpr CommandName kNames[] = {
-    {CmdPresentation, L"Present from the beginning", L"F5"},
-    {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
-    {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
-    {CmdPresenterView, L"Presenter view", L"Alt+F5"},
-    {CmdUsePresenterView, L"Use Presenter View", L""},
-    {CmdNextPage, L"Next slide", L"Page Down"},
-    {CmdPrevPage, L"Previous slide", L"Page Up"},
-    {CmdFirstPage, L"First slide", L"Home"},
-    {CmdLastPage, L"Last slide", L"End"},
-    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
-    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
-    {CmdZoomFitPage, L"Fit slide to window", L"Ctrl+0"},
-    {CmdZoomActual, L"Zoom to 100 %", L"Ctrl+1"},
-    {CmdNotesPane, L"Notes", L""},
-    {CmdCopy, L"Copy slide", L"Ctrl+C"},
-    {CmdCopySlideText, L"Copy slide text", L""},
-    {CmdCopySlidePicture, L"Copy slide as picture", L""},
-    {CmdCopyNotes, L"Copy speaker notes", L""},
-    {CmdOpenSlideLink, L"Open link", L""},
-    {CmdReplace, L"Replace", L"Ctrl+H"},
-    {CmdPrintSlides, L"Print and export: full page slides", L""},
-    {CmdPrintHandouts1, L"Print and export: handouts, 1 slide per page", L""},
-    {CmdPrintHandouts2, L"Print and export: handouts, 2 slides per page", L""},
-    {CmdPrintHandouts3, L"Print and export: handouts, 3 slides per page", L""},
-    {CmdPrintHandouts4, L"Print and export: handouts, 4 slides per page", L""},
-    {CmdPrintHandouts6, L"Print and export: handouts, 6 slides per page", L""},
-    {CmdPrintHandouts9, L"Print and export: handouts, 9 slides per page", L""},
-    {CmdPrintNotes, L"Print and export: notes pages", L""},
-    {CmdPrintHidden, L"Print hidden slides", L""},
-    {CmdPrintFrame, L"Frame slides on handouts and notes pages", L""},
+    {CmdPresentation, N_(L"Present from the beginning"), L"F5"},
+    {CmdSlideShowFromStart, N_(L"Present from the beginning"), L"F5"},
+    {CmdSlideShowFromCurrent, N_(L"Present from the current slide"), L"Shift+F5"},
+    {CmdPresenterView, N_(L"Presenter view"), L"Alt+F5"},
+    {CmdUsePresenterView, N_(L"Use Presenter View"), L""},
+    {CmdNextPage, N_(L"Next slide"), N_(L"Page Down")},
+    {CmdPrevPage, N_(L"Previous slide"), N_(L"Page Up")},
+    {CmdFirstPage, N_(L"First slide"), N_(L"Home")},
+    {CmdLastPage, N_(L"Last slide"), N_(L"End")},
+    {CmdZoomIn, N_(L"Zoom in"), L"Ctrl+="},
+    {CmdZoomOut, N_(L"Zoom out"), L"Ctrl+−"},
+    {CmdZoomFitPage, N_(L"Fit slide to window"), L"Ctrl+0"},
+    {CmdZoomActual, N_(L"Zoom to 100 %"), L"Ctrl+1"},
+    {CmdNotesPane, N_(L"Notes"), L""},
+    {CmdCopy, N_(L"Copy slide"), L"Ctrl+C"},
+    {CmdCopySlideText, N_(L"Copy slide text"), L""},
+    {CmdCopySlidePicture, N_(L"Copy slide as picture"), L""},
+    {CmdCopyNotes, N_(L"Copy speaker notes"), L""},
+    {CmdOpenSlideLink, N_(L"Open link"), L""},
+    {CmdReplace, N_(L"Replace"), L"Ctrl+H"},
+    {CmdPrintSlides, N_(L"Print and export: full page slides"), L""},
+    {CmdPrintHandouts1, N_(L"Print and export: handouts, 1 slide per page"), L""},
+    {CmdPrintHandouts2, N_(L"Print and export: handouts, 2 slides per page"), L""},
+    {CmdPrintHandouts3, N_(L"Print and export: handouts, 3 slides per page"), L""},
+    {CmdPrintHandouts4, N_(L"Print and export: handouts, 4 slides per page"), L""},
+    {CmdPrintHandouts6, N_(L"Print and export: handouts, 6 slides per page"), L""},
+    {CmdPrintHandouts9, N_(L"Print and export: handouts, 9 slides per page"), L""},
+    {CmdPrintNotes, N_(L"Print and export: notes pages"), L""},
+    {CmdPrintHidden, N_(L"Print hidden slides"), L""},
+    {CmdPrintFrame, N_(L"Frame slides on handouts and notes pages"), L""},
 };
 
 // The print layouts (File › Print's choices).
@@ -147,7 +148,7 @@ CommandState PresentationView::QueryCommand(int cmd) {
   CommandState s;
   // r1-slide: the clipboard's commands named wherever they go (the ribbon shows them all the time).
   auto clipboardName = [cmd](CommandState& st) {
-    const wchar_t* names[][2] = {{L"Cut", L"Ctrl+X"}, {L"Copy", L"Ctrl+C"}, {L"Paste", L"Ctrl+V"}, {L"Select all", L"Ctrl+A"}};
+    const wchar_t* names[][2] = {{T(L"Cut"), L"Ctrl+X"}, {T(L"Copy"), L"Ctrl+C"}, {T(L"Paste"), L"Ctrl+V"}, {T(L"Select all"), L"Ctrl+A"}};
     const int k = cmd == CmdCut ? 0 : cmd == CmdCopy ? 1 : cmd == CmdPaste ? 2 : cmd == CmdSelectAll ? 3 : -1;
     if (k >= 0 && st.label.empty()) st.label = names[k][0], st.shortcut = names[k][1];
     return st;
@@ -353,27 +354,28 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
     Objects().ContextMenu(m, static_cast<float>(x), static_cast<float>(y));
   const bool any = SlideCount() > 0;
   if (LinkAt(x, y)) {
-    AppendItem(m, CmdOpenSlideLink, L"Open link");
+    AppendItem(m, CmdOpenSlideLink, T(L"Open link"));
     AppendSeparator(m);
   }
-  AppendItem(m, CmdCopy, L"Copy slide\tCtrl+C", any);
-  AppendItem(m, CmdCopySlideText, L"Copy slide text", any);
-  AppendItem(m, CmdCopySlidePicture, L"Copy slide as picture", any);
-  AppendItem(m, CmdCopyNotes, L"Copy speaker notes", any && !deck_->Notes(current_).empty());
+  AppendItem(m, CmdCopy, T(L"Copy slide\tCtrl+C"), any);
+  AppendItem(m, CmdCopySlideText, T(L"Copy slide text"), any);
+  AppendItem(m, CmdCopySlidePicture, T(L"Copy slide as picture"), any);
+  AppendItem(m, CmdCopyNotes, T(L"Copy speaker notes"), any && !deck_->Notes(current_).empty());
   AppendSeparator(m);
-  AppendItem(m, CmdPresentation, L"Present from the beginning\tF5", any);
-  AppendItem(m, CmdSlideShowFromCurrent, L"Present from this slide\tShift+F5", any);
+  AppendItem(m, CmdPresentation, T(L"Present from the beginning\tF5"), any);
+  AppendItem(m, CmdSlideShowFromCurrent, T(L"Present from this slide\tShift+F5"), any);
   AppendSeparator(m);
-  AppendItem(m, CmdZoomFitPage, L"Fit slide to window\tCtrl+0", any, zoom_ == 0);
-  AppendItem(m, CmdNotesPane, L"Speaker notes", true, notesShown_);
+  AppendItem(m, CmdZoomFitPage, T(L"Fit slide to window\tCtrl+0"), any, zoom_ == 0);
+  AppendItem(m, CmdNotesPane, T(L"Speaker notes"), true, notesShown_);
 }
 
 void PresentationView::BuildStatusBar(StatusBarModel& m) {
   const size_t n = SlideCount();
-  std::wstring slide = n ? L"Slide " + std::to_wstring(current_ + 1) + L" of " + std::to_wstring(n) : L"No slides";
-  if (n && deck_->Hidden(current_)) slide += L" (hidden)";
+  std::wstring slide =
+      n ? Fmt(T(L"Slide {0} of {1}"), {std::to_wstring(current_ + 1), std::to_wstring(n)}) : T(L"No slides");
+  if (n && deck_->Hidden(current_)) slide = Fmt(T(L"{0} (hidden)"), {slide});
   m.segments.push_back(slide);
-  if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(L"Read-only");
+  if (edit::Editor* ed = SlideEditor(); !ed || !ed->CanEdit()) m.segments.push_back(T(L"Read-only"));
   m.zoom = n > 0;
   m.zoomValue = Scale() / (96.0 / 72.0 * ui_);
   m.onZoom = [this](double z) {
@@ -467,7 +469,7 @@ bool PresentationView::ReplaceCurrent(const std::wstring& with) {
   for (const TextMatch& m : fw::slide::view::FindAll(*model, search_.query, search_.matchCase, search_.wholeWords))
     if (m.target.slide == cur.slide && m.target.notes == cur.notes) here.push_back(m);
   if (rank >= here.size() || !ReplaceMatch(*model, here[rank], search_.query, search_.matchCase, with)) {
-    host_.ViewMessage(BannerKind::Warning, L"That text can't be replaced here.");
+    host_.ViewMessage(BannerKind::Warning, T(L"That text can't be replaced here."));
     return false;
   }
   // Found again; the current match is the one after the replaced text.
@@ -586,9 +588,9 @@ void PresentationView::CopySlide(bool text, bool picture) {
     if (text && !words.empty()) PutClipboard(CF_UNICODETEXT, words.c_str(), (words.size() + 1) * sizeof(wchar_t));
     CloseClipboard();
   }
-  host_.ViewMessage(BannerKind::Success, picture && text ? L"Copied the slide"
-                                         : picture       ? L"Copied the slide as a picture"
-                                                         : L"Copied the slide's text");
+  host_.ViewMessage(BannerKind::Success, picture && text ? T(L"Copied the slide")
+                                         : picture       ? T(L"Copied the slide as a picture")
+                                                         : T(L"Copied the slide's text"));
 }
 
 void PresentationView::CopyNotes() {
@@ -600,7 +602,7 @@ void PresentationView::CopyNotes() {
   }
   if (out.empty()) return;
   util::SetClipboardText(out);
-  host_.ViewMessage(BannerKind::Success, L"Copied the speaker notes");
+  host_.ViewMessage(BannerKind::Success, T(L"Copied the speaker notes"));
 }
 
 // ---------------------------------------------------------------------------
@@ -624,7 +626,7 @@ const SlideLink* PresentationView::LinkAt(int x, int y) const {
 void PresentationView::FollowLink(const SlideLink& link) {
   if (link.slide >= 0) {
     if (static_cast<size_t>(link.slide) < SlideCount()) GoToSlide(static_cast<size_t>(link.slide));
-    else host_.ViewMessage(BannerKind::Warning, L"The slide this link points to isn't in the presentation.");
+    else host_.ViewMessage(BannerKind::Warning, T(L"The slide this link points to isn't in the presentation."));
     return;
   }
   if (link.slide == -2) {  // the next slide
@@ -632,7 +634,7 @@ void PresentationView::FollowLink(const SlideLink& link) {
     return;
   }
   if (!util::OpenExternalLink(link.url))
-    host_.ViewMessage(BannerKind::Warning, L"This link was blocked because it doesn’t point to a website.");
+    host_.ViewMessage(BannerKind::Warning, T(L"This link was blocked because it doesn’t point to a website."));
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +664,7 @@ void PresentationView::StartShow(bool fromCurrent, bool presenterWindowed) {
   };
   o.openFile = [](const std::wstring&) { return false; };  // links to files aren't followed from the show in P1
   showing_ = fw::slide::show::Start(*model, *showRenderer_, o);
-  if (!showing_) host_.ViewMessage(BannerKind::Warning, L"The slide show couldn't start.");
+  if (!showing_) host_.ViewMessage(BannerKind::Warning, T(L"The slide show couldn't start."));
 }
 
 void PresentationView::ReadOnlyBanner() {
@@ -672,11 +674,11 @@ void PresentationView::ReadOnlyBanner() {
   const bool editable = ed && ed->CanEdit(&why);
   const bool macros = deck_ && deck_->HasMacros();
   if (editable) {
-    if (macros) host_.ViewMessage(BannerKind::Info, L"This presentation's macros are kept but never run.");
+    if (macros) host_.ViewMessage(BannerKind::Info, T(L"This presentation's macros are kept but never run."));
     return;
   }
-  std::wstring text = why.empty() ? std::wstring(L"This presentation is read-only.") : std::wstring(why.begin(), why.end());
-  if (macros) text += L" Its macros are kept but never run.";
+  std::wstring text = why.empty() ? std::wstring(T(L"This presentation is read-only.")) : std::wstring(why.begin(), why.end());
+  if (macros) text += T(L" Its macros are kept but never run.");
   host_.ViewMessage(BannerKind::Info, text);
 }
 

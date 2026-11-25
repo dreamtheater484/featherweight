@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "doc/edit/Notes.h"
 #include "doc/edit/Toc.h"
 #include "ui/Menu.h"
@@ -64,16 +65,16 @@ std::optional<CommandState> DocView::QueryNotes(int cmd) {
                     doc_->Para(focus_.para).story == doc_->MainStory();
   CommandState s;
   switch (cmd) {
-    case CmdInsertFootnote: s = {text, false}; s.label = L"Footnote"; s.shortcut = L"Ctrl+Alt+F"; break;
-    case CmdInsertEndnote: s = {text, false}; s.label = L"Endnote"; s.shortcut = L"Ctrl+Alt+D"; break;
-    case CmdInsertToc: s = {text, false}; s.label = L"Table of contents"; break;
+    case CmdInsertFootnote: s = {text, false}; s.label = T(L"Footnote"); s.shortcut = L"Ctrl+Alt+F"; break;
+    case CmdInsertEndnote: s = {text, false}; s.label = T(L"Endnote"); s.shortcut = L"Ctrl+Alt+D"; break;
+    case CmdInsertToc: s = {text, false}; s.label = T(L"Table of contents"); break;
     case CmdUpdateTocPages:
       s = {Editing() && CurrentToc().has_value(), false};
-      s.label = L"Update table of contents: page numbers only";
+      s.label = T(L"Update table of contents: page numbers only");
       break;
     case CmdUpdateToc:
       s = {Editing() && CurrentToc().has_value(), false};
-      s.label = L"Update table of contents: entire table";
+      s.label = T(L"Update table of contents: entire table");
       break;
     default: return std::nullopt;
   }
@@ -107,7 +108,7 @@ bool DocView::ExecuteNotes(int cmd) {
 
 void DocView::FillNotesMenu(HMENU m) {
   if (!Editing() || !doc_ || !edit::TocAt(*doc_, ToDoc(focus_))) return;
-  menu::AppendItem(m, CmdUpdateTocPages, L"Update page numbers");
-  menu::AppendItem(m, CmdUpdateToc, L"Update entire table");
+  menu::AppendItem(m, CmdUpdateTocPages, T(L"Update page numbers"));
+  menu::AppendItem(m, CmdUpdateToc, T(L"Update entire table"));
   menu::AppendSeparator(m);
 }

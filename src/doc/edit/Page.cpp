@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <string>
 
+#include "core/Lang.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
@@ -151,7 +152,7 @@ Result SetPageSetup(Editor& editor, uint32_t first, uint32_t last, const PageSet
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (first > last || last >= doc.Sections().size()) return Fail(u"There's no such section.");
+  if (first > last || last >= doc.Sections().size()) return Fail(T(u"There's no such section."));
   if (!setup.Any()) return Result{};
   // What each section becomes, checked before anything changes.
   std::vector<SectionProps> after;
@@ -174,19 +175,19 @@ Result SetPageSetup(Editor& editor, uint32_t first, uint32_t last, const PageSet
     if (setup.gutter) p.gutter = *setup.gutter;
     const int32_t w = p.pageWidth.Value(), h = p.pageHeight.Value();
     if (w < kMinText || h < kMinText || w > kMaxPage || h > kMaxPage)
-      return Fail(u"The paper can be from half an inch to 22 inches on each side.");
+      return Fail(T(u"The paper can be from half an inch to 22 inches on each side."));
     if (p.marginStart.Value() < 0 || p.marginEnd.Value() < 0 || p.gutter.Value() < 0 || p.headerDistance.Value() < 0 ||
         p.footerDistance.Value() < 0)
-      return Fail(u"Margins can't be less than zero.");
+      return Fail(T(u"Margins can't be less than zero."));
     if (TextWidth(p) < kMinText || h - std::abs(p.marginTop.Value()) - std::abs(p.marginBottom.Value()) < kMinText)
-      return Fail(u"The margins leave too little room for text. Make them smaller, or the paper larger.");
+      return Fail(T(u"The margins leave too little room for text. Make them smaller, or the paper larger."));
     if (!ColumnsFit(p.columns, TextWidth(p)))
-      return Fail(u"The columns don't fit between these margins. Make the margins smaller, or use fewer columns.");
+      return Fail(T(u"The columns don't fit between these margins. Make the margins smaller, or use fewer columns."));
     after.push_back(p);
   }
 
   TreeEdit ed(editor);
-  ed.Begin(u"Page setup");
+  ed.Begin(T(u"Page setup"));
   ed.Affects(SectionParagraphs(doc, first).first, SectionParagraphs(doc, last).second);
   for (uint32_t s = first; s <= last; ++s) {
     const SectionProps& was = doc.Sections()[s].props;
@@ -224,20 +225,20 @@ Result SetColumns(Editor& editor, uint32_t first, uint32_t last, const ColumnSet
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (first > last || last >= doc.Sections().size()) return Fail(u"There's no such section.");
+  if (first > last || last >= doc.Sections().size()) return Fail(T(u"There's no such section."));
   Columns c;
   c.count = setup.widths.empty() ? setup.count : static_cast<int32_t>(setup.widths.size());
   c.space = setup.space;
   c.separator = setup.line;
   c.equalWidth = setup.widths.empty();
   c.cols = setup.widths;
-  if (c.count < 1 || c.count > 45) return Fail(u"A page can have from 1 to 45 columns.");
+  if (c.count < 1 || c.count > 45) return Fail(T(u"A page can have from 1 to 45 columns."));
   for (uint32_t s = first; s <= last; ++s)
     if (!ColumnsFit(c, TextWidth(doc.Sections()[s].props)))
-      return Fail(u"The columns don't fit between the margins. Use fewer columns, or less space between them.");
+      return Fail(T(u"The columns don't fit between the margins. Use fewer columns, or less space between them."));
 
   TreeEdit ed(editor);
-  ed.Begin(u"Columns");
+  ed.Begin(T(u"Columns"));
   ed.Affects(SectionParagraphs(doc, first).first, SectionParagraphs(doc, last).second);
   for (uint32_t s = first; s <= last; ++s) {
     const ElemId sectPr = SectPrOf(ed, s);
@@ -268,10 +269,10 @@ Result SetSectionStart(Editor& editor, uint32_t section, SectionStart start) {
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (section >= doc.Sections().size()) return Fail(u"There's no such section.");
+  if (section >= doc.Sections().size()) return Fail(T(u"There's no such section."));
   if (doc.Sections()[section].props.start == start) return Result{};
   TreeEdit ed(editor);
-  ed.Begin(u"Section start");
+  ed.Begin(T(u"Section start"));
   ed.Affects(SectionParagraphs(doc, section).first, SectionParagraphs(doc, section).second, true);
   if (const ElemId sectPr = SectPrOf(ed, section); sectPr != kNoElem) SetStart(ed, sectPr, start);
   ed.Commit();
@@ -283,18 +284,18 @@ Result InsertSectionBreak(Editor& editor, Pos at, SectionStart start) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   if (at.para >= doc.Paragraphs().size() || doc.Para(at.para).story != doc.MainStory())
-    return Fail(u"A section break goes in the text of the document, not in a header, a note or a text box.");
+    return Fail(T(u"A section break goes in the text of the document, not in a header, a note or a text box."));
   if (doc.ParaNode(at.para).Parent().Id() != doc.Stories()[doc.MainStory()].root)
-    return Fail(u"A section break can't go in a table or a content control. Put it before or after it.");
+    return Fail(T(u"A section break can't go in a table or a content control. Put it before or after it."));
 
-  editor.BeginGroup(u"Section break");
+  editor.BeginGroup(T(u"Section break"));
   GroupEnd ender{editor};
   Result split = editor.SplitParagraph(at);
   if (!split) return split;
   const uint32_t a = at.para, b = split.caret.para;  // the halves
   const uint32_t section = SectionOf(doc, b);
   TreeEdit ed(editor, split.caret);
-  ed.Begin(u"Section break");
+  ed.Begin(T(u"Section break"));
   ed.Affects(a, SectionParagraphs(doc, static_cast<uint32_t>(doc.Sections().size() - 1)).second, true);
   // The first half ends a new section like the one it was in, which starts as that one did.
   const ElemId pPr = ed.Child(doc.Para(a).elem, kPPr);
@@ -321,16 +322,16 @@ Result DeleteSectionBreak(Editor& editor, uint32_t section) {
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (section + 1 >= doc.Sections().size()) return Fail(u"The last section doesn't end in a break.");
+  if (section + 1 >= doc.Sections().size()) return Fail(T(u"The last section doesn't end in a break."));
   const uint32_t para = doc.Sections()[section].endPara;
   const bool empty = doc.Para(para).text.empty();
   const uint32_t next = editor.NextPara(para);
   // A break with text before it: its mark stays, as a paragraph mark.
-  editor.BeginGroup(u"Delete section break");
+  editor.BeginGroup(T(u"Delete section break"));
   GroupEnd ender{editor};
   const KeptRefs kept = KeptReferences(doc, {para});
   TreeEdit ed(editor, {para, 0});
-  ed.Begin(u"Delete section break");
+  ed.Begin(T(u"Delete section break"));
   ed.Affects(SectionParagraphs(doc, section).first,
              SectionParagraphs(doc, static_cast<uint32_t>(doc.Sections().size() - 1)).second, true);
   for (const std::string& xml : kept.xml) ed.AddXml(kept.sectPr, xml);
@@ -352,7 +353,7 @@ Result InsertBreak(Editor& editor, Pos at, bool column) {
   if (!editor.CanEdit(&why)) return Fail(why);
   // The break, then the paragraph split after it; where it can't be split (in a field's result),
   // the break comes out again (d1-corpus torture finding 26).
-  editor.BeginGroup(column ? u"Column break" : u"Page break");
+  editor.BeginGroup(column ? T(u"Column break") : T(u"Page break"));
   GroupEnd ender{editor};
   Result r = editor.InsertText(at, std::u16string(1, column ? char16_t(0x0E) : char16_t(0x0C)));
   if (r) r = editor.SplitParagraph(r.caret);
@@ -363,13 +364,13 @@ Result InsertBreak(Editor& editor, Pos at, bool column) {
 Result SetHyphenation(Editor& editor, const Hyphenation& h) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (h.zone && (h.zone->Value() < 0 || h.zone->Value() > 31680)) return Fail(u"The hyphenation zone can be up to 22 inches.");
-  if (h.limit && (*h.limit < 0 || *h.limit > 32767)) return Fail(u"The limit can be from 0 (none) to 32767 lines.");
+  if (h.zone && (h.zone->Value() < 0 || h.zone->Value() > 31680)) return Fail(T(u"The hyphenation zone can be up to 22 inches."));
+  if (h.limit && (*h.limit < 0 || *h.limit > 32767)) return Fail(T(u"The limit can be from 0 (none) to 32767 lines."));
   TreeEdit ed(editor);
   const ElemId root = ed.EnsurePart(PartKind::Settings);
-  if (root == kNoElem) return Fail(u"This document's settings can't be changed.");
+  if (root == kNoElem) return Fail(T(u"This document's settings can't be changed."));
   const DocSettings& s = editor.Doc().Settings();
-  ed.Begin(u"Hyphenation");
+  ed.Begin(T(u"Hyphenation"));
   if (h.automatic && *h.automatic != s.autoHyphenation) {
     if (*h.automatic) ed.Child(root, Name("autoHyphenation"));
     else ed.Remove(root, Name("autoHyphenation"));

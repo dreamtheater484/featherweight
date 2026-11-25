@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -31,7 +32,7 @@ void Banner::Show(BannerKind kind, const std::wstring& text, std::vector<Action>
   close_.id = -1;
   close_.glyph = icon::Cancel;
   close_.glyphSize = 11;
-  close_.tooltip = L"Dismiss";
+  close_.tooltip = T(L"Dismiss");
   set_.Add(&close_);
 }
 
@@ -158,8 +159,8 @@ int Banner::OnMouseUp(int x, int y) {
 
 void Banner::Describe(uia::Tree& t, int parent, const std::function<void(int)>& act) const {
   if (!visible_) return;
-  static const wchar_t* const kKinds[] = {L"Information", L"Done", L"Warning", L"Error"};
-  int pane = t.Add(parent, 4, UIA_PaneControlTypeId, L"Message", Card());
+  static const wchar_t* const kKinds[] = {T(L"Information"), T(L"Done"), T(L"Warning"), T(L"Error")};
+  int pane = t.Add(parent, 4, UIA_PaneControlTypeId, T(L"Message"), Card());
   t[pane].layer = 1;
   int text = t.Add(pane, 1, UIA_TextControlTypeId, text_, Card());
   t[text].live = true;

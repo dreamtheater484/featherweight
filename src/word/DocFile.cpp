@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/docx/Save.h"
 #include "doc/model/Document.h"
@@ -48,7 +49,7 @@ bool DocFile::Save(fw::doc::Document& doc, const std::wstring& path, std::wstrin
   std::vector<uint8_t> bytes;
   pkg::Status st = fw::doc::docx::Serialize(doc, options, bytes);
   if (!st.Ok()) {
-    error = job.name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
+    error = Fmt(T(L"{0} couldn't be saved. {1}"), {job.name, fw::Utf8ToWide(st.message)});
     return false;
   }
   pkg::SaveResult saved = WriteSave(job, std::move(bytes), &doc.Package().GetSnapshot());

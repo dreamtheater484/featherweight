@@ -4,6 +4,8 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
+
 namespace fw {
 
 // The kinds of file Featherweight opens (plan §5.1, §12). Each kind gets its ProgID, file icon
@@ -17,8 +19,8 @@ struct FileKindInfo {
   const wchar_t* noun;        // "document": "a document app", "New document"
   const wchar_t* plural;      // "documents": "Open documents with Featherweight by default?"
   const wchar_t* progId;      // "Featherweight.Document"
-  const wchar_t* typeName;    // what Explorer calls these files
-  const wchar_t* filterName;  // their name in the Open dialog
+  UiText typeName;            // what Explorer calls these files
+  UiText filterName;          // their name in the Open dialog
   std::span<const wchar_t* const> extensions;  // opened by the viewer; the first is the main one
   // Formats of this kind the viewer doesn't open yet: .rtf and .txt (D2), and the older and other
   // formats imported in the app's last milestone (decision 10).
@@ -30,6 +32,11 @@ struct FileKindInfo {
 
 std::span<const FileKindInfo> FileKinds();
 const FileKindInfo& Info(FileKind kind);
+
+// What the interface says about a kind, translated and whole: languages can't glue "New " to a noun
+// ("Neues Dokument", "Nueva presentación").
+enum class KindPhrase { New, Blank, OpenByDefault, CouldNotRegister };
+const wchar_t* Phrase(FileKind kind, KindPhrase phrase);
 // By extension, including the formats that come later; Unknown for anything else.
 FileKind KindOfPath(std::wstring_view path);
 

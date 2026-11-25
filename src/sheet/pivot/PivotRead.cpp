@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/Lang.h"
 #include "pkg/Package.h"
 #include "pkg/XmlDom.h"
 #include "sheet/model/Workbook.h"
@@ -159,19 +160,19 @@ bool ReadCache(std::string_view xml, Cache& out) {
   c.refreshOnLoad = Bool(root, "refreshOnLoad", false);
   pugi::xml_node src = Child(root, "cacheSource");
   if (!src || Str(src, "type") != "worksheet") {
-    c.why = "an external or consolidated source";
+    c.why = ::T("an external or consolidated source");
   } else if (pugi::xml_node ws = Child(src, "worksheetSource")) {
-    if (Attr(ws, "id")) c.why = "a source in another workbook";
+    if (Attr(ws, "id")) c.why = ::T("a source in another workbook");
     c.sheet = Str(ws, "sheet");
     c.ref = Str(ws, "ref");
     c.name = Str(ws, "name");
-    if (c.name.empty() && (c.sheet.empty() || c.ref.empty())) c.why = "a source it can't find";
+    if (c.name.empty() && (c.sheet.empty() || c.ref.empty())) c.why = ::T("a source it can't find");
   } else {
-    c.why = "a source it can't find";
+    c.why = ::T("a source it can't find");
   }
   if (Child(root, "calculatedItems") || Child(root, "calculatedMembers") || Child(root, "cacheHierarchies") ||
       Child(root, "kpis") || Child(root, "tupleCache"))
-    c.why = "calculated items or OLAP data";
+    c.why = ::T("calculated items or OLAP data");
   pugi::xml_node fields = Child(root, "cacheFields");
   if (!fields) return false;
   for (pugi::xml_node f = fields.first_child(); f; f = f.next_sibling()) {
@@ -334,11 +335,11 @@ bool ReadTable(std::string_view xml, Table& out) {
       std::string_view sort = Attr(f, "sortType").value();
       fd.sort = sort == "ascending" ? Field::Sort::Ascending : sort == "descending" ? Field::Sort::Descending : Field::Sort::Manual;
       if (Bool(f, "autoShow", false) || Child(f, "autoSortScope") || Bool(f, "dataSourceSort", false))
-        t.why = "a top 10 filter or a sort by values";
+        t.why = ::T("a top 10 filter or a sort by values");
       if (Bool(f, "hideNewItems", false) || Bool(f, "includeNewItemsInFilter", false) || Bool(f, "insertBlankRow", false) ||
           Bool(f, "insertPageBreak", false))
-        if (t.why.empty() && Bool(f, "insertBlankRow", false)) t.why = "blank rows after items";
-      if (fd.subtotals != 0 && t.why.empty()) t.why = "subtotals other than the automatic ones";
+        if (t.why.empty() && Bool(f, "insertBlankRow", false)) t.why = ::T("blank rows after items");
+      if (fd.subtotals != 0 && t.why.empty()) t.why = ::T("subtotals other than the automatic ones");
       if (pugi::xml_node items = Child(f, "items")) {
         fd.hasItems = true;
         for (pugi::xml_node it = items.first_child(); it; it = it.next_sibling()) {
@@ -384,10 +385,10 @@ bool ReadTable(std::string_view xml, Table& out) {
       d.field = U32(f, "fld", 0);
       d.func = FuncOf(Attr(f, "subtotal") ? Attr(f, "subtotal").value() : "sum");
       d.numFmtId = U32(f, "numFmtId", kNone);
-      if (Attr(f, "showDataAs") && Str(f, "showDataAs") != "normal") t.why = "values shown as a percentage or difference";
+      if (Attr(f, "showDataAs") && Str(f, "showDataAs") != "normal") t.why = ::T("values shown as a percentage or difference");
       t.dataFields.push_back(std::move(d));
     }
-  if (Child(root, "filters")) t.why = "label or value filters";
+  if (Child(root, "filters")) t.why = ::T("label or value filters");
   if (Child(root, "calculatedItems") || Child(root, "calculatedMembers")) t.why = "calculated items";
   if (Child(root, "pivotHierarchies") || Child(root, "rowHierarchiesUsage")) t.why = "OLAP data";
   if (pugi::xml_node style = Child(root, "pivotTableStyleInfo")) {

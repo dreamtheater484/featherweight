@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "slide/Presentation.h"
 #include "slide/show/SlideRenderer.h"
 #include "ui/Gfx.h"
@@ -211,8 +212,8 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   say(buf, big.Get(), {pad, 0, pad + 150 * s, bar}, v.paused ? dim.Get() : text.Get());
   v.pause = {pad + 160 * s, bar * 0.2f, pad + 250 * s, bar * 0.8f};
   v.reset = {pad + 260 * s, bar * 0.2f, pad + 350 * s, bar * 0.8f};
-  button(v.pause, v.paused ? L"Resume" : L"Pause");
-  button(v.reset, L"Reset");
+  button(v.pause, v.paused ? T(L"Resume") : T(L"Pause"));
+  button(v.reset, T(L"Reset"));
   // Before the clock: Black screen (lit while the show is black), Swap displays, End show.
   const float bw = 112 * s, bgap = 10 * s, clockW = 150 * s;
   v.end = {w - pad - clockW - bw, bar * 0.2f, w - pad - clockW, bar * 0.8f};
@@ -221,12 +222,12 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   v.black = {blackRight - bw, v.end.top, blackRight, v.end.bottom};
   if (v.state.blank == 1) {
     dc->FillRoundedRectangle(D2D1::RoundedRect(v.black, 4 * s, 4 * s), accent.Get());
-    say(L"Black screen", label.Get(), v.black, text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    say(T(L"Black screen"), label.Get(), v.black, text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
   } else {
-    button(v.black, L"Black screen");
+    button(v.black, T(L"Black screen"));
   }
-  if (!v.windowed) button(v.swap, L"Swap displays");
-  button(v.end, L"End show");
+  if (!v.windowed) button(v.swap, T(L"Swap displays"));
+  button(v.end, T(L"End show"));
   // ◄ and ► before the slide number: back and on by mouse, as PowerPoint's arrows under its slide.
   v.back = {pad + 370 * s, bar * 0.2f, pad + 414 * s, bar * 0.8f};
   v.forward = {pad + 420 * s, bar * 0.2f, pad + 464 * s, bar * 0.8f};
@@ -236,9 +237,9 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   }
   const size_t count = v.renderer.SlideCount();
   if (v.state.slide != PresenterState::kEnd)
-    swprintf(buf, 64, L"Slide %zu of %zu", v.state.slide + 1, count);
+    swprintf(buf, 64, T(L"Slide %zu of %zu"), v.state.slide + 1, count);
   else
-    swprintf(buf, 64, L"End of slide show");
+    swprintf(buf, 64, T(L"End of slide show"));
   say(buf, label.Get(), {pad + 480 * s, 0, std::max(pad + 480 * s, v.black.left - bgap), bar}, dim.Get());
   wchar_t clock[32] = L"";
   GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, nullptr, nullptr, clock, 32);
@@ -259,23 +260,23 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
     if (blank) {
       const D2D1_RECT_F band{r.left, r.top, r.right, std::min(r.bottom, r.top + 36 * s)};
       dc->FillRectangle(band, box.Get());
-      say(blank == 2 ? L"The screen is white" : L"The screen is black", label.Get(), band, text.Get(),
+      say(blank == 2 ? T(L"The screen is white") : T(L"The screen is black"), label.Get(), band, text.Get(),
           DWRITE_TEXT_ALIGNMENT_CENTER);
     }
     if (!b && none) say(none, label.Get(), r, dim.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
     dc->DrawRectangle(r, box.Get(), 1);
   };
   const bool atEnd = v.state.slide == PresenterState::kEnd;
-  slide(v.state.current.Get(), v.current, v.state.blank, atEnd ? L"End of slide show, click to exit." : nullptr);
+  slide(v.state.current.Get(), v.current, v.state.blank, atEnd ? T(L"End of slide show, click to exit.") : nullptr);
   const float right = split + pad / 2, nextH = std::floor((bottom - top) * 0.42f);
-  say(v.state.stepsLeft > 0 ? L"Next animation" : L"Next slide", label.Get(), {right, top, w - pad, top + 28 * s},
+  say(v.state.stepsLeft > 0 ? T(L"Next animation") : T(L"Next slide"), label.Get(), {right, top, w - pad, top + 28 * s},
       dim.Get());
   v.next = Fit({right, top + 28 * s, w - pad, top + 28 * s + nextH}, size.width, size.height);
-  slide(v.state.next.Get(), v.next, 0, L"End of slide show");
+  slide(v.state.next.Get(), v.next, 0, T(L"End of slide show"));
 
   // The notes, scrolled and zoomed; A- and A+ beside their heading.
   const float notesTop = v.next.bottom + pad;
-  say(L"Notes", label.Get(), {right, notesTop, w - pad, notesTop + 28 * s}, dim.Get());
+  say(T(L"Notes"), label.Get(), {right, notesTop, w - pad, notesTop + 28 * s}, dim.Get());
   v.smaller = {w - pad - 96 * s, notesTop, w - pad - 52 * s, notesTop + 28 * s};
   v.larger = {w - pad - 44 * s, notesTop, w - pad, notesTop + 28 * s};
   button(v.smaller, L"A−");
@@ -284,7 +285,7 @@ void PresenterView::Draw(ID2D1DeviceContext* dc, float w, float h) {
   std::wstring notes;
   if (v.state.slide != PresenterState::kEnd && v.state.slide < count)
     if (const Slide* sl = v.deck.GetSlide(v.state.slide)) notes = sl->NotesText();
-  if (notes.empty() && !atEnd) notes = L"No notes on this slide.";
+  if (notes.empty() && !atEnd) notes = T(L"No notes on this slide.");
   ComPtr<IDWriteTextLayout> layout;
   const float nw = std::max(1.f, v.notes.right - v.notes.left), nh = std::max(1.f, v.notes.bottom - v.notes.top);
   if (SUCCEEDED(dw->CreateTextLayout(notes.c_str(), static_cast<UINT32>(notes.size()), notesFmt.Get(), nw, 1e6f, &layout))) {

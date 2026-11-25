@@ -6,6 +6,7 @@
 #include <cwchar>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -290,10 +291,10 @@ void SpinBox::Describe(uia::Tree& t, int parent) {
       Commit();
     };
   }
-  int up = t.Add(i, 2, UIA_ButtonControlTypeId, L"Increase", UpRect());
+  int up = t.Add(i, 2, UIA_ButtonControlTypeId, T(L"Increase"), UpRect());
   t[up].enabled = enabled && value < maxValue;
   t[up].invoke = [this] { Step(step); };
-  int down = t.Add(i, 3, UIA_ButtonControlTypeId, L"Decrease", DownRect());
+  int down = t.Add(i, 3, UIA_ButtonControlTypeId, T(L"Decrease"), DownRect());
   t[down].enabled = enabled && value > minValue;
   t[down].invoke = [this] { Step(-step); };
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Theme.h"
 
 using namespace gfx;
@@ -45,10 +46,10 @@ void Tooltip::Show(const std::wstring& text, const RECT& anchor, float ui) {
     return;
   }
   ui_ = ui;
-  text_ = text;
+  text_ = fw::lang::KeyNames(text);  // "Bold (Strg+B)" in German
   IDWriteTextFormat* fmt = Canvas::Format(12 * ui, DWRITE_FONT_WEIGHT_REGULAR, false);
   ComPtr<IDWriteTextLayout> layout;
-  DWrite()->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), fmt, 640 * ui, 100, &layout);
+  DWrite()->CreateTextLayout(text_.c_str(), static_cast<UINT32>(text_.size()), fmt, 640 * ui, 100, &layout);
   DWRITE_TEXT_METRICS m{};
   if (layout) layout->GetMetrics(&m);
   int w = static_cast<int>(std::ceil(std::min(m.widthIncludingTrailingWhitespace, 640 * ui) + 18 * ui));

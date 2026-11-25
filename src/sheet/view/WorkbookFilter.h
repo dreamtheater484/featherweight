@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
@@ -21,25 +22,25 @@ namespace filter_detail {
 
 // Excel's custom AutoFilter conditions (1-12: text ones as * patterns), then its other number
 // filters (13-18: Top 10 by items or percent, the average), which take the first condition's place.
-inline constexpr const wchar_t* kOps[] = {L"(no condition)",
-                                          L"equals",
-                                          L"does not equal",
-                                          L"is greater than",
-                                          L"is greater than or equal to",
-                                          L"is less than",
-                                          L"is less than or equal to",
-                                          L"begins with",
-                                          L"does not begin with",
-                                          L"ends with",
-                                          L"does not end with",
+inline constexpr UiText kOps[] = {N_(L"(no condition)"),
+                                          N_(L"equals"),
+                                          N_(L"does not equal"),
+                                          N_(L"is greater than"),
+                                          N_(L"is greater than or equal to"),
+                                          N_(L"is less than"),
+                                          N_(L"is less than or equal to"),
+                                          N_(L"begins with"),
+                                          N_(L"does not begin with"),
+                                          N_(L"ends with"),
+                                          N_(L"does not end with"),
                                           L"contains",
-                                          L"does not contain",
-                                          L"is in the top (items)",
-                                          L"is in the bottom (items)",
-                                          L"is in the top (percent)",
-                                          L"is in the bottom (percent)",
-                                          L"is above average",
-                                          L"is below average"};
+                                          N_(L"does not contain"),
+                                          N_(L"is in the top (items)"),
+                                          N_(L"is in the bottom (items)"),
+                                          N_(L"is in the top (percent)"),
+                                          N_(L"is in the bottom (percent)"),
+                                          N_(L"is above average"),
+                                          N_(L"is below average")};
 inline constexpr int kFirstSpecial = 13;
 // Conditions 1-12: the comparison and whether the value is wrapped in * (before, after).
 struct OpChoice {
@@ -61,7 +62,7 @@ inline constexpr wchar_t kChecked[] = L"\x2611  ", kUnchecked[] = L"\x2610  ";
 class WorkbookView::FilterPanel : public PanelContent {
  public:
   explicit FilterPanel(WorkbookView& view) : v_(view) {
-    values_.label = L"Values";
+    values_.label = T(L"Values");
     values_.rowHeight = 28;
     values_.onSelect = [this](int i) {
       if (i < 0 || toggling_) return;
@@ -71,10 +72,10 @@ class WorkbookView::FilterPanel : public PanelContent {
       toggling_ = false;
     };
     for (int k = 0; k < 2; ++k) {
-      op_[k].label = k == 0 ? L"Condition" : L"Second condition";
+      op_[k].label = k == 0 ? T(L"Condition") : T(L"Second condition");
       op_[k].items.assign(std::begin(filter_detail::kOps), std::end(filter_detail::kOps) - (k == 0 ? 0 : 6));
       op_[k].selected = 0;
-      value_[k].label = L"Value";
+      value_[k].label = T(L"Value");
       value_[k].autoComplete = false;
       // A condition picked from the list hands the keyboard to its value, as Excel's dialog has the
       // box ready for the number (the average conditions take none), and Enter there applies.
@@ -83,22 +84,22 @@ class WorkbookView::FilterPanel : public PanelContent {
       };
       value_[k].onEnter = [this] { Apply(); };
     }
-    and_.text = L"And";
-    or_.text = L"Or";
+    and_.text = T(L"And");
+    or_.text = T(L"Or");
     and_.toggle = or_.toggle = true;
     or_.checked = true;
     and_.onInvoke = [this] { and_.checked = true, or_.checked = false; };
     or_.onInvoke = [this] { or_.checked = true, and_.checked = false; };
-    sortUp_.text = L"Sort A to Z";
-    sortDown_.text = L"Sort Z to A";
+    sortUp_.text = T(L"Sort A to Z");
+    sortDown_.text = T(L"Sort Z to A");
     for (PanelButton* b : {&sortUp_, &sortDown_})
       b->onInvoke = [this, b] {
         if (const ViewFilter* f = v_.FilterOf())
           v_.SortRange(f->ref, true, {{f->ref.firstCol + column_, b == &sortDown_}});
       };
-    apply_.text = L"Apply";
+    apply_.text = T(L"Apply");
     apply_.onInvoke = [this] { Apply(); };
-    clear_.text = L"Clear this column's filter";
+    clear_.text = T(L"Clear this column's filter");
     clear_.onInvoke = [this] {
       if (ViewFilter* f = v_.FilterOf()) {
         std::erase_if(f->criteria, [&](const data::FilterCriteria& c) { return c.column == column_; });
@@ -108,7 +109,7 @@ class WorkbookView::FilterPanel : public PanelContent {
     };
   }
 
-  std::wstring Title() const override { return L"Filter: " + header_; }
+  std::wstring Title() const override { return T(L"Filter: ") + header_; }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     ui_ = ui;
@@ -123,11 +124,11 @@ class WorkbookView::FilterPanel : public PanelContent {
     sortUp_.rc = gfx::RectF(left, y, left + half, y + 30 * ui);
     sortDown_.rc = gfx::RectF(left + half + 8 * ui, y, right, y + 30 * ui);
     y += 42 * ui;
-    label(L"Show the rows with these values");
+    label(T(L"Show the rows with these values"));
     const float listBottom = std::max(y + 100 * ui, body.bottom - 222 * ui);
     values_.rc = gfx::RectF(left, y, right, listBottom);
     y = listBottom + 14 * ui;
-    label(L"Or with conditions");
+    label(T(L"Or with conditions"));
     // Each condition on one line: what (wider), then the value.
     const float split = left + (right - left) * 0.58f;
     for (int k = 0; k < 2; ++k) {
@@ -208,7 +209,7 @@ class WorkbookView::FilterPanel : public PanelContent {
   void Refresh() {
     values_.items.clear();
     const bool all = std::all_of(checked_.begin(), checked_.end(), [](bool b) { return b; });
-    values_.items.push_back(std::wstring(all ? filter_detail::kChecked : filter_detail::kUnchecked) + L"(Select all)");
+    values_.items.push_back(std::wstring(all ? filter_detail::kChecked : filter_detail::kUnchecked) + T(L"(Select all)"));
     for (size_t i = 0; i < texts_.size(); ++i)
       values_.items.push_back(std::wstring(checked_[i] ? filter_detail::kChecked : filter_detail::kUnchecked) + (texts_[i].empty() ? L"(Blanks)" : texts_[i]));
     v_.host_.ViewInvalidate();
@@ -317,16 +318,16 @@ class WorkbookView::FilterPanel : public PanelContent {
 class WorkbookView::DataPanel : public PanelContent {
  public:
   explicit DataPanel(WorkbookView& view) : v_(view) {
-    header_.text = L"My data has headers";
+    header_.text = T(L"My data has headers");
     header_.toggle = true;
     header_.onInvoke = [this] { Columns(); };
     for (int k = 0; k < 3; ++k) {
-      keys_[k].label = k == 0 ? L"Sort by" : L"Then by";
-      orders_[k].label = L"Order";
-      orders_[k].items = {L"A to Z", L"Z to A"};
+      keys_[k].label = k == 0 ? T(L"Sort by") : T(L"Then by");
+      orders_[k].label = T(L"Order");
+      orders_[k].items = {T(L"A to Z"), T(L"Z to A")};
       orders_[k].selected = 0;
     }
-    columns_.label = L"Columns";
+    columns_.label = T(L"Columns");
     columns_.rowHeight = 28;
     columns_.onSelect = [this](int i) {
       if (i < 0 || toggling_ || static_cast<size_t>(i) >= checked_.size()) return;
@@ -339,7 +340,7 @@ class WorkbookView::DataPanel : public PanelContent {
     apply_.onInvoke = [this] { Apply(); };
   }
 
-  std::wstring Title() const override { return sort_ ? L"Sort" : L"Remove duplicates"; }
+  std::wstring Title() const override { return sort_ ? T(L"Sort") : T(L"Remove duplicates"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     ui_ = ui;
@@ -352,8 +353,8 @@ class WorkbookView::DataPanel : public PanelContent {
       keys_[k].visible = orders_[k].visible = sort_;
       if (!sort_) continue;
       const float w = (right - left - gap) * 0.62f;
-      labels_.push_back({k == 0 ? L"Sort by" : L"Then by", gfx::RectF(left, y, left + w, y + 16 * ui)});
-      labels_.push_back({L"Order", gfx::RectF(left + w + gap, y, right, y + 16 * ui)});
+      labels_.push_back({k == 0 ? T(L"Sort by") : T(L"Then by"), gfx::RectF(left, y, left + w, y + 16 * ui)});
+      labels_.push_back({T(L"Order"), gfx::RectF(left + w + gap, y, right, y + 16 * ui)});
       y += 20 * ui;
       keys_[k].rc = gfx::RectF(left, y, left + w, y + 30 * ui);
       orders_[k].rc = gfx::RectF(left + w + gap, y, right, y + 30 * ui);
@@ -361,13 +362,13 @@ class WorkbookView::DataPanel : public PanelContent {
     }
     columns_.visible = !sort_;
     if (!sort_) {
-      labels_.push_back({L"Rows are duplicates when these columns match", gfx::RectF(left, y, right, y + 16 * ui)});
+      labels_.push_back({T(L"Rows are duplicates when these columns match"), gfx::RectF(left, y, right, y + 16 * ui)});
       y += 20 * ui;
       const float bottom = std::max(y + 100 * ui, body.bottom - 70 * ui);
       columns_.rc = gfx::RectF(left, y, right, bottom);
       y = bottom + 12 * ui;
     }
-    apply_.text = sort_ ? L"Sort" : L"Remove duplicates";
+    apply_.text = sort_ ? T(L"Sort") : T(L"Remove duplicates");
     apply_.rc = gfx::RectF(left, y, right, y + 30 * ui);
     return {&header_, &keys_[0], &orders_[0], &keys_[1], &orders_[1], &keys_[2], &orders_[2], &columns_, &apply_};
   }
@@ -395,11 +396,11 @@ class WorkbookView::DataPanel : public PanelContent {
     for (uint32_t c = range_.firstCol; c <= range_.lastCol; ++c) {
       std::wstring n = header_.checked ? data::ShownText(*v_.book_, v_.Current(), range_.firstRow, c, v_.text_->Locale())
                                        : std::wstring();
-      if (n.empty()) n = L"Column " + Utf8ToWide(ColumnName(c));
+      if (n.empty()) n = Fmt(T(L"Column {0}"), {Utf8ToWide(ColumnName(c))});
       names.push_back(n);
     }
     for (int k = 0; k < 3; ++k) {
-      keys_[k].items = {k == 0 ? L"(choose a column)" : L"(none)"};
+      keys_[k].items = {k == 0 ? T(L"(choose a column)") : L"(none)"};
       keys_[k].items.insert(keys_[k].items.end(), names.begin(), names.end());
     }
     columns_.items.clear();

@@ -70,8 +70,11 @@ class XmlPull {
     bool owned = false;  // uri points into ownedUris_
   };
 
-  Event Fail(Status::Code code, std::string_view what);
+  // Fails with `message`, whole: a sentence with Subject() in it.
+  Event Fail(Status::Code code, std::string_view message);
   Event Damaged(std::string_view why);
+  // What a message calls this XML: "Part word/document.xml", or "This XML" without a label.
+  std::string Subject() const;
   Event ParseStartTag();
   Event ParseEndTag();
   Event ParseMarkup();

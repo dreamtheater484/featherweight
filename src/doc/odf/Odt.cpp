@@ -12,6 +12,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "core/Lang.h"
 #include "pkg/Odf.h"
 #include "pkg/Snapshot.h"
 #include "pkg/XmlDom.h"
@@ -347,7 +348,7 @@ class Converter {
 };
 
 pkg::Status Converter::Load(const char* name, pkg::XmlDom& dom, bool required) {
-  return pkg::odf::LoadPart(zip_, name, dom, limits_, required, "This isn't an OpenDocument text document.");
+  return pkg::odf::LoadPart(zip_, name, dom, limits_, required, T("This isn't an OpenDocument text document."));
 }
 
 void Converter::ReadStyles(xml_node root, int scope) {
@@ -1255,13 +1256,13 @@ std::string Converter::SectPr() {
 
 pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
   if (const std::string t = pkg::odf::MimeType(zip_); !t.empty() && !t.starts_with("application/vnd.oasis.opendocument.text"))
-    return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a text document.");
+    return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a text document."));
   if (pkg::Status st = Load("content.xml", content_, true); !st.Ok()) return st;
   if (pkg::Status st = Load("styles.xml", styles_, false); !st.Ok()) return st;
   ReadStyles(styles_.Root(), 1);
   ReadStyles(content_.Root(), 0);
   xml_node text = content_.Root().child("office:body").child("office:text");
-  if (!text) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a text document.");
+  if (!text) return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a text document."));
 
   // The page style: the one the first paragraph starts, or "Standard".
   xml_node masters = styles_.Root().child("office:master-styles");

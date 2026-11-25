@@ -7,6 +7,7 @@
 #include "App.h"
 #include "Commands.h"
 #include "FileAssoc.h"
+#include "core/Lang.h"
 
 using namespace gfx;
 
@@ -16,46 +17,46 @@ namespace {
 // itself when its keys differ.
 struct AppCommand {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 
 constexpr AppCommand kAppCommands[] = {
-    {CmdOpen, L"Open", L"Ctrl+O"},
-    {CmdSave, L"Save", L"Ctrl+S"},
-    {CmdSaveAs, L"Save as…", L"Ctrl+Shift+S"},
-    {CmdPrint, L"Print", L"Ctrl+P"},
-    {CmdExportPdf, L"Export PDF…", L""},
-    {CmdFind, L"Find", L"Ctrl+F"},
-    {CmdFindNext, L"Find next", L"F3"},
-    {CmdFindPrev, L"Find previous", L"Shift+F3"},
-    {CmdCloseTab, L"Close tab", L"Ctrl+W"},
-    {CmdNextTab, L"Next tab", L"Ctrl+Tab"},
-    {CmdPrevTab, L"Previous tab", L"Ctrl+Shift+Tab"},
-    {CmdFullScreen, L"Full screen", L"F11"},
-    {CmdPresentation, L"Present", L""},
-    {CmdToggleInvert, L"Night reading: dark pages", L""},
-    {CmdThemeSystem, L"App theme: use Windows setting", L""},
-    {CmdThemeLight, L"App theme: light", L""},
-    {CmdThemeDark, L"App theme: dark", L""},
-    {CmdToggleHighlight, L"Highlight form fields", L""},
-    {CmdToggleSpelling, L"Check spelling as you type", L""},
-    {CmdToggleAutoCorrect, L"AutoCorrect as you type", L""},
-    {CmdRuler, L"Ruler", L""},
-    {CmdDeveloperTab, L"Show Developer tab", L""},
-    {CmdClearRecent, L"Clear recent files", L""},
-    {CmdShowRecentFiles, L"Show recent files", L""},
-    {CmdToggleAutoUpdate, L"Update automatically", L""},
-    {CmdCheckUpdates, L"Check for updates now", L""},
-    {CmdMakeDefault, L"Make Featherweight the default PDF app", L""},
-    {CmdHelp, L"Help", L"F1"},  // f1-trust
-    {CmdKnownIssues, L"Known issues", L""},
-    {CmdReportProblem, L"Report a problem", L""},
-    {CmdThirdPartyNotices, L"Third-party notices", L""},
-    {CmdAbout, L"About Featherweight", L""},
-    {CmdExit, L"Exit", L"Alt+F4"},
-    {CmdRibbonCollapse, L"Collapse the ribbon", L"Ctrl+F1"},
-    {CmdFilePage, L"File (new, open, save, print, options)", L""},
+    {CmdOpen, N_(L"Open"), L"Ctrl+O"},
+    {CmdSave, N_(L"Save"), L"Ctrl+S"},
+    {CmdSaveAs, N_(L"Save as…"), L"Ctrl+Shift+S"},
+    {CmdPrint, N_(L"Print"), L"Ctrl+P"},
+    {CmdExportPdf, N_(L"Export PDF…"), L""},
+    {CmdFind, N_(L"Find"), L"Ctrl+F"},
+    {CmdFindNext, N_(L"Find next"), L"F3"},
+    {CmdFindPrev, N_(L"Find previous"), L"Shift+F3"},
+    {CmdCloseTab, N_(L"Close tab"), L"Ctrl+W"},
+    {CmdNextTab, N_(L"Next tab"), L"Ctrl+Tab"},
+    {CmdPrevTab, N_(L"Previous tab"), L"Ctrl+Shift+Tab"},
+    {CmdFullScreen, N_(L"Full screen"), L"F11"},
+    {CmdPresentation, N_(L"Present"), L""},
+    {CmdToggleInvert, N_(L"Night reading: dark pages"), L""},
+    {CmdThemeSystem, N_(L"App theme: use Windows setting"), L""},
+    {CmdThemeLight, N_(L"App theme: light"), L""},
+    {CmdThemeDark, N_(L"App theme: dark"), L""},
+    {CmdToggleHighlight, N_(L"Highlight form fields"), L""},
+    {CmdToggleSpelling, N_(L"Check spelling as you type"), L""},
+    {CmdToggleAutoCorrect, N_(L"AutoCorrect as you type"), L""},
+    {CmdRuler, N_(L"Ruler"), L""},
+    {CmdDeveloperTab, N_(L"Show Developer tab"), L""},
+    {CmdClearRecent, N_(L"Clear recent files"), L""},
+    {CmdShowRecentFiles, N_(L"Show recent files"), L""},
+    {CmdToggleAutoUpdate, N_(L"Update automatically"), L""},
+    {CmdCheckUpdates, N_(L"Check for updates now"), L""},
+    {CmdMakeDefault, N_(L"Make Featherweight the default PDF app"), L""},
+    {CmdHelp, N_(L"Help"), L"F1"},  // f1-trust
+    {CmdKnownIssues, N_(L"Known issues"), L""},
+    {CmdReportProblem, N_(L"Report a problem"), L""},
+    {CmdThirdPartyNotices, N_(L"Third-party notices"), L""},
+    {CmdAbout, N_(L"About Featherweight"), L""},
+    {CmdExit, N_(L"Exit"), L"Alt+F4"},
+    {CmdRibbonCollapse, N_(L"Collapse the ribbon"), L"Ctrl+F1"},
+    {CmdFilePage, N_(L"File (new, open, save, print, options)"), L""},
 };
 
 const AppCommand* FindAppCommand(int cmd) {
@@ -85,6 +86,20 @@ CommandState App::QueryCommand(int cmd) {
   const bool ready = v && v->Ready();
   CommandState s = ready ? v->QueryCommand(cmd) : CommandState{};
   const AppCommand* own = FindAppCommand(cmd);
+  // File > Options > Language (f1-lang): each language by its own name; a change applies at the next start.
+  if (cmd == CmdLanguageWindows || (cmd >= CmdLanguage0 && cmd < CmdLanguage0 + 9)) {
+    const auto& all = fw::lang::Languages();
+    const std::wstring code = cmd == CmdLanguageWindows ? fw::lang::WindowsLanguage()
+                              : static_cast<size_t>(cmd - CmdLanguage0) < all.size() ? all[cmd - CmdLanguage0].code
+                                                                                    : L"";
+    CommandState l;
+    l.visible = l.enabled = !code.empty();
+    for (const fw::lang::Language& lang : all)
+      if (code == lang.code)
+        l.label = cmd == CmdLanguageWindows ? Fmt(T(L"Windows' language ({0})"), {lang.name}) : lang.name;
+    l.checked = cmd == CmdLanguageWindows ? settings_.language.empty() : settings_.language == code;
+    return l;
+  }
   if (!own) return s;
   if (s.label.empty()) {
     s.label = own->label;
@@ -103,7 +118,7 @@ CommandState App::QueryCommand(int cmd) {
     case CmdCloseTab: s.enabled = active_ >= 0; break;
     case CmdNextTab:
     case CmdPrevTab: s.enabled = tabs_.size() > 1; break;
-    case CmdFullScreen: s.label = fullscreen_ ? L"Exit full screen" : L"Full screen"; break;
+    case CmdFullScreen: s.label = fullscreen_ ? T(L"Exit full screen") : T(L"Full screen"); break;
     case CmdPresentation: s.enabled = ready && (v->Paged() || (v->Kind() == TabKind::Presentation && tabEnabled)); break;
     case CmdToggleInvert: s.checked = settings_.invert; break;
     case CmdThemeSystem: s.checked = settings_.theme == ThemeSetting::System; break;
@@ -125,14 +140,14 @@ CommandState App::QueryCommand(int cmd) {
       // Pinned files stay.
       const bool pinned = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return r.pinned; });
       s.enabled = std::any_of(settings_.recent.begin(), settings_.recent.end(), [](const RecentFile& r) { return !r.pinned; });
-      if (pinned) s.label = L"Clear unpinned recent files";
+      if (pinned) s.label = T(L"Clear unpinned recent files");
       break;
     }
     case CmdShowRecentFiles: s.checked = settings_.showRecent; break;
     case CmdMakeDefault: s.visible = !fileassoc::IsDefault(); break;
     case CmdRibbonCollapse:
       s.visible = ribbonShown_;
-      if (ribbon_.Collapsed()) s.label = L"Show the whole ribbon";
+      if (ribbon_.Collapsed()) s.label = T(L"Show the whole ribbon");
       break;
     case CmdFilePage: s.visible = ribbonShown_; break;
     default: break;
@@ -162,8 +177,9 @@ std::vector<CommandEntry> App::SearchableCommands() {
     places = ribbon_.Commands();
     const ui::FilePage::Model fm = CurrentFilePage();
     for (int sec = 0; sec < ui::FilePage::kSectionCount; ++sec) {
-      const std::wstring where = std::wstring(L"File \u203A ") + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(sec));
-      if (fm.run[sec]) places.push_back({fm.run[sec], L"File"});
+      const std::wstring where =
+          std::wstring(T(L"File")) + L" \u203A " + ui::FilePage::SectionName(static_cast<ui::FilePage::Section>(sec));
+      if (fm.run[sec]) places.push_back({fm.run[sec], T(L"File")});
       for (const auto& e : fm.entries[sec])
         if (e.cmd && (e.cmd < CmdRecent || e.cmd >= CmdRecent + Settings::kMaxRecent)) places.push_back({e.cmd, where});
     }

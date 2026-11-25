@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -17,7 +18,7 @@ SidePanel::SidePanel() {
   close_.id = 1;
   close_.glyph = icon::Cancel;
   close_.glyphSize = 12;
-  close_.tooltip = L"Close (Esc)";
+  close_.tooltip = T(L"Close (Esc)");
   set_.Add(&close_);
 }
 

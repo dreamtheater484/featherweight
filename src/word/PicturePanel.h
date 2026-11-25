@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/Lang.h"
 #include "doc/edit/Pictures.h"
 #include "ui/Controls.h"
 #include "ui/SidePanel.h"
@@ -24,7 +25,7 @@ class PicturePanel : public PanelContent {
   };
   explicit PicturePanel(Actions actions);
 
-  std::wstring Title() const override { return L"Picture"; }
+  std::wstring Title() const override { return T(L"Picture"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
 

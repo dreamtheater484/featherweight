@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/TreeEdit.h"
 #include "ui/Controls.h"
@@ -28,32 +29,32 @@ namespace {
 
 struct Named {
   int cmd;
-  const wchar_t* label;
+  UiText label;
   const wchar_t* keys;
 };
 constexpr Named kNames[] = {
-    {CmdPageSetup, L"Page setup…", L""},
-    {CmdLayoutBox, L"Layout", L""},
-    {CmdPortrait, L"Portrait", L""},
-    {CmdLandscape, L"Landscape", L""},
-    {CmdMarginsNormal, L"Margins: Normal", L""},
-    {CmdMarginsNarrow, L"Margins: Narrow", L""},
-    {CmdMarginsModerate, L"Margins: Moderate", L""},
-    {CmdMarginsWide, L"Margins: Wide", L""},
-    {CmdColumnsOne, L"One column", L""},
-    {CmdColumnsTwo, L"Two columns", L""},
-    {CmdColumnsThree, L"Three columns", L""},
-    {CmdPageBreak, L"Page break", L"Ctrl+Enter"},
-    {CmdColumnBreak, L"Column break", L"Ctrl+Shift+Enter"},
-    {CmdSectionNextPage, L"Section break (next page)", L""},
-    {CmdSectionContinuous, L"Section break (continuous)", L""},
-    {CmdSectionEvenPage, L"Section break (even page)", L""},
-    {CmdSectionOddPage, L"Section break (odd page)", L""},
-    {CmdDeleteSectionBreak, L"Delete section break", L""},
-    {CmdHyphenation, L"Hyphenate automatically", L""},
-    {CmdOptionalHyphen, L"Optional hyphen", L"Ctrl+-"},
-    {CmdNonBreakingHyphen, L"Non-breaking hyphen", L"Ctrl+Shift+-"},
-    {CmdParagraph, L"Paragraph…", L""},
+    {CmdPageSetup, N_(L"Page setup…"), L""},
+    {CmdLayoutBox, N_(L"Layout"), L""},
+    {CmdPortrait, N_(L"Portrait"), L""},
+    {CmdLandscape, N_(L"Landscape"), L""},
+    {CmdMarginsNormal, N_(L"Margins: Normal"), L""},
+    {CmdMarginsNarrow, N_(L"Margins: Narrow"), L""},
+    {CmdMarginsModerate, N_(L"Margins: Moderate"), L""},
+    {CmdMarginsWide, N_(L"Margins: Wide"), L""},
+    {CmdColumnsOne, N_(L"One column"), L""},
+    {CmdColumnsTwo, N_(L"Two columns"), L""},
+    {CmdColumnsThree, N_(L"Three columns"), L""},
+    {CmdPageBreak, N_(L"Page break"), L"Ctrl+Enter"},
+    {CmdColumnBreak, N_(L"Column break"), L"Ctrl+Shift+Enter"},
+    {CmdSectionNextPage, N_(L"Section break (next page)"), L""},
+    {CmdSectionContinuous, N_(L"Section break (continuous)"), L""},
+    {CmdSectionEvenPage, N_(L"Section break (even page)"), L""},
+    {CmdSectionOddPage, N_(L"Section break (odd page)"), L""},
+    {CmdDeleteSectionBreak, N_(L"Delete section break"), L""},
+    {CmdHyphenation, N_(L"Hyphenate automatically"), L""},
+    {CmdOptionalHyphen, N_(L"Optional hyphen"), L"Ctrl+-"},
+    {CmdNonBreakingHyphen, N_(L"Non-breaking hyphen"), L"Ctrl+Shift+-"},
+    {CmdParagraph, N_(L"Paragraph…"), L""},
 };
 
 const Named* NameOf(int cmd) {
@@ -69,19 +70,19 @@ struct MarginPreset {
   int32_t top, bottom, left, right;
 };
 constexpr MarginPreset kMargins[] = {
-    {CmdMarginsNormal, L"Normal", 1440, 1440, 1440, 1440},
-    {CmdMarginsNarrow, L"Narrow", 720, 720, 720, 720},
-    {CmdMarginsModerate, L"Moderate", 1440, 1440, 1080, 1080},
-    {CmdMarginsWide, L"Wide", 1440, 1440, 2880, 2880},
+    {CmdMarginsNormal, N_(L"Normal"), 1440, 1440, 1440, 1440},
+    {CmdMarginsNarrow, N_(L"Narrow"), 720, 720, 720, 720},
+    {CmdMarginsModerate, N_(L"Moderate"), 1440, 1440, 1080, 1080},
+    {CmdMarginsWide, N_(L"Wide"), 1440, 1440, 2880, 2880},
 };
 
 // Paper sizes, standing up, in twips.
 struct Paper {
-  const wchar_t* name;
+  UiText name;
   int32_t width, height;
 };
-constexpr Paper kPapers[] = {{L"Letter", 12240, 15840}, {L"Legal", 12240, 20160},  {L"A4", 11906, 16838},
-                             {L"A5", 8391, 11906},      {L"Executive", 10440, 15120}, {L"B5 (JIS)", 10319, 14571}};
+constexpr Paper kPapers[] = {{N_(L"Letter"), 12240, 15840}, {N_(L"Legal"), 12240, 20160},  {L"A4", 11906, 16838},
+                             {L"A5", 8391, 11906},      {N_(L"Executive"), 10440, 15120}, {L"B5 (JIS)", 10319, 14571}};
 
 constexpr int32_t kLongest = 31680;  // 22 inches, as Word allows
 // The panel fits a 700-pixel window without scrolling: 10 rows under 4 headings. Word's margin
@@ -223,13 +224,13 @@ class DocPage::Panel : public RowsPanel {
     };
     const double longest = FromTwips(kLongest), step = Metric() ? 0.1 : 0.05;
 
-    drop(applyTo_, L"Apply to", {L"This section", L"Whole document"});
+    drop(applyTo_, T(L"Apply to"), {T(L"This section"), T(L"Whole document")});
     applyTo_.selected = 0;
     applyTo_.onChange = [this](int) { shown_ = {}; };
     std::vector<std::wstring> papers;
     for (const Paper& paper : kPapers) papers.push_back(PaperLabel(paper));
-    papers.push_back(L"Custom size");
-    drop(paper_, L"Paper size", std::move(papers));
+    papers.push_back(T(L"Custom size"));
+    drop(paper_, T(L"Paper size"), std::move(papers));
     paper_.onChange = [this](int i) {
       if (i < 0 || i >= static_cast<int>(std::size(kPapers))) return;
       const auto [first, last] = Scope();
@@ -241,30 +242,30 @@ class DocPage::Panel : public RowsPanel {
       s.height = Twips(turned ? kPapers[i].width : kPapers[i].height);
       Page(s);
     };
-    spin(width_, L"Page width", FromTwips(1440), longest, step, 2, Unit());
+    spin(width_, T(L"Page width"), FromTwips(1440), longest, step, 2, Unit());
     width_.onChange = [this](double v) {
       edit::PageSetup s;
       s.width = Twips(ToTwips(v));
       Page(s);
     };
-    spin(height_, L"Page height", FromTwips(1440), longest, step, 2, Unit());
+    spin(height_, T(L"Page height"), FromTwips(1440), longest, step, 2, Unit());
     height_.onChange = [this](double v) {
       edit::PageSetup s;
       s.height = Twips(ToTwips(v));
       Page(s);
     };
-    drop(orientation_, L"Orientation", {L"Portrait", L"Landscape"});
+    drop(orientation_, T(L"Orientation"), {T(L"Portrait"), T(L"Landscape")});
     orientation_.onChange = [this](int i) {
       edit::PageSetup s;
       s.landscape = i == 1;
       Page(s);
     };
-    drop(start_, L"Section starts", {L"On a new page", L"Continuous", L"On an even page", L"On an odd page"});
+    drop(start_, T(L"Section starts"), {T(L"On a new page"), T(L"Continuous"), T(L"On an even page"), T(L"On an odd page")});
     start_.onChange = [this](int i) {
       const auto [first, last] = Scope();
       if (first == kNone || i < 0 || i > 3) return;
       edit::Editor& ed = p_.editor_;
-      ed.BeginGroup(u"Section start");
+      ed.BeginGroup(T(u"Section start"));
       edit::Result r;
       for (uint32_t s = first; s <= last && (r = edit::SetSectionStart(ed, s, static_cast<SectionStart>(i))); ++s) {
       }
@@ -280,56 +281,56 @@ class DocPage::Panel : public RowsPanel {
         Page(s);
       };
     };
-    margin(top_, L"Top margin", &edit::PageSetup::top);
-    margin(bottom_, L"Bottom margin", &edit::PageSetup::bottom);
-    margin(left_, L"Left margin", &edit::PageSetup::left);
-    margin(right_, L"Right margin", &edit::PageSetup::right);
+    margin(top_, T(L"Top margin"), &edit::PageSetup::top);
+    margin(bottom_, T(L"Bottom margin"), &edit::PageSetup::bottom);
+    margin(left_, T(L"Left margin"), &edit::PageSetup::left);
+    margin(right_, T(L"Right margin"), &edit::PageSetup::right);
 
-    spin(columns_, L"Columns", 1, 12, 1, 0, L"");
+    spin(columns_, T(L"Columns"), 1, 12, 1, 0, L"");
     columns_.onChange = [this](double v) { Columns(static_cast<int>(std::lround(v)), spacing_.value, line_.selected == 1); };
-    spin(spacing_, L"Space between columns", 0, longest, step, 2, Unit());
+    spin(spacing_, T(L"Space between columns"), 0, longest, step, 2, Unit());
     spacing_.onChange = [this](double v) { Columns(static_cast<int>(std::lround(columns_.value)), v, line_.selected == 1); };
-    drop(line_, L"Line between columns", {L"No line", L"Line between"});
+    drop(line_, T(L"Line between columns"), {T(L"No line"), T(L"Line between")});
     line_.onChange = [this](int i) { Columns(static_cast<int>(std::lround(columns_.value)), spacing_.value, i == 1); };
 
-    drop(hyphenate_, L"Hyphenate automatically", {L"Off", L"On"});
+    drop(hyphenate_, T(L"Hyphenate automatically"), {T(L"Off"), T(L"On")});
     hyphenate_.onChange = [this](int i) {
       edit::Hyphenation h;
       h.automatic = i == 1;
       Done(edit::SetHyphenation(p_.editor_, h));
     };
-    spin(zone_, L"Hyphenation zone", 0, FromTwips(kLongest), step, 2, Unit());
+    spin(zone_, T(L"Hyphenation zone"), 0, FromTwips(kLongest), step, 2, Unit());
     zone_.onChange = [this](double v) {
       edit::Hyphenation h;
       h.zone = Twips(ToTwips(v));
       Done(edit::SetHyphenation(p_.editor_, h));
     };
-    spin(limit_, L"Hyphenated lines in a row (0: no limit)", 0, 32767, 1, 0, L"");
+    spin(limit_, T(L"Hyphenated lines in a row (0: no limit)"), 0, 32767, 1, 0, L"");
     limit_.onChange = [this](double v) {
       edit::Hyphenation h;
       h.limit = static_cast<int32_t>(std::lround(v));
       Done(edit::SetHyphenation(p_.editor_, h));
     };
 
-    rows_ = {{L"Page"},
-             {L"Apply to", &applyTo_},
-             {L"Paper", &paper_},
-             {L"Width, height", &width_, &height_},
-             {L"Orientation", &orientation_},
-             {L"Section starts", &start_},
-             {L"Margins"},
-             {L"Top, bottom", &top_, &bottom_},
-             {L"Left, right", &left_, &right_},
-             {L"Columns"},
-             {L"Count, space", &columns_, &spacing_},
-             {L"Line", &line_},
-             {L"Hyphenation (whole document)"},
-             {L"Automatic", &hyphenate_},
-             {L"Zone, limit", &zone_, &limit_}};
+    rows_ = {{T(L"Page")},
+             {T(L"Apply to"), &applyTo_},
+             {T(L"Paper"), &paper_},
+             {T(L"Width, height"), &width_, &height_},
+             {T(L"Orientation"), &orientation_},
+             {T(L"Section starts"), &start_},
+             {T(L"Margins")},
+             {T(L"Top, bottom"), &top_, &bottom_},
+             {T(L"Left, right"), &left_, &right_},
+             {T(L"Columns")},
+             {T(L"Count, space"), &columns_, &spacing_},
+             {T(L"Line"), &line_},
+             {T(L"Hyphenation (whole document)")},
+             {T(L"Automatic"), &hyphenate_},
+             {T(L"Zone, limit"), &zone_, &limit_}};
     NumberControls();
   }
 
-  std::wstring Title() const override { return L"Page setup"; }
+  std::wstring Title() const override { return T(L"Page setup"); }
 
   // Opened again: the selection's sections, shown as they are.
   void Open() {
@@ -383,7 +384,7 @@ class DocPage::Panel : public RowsPanel {
     const bool can = p_.editor_.CanEdit() && first != kNone;
     EnableAll(can);
     applyTo_.enabled = can && doc.Sections().size() > 1;
-    applyTo_.items[0] = first != last && applyTo_.selected == 0 ? L"Selected sections" : L"This section";
+    applyTo_.items[0] = first != last && applyTo_.selected == 0 ? T(L"Selected sections") : T(L"This section");
     if (first == kNone) return;
     const SectionProps& s = doc.Sections()[first].props;
     const int32_t w = s.pageWidth.Value(), h = s.pageHeight.Value();
@@ -435,26 +436,26 @@ class DocPage::ParaPanel : public RowsPanel {
     };
     const double longest = FromTwips(kLongest), step = Metric() ? 0.1 : 0.05;
 
-    drop(align_, L"Alignment", {L"Left", L"Centered", L"Right", L"Justified"});
+    drop(align_, T(L"Alignment"), {T(L"Left"), T(L"Centered"), T(L"Right"), T(L"Justified")});
     align_.onChange = [this](int i) {
       if (i < 0 || i >= static_cast<int>(std::size(kAlign))) return;
       edit::ParaFormat f;
       f.jc = kAlign[i];
       Format(f);
     };
-    spin(left_, L"Left indent", -longest, longest, step, 2, Unit());
+    spin(left_, T(L"Left indent"), -longest, longest, step, 2, Unit());
     left_.onChange = [this](double v) {
       edit::ParaFormat f;
       f.indStart = Twips(ToTwips(v));
       Format(f);
     };
-    spin(right_, L"Right indent", -longest, longest, step, 2, Unit());
+    spin(right_, T(L"Right indent"), -longest, longest, step, 2, Unit());
     right_.onChange = [this](double v) {
       edit::ParaFormat f;
       f.indEnd = Twips(ToTwips(v));
       Format(f);
     };
-    drop(special_, L"First line or hanging indent", {L"None", L"First line", L"Hanging"});
+    drop(special_, T(L"First line or hanging indent"), {T(L"None"), T(L"First line"), T(L"Hanging")});
     special_.onChange = [this](int i) {
       if (i < 0 || i > 2) return;
       const int32_t by = by_.value > 0 ? ToTwips(by_.value) : 720;  // Word's half inch
@@ -462,7 +463,7 @@ class DocPage::ParaPanel : public RowsPanel {
       f.firstLine = Twips(i == 0 ? 0 : i == 1 ? by : -by);
       Format(f);
     };
-    spin(by_, L"Indented by", 0, longest, step, 2, Unit());
+    spin(by_, T(L"Indented by"), 0, longest, step, 2, Unit());
     by_.onChange = [this](double v) {
       const int32_t by = ToTwips(v);
       edit::ParaFormat f;
@@ -478,9 +479,9 @@ class DocPage::ParaPanel : public RowsPanel {
         Format(f);
       };
     };
-    space(before_, L"Space before", &edit::ParaFormat::spaceBefore);
-    space(after_, L"Space after", &edit::ParaFormat::spaceAfter);
-    drop(rule_, L"Line spacing", {L"Single", L"1.5 lines", L"Double", L"At least", L"Exactly", L"Multiple"});
+    space(before_, T(L"Space before"), &edit::ParaFormat::spaceBefore);
+    space(after_, T(L"Space after"), &edit::ParaFormat::spaceAfter);
+    drop(rule_, T(L"Line spacing"), {T(L"Single"), T(L"1.5 lines"), T(L"Double"), T(L"At least"), T(L"Exactly"), T(L"Multiple")});
     rule_.onChange = [this](int i) {
       if (i < 0 || i > 5) return;
       edit::ParaFormat f;
@@ -489,7 +490,7 @@ class DocPage::ParaPanel : public RowsPanel {
       f.line = i <= 2 ? 240 + 120 * i : i <= 4 ? 240 : 720;
       Format(f);
     };
-    spin(at_, L"Line spacing at", 0.06, 132, 0.25, 2, L"");  // lines or points: Refresh sets which
+    spin(at_, T(L"Line spacing at"), 0.06, 132, 0.25, 2, L"");  // lines or points: Refresh sets which
     at_.onChange = [this](double v) {
       edit::ParaFormat f;
       f.lineRule = atRule_;
@@ -498,7 +499,7 @@ class DocPage::ParaPanel : public RowsPanel {
     };
 
     auto onOff = [&](Dropdown& d, const wchar_t* name, std::optional<bool> edit::ParaFormat::*field) {
-      drop(d, name, {L"Off", L"On"});
+      drop(d, name, {T(L"Off"), T(L"On")});
       d.onChange = [this, field](int i) {
         if (i < 0 || i > 1) return;
         edit::ParaFormat f;
@@ -506,28 +507,28 @@ class DocPage::ParaPanel : public RowsPanel {
         Format(f);
       };
     };
-    onOff(widow_, L"Widow/orphan control", &edit::ParaFormat::widowControl);
-    onOff(keepNext_, L"Keep with next", &edit::ParaFormat::keepNext);
-    onOff(keepLines_, L"Keep lines together", &edit::ParaFormat::keepLines);
-    onOff(breakBefore_, L"Page break before", &edit::ParaFormat::pageBreakBefore);
+    onOff(widow_, T(L"Widow/orphan control"), &edit::ParaFormat::widowControl);
+    onOff(keepNext_, T(L"Keep with next"), &edit::ParaFormat::keepNext);
+    onOff(keepLines_, T(L"Keep lines together"), &edit::ParaFormat::keepLines);
+    onOff(breakBefore_, T(L"Page break before"), &edit::ParaFormat::pageBreakBefore);
 
-    rows_ = {{L"General"},
-             {L"Alignment", &align_},
-             {L"Indents"},
-             {L"Left, right", &left_, &right_},
-             {L"Special, by", &special_, &by_},
-             {L"Spacing"},
-             {L"Before, after", &before_, &after_},
-             {L"Line, at", &rule_, &at_},
-             {L"Line and page breaks"},
-             {L"Widow control", &widow_},
-             {L"Keep with next", &keepNext_},
-             {L"Keep together", &keepLines_},
-             {L"Page break", &breakBefore_}};
+    rows_ = {{T(L"General")},
+             {T(L"Alignment"), &align_},
+             {T(L"Indents")},
+             {T(L"Left, right"), &left_, &right_},
+             {T(L"Special, by"), &special_, &by_},
+             {T(L"Spacing")},
+             {T(L"Before, after"), &before_, &after_},
+             {T(L"Line, at"), &rule_, &at_},
+             {T(L"Line and page breaks")},
+             {T(L"Widow control"), &widow_},
+             {T(L"Keep with next"), &keepNext_},
+             {T(L"Keep together"), &keepLines_},
+             {T(L"Page break"), &breakBefore_}};
     NumberControls();
   }
 
-  std::wstring Title() const override { return L"Paragraph"; }
+  std::wstring Title() const override { return T(L"Paragraph"); }
   void Open() { shown_ = {}; }
 
  private:
@@ -669,7 +670,7 @@ CommandState DocPage::Query(int cmd) {
   }
   const bool can = editor_.CanEdit();
   if (cmd >= CmdIndentLeftBox && cmd <= CmdSpaceAfterBox) {
-    static constexpr const wchar_t* kBoxes[] = {L"Indent left", L"Indent right", L"Spacing before", L"Spacing after"};
+    static constexpr UiText kBoxes[] = {N_(L"Indent left"), N_(L"Indent right"), N_(L"Spacing before"), N_(L"Spacing after")};
     s.label = kBoxes[cmd - CmdIndentLeftBox];
     s.enabled = can;
     return s;
@@ -801,7 +802,7 @@ void DocPage::Break(bool column) {
     host_.apply(edit::InsertBreak(editor_, from, column));
     return;
   }
-  editor_.BeginGroup(column ? u"Column break" : u"Page break");
+  editor_.BeginGroup(column ? T(u"Column break") : T(u"Page break"));
   edit::Result r = editor_.Delete(from, to);
   if (r) r = edit::InsertBreak(editor_, r.caret, column);
   if (r) editor_.EndGroup();
@@ -824,7 +825,7 @@ void DocPage::SectionBreak(SectionStart start) {
     host_.apply(edit::InsertSectionBreak(editor_, from, start));
     return;
   }
-  editor_.BeginGroup(u"Section break");
+  editor_.BeginGroup(T(u"Section break"));
   edit::Result r = editor_.Delete(from, to);
   if (r) r = edit::InsertSectionBreak(editor_, r.caret, start);
   if (r) editor_.EndGroup();
@@ -836,7 +837,7 @@ ToolItem DocPage::SizeMenu() {
   ToolItem t;
   t.cmd = CmdLayoutBox;
   t.dropdown = true;
-  t.tooltip = L"Size: the paper size";
+  t.tooltip = T(L"Size: the paper size");
   t.enabled = editor_.CanEdit();
   const auto [first, last] = Sections();
   const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
@@ -844,7 +845,7 @@ ToolItem DocPage::SizeMenu() {
   const int32_t h = p ? std::max(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
   for (const Paper& paper : kPapers)
     t.choices.push_back(std::wstring(p && Near(w, paper.width) && Near(h, paper.height) ? L"✓ " : L"") + PaperLabel(paper));
-  t.choices.push_back(L"More paper sizes…");
+  t.choices.push_back(T(L"More paper sizes…"));
   t.onChange = [this](const ToolValue& v) {
     if (v.index >= 0 && v.index < static_cast<int>(std::size(kPapers))) PaperSize(static_cast<size_t>(v.index));
     else if (v.index == static_cast<int>(std::size(kPapers))) Execute(CmdPageSetup);

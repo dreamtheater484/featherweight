@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
@@ -700,23 +701,23 @@ void PagedView::FillMenu(int which, HMENU m) {
   using menu::AppendSeparator;
   auto checked = [&](int cmd) { return QueryCommand(cmd).checked; };
   if (which == CmdZoomMenu) {
-    AppendItem(m, CmdZoomAuto, L"Automatic\tCtrl+0", true, checked(CmdZoomAuto), true);
-    AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3", true, checked(CmdZoomFitWidth), true);
-    AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2", true, checked(CmdZoomFitPage), true);
-    AppendItem(m, CmdZoomActual, L"Actual size\tCtrl+1", true, checked(CmdZoomActual), true);
+    AppendItem(m, CmdZoomAuto, T(L"Automatic\tCtrl+0"), true, checked(CmdZoomAuto), true);
+    AppendItem(m, CmdZoomFitWidth, T(L"Fit width\tCtrl+3"), true, checked(CmdZoomFitWidth), true);
+    AppendItem(m, CmdZoomFitPage, T(L"Fit page\tCtrl+2"), true, checked(CmdZoomFitPage), true);
+    AppendItem(m, CmdZoomActual, T(L"Actual size\tCtrl+1"), true, checked(CmdZoomActual), true);
     AppendSeparator(m);
     const auto& presets = fw::ZoomPresets();
     for (int i = 0; i < static_cast<int>(presets.size()); ++i)
       AppendItem(m, CmdZoomPreset + i, fw::FormatPercent(presets[i]), true, checked(CmdZoomPreset + i), true);
   } else if (which == CmdViewMenu) {
-    AppendItem(m, CmdViewSingle, L"Single page\tCtrl+6", true, checked(CmdViewSingle), true);
-    AppendItem(m, CmdViewContinuous, L"Continuous\tCtrl+7", true, checked(CmdViewContinuous), true);
-    AppendItem(m, CmdViewFacing, L"Two pages\tCtrl+8", true, checked(CmdViewFacing), true);
+    AppendItem(m, CmdViewSingle, T(L"Single page\tCtrl+6"), true, checked(CmdViewSingle), true);
+    AppendItem(m, CmdViewContinuous, T(L"Continuous\tCtrl+7"), true, checked(CmdViewContinuous), true);
+    AppendItem(m, CmdViewFacing, T(L"Two pages\tCtrl+8"), true, checked(CmdViewFacing), true);
     AppendSeparator(m);
     CommandState cover = QueryCommand(CmdToggleCover);
-    AppendItem(m, CmdToggleCover, L"Show cover page on its own", cover.enabled, cover.checked);
+    AppendItem(m, CmdToggleCover, T(L"Show cover page on its own"), cover.enabled, cover.checked);
     AppendSeparator(m);
-    AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
+    AppendItem(m, CmdRotateLeft, T(L"Rotate counterclockwise\tCtrl+Shift+−"));
     AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
   }
 }

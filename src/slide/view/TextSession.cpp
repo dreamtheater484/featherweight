@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "draw/Xml.h"
 #include "slide/Presentation.h"
 #include "text/Fonts.h"
@@ -188,7 +189,7 @@ bool TextSession::Commit(std::u16string_view step, bool coalesce) {
     Relayout();
   };
   committing_ = true;
-  if (newHeight > 0 && step == u"Typing") {
+  if (newHeight > 0 && step == T(u"Typing")) {
     // Typing that grows (or shrinks) the shape: its height first, a step of its own (the edit layer
     // has no typing group), then the text, which starts the typing step the next keys join - so one
     // undo takes back what was typed, not just its first letter.
@@ -205,13 +206,13 @@ bool TextSession::Commit(std::u16string_view step, bool coalesce) {
   }
   committing_ = false;
   if (!ok) {
-    error_ = error.empty() ? L"This text can't be changed." : error;
+    error_ = error.empty() ? T(L"This text can't be changed.") : error;
     ModelChanged();
     return false;
   }
   // A cell's text taller or shorter: its row may change.
   if (target_.Cell() && std::fabs(block_.ContentHeight() - frame_.contentHeight) > 0.01f) geometryChanged_ = true;
-  typing_ = coalesce || step == u"Typing";
+  typing_ = coalesce || step == T(u"Typing");
   return true;
 }
 
@@ -434,14 +435,14 @@ bool TextSession::Type(std::wstring_view text) {
   caret_ = anchor_ = end;
   lineEnd_ = false;
   goalX_.reset();
-  return Commit(u"Typing", coalesce);
+  return Commit(T(u"Typing"), coalesce);
 }
 
 bool TextSession::Backspace(bool word) {
   const bool coalesce = typing_ && !HasSelection();
   if (HasSelection()) {
     caret_ = anchor_ = doc_->Delete(SelFrom(), SelTo());
-    return Commit(u"Typing", false);
+    return Commit(T(u"Typing"), false);
   }
   if (caret_.offset == 0) {
     // At a paragraph's start: an indented one comes back a level, as PowerPoint's lists do; else
@@ -454,7 +455,7 @@ bool TextSession::Backspace(bool word) {
         if (level - 1 == 0) pPr.remove_attribute("lvl");
         else (pPr.attribute("lvl") ? pPr.attribute("lvl") : pPr.append_attribute("lvl")) = level - 1;
       });
-      return Commit(u"Promote", false);
+      return Commit(T(u"Promote"), false);
     }
     if (caret_.para == 0) return false;
   }
@@ -463,21 +464,21 @@ bool TextSession::Backspace(bool word) {
   caret_ = anchor_ = doc_->Delete(from, caret_);
   lineEnd_ = false;
   goalX_.reset();
-  return Commit(u"Typing", coalesce);
+  return Commit(T(u"Typing"), coalesce);
 }
 
 bool TextSession::DeleteForward(bool word) {
   const bool coalesce = typing_ && !HasSelection();
   if (HasSelection()) {
     caret_ = anchor_ = doc_->Delete(SelFrom(), SelTo());
-    return Commit(u"Typing", false);
+    return Commit(T(u"Typing"), false);
   }
   const TextPos to = word ? StepWord(caret_, true) : Step(caret_, true);
   if (to == caret_) return false;
   caret_ = anchor_ = doc_->Delete(caret_, to);
   lineEnd_ = false;
   goalX_.reset();
-  return Commit(u"Typing", coalesce);
+  return Commit(T(u"Typing"), coalesce);
 }
 
 bool TextSession::Enter() {
@@ -488,7 +489,7 @@ bool TextSession::Enter() {
   lineEnd_ = false;
   goalX_.reset();
   pending_.reset();
-  return Commit(u"Typing", coalesce);
+  return Commit(T(u"Typing"), coalesce);
 }
 
 bool TextSession::LineBreak() { return Type(L"\u000B"); }
@@ -520,7 +521,7 @@ bool TextSession::Tab(bool shift) {
     if (next == 0) pPr.remove_attribute("lvl");
     else (pPr.attribute("lvl") ? pPr.attribute("lvl") : pPr.append_attribute("lvl")) = next;
   });
-  return Commit(shift ? u"Promote" : u"Demote", false);
+  return Commit(shift ? T(u"Promote") : T(u"Demote"), false);
 }
 
 bool TextSession::ReplaceSelection(std::wstring_view text, std::u16string_view step) {

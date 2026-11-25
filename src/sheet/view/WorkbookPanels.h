@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Controls.h"
 #include "ui/SidePanel.h"
@@ -35,7 +36,7 @@ class FocusComboBox : public ComboBox {
 class WorkbookView::SizePanel : public PanelContent {
  public:
   explicit SizePanel(WorkbookView& view);
-  std::wstring Title() const override { return rows_ ? L"Row height" : L"Column width"; }
+  std::wstring Title() const override { return rows_ ? T(L"Row height") : T(L"Column width"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   void Open(bool rows);
@@ -53,7 +54,7 @@ class WorkbookView::SizePanel : public PanelContent {
 class WorkbookView::GoToPanel : public PanelContent {
  public:
   explicit GoToPanel(WorkbookView& view);
-  std::wstring Title() const override { return L"Go to"; }
+  std::wstring Title() const override { return T(L"Go to"); }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
   void Open();

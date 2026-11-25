@@ -52,6 +52,7 @@ class Settings {
   bool ruler = false;       // Word documents: the rulers shown
   bool developerTab = false;  // Word documents: the ribbon's Developer tab (content controls), off as in Word
   std::wstring reviewer;    // Word documents: the name changes and comments are made with (empty: Windows')
+  std::wstring language;    // the interface's language ("de"); empty: Windows' (f1-lang, at the next start)
   // The editors' ribbon: -1 as the screen suits (only its tabs on a small screen), 0 shown, 1 only its
   // tabs (Ctrl+F1).
   int ribbon = -1;

@@ -13,6 +13,7 @@
 #include <cmath>
 
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Pdf.h"
@@ -131,7 +132,7 @@ void WorkbookView::TogglePreview() {
   if (!preview_) {
     Paginate();
     if (pageSizes_.empty()) {
-      host_.ViewMessage(BannerKind::Info, L"This sheet has nothing to print.");
+      host_.ViewMessage(BannerKind::Info, T(L"This sheet has nothing to print."));
       return;
     }
     preview_ = true;
@@ -182,7 +183,7 @@ PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>
   if (!preview_ || prints_.empty()) Paginate();
   const int pageCount = static_cast<int>(pageSizes_.size());
   if (pageCount == 0) {
-    message = L"This sheet has nothing to print.";
+    message = T(L"This sheet has nothing to print.");
     return PrintOutcome::Failed;
   }
   PRINTPAGERANGE ranges[16] = {};
@@ -204,7 +205,7 @@ PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>
   if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT || !pd.hDevNames) {
     cleanup();
     if (FAILED(hr)) {
-      message = L"The print dialog couldn’t be opened. Is a printer installed?";
+      message = T(L"The print dialog couldn’t be opened. Is a printer installed?");
       return PrintOutcome::Failed;
     }
     return PrintOutcome::Cancelled;
@@ -238,7 +239,7 @@ PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& m
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {
-    message = L"Couldn't create " + path;
+    message = Fmt(T(L"Couldn't create {0}"), {path});
     return PrintOutcome::Failed;
   }
   draw::PrintJob job;
@@ -249,7 +250,7 @@ PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& m
   });
   if (SUCCEEDED(hr)) hr = job.Finish();
   if (FAILED(hr) || job.Wait(120000) != draw::PrintJob::Outcome::Completed) {
-    message = L"Printing failed.";
+    message = T(L"Printing failed.");
     return PrintOutcome::Failed;
   }
   return PrintOutcome::Printed;
@@ -259,7 +260,7 @@ PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODE
                                       IStream* output, const std::function<void(int, int)>& progress,
                                       std::wstring& message) {
   if (pages.empty()) {
-    message = L"This sheet has nothing to print.";
+    message = T(L"This sheet has nothing to print.");
     return PrintOutcome::Failed;
   }
   draw::PrintJob job;
@@ -274,17 +275,18 @@ PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODE
   }
   if (SUCCEEDED(hr)) hr = job.Finish();
   if (FAILED(hr)) {
-    message = L"Printing stopped because the printer reported an error.";
+    message = T(L"Printing stopped because the printer reported an error.");
     return PrintOutcome::Failed;
   }
   switch (job.Wait(120000)) {
-    case draw::PrintJob::Outcome::Canceled: message = L"Printing was canceled."; return PrintOutcome::Cancelled;
+    case draw::PrintJob::Outcome::Canceled: message = T(L"Printing was canceled."); return PrintOutcome::Cancelled;
     case draw::PrintJob::Outcome::Failed:
-      message = L"Printing stopped because the printer reported an error.";
+      message = T(L"Printing stopped because the printer reported an error.");
       return PrintOutcome::Failed;
     default: break;
   }
-  message = done == 1 ? L"Sent 1 page to the printer" : L"Sent " + std::to_wstring(done) + L" pages to the printer";
+  message = done == 1 ? T(L"Sent 1 page to the printer")
+                      : Fmt(T(L"Sent {0} pages to the printer"), {std::to_wstring(done)});
   return PrintOutcome::Printed;
 }
 
@@ -298,7 +300,7 @@ bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
   if (prints_.empty() || !preview_) Paginate();
   const size_t count = pageSizes_.size();
   if (count == 0) {
-    message = L"This sheet has nothing to export.";
+    message = T(L"This sheet has nothing to export.");
     return false;
   }
   draw::PdfDocument pdf;
@@ -310,11 +312,11 @@ bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
   pdf.SetInfo(std::u16string(title.begin(), title.end()), u"");
   const std::vector<uint8_t> bytes = pdf.Finish();
   if (!util::WriteFileAtomic(path, std::string(bytes.begin(), bytes.end()))) {
-    message = L"The PDF couldn't be saved.";
+    message = T(L"The PDF couldn't be saved.");
     return false;
   }
-  message = count == 1 ? L"Exported 1 page to " + FileNameOf(path)
-                       : L"Exported " + std::to_wstring(count) + L" pages to " + FileNameOf(path);
+  message = count == 1 ? Fmt(T(L"Exported 1 page to {0}"), {FileNameOf(path)})
+                       : Fmt(T(L"Exported {0} pages to {1}"), {std::to_wstring(count), FileNameOf(path)});
   return true;
 }
 

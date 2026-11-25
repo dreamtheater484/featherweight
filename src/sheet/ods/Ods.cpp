@@ -12,6 +12,7 @@
 #include <set>
 #include <unordered_map>
 
+#include "core/Lang.h"
 #include "pkg/Odf.h"
 #include "pkg/Snapshot.h"
 #include "pkg/XmlDom.h"
@@ -1140,13 +1141,13 @@ std::string Converter::WriteSheet(size_t index) {
 pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
   if (const std::string t = pkg::odf::MimeType(zip_);
       !t.empty() && !t.starts_with("application/vnd.oasis.opendocument.spreadsheet"))
-    return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a spreadsheet.");
-  constexpr std::string_view kNot = "This isn't an OpenDocument spreadsheet.";
+    return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a spreadsheet."));
+  const char* kNot = T("This isn't an OpenDocument spreadsheet.");
   if (pkg::Status s = pkg::odf::LoadPart(zip_, "content.xml", content_, limits_, true, kNot); !s.Ok()) return s;
   if (pkg::Status s = pkg::odf::LoadPart(zip_, "styles.xml", styles_, limits_, false, kNot); !s.Ok()) return s;
   if (!pkg::odf::LoadPart(zip_, "settings.xml", settings_, limits_, false, kNot).Ok()) settings_ = pkg::XmlDom();
   xml_node book = content_.Root().child("office:body").child("office:spreadsheet");
-  if (!book) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a spreadsheet.");
+  if (!book) return pkg::Status::Fail(pkg::Status::Code::Unsupported, T("This OpenDocument file isn't a spreadsheet."));
   st_.Read(styles_.Root(), content_.Root());
   maxCells_ = std::clamp<uint64_t>(limits_.maxTotalSize / 32, 100000, 8000000);
   maxWork_ = maxCells_ * 16;
@@ -1198,7 +1199,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
     sheetNames_[s.odfName] = s.name;
     sheets_.push_back(std::move(s));
   }
-  if (sheets_.empty()) return pkg::Status::Fail(pkg::Status::Code::Damaged, "This spreadsheet has no sheets.");
+  if (sheets_.empty()) return pkg::Status::Fail(pkg::Status::Code::Damaged, T("This spreadsheet has no sheets."));
   mapNames_ = [this](std::string_view n) { return SheetName(n); };
   // At least one sheet shows.
   if (std::all_of(sheets_.begin(), sheets_.end(), [](const Sheet& s) { return s.hidden; })) sheets_[0].hidden = false;

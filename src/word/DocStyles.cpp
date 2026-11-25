@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Styles.h"
@@ -29,23 +30,23 @@ namespace {
 
 struct Named {
   int cmd;
-  const wchar_t* label;
+  UiText label;
 };
 constexpr Named kNames[] = {
-    {CmdTabsPanel, L"Tabs…"},
-    {CmdTabLeft, L"Left tab"},
-    {CmdTabCenter, L"Center tab"},
-    {CmdTabRight, L"Right tab"},
-    {CmdTabDecimal, L"Decimal tab"},
-    {CmdTabBar, L"Bar tab"},
-    {CmdTabLeaderNone, L"No leader"},
-    {CmdTabLeaderDots, L"Leader: dots ……"},
-    {CmdTabLeaderDashes, L"Leader: dashes - - -"},
-    {CmdTabLeaderLine, L"Leader: line ____"},
-    {CmdTabClear, L"Clear tab stop"},
-    {CmdTabClearAll, L"Clear all tab stops"},
-    {CmdModifyStyle, L"Modify style…"},
-    {CmdNewStyle, L"New style from selection…"},
+    {CmdTabsPanel, N_(L"Tabs…")},
+    {CmdTabLeft, N_(L"Left tab")},
+    {CmdTabCenter, N_(L"Center tab")},
+    {CmdTabRight, N_(L"Right tab")},
+    {CmdTabDecimal, N_(L"Decimal tab")},
+    {CmdTabBar, N_(L"Bar tab")},
+    {CmdTabLeaderNone, N_(L"No leader")},
+    {CmdTabLeaderDots, N_(L"Leader: dots ……")},
+    {CmdTabLeaderDashes, N_(L"Leader: dashes - - -")},
+    {CmdTabLeaderLine, N_(L"Leader: line ____")},
+    {CmdTabClear, N_(L"Clear tab stop")},
+    {CmdTabClearAll, N_(L"Clear all tab stops")},
+    {CmdModifyStyle, N_(L"Modify style…")},
+    {CmdNewStyle, N_(L"New style from selection…")},
 };
 
 const wchar_t* LabelOf(int cmd) {
@@ -55,10 +56,10 @@ const wchar_t* LabelOf(int cmd) {
 }
 
 constexpr TabAlign kAligns[] = {TabAlign::Start, TabAlign::Center, TabAlign::End, TabAlign::Decimal, TabAlign::Bar};
-constexpr const wchar_t* kAlignNames[] = {L"Left", L"Center", L"Right", L"Decimal", L"Bar"};
+constexpr UiText kAlignNames[] = {N_(L"Left"), N_(L"Center"), N_(L"Right"), N_(L"Decimal"), N_(L"Bar")};
 constexpr TabLeader kLeaders[] = {TabLeader::None,       TabLeader::Dot,   TabLeader::Hyphen,
                                   TabLeader::Underscore, TabLeader::Heavy, TabLeader::MiddleDot};
-constexpr const wchar_t* kLeaderNames[] = {L"No leader", L"Dots ……", L"Dashes - - -", L"Line ____", L"Heavy line", L"Middle dots ···"};
+constexpr UiText kLeaderNames[] = {N_(L"No leader"), N_(L"Dots ……"), N_(L"Dashes - - -"), N_(L"Line ____"), N_(L"Heavy line"), N_(L"Middle dots ···")};
 
 template <typename T, size_t N>
 int IndexOf(const T (&values)[N], T v) {
@@ -124,34 +125,34 @@ uint32_t RgbOf(D2D1_COLOR_F c) {
 class DocStyles::TabsPanel : public PanelContent, DocPanelRows {
  public:
   explicit TabsPanel(DocStyles& owner) : s_(owner) {
-    list_.label = L"Tab stops";
+    list_.label = ::T(L"Tab stops");
     list_.rowHeight = 26;
     list_.onSelect = [this](int i) { Pick(i); };
-    Spin(position_, L"Tab stop position", 0, FromTwips(kLongest), Metric() ? 0.25 : 0.125, 2, Unit());
-    align_.label = align_.tooltip = L"Alignment";
+    Spin(position_, ::T(L"Tab stop position"), 0, FromTwips(kLongest), Metric() ? 0.25 : 0.125, 2, Unit());
+    align_.label = align_.tooltip = ::T(L"Alignment");
     align_.items.assign(std::begin(kAlignNames), std::end(kAlignNames));
     align_.selected = 0;
-    leader_.label = leader_.tooltip = L"Leader";
+    leader_.label = leader_.tooltip = ::T(L"Leader");
     leader_.items.assign(std::begin(kLeaderNames), std::end(kLeaderNames));
     leader_.selected = 0;
-    set_.text = L"Set";
+    set_.text = ::T(L"Set");
     set_.primary = true;
     set_.onInvoke = [this] { Set(); };
-    clear_.text = L"Clear";
+    clear_.text = ::T(L"Clear");
     clear_.onInvoke = [this] { Clear(); };
-    clearAll_.text = L"Clear all";
+    clearAll_.text = ::T(L"Clear all");
     clearAll_.onInvoke = [this] { s_.Execute(CmdTabClearAll); };
   }
 
-  std::wstring Title() const override { return L"Tabs"; }
+  std::wstring Title() const override { return ::T(L"Tabs"); }
 
   void Open() { shown_ = {}; }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     Refresh();
-    return LayOutRows({{L"Tab stops of this paragraph", {&list_}, 134},
-                       {L"Position", {&position_}},
-                       {L"Alignment and leader", {&align_, &leader_}},
+    return LayOutRows({{::T(L"Tab stops of this paragraph"), {&list_}, 134},
+                       {::T(L"Position"), {&position_}},
+                       {::T(L"Alignment and leader"), {&align_, &leader_}},
                        {L"", {&set_, &clear_, &clearAll_}}},
                       body, ui);
   }
@@ -197,9 +198,9 @@ class DocStyles::TabsPanel : public PanelContent, DocPanelRows {
       c->enabled = can;
     clear_.enabled = can && Near().has_value();
     clearAll_.enabled = can && !stops_.empty();
-    note_ = stops_.empty() ? L"No tab stops of its own: tabs go to the default stops, every " +
-                                 Length(s_.Doc().Settings().defaultTabStop.Value()) + L"."
-                           : L"Default stops every " + Length(s_.Doc().Settings().defaultTabStop.Value()) + L" after these.";
+    const std::wstring every = Length(s_.Doc().Settings().defaultTabStop.Value());
+    note_ = stops_.empty() ? ::Fmt(::T(L"No tab stops of its own: tabs go to the default stops, every {0}."), {every})
+                           : ::Fmt(::T(L"Default stops every {0} after these."), {every});
   }
 
   void Pick(int i) {
@@ -248,53 +249,53 @@ class DocStyles::TabsPanel : public PanelContent, DocPanelRows {
 class DocStyles::StylePanel : public PanelContent, DocPanelRows {
  public:
   explicit StylePanel(DocStyles& owner) : s_(owner) {
-    name_.label = name_.tooltip = L"Name";
+    name_.label = name_.tooltip = ::T(L"Name");
     name_.autoComplete = false;
-    style_.label = style_.tooltip = L"Style";
+    style_.label = style_.tooltip = ::T(L"Style");
     style_.onChange = [this](int i) {
       if (i >= 0 && i < static_cast<int>(ids_.size())) picked_ = ids_[static_cast<size_t>(i)];
       Load();
     };
-    font_.label = font_.tooltip = L"Font";
+    font_.label = font_.tooltip = ::T(L"Font");
     font_.validate = [](std::wstring& text) { return !text.empty() && fw::doc::edit::XmlSafe(fw::WideToUtf8(text)); };
-    Spin(size_, L"Size", 1, 1638, 1, 1, L" pt");
-    weight_.label = weight_.tooltip = L"Font style";
-    weight_.items = {L"Regular", L"Bold", L"Italic", L"Bold italic"};
-    underline_.label = underline_.tooltip = L"Underline";
-    underline_.items = {L"None", L"Underline"};
-    color_.label = color_.tooltip = L"Font color";
-    color_.automaticLabel = L"Automatic";
+    Spin(size_, ::T(L"Size"), 1, 1638, 1, 1, L" pt");
+    weight_.label = weight_.tooltip = ::T(L"Font style");
+    weight_.items = {::T(L"Regular"), ::T(L"Bold"), ::T(L"Italic"), ::T(L"Bold italic")};
+    underline_.label = underline_.tooltip = ::T(L"Underline");
+    underline_.items = {::T(L"None"), ::T(L"Underline")};
+    color_.label = color_.tooltip = ::T(L"Font color");
+    color_.automaticLabel = ::T(L"Automatic");
     color_.automaticColor = {0, 0, 0, 1};
     color_.onChange = [this](D2D1_COLOR_F c, bool automatic) {
       color_.color = c;
       color_.automatic = automatic;
     };
-    align_.label = align_.tooltip = L"Alignment";
-    align_.items = {L"Left", L"Center", L"Right", L"Justify"};
-    spacing_.label = spacing_.tooltip = L"Line spacing";
+    align_.label = align_.tooltip = ::T(L"Alignment");
+    align_.items = {::T(L"Left"), ::T(L"Center"), ::T(L"Right"), ::T(L"Justify")};
+    spacing_.label = spacing_.tooltip = ::T(L"Line spacing");
     const double longest = FromTwips(kLongest), step = Metric() ? 0.1 : 0.05;
-    Spin(before_, L"Space before", 0, 1584, 6, 1, L" pt");
-    Spin(after_, L"Space after", 0, 1584, 6, 1, L" pt");
-    Spin(left_, L"Left indent", -longest, longest, step, 2, Unit());
-    Spin(right_, L"Right indent", -longest, longest, step, 2, Unit());
-    Spin(first_, L"First line indent (negative: hanging)", -longest, longest, step, 2, Unit());
+    Spin(before_, ::T(L"Space before"), 0, 1584, 6, 1, L" pt");
+    Spin(after_, ::T(L"Space after"), 0, 1584, 6, 1, L" pt");
+    Spin(left_, ::T(L"Left indent"), -longest, longest, step, 2, Unit());
+    Spin(right_, ::T(L"Right indent"), -longest, longest, step, 2, Unit());
+    Spin(first_, ::T(L"First line indent (negative: hanging)"), -longest, longest, step, 2, Unit());
     apply_.primary = true;
     apply_.onInvoke = [this] { Apply(); };
   }
 
-  std::wstring Title() const override { return create_ ? L"New style" : L"Modify style"; }
+  std::wstring Title() const override { return create_ ? ::T(L"New style") : ::T(L"Modify style"); }
 
   void Open(bool create) {
     create_ = create;
     shown_ = {};
     picked_.clear();
     note_.clear();
-    apply_.text = create ? L"Create" : L"Apply";
+    apply_.text = create ? ::T(L"Create") : ::T(L"Apply");
     if (create) {
       // "Style1", "Style2"... as Word names them.
       std::wstring name;
       for (int n = 1; n < 1000; ++n) {
-        name = L"Style" + std::to_wstring(n);
+        name = ::Fmt(::T(L"Style{0}"), {std::to_wstring(n)});
         if (!s_.Doc().FindStyle(fw::WideToUtf8(name))) break;
       }
       name_.SetText(name);
@@ -305,12 +306,12 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
     Refresh();
     name_.visible = create_;
     style_.visible = !create_;
-    return LayOutRows({{create_ ? L"Name" : L"Style", {&name_, &style_}},
-                       {L"Font and size", {&font_, &size_}},
-                       {L"Font style, underline and color", {&weight_, &underline_, &color_}},
-                       {L"Alignment and line spacing", {&align_, &spacing_}},
-                       {L"Space before and after", {&before_, &after_}},
-                       {L"Indents: left, right, first line", {&left_, &right_, &first_}},
+    return LayOutRows({{create_ ? ::T(L"Name") : ::T(L"Style"), {&name_, &style_}},
+                       {::T(L"Font and size"), {&font_, &size_}},
+                       {::T(L"Font style, underline and color"), {&weight_, &underline_, &color_}},
+                       {::T(L"Alignment and line spacing"), {&align_, &spacing_}},
+                       {::T(L"Space before and after"), {&before_, &after_}},
+                       {::T(L"Indents: left, right, first line"), {&left_, &right_, &first_}},
                        {L"", {&apply_}}},
                       body, ui);
   }
@@ -419,11 +420,11 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
     color_.automatic = v.color.automatic;
     color_.color = v.color.automatic ? D2D1_COLOR_F{0, 0, 0, 1} : ColorOf(v.color.rgb);
     align_.selected = v.align;
-    spacing_.items = {L"Single", L"1.15", L"1.5", L"Double"};
+    spacing_.items = {::T(L"Single"), L"1.15", L"1.5", ::T(L"Double")};
     if (v.spacing < 0) {  // what it is, kept unless another is chosen
       wchar_t b[48];
-      if (pp.lineRule == fw::doc::LineRule::Auto) swprintf_s(b, L"%.2f lines", pp.line / 240.0);
-      else swprintf_s(b, pp.lineRule == fw::doc::LineRule::Exact ? L"Exactly %g pt" : L"At least %g pt", pp.line / 20.0);
+      if (pp.lineRule == fw::doc::LineRule::Auto) swprintf_s(b, ::T(L"%.2f lines"), pp.line / 240.0);
+      else swprintf_s(b, pp.lineRule == fw::doc::LineRule::Exact ? ::T(L"Exactly %g pt") : ::T(L"At least %g pt"), pp.line / 20.0);
       spacing_.items.push_back(b);
     }
     spacing_.selected = v.spacing < 0 ? 4 : v.spacing;
@@ -485,7 +486,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
     const edit::Range sel = s_.Selection();
     std::u16string why;
     if (create_) {
-      s_.editor_.BeginGroup(u"New style");
+      s_.editor_.BeginGroup(::T(u"New style"));
       {
         edit::TreeEdit te(s_.editor_, sel.from);
         const std::string id = edit::NewStyleFromSelection(te, sel, fw::WideToUtf8(name_.Text()), why);
@@ -502,7 +503,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
       }
     } else {
       if (!rf.Any() && !pf.Any()) {
-        note_ = L"Nothing changed.";
+        note_ = ::T(L"Nothing changed.");
         return;
       }
       {
@@ -510,7 +511,7 @@ class DocStyles::StylePanel : public PanelContent, DocPanelRows {
         edit::ModifyStyle(te, picked_, rf, pf);
         why = te.Refused();
       }
-      note_ = why.empty() ? L"Changed. Text in this style follows." : L"";
+      note_ = why.empty() ? ::T(L"Changed. Text in this style follows.") : L"";
       shown_ = {};
     }
     s_.host_.done(W(why));

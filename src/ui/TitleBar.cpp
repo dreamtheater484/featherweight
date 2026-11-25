@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Logo.h"
 #include "ui/Theme.h"
@@ -25,12 +26,12 @@ TitleBar::TitleBar() {
   min_.style = max_.style = ButtonStyle::Caption;
   close_.style = ButtonStyle::CaptionClose;
   min_.glyphSize = max_.glyphSize = close_.glyphSize = 10;
-  min_.tooltip = L"Minimize";
-  max_.tooltip = L"Maximize";
-  close_.tooltip = L"Close";
+  min_.tooltip = T(L"Minimize");
+  max_.tooltip = T(L"Maximize");
+  close_.tooltip = T(L"Close");
   newTab_.glyph = icon::Add;
   newTab_.glyphSize = 12;
-  newTab_.tooltip = L"Open a file (Ctrl+O)";
+  newTab_.tooltip = T(L"Open a file (Ctrl+O)");
   min_.id = 1;
   max_.id = 2;
   close_.id = 3;
@@ -183,7 +184,7 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
 
   // New tab button and caption buttons.
   max_.glyph = maximized ? icon::ChromeRestore : icon::ChromeMaximize;
-  max_.tooltip = maximized ? L"Restore" : L"Maximize";
+  max_.tooltip = maximized ? T(L"Restore") : T(L"Maximize");
   DrawButton(c, newTab_, u, windowActive);
   DrawButton(c, min_, u, windowActive);
   DrawButton(c, max_, u, windowActive);
@@ -193,7 +194,7 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
 void TitleBar::SetNewTabMenu(bool menu, bool open) {
   newTabMenu_ = menu;
   newTabOpen_ = menu && open;
-  newTab_.tooltip = menu ? L"New or open a file" : L"Open a file (Ctrl+O)";
+  newTab_.tooltip = menu ? T(L"New or open a file") : T(L"Open a file (Ctrl+O)");
 }
 
 TitleBar::Hit TitleBar::HitTest(int x, int y) const {
@@ -274,7 +275,7 @@ std::wstring TitleBar::TooltipAt(int x, int y, const std::vector<TabInfo>& tabs)
   Hit h = HitTest(x, y);
   switch (h.part) {
     case Part::Tab: return h.index < static_cast<int>(tabs.size()) ? tabs[h.index].path : L"";
-    case Part::TabClose: return L"Close tab (Ctrl+W)";
+    case Part::TabClose: return T(L"Close tab (Ctrl+W)");
     case Part::NewTab: return newTab_.tooltip;
     case Part::Quick: return quick_[h.index].tooltip;
     case Part::QuickList: return quickList_[h.index].tooltip;
@@ -290,7 +291,7 @@ void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, c
   int bar = t.Add(parent, 1, UIA_TitleBarControlTypeId, caption, RectF(rc_));
   if (!tabs.empty()) {
     D2D1_RECT_F first = TabRect(0), last = TabRect(static_cast<int>(tabs.size()) - 1);
-    int strip = t.Add(bar, 1, UIA_TabControlTypeId, L"Open files", RectF(first.left, first.top, last.right, first.bottom));
+    int strip = t.Add(bar, 1, UIA_TabControlTypeId, T(L"Open files"), RectF(first.left, first.top, last.right, first.bottom));
     t[strip].orientation = OrientationType_Horizontal;
     t[strip].selectionContainer = true;
     t[strip].selectionRequired = true;
@@ -298,13 +299,13 @@ void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, c
       int tab = t.Add(strip, i, UIA_TabItemControlTypeId, tabs[i].title, TabRect(i));
       uia::Node& n = t[tab];
       n.help = tabs[i].path;
-      if (tabs[i].modified) n.status = L"Modified";
+      if (tabs[i].modified) n.status = T(L"Modified");
       n.selectable = true;
       n.selected = i == active;
       n.select = [act, i] { act(Part::Tab, i); };
       n.positionInSet = i + 1;
       n.sizeOfSet = static_cast<int>(tabs.size());
-      int close = t.Add(tab, 1, UIA_ButtonControlTypeId, L"Close tab", TabCloseRect(i));
+      int close = t.Add(tab, 1, UIA_ButtonControlTypeId, T(L"Close tab"), TabCloseRect(i));
       t[close].accelerator = i == active ? L"Ctrl+W" : L"";
       t[close].invoke = [act, i] { act(Part::TabClose, i); };
     }
@@ -321,6 +322,6 @@ void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, c
   }
   uia::AddButton(t, bar, 3, min_, [act] { act(Part::Minimize, -1); });
   int max = uia::AddButton(t, bar, 4, max_, [act] { act(Part::Maximize, -1); });
-  t[max].name = maximized ? L"Restore" : L"Maximize";
+  t[max].name = maximized ? T(L"Restore") : T(L"Maximize");
   uia::AddButton(t, bar, 5, close_, [act] { act(Part::Close, -1); });
 }

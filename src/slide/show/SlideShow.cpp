@@ -24,6 +24,7 @@
 
 #include "Util.h"
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
@@ -955,7 +956,7 @@ void Show::DrawEnd() {
   dc_->Clear({0, 0, 0, 1});
   ComPtr<ID2D1SolidColorBrush> gray;
   dc_->CreateSolidColorBrush(D2D1::ColorF(0.8f, 0.8f, 0.8f, 1), &gray);
-  static const wchar_t kText[] = L"End of slide show, click to exit.";
+  const wchar_t* kText = T(L"End of slide show, click to exit.");
   if (gray && endFormat_)
     dc_->DrawTextW(kText, static_cast<UINT32>(wcslen(kText)), endFormat_.Get(),
                    D2D1::RectF(0, h_ / 40.f, static_cast<float>(w_), h_ / 8.f), gray.Get());
@@ -1276,11 +1277,11 @@ void Show::Follow(const Hyperlink& link) {
     case A::Url: {
       std::wstring url = fw::Utf8ToWide(link.url);
       if (!util::IsSafeExternalLink(url)) {
-        message(L"This link was blocked because it doesn’t point to a website.");
+        message(T(L"This link was blocked because it doesn’t point to a website."));
         break;
       }
-      if (confirm(L"Open " + url + L"?", L"Open") && !util::OpenExternalLink(url))
-        message(L"Windows couldn’t open this link.");
+      if (confirm(Fmt(T(L"Open {0}?"), {url}), T(L"Open")) && !util::OpenExternalLink(url))
+        message(T(L"Windows couldn’t open this link."));
       break;
     }
     case A::File: {
@@ -1294,10 +1295,10 @@ void Show::Follow(const Hyperlink& link) {
         path = (slash == std::wstring::npos ? L"" : opts_.deckPath.substr(0, slash + 1)) + name;
       }
       if (!opts_.openFile || !fw::Opens(path)) {
-        message(L"For your safety, Featherweight only opens the kinds of file it reads from links in a slide show.");
+        message(T(L"For your safety, Featherweight only opens the kinds of file it reads from links in a slide show."));
         break;
       }
-      if (confirm(L"End the slide show and open " + name + L"?", L"Open")) {
+      if (confirm(Fmt(T(L"End the slide show and open {0}?"), {name}), T(L"Open"))) {
         fileToOpen_ = path;
         PostStop();
       }
@@ -1305,7 +1306,7 @@ void Show::Follow(const Hyperlink& link) {
     }
     case A::Program:
     case A::Macro:
-    case A::Ole: message(L"For your safety, Featherweight doesn’t run programs, macros or embedded objects from links."); break;
+    case A::Ole: message(T(L"For your safety, Featherweight doesn’t run programs, macros or embedded objects from links.")); break;
     default: break;
   }
 }
@@ -1401,9 +1402,9 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
         buf.push_back(0);
         if (SUCCEEDED(UrlUnescapeW(buf.data(), nullptr, nullptr, URL_UNESCAPE_INPLACE))) name = buf.data();
       }
-      NoteMedia(spid, item, L"The linked file isn't on this PC: " + name);
+      NoteMedia(spid, item, T(L"The linked file isn't on this PC: ") + name);
     } else {
-      NoteMedia(spid, item, L"This media can't be played.");
+      NoteMedia(spid, item, T(L"This media can't be played."));
     }
     return nullptr;
   }
@@ -1421,7 +1422,7 @@ MediaPlayer* Show::OpenMedia(uint32_t spid) {
     }
   std::unique_ptr<MediaPlayer> player = MediaPlayer::Open(std::move(src), settings);
   if (!player) {
-    NoteMedia(spid, item, L"This media can't be played.");
+    NoteMedia(spid, item, T(L"This media can't be played."));
     return nullptr;
   }
   Media m;
@@ -1635,13 +1636,13 @@ void Show::Key(UINT vk) {
 void Show::ContextMenu(int x, int y) {
   enum { kNext = 1, kPrev, kBlack, kWhite, kEndShow };
   HMENU m = CreatePopupMenu();
-  AppendMenuW(m, MF_STRING, kNext, L"Next");
-  AppendMenuW(m, MF_STRING, kPrev, L"Previous");
+  AppendMenuW(m, MF_STRING, kNext, T(L"Next"));
+  AppendMenuW(m, MF_STRING, kPrev, T(L"Previous"));
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING | (blank_ == 1 ? MF_CHECKED : 0), kBlack, L"Black screen\tB");
-  AppendMenuW(m, MF_STRING | (blank_ == 2 ? MF_CHECKED : 0), kWhite, L"White screen\tW");
+  AppendMenuW(m, MF_STRING | (blank_ == 1 ? MF_CHECKED : 0), kBlack, T(L"Black screen\tB"));
+  AppendMenuW(m, MF_STRING | (blank_ == 2 ? MF_CHECKED : 0), kWhite, T(L"White screen\tW"));
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING, kEndShow, L"End show\tEsc");
+  AppendMenuW(m, MF_STRING, kEndShow, T(L"End show\tEsc"));
   POINT pt{x, y};
   ClientToScreen(hwnd_, &pt);
   ShowCursorNow();
@@ -2149,8 +2150,9 @@ std::vector<std::wstring> Monitors() {
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(list.handles[i], &mi);
     wchar_t buf[96];
-    swprintf(buf, 96, L"%zu: %ld × %ld%s", i + 1, mi.rcMonitor.right - mi.rcMonitor.left,
-             mi.rcMonitor.bottom - mi.rcMonitor.top, (mi.dwFlags & MONITORINFOF_PRIMARY) ? L" (main)" : L"");
+    const bool primary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    swprintf(buf, 96, primary ? T(L"%zu: %ld × %ld (main)") : T(L"%zu: %ld × %ld"), i + 1,
+             mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top);
     names.push_back(buf);
   }
   return names;
@@ -2165,7 +2167,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
       snapshot ? fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), st) : nullptr;
   std::unique_ptr<Presentation> deck = package ? Read(std::move(package), st) : nullptr;
   if (!deck) {
-    MessageBoxW(nullptr, (L"Featherweight couldn’t open " + path + L".").c_str(), L"Featherweight", MB_ICONERROR);
+    MessageBoxW(nullptr, Fmt(T(L"Featherweight couldn’t open {0}."), {path}).c_str(), L"Featherweight", MB_ICONERROR);
     return 1;
   }
   std::unique_ptr<SlideRenderer> renderer = MakeRenderer(*deck);

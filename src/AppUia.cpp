@@ -6,6 +6,7 @@
 
 #include "ui/Uia.h"
 #if FW_TEST_SCREENS
+#include "core/Lang.h"
 #include "ui/WidgetGallery.h"
 #endif
 
@@ -53,7 +54,7 @@ void App::DescribeUia(uia::Tree& t) {
   }
 
   // The document area. It has the keyboard when nothing else does (arrows scroll the pages).
-  int doc = t.Add(0, 5, UIA_PaneControlTypeId, v ? v->Title() : L"Start", RectF(DocRect()));
+  int doc = t.Add(0, 5, UIA_PaneControlTypeId, v ? v->Title() : T(L"Start"), RectF(DocRect()));
   if (v) {
     v->DescribeUia(t, doc);
   } else {

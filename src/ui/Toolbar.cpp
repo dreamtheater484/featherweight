@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
@@ -175,14 +176,14 @@ Control& Toolbar::ConfigureControl(std::unique_ptr<Control>& slot, ToolKind& slo
 }
 
 Toolbar::Toolbar() {
-  Make(open_, CmdOpen, icon::FolderOpen, L"Open (Ctrl+O)");
-  Make(prev_, CmdPrevPage, icon::ChevronUp, L"Previous page (Page Up)");
-  Make(next_, CmdNextPage, icon::ChevronDown, L"Next page (Page Down)");
-  Make(zoomOut_, CmdZoomOut, icon::ZoomOut, L"Zoom out (Ctrl+−)");
-  Make(zoom_, CmdZoomMenu, 0, L"Zoom");
+  Make(open_, CmdOpen, icon::FolderOpen, T(L"Open (Ctrl+O)"));
+  Make(prev_, CmdPrevPage, icon::ChevronUp, T(L"Previous page (Page Up)"));
+  Make(next_, CmdNextPage, icon::ChevronDown, T(L"Next page (Page Down)"));
+  Make(zoomOut_, CmdZoomOut, icon::ZoomOut, T(L"Zoom out (Ctrl+−)"));
+  Make(zoom_, CmdZoomMenu, 0, T(L"Zoom"));
   Make(zoomIn_, CmdZoomIn, icon::ZoomIn, L"Zoom in (Ctrl+=)");
-  Make(more_, CmdMoreMenu, icon::More, L"More");
-  Make(overflowButton_, CmdToolbarOverflow, icon::ChevronRight, L"More tools");
+  Make(more_, CmdMoreMenu, icon::More, T(L"More"));
+  Make(overflowButton_, CmdToolbarOverflow, icon::ChevronRight, T(L"More tools"));
   overflowButton_.glyphSize = 14;
   zoom_.dropdown = true;
   prev_.glyphSize = next_.glyphSize = 14;
@@ -314,7 +315,7 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   right.push_back({&more_, nullptr, ToolKind::Button, kBtn * u, 9, false, nullptr});
 
   // Center group width.
-  pageLabelText_ = m.pageCount > 0 ? L"of " + std::to_wstring(m.pageCount) : L"";
+  pageLabelText_ = m.pageCount > 0 ? Fmt(T(L"of {0}"), {std::to_wstring(m.pageCount)}) : L"";
   float labelW = 0;
   if (!pageLabelText_.empty()) {
     IDWriteTextFormat* fmt = Canvas::Format(13 * u, DWRITE_FONT_WEIGHT_REGULAR, false);
@@ -373,7 +374,7 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   if (!overflow_.empty()) {
     std::wstring names;
     for (const ToolItem& item : overflow_) names += (names.empty() ? L"" : L", ") + MenuName(item);
-    overflowButton_.tooltip = L"More tools: " + names;
+    overflowButton_.tooltip = T(L"More tools: ") + names;
   }
   const float rightStart = rx;
 
@@ -476,7 +477,7 @@ void Toolbar::OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
 
 std::wstring Toolbar::TooltipAt(int x, int y) const {
   if (group_.Hit((float)x, (float)y)) return group_.TooltipAt((float)x, (float)y);
-  if (HitPageBox(x, y)) return L"Go to page (Ctrl+G)";
+  if (HitPageBox(x, y)) return T(L"Go to page (Ctrl+G)");
   for (Button* b : all_)
     if (b->visible && Contains(b->rc, (float)x, (float)y)) return b->tooltip;
   return {};
@@ -544,7 +545,7 @@ void Toolbar::FillOverflowMenu(HMENU menu) {
       for (const NamedColor& c : ColorPalette::StandardColors())
         AppendItem(sub, id(MenuPick::Color, i, -1, c.color), MenuText(c.name), it.enabled);
       AppendSeparator(sub);
-      AppendItem(sub, id(MenuPick::MoreColors, i), L"More colors\u2026", it.enabled);
+      AppendItem(sub, id(MenuPick::MoreColors, i), T(L"More colors\u2026"), it.enabled);
     } else {
       for (size_t k = 0; k < it.choices.size(); ++k) {
         const bool chosen = it.kind == ToolKind::ComboBox ? it.choices[k] == it.text : static_cast<int>(k) == it.choice;
@@ -582,7 +583,7 @@ int Toolbar::OverflowChoice(int id) {
 
 void Toolbar::Describe(uia::Tree& t, int parent, const std::function<bool(int)>& isMenu, int openMenu,
                        const std::function<void(TextBox*)>& focusBox) {
-  int bar = t.Add(parent, CmdMoreMenu, UIA_ToolBarControlTypeId, L"Commands", RectF(rc_));
+  int bar = t.Add(parent, CmdMoreMenu, UIA_ToolBarControlTypeId, T(L"Commands"), RectF(rc_));
   t[bar].orientation = OrientationType_Horizontal;
   // Everything in reading order, left to right.
   struct Entry {
@@ -605,7 +606,7 @@ void Toolbar::Describe(uia::Tree& t, int parent, const std::function<bool(int)>&
       continue;
     }
     if (!e.button) {
-      uia::AddTextBox(t, bar, CmdGoToPage, pageBox_, L"Go to page (Ctrl+G)", [focusBox, this] { focusBox(&pageBox_); });
+      uia::AddTextBox(t, bar, CmdGoToPage, pageBox_, T(L"Go to page (Ctrl+G)"), [focusBox, this] { focusBox(&pageBox_); });
       if (!pageLabelText_.empty()) t.Add(bar, CmdGoToPage + 1000, UIA_TextControlTypeId, pageLabelText_, pageLabel_);
       continue;
     }

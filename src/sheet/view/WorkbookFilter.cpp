@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookFilter.h"
 #include "ui/Gfx.h"
@@ -59,7 +60,7 @@ bool WorkbookView::SetTableButtons(size_t index, bool on) {
   const int sheet = static_cast<int>(sheet_);
   Table t = Current().Tables()[index];
   if (t.autoFilter == on) return true;
-  edit::EditGroup group(Ed(), u"Filter");
+  edit::EditGroup group(Ed(), T(u"Filter"));
   const std::vector<HeldSize> held = HeldSizes();  // pictures keep their size
   edit::Result r;
   if (!on && !t.criteria.empty()) {
@@ -92,7 +93,7 @@ void WorkbookView::ToggleFilter() {
     // Off: every row it hid shows again.
     const Range ref = f->ref;
     const bool any = !f->criteria.empty() || !f->other.empty();
-    edit::EditGroup group(Ed(), u"Remove Filter");
+    edit::EditGroup group(Ed(), T(u"Remove Filter"));
     const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
     edit::Result r = Ed().SetFilter(sheet, std::nullopt);
     if (r && any && ref.lastRow > ref.firstRow) r = Ed().HideRows(sheet, ref.firstRow + 1, ref.lastRow, false);
@@ -106,7 +107,7 @@ void WorkbookView::ToggleFilter() {
   const Range sel = Selected();
   Range ref = sel.firstRow == sel.lastRow && sel.firstCol == sel.lastCol ? data::CurrentRegion(Current(), active_) : sel;
   if (ref.firstRow == ref.lastRow && ref.firstCol == ref.lastCol && Current().GetValue(ref.firstRow, ref.firstCol).type == ValueType::Empty) {
-    host_.ViewMessage(BannerKind::Info, L"Select a cell in the table to filter, or the cells themselves.");
+    host_.ViewMessage(BannerKind::Info, T(L"Select a cell in the table to filter, or the cells themselves."));
     return;
   }
   SheetFilter on;
@@ -146,7 +147,7 @@ bool WorkbookView::ApplyFilter() {
   std::sort(model.columns.begin(), model.columns.end(),
             [](const FilterColumn& a, const FilterColumn& b) { return a.colId < b.colId; });
   const int sheet = static_cast<int>(sheet_);
-  edit::EditGroup group(Ed(), u"Filter");
+  edit::EditGroup group(Ed(), T(u"Filter"));
   const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   edit::Result r = ofTable ? Ed().SetTableFilter(sheet, static_cast<size_t>(table), model) : Ed().SetFilter(sheet, model);
   // Runs of rows whose hidden state changes, each in one call.
@@ -289,7 +290,7 @@ bool WorkbookView::RemoveDuplicates(const Range& range, bool header, const std::
     for (size_t i = 0; i < dup.size(); ++i)
       if (dup[i]) order.push_back(static_cast<uint32_t>(i));
     const int sheet = static_cast<int>(sheet_);
-    edit::EditGroup group(Ed(), u"Remove Duplicates");
+    edit::EditGroup group(Ed(), T(u"Remove Duplicates"));
     edit::Result r = Ed().SortRows(sheet, Range{first, range.firstCol, range.lastRow, range.lastCol}, order);
     if (r) r = Ed().ClearAll(sheet, Range{first + static_cast<uint32_t>(unique), range.firstCol, range.lastRow, range.lastCol});
     if (EditRefused(r)) return false;
@@ -297,9 +298,10 @@ bool WorkbookView::RemoveDuplicates(const Range& range, bool header, const std::
     host_.ViewInvalidate();
   }
   // Excel's report, in its words.
-  host_.ViewMessage(BannerKind::Info, removed ? std::to_wstring(removed) + L" duplicate values found and removed; " +
-                                                    std::to_wstring(unique) + L" unique values remain."
-                                              : L"No duplicate values found.");
+  host_.ViewMessage(BannerKind::Info,
+                    removed ? Fmt(T(L"{0} duplicate values found and removed; {1} unique values remain."),
+                                  {std::to_wstring(removed), std::to_wstring(unique)})
+                            : T(L"No duplicate values found."));
   return true;
 }
 
@@ -314,16 +316,16 @@ bool WorkbookView::DataCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet();
   switch (cmd) {
     case CmdFilter:
-      s.label = L"Filter";
+      s.label = T(L"Filter");
       s.shortcut = L"Ctrl+Shift+L";
       s.enabled = cells;
       if (const int i = cells ? TableIndexAt(active_) : -1; i >= 0) s.checked = Current().Tables()[static_cast<size_t>(i)].autoFilter;
       else s.checked = cells && Current().Filter().has_value();
       return true;
-    case CmdDataBox: s.label = L"Custom sort…"; s.enabled = cells; return true;  // the Sort panel
-    case CmdSortAscending: s.label = L"Sort A to Z"; s.enabled = cells; return true;
-    case CmdSortDescending: s.label = L"Sort Z to A"; s.enabled = cells; return true;
-    case CmdRemoveDuplicates: s.label = L"Remove duplicates…"; s.enabled = cells; return true;
+    case CmdDataBox: s.label = T(L"Custom sort…"); s.enabled = cells; return true;  // the Sort panel
+    case CmdSortAscending: s.label = T(L"Sort A to Z"); s.enabled = cells; return true;
+    case CmdSortDescending: s.label = T(L"Sort Z to A"); s.enabled = cells; return true;
+    case CmdRemoveDuplicates: s.label = T(L"Remove duplicates…"); s.enabled = cells; return true;
   }
   return false;
 }

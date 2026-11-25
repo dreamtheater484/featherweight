@@ -10,6 +10,7 @@
 #include "Util.h"
 #include "Version.h"
 #include "core/Json.h"
+#include "core/Lang.h"
 #include "core/SemVer.h"
 #include "core/Strings.h"
 
@@ -172,14 +173,14 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, bool install) {
   std::string body;
   int status = HttpGet(g_testUrl.empty() ? kLatestUrl : g_testUrl, body, 4u << 20);
   if (status == 404) return finish({Status::UpToDate});  // no releases yet
-  if (status != 200) return finish({Status::Failed, L"", L"", L"Couldn’t reach GitHub."});
+  if (status != 200) return finish({Status::Failed, L"", L"", T(L"Couldn’t reach GitHub.")});
   auto json = fw::ParseJson(body);
-  if (!json) return finish({Status::Failed, L"", L"", L"Unexpected response from GitHub."});
+  if (!json) return finish({Status::Failed, L"", L"", T(L"Unexpected response from GitHub.")});
 
   std::string tag = json->StringOr("tag_name");
   auto latest = fw::ParseSemVer(tag);
   auto current = fw::ParseSemVer(FW_VERSION_STRING);
-  if (!latest || !current) return finish({Status::Failed, L"", L"", L"Unexpected version number."});
+  if (!latest || !current) return finish({Status::Failed, L"", L"", T(L"Unexpected version number.")});
   r.version = fw::Utf8ToWide(tag.size() && (tag[0] == 'v' || tag[0] == 'V') ? tag.substr(1) : tag);
   r.pageUrl = fw::Utf8ToWide(json->StringOr("html_url", "https://github.com/dreamtheater484/featherweight/releases"));
   if (fw::CompareSemVer(*latest, *current) <= 0) {
@@ -203,7 +204,7 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, bool install) {
     return finish(r);
   }
   std::string sumsText;
-  if (HttpGet(sumsUrl->second, sumsText, 1u << 20) != 200) return finish({Status::Failed, r.version, r.pageUrl, L"Download failed."});
+  if (HttpGet(sumsUrl->second, sumsText, 1u << 20) != 200) return finish({Status::Failed, r.version, r.pageUrl, T(L"Download failed.")});
   auto sums = ParseSums(sumsText);
 
   const std::wstring dir = util::ExeDir();
@@ -221,13 +222,13 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, bool install) {
     std::string data;
     if (HttpGet(url->second, data, 256u << 20) != 200 || util::Sha256(data.data(), data.size()) != sum->second) {
       for (auto& p : plan) DeleteFileW(p.fresh.c_str());
-      return finish({Status::Failed, r.version, r.pageUrl, L"The download didn’t pass verification."});
+      return finish({Status::Failed, r.version, r.pageUrl, T(L"The download didn’t pass verification.")});
     }
     Planned p{target, target + L".new", target + L".old"};
     if (!WriteBytes(p.fresh, data)) {
       for (auto& q : plan) DeleteFileW(q.fresh.c_str());
       DeleteFileW(p.fresh.c_str());
-      return finish({Status::Failed, r.version, r.pageUrl, L"Couldn’t write the update."});
+      return finish({Status::Failed, r.version, r.pageUrl, T(L"Couldn’t write the update.")});
     }
     plan.push_back(p);
   }
@@ -254,7 +255,7 @@ void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, bool install) {
       MoveFileExW(p.old.c_str(), p.target.c_str(), 0);
     }
     for (auto& p : plan) DeleteFileW(p.fresh.c_str());
-    return finish({Status::Failed, r.version, r.pageUrl, L"The update couldn’t be installed."});
+    return finish({Status::Failed, r.version, r.pageUrl, T(L"The update couldn’t be installed.")});
   }
   r.status = Status::Installed;
   finish(r);
