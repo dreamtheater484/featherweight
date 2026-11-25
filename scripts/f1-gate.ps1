@@ -1124,6 +1124,7 @@ if ($Verify) {
   $problems = @()
   if ($rep.commit -ne $want) { $problems += "the report is for $($rep.commit), not $want" }
   if ($rep.dirty) { $problems += "the report was made on a tree with uncommitted changes" }
+  if ($rep.ciCommit -and $rep.ciCommit -ne $rep.commit) { $problems += "the report's CI rows read $($rep.ciCommit) (-CiCommit, a trial)" }
   $failed = @($rep.rows | Where-Object { $_.status -ne "passed" -and $_.status -ne "waiting" })
   if ($failed.Count) { $problems += "failed rows: " + (($failed | ForEach-Object { $_.title }) -join ", ") }
   $waiting = @($rep.rows | ForEach-Object { $_.checks } | Where-Object { $_.status -eq "waiting" })
