@@ -99,6 +99,14 @@ foreach(entry
   list(GET pair 1 sha256)
   fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_utf8_url}/${name}" ${sha256})
 endforeach()
+# Swedish and Finnish: the TeX originals at the same commit, shipped byte for byte, since their
+# licences (LPPL 1.3 for hyph-sv; hyph-fi's "may be freely distributed") ask for the files as they
+# are. A failed download or another hash stops configure: nothing falls back to the derivatives.
+set(_fw_hyph_tex_url "https://raw.githubusercontent.com/hyphenation/tex-hyphen/${_fw_hyph_utf8_commit}/hyph-utf8/tex/generic/hyph-utf8/patterns/tex")
+fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_tex_url}/hyph-sv.tex"
+  102253382bd91cdb7535de5c20744254c9ac9aaa4ca12ed420eb835e5004c0b3)
+fw_fetch_file("${FW_HYPH_UTF8_DIR}" "${_fw_hyph_tex_url}/hyph-fi.tex"
+  cf68be5eb003d299f85f2b7185f31d8ff5799c19dfad3f0300eaf9843e9cc8d3)
 fw_fetch_file("${FW_OPENTAAL_HYPH_DIR}"
   "https://raw.githubusercontent.com/LibreOffice/dictionaries/${_fw_opentaal_commit}/nl_NL/hyph_nl_NL.dic"
   0a97b76b259ed4165d094dedf9b6fb98c57734a437df0b5b263ee13e262d5f8f)

@@ -36,7 +36,9 @@ constexpr Language kLanguages[] = {
     {L"it", "it", {L"it"}, 2, 2, false},
     {L"pt", "pt", {L"pt"}, 2, 3, false},
     {L"da", "da", {L"da"}, 2, 2, false},
+    {L"sv", "sv", {L"sv"}, 2, 2, false},
     {L"nb", "nb", {L"nb", L"nn", L"no"}, 2, 2, false},
+    {L"fi", "fi", {L"fi"}, 2, 2, false},
 };
 constexpr size_t kLanguageCount = sizeof(kLanguages) / sizeof(kLanguages[0]);
 
@@ -152,14 +154,23 @@ Hyphenator::Hyphenator(std::wstring tag, std::wstring_view patterns, int leftMin
     if (eol == std::wstring_view::npos) eol = patterns.size();
     std::wstring_view line = patterns.substr(pos, eol - pos);
     pos = eol + 1;
-    if (line.empty() || line[0] == L'%' || IsDirective(line)) continue;
+    // Swedish and Finnish ship as TeX source, the files as they are (hyph-sv.tex, hyph-fi.tex): a
+    // comment runs from % to the line's end, and \patterns{...} wraps the words.
+    if (size_t c = line.find(L'%'); c != std::wstring_view::npos) line = line.substr(0, c);
+    if (line.empty() || IsDirective(line)) continue;
     size_t t = 0;
     while (t < line.size()) {
       size_t end = line.find_first_of(L" \t", t);
       if (end == std::wstring_view::npos) end = line.size();
       std::wstring_view token = line.substr(t, end - t);
       t = end + 1;
-      if (token.empty() || token[0] == L'%') break;
+      if (!token.empty() && token[0] == L'\\') {
+        const size_t brace = token.find(L'{');
+        token = brace == std::wstring_view::npos ? std::wstring_view{} : token.substr(brace + 1);
+      }
+      while (!token.empty() && token.front() == L'{') token.remove_prefix(1);
+      while (!token.empty() && token.back() == L'}') token.remove_suffix(1);
+      if (token.empty()) continue;
       bool pattern = token.find_first_of(L"0123456789") != std::wstring_view::npos;
       std::wstring key;
       std::string values;
