@@ -217,7 +217,7 @@ def signed(path, changed_path, rng):
     data[at:at + len(br)] = br
     signed_bytes = bytes(data[:start]) + bytes(data[end:])
     sig = (pkcs7.PKCS7SignatureBuilder().set_data(signed_bytes).add_signer(cert, key, hashes.SHA256())
-           .sign(serialization.Encoding.DER, [pkcs7.PKCS7Options.DetachedSignature]))
+           .sign(serialization.Encoding.DER, [pkcs7.PKCS7Options.DetachedSignature, pkcs7.PKCS7Options.Binary]))  # Binary: the bytes as they are, no CRLF
     hexsig = sig.hex().encode().ljust(hole, b"0")
     data[start + 1:start + 1 + hole] = hexsig
     final = bytes(data)
