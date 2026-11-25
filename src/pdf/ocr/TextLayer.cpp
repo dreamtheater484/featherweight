@@ -75,8 +75,13 @@ int WriteTextLayer(FPDF_DOCUMENT doc, FPDF_PAGE page, const PageImage& img, cons
   FPDF_FONT font = FPDFText_LoadStandardFont(doc, "Helvetica");
   if (!font) return 0;
   int written = 0;
+  // A real space after each word but a line's last, so readers (copy, search, screen readers) get
+  // the words apart rather than guessing spaces from the gaps (f1-gate's finding 8: "Openingfiles").
+  // Not for languages written without spaces between words.
+  const bool spaced = result.language.rfind(L"ja", 0) != 0 && result.language.rfind(L"zh", 0) != 0;
   for (const Line& line : result.lines) {
-    for (const Word& word : line.words) {
+    for (size_t k = 0; k < line.words.size(); ++k) {
+      const Word& word = line.words[k];
       // The box's corners on the page: whatever the page's rotation, the text runs along the
       // bottom edge (left to right) and stands on it.
       const Pt bl = ToPage(page, img, word.x, word.y + word.h), br = ToPage(page, img, word.x + word.w, word.y + word.h),
@@ -89,6 +94,11 @@ int WriteTextLayer(FPDF_DOCUMENT doc, FPDF_PAGE page, const PageImage& img, cons
           !FPDFPageObj_GetBounds(obj, &l, &b, &r, &t) || r - l <= 0.01f) {
         FPDFPageObj_Destroy(obj);
         continue;
+      }
+      // The space goes after the word's own box (scaled as the word is), measured without it.
+      if (spaced && k + 1 < line.words.size()) {
+        text += u' ';
+        FPDFText_SetText(obj, reinterpret_cast<FPDF_WIDESTRING>(text.c_str()));
       }
       FPDFTextObj_SetTextRenderMode(obj, FPDF_TEXTRENDERMODE_INVISIBLE);
       // One unit of text space: the word's width along the bottom edge, its height (an em) up the

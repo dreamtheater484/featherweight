@@ -265,6 +265,9 @@ TEST(F1PdfOcrWritesFindableText) {
   const std::wstring text = PageText(back.doc, 0);
   for (const wchar_t* word : {L"Featherweight", L"scanned", L"quick", L"brown", L"lazy"})
     CHECK(text.find(word) != std::wstring::npos);
+  // With the spaces between them, as a phrase search and copying need (f1-gate's finding 8).
+  CHECK(text.find(L"quick brown fox") != std::wstring::npos);
+  CHECK(text.find(L"reads scanned pages") != std::wstring::npos);
   // The page looks as it did: the text is invisible, the picture is still the page.
   FPDF_PAGE again = FPDF_LoadPage(back.doc, 0);
   CHECK(!pdfocr::NeedsText(again));
