@@ -325,6 +325,94 @@ TEST(Layout_NoAutomaticSpaceBelowACellsLastParagraph) {
   CHECK_NEAR(b->top, a->top, 0.05f);
 }
 
+TEST(Layout_SuppressTopSpacingShortensAPagesFirstAtLeastLine) {
+  // Under w:suppressTopSpacing, the first line on a page with at-least spacing is shorter by as much
+  // as its minimum exceeds 9.6 pt, as Word's is: 2.4 pt at least 12 (the UN financial report then
+  // holds Word's 55th line on a page). At least 6, and the lines after, as they are.
+  const std::string sup = "<w:compat><w:suppressTopSpacing/></w:compat>";
+  for (const char* line : {"240", "120"}) {
+    const std::string sp = std::string("<w:spacing w:after=\"0\" w:line=\"") + line + "\" w:lineRule=\"atLeast\"/>";
+    const std::string body = P("first", sp) + P("second", sp) + SmallPage();
+    Doc plain = Make(body, "<w:compat/>"), shorter = Make(body, sup);
+    REQUIRE(plain.layout && shorter.layout);
+    const LineBox *a1 = Find(plain, u"first"), *a2 = Find(plain, u"second");
+    const LineBox *b1 = Find(shorter, u"first"), *b2 = Find(shorter, u"second");
+    REQUIRE(a1 && a2 && b1 && b2);
+    const float less = std::string_view(line) == "240" ? 2.4f : 0.0f;
+    CHECK_NEAR(b1->top, a1->top, 0.01f);
+    CHECK_NEAR(b1->height, a1->height - less, 0.01f);
+    CHECK_NEAR(b1->baseline, a1->baseline - less, 0.01f);
+    CHECK_NEAR(b2->top, a2->top - less, 0.01f);
+    CHECK_NEAR(b2->height, a2->height, 0.01f);
+  }
+}
+
+TEST(Layout_AtLeastSpacingPutsItsSpaceAboveTheText) {
+  // Word adds an at-least line's extra space above its text: at least 30 pt, the text sits on the
+  // line's bottom, a descent above it, as on a single line.
+  Doc d = Make(P("tall", "<w:spacing w:after=\"0\" w:line=\"600\" w:lineRule=\"atLeast\"/>") + P("single") + SmallPage());
+  REQUIRE(d.layout);
+  const LineBox *tall = Find(d, u"tall"), *single = Find(d, u"single");
+  REQUIRE(tall && single);
+  CHECK_NEAR(tall->height, 30.0f, 0.01f);
+  CHECK_NEAR(tall->top + tall->height - tall->baseline, single->top + single->height - single->baseline, 0.01f);
+}
+
+TEST(Layout_ALeftBorderWiderThanTheCellMarginPushesItsText) {
+  // A 2 pt left border with no left cell margin moves the cell's text 2 pt in, as Word does (the UN
+  // report's 0.25 pt border, 0.24 pt in its PDF); a margin wider than the border leaves it.
+  auto table = [](const char* margin, bool border) {
+    return std::string("<w:tbl><w:tblPr><w:tblBorders>") +
+           (border ? "<w:left w:val=\"single\" w:sz=\"16\" w:space=\"0\" w:color=\"000000\"/>" : "") +
+           "</w:tblBorders><w:tblCellMar><w:left w:w=\"" + margin + "\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr>"
+           "<w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc>" + P("cell") + "</w:tc></w:tr></w:tbl>" + P("") +
+           SmallPage();
+  };
+  Doc none = Make(table("0", false)), bordered = Make(table("0", true));
+  Doc margin = Make(table("108", false)), both = Make(table("108", true));
+  REQUIRE(none.layout && bordered.layout && margin.layout && both.layout);
+  const LineBox *a = Find(none, u"cell"), *b = Find(bordered, u"cell"), *c = Find(margin, u"cell"), *e = Find(both, u"cell");
+  REQUIRE(a && b && c && e);
+  CHECK_NEAR(b->x - a->x, 2.0f, 0.01f);
+  CHECK_NEAR(e->x, c->x, 0.01f);
+}
+
+TEST(Layout_AShortLineFitsAboveItsFloat) {
+  // A 6 pt paragraph whose float starts 7.55 pt below it stays above the float; the text after goes
+  // right below the float (the UN report's figures: a line's room beside floats is found again for
+  // its own height, not only a taller one).
+  const std::string shape =
+      "<w:r><w:pict xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\">"
+      "<v:rect style=\"position:absolute;margin-left:0;margin-top:7.55pt;width:100pt;height:60pt;"
+      "mso-position-vertical-relative:paragraph\"><w10:wrap type=\"topAndBottom\"/></v:rect></w:pict></w:r>";
+  Doc d = Make(P("before", "<w:spacing w:after=\"0\"/>") + "<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"120\" w:lineRule=\"exact\"/></w:pPr>" +
+               shape + "</w:p>" + P("after") + SmallPage());
+  REQUIRE(d.layout);
+  const LineBox *before = Find(d, u"before"), *after = Find(d, u"after");
+  REQUIRE(before && after);
+  const Page& page = d.page(0);
+  REQUIRE(page.drawings.size() == 1u);
+  const fw::doc::layout::Rect box = page.drawings.front().rect;
+  CHECK_NEAR(box.top, before->top + before->height + 7.55f, 0.01f);
+  CHECK_NEAR(after->top, box.bottom, 0.01f);
+}
+
+TEST(Layout_AFloatingTableIsAsWideAsItsCells) {
+  // A floating table with a vertical cell is as wide as its cells, not as long as the cell's turned
+  // line: the text beside it stays at the margin (the UN report's landscape footers: the page number
+  // in a table 21.6 pt wide at the left edge, in a row 246 pt tall).
+  Doc d = Make("<w:tbl><w:tblPr><w:tblpPr w:leftFromText=\"0\" w:rightFromText=\"0\" w:vertAnchor=\"page\" "
+               "w:horzAnchor=\"page\" w:tblpX=\"0\" w:tblpY=\"0\"/><w:tblW w:w=\"300\" w:type=\"dxa\"/>"
+               "<w:tblCellMar><w:left w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"0\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr>"
+               "<w:tblGrid><w:gridCol w:w=\"300\"/></w:tblGrid><w:tr><w:trPr><w:trHeight w:val=\"3000\"/></w:trPr>"
+               "<w:tc><w:tcPr><w:tcW w:w=\"300\" w:type=\"dxa\"/><w:textDirection w:val=\"tbRl\"/></w:tcPr>" +
+               P("12/34") + "</w:tc></w:tr></w:tbl>" + P("beside") + SmallPage());
+  REQUIRE(d.layout);
+  const LineBox* beside = Find(d, u"beside");
+  REQUIRE(beside);
+  CHECK_NEAR(beside->x, 20.0f, 0.01f);  // the margin; the turned line is 150 pt long
+}
+
 TEST(Layout_AColumnBreakNeedNotFitItsColumn) {
   // Column one full to the last line, then a paragraph that starts with a column break: the
   // break's empty line stays in column one, and the text after it starts column two.

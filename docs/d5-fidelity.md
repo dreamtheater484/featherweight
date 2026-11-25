@@ -2,7 +2,7 @@
 
 The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` against Word's renders in the private corpus (108 Word documents with a reference PDF, made by Word on Roy's PC).
 
-## F1 (f1-word, 25 Nov 2026): 147 of 152
+## F1 (f1-word, 25 Nov 2026): 148 of 152
 
 On claude/f1-word, measured against the corpus references, one of them re-rendered (bund). The misses D5 left, as they stand:
 
@@ -19,7 +19,12 @@ On claude/f1-word, measured against the corpus references, one of them re-render
   - The pages each form's own Word saved in `docProps/app.xml`: b1 18, b2 22, b3 8, b4 13. These are ours.
   - b2's current reference is the good one and is kept.
 - **acuk-example-cv:** still a miss. Word's baselines fall on a 0.12 pt (1/600 inch) grid. But rounding line heights, or the space between paragraphs, to it makes the drift worse (+1.02 pt at the page end, against +0.72): Word rounds positions, not heights.
-- **un-financial** (348 / 351): still a miss, from single-line differences spread over the report.
+- **un-financial:** matches (348 pages, 28,489 of 28,760 lines). The three extra pages weren't single-line differences but four rules, each checked in Word and on the corpus:
+  - Its cells' text box was 0.24 pt narrower in Word's PDF, not 0.7: the table's 0.25 pt left border, with no cell margins, pushes the text in. The right border doesn't. The rule is the larger of margin and left border (+16 lines over the corpus). Adding the border to the margin loses about 1,000 lines; the larger of the two on both sides gains nothing.
+  - Its settings ask for `w:suppressTopSpacing`. Word then makes the first line on a page with at-least spacing shorter by as much as its minimum exceeds 9.6 pt: renders of Times New Roman, Arial and Calibri at 10, 11 and 20 pt, at least 6 (no change), 12 (2.4 pt) and 30 (20.4 pt). Each page then holds Word's 55th line. Word's render of a copy without the flag has 349 pages; `w:suppressBottomSpacing` changes nothing here (348 without it). The test documents and Word's renders are in `FeatherweightNotes\f1\evidence\suppress-top-spacing`.
+  - Chapter IV's figures are floats 7.55 pt below a 6 pt paragraph. The room beside floats was found for a 12 pt estimate only, so the 6 pt line went below the figure, 6 pt per figure. It's found again for the line's own height now.
+  - Its landscape footers hold the page number in a floating table 21.6 pt wide, in a vertical cell 246 pt tall. The table's width came from the turned line's length, which pushed the body text 246 pt in and wrapped two table titles. It's as wide as its cells now.
+  - The same renders show at-least spacing puts its extra space above the text; it does here now (no line breaks move).
 - **EPA brownfields QAPP** (171 / 162): still a miss. Its fonts are all installed and drawn as asked, so the reference stands. The file's saved page count (160) isn't evidence by itself.
 
 ## Handover (6 Nov 2026, paused for the weekly usage limit)

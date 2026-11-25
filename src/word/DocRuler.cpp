@@ -757,7 +757,14 @@ std::wstring DocView::RulerTooltip(int x, int y) {
   switch (hit.part) {
     case RulerPart::Corner:
       return Fmt(T(L"{0}: a click on the ruler sets one. Click here for another kind."), {TabName(rulerTab_)});
-    case RulerPart::Strip: return Fmt(T(L"Click to set a {0}"), {fw::ToLower(std::wstring(TabName(rulerTab_)))});
+    case RulerPart::Strip:  // whole per kind: German keeps its nouns' capitals ("einen linksbündigen Tabstopp")
+      switch (rulerTab_) {
+        case TabAlign::Center: return T(L"Click to set a center tab");
+        case TabAlign::End: return T(L"Click to set a right tab");
+        case TabAlign::Decimal: return T(L"Click to set a decimal tab");
+        case TabAlign::Bar: return T(L"Click to set a bar tab");
+        default: return T(L"Click to set a left tab");
+      }
     case RulerPart::FirstLine: return T(L"First line indent: ") + Length(r.first - o);
     case RulerPart::Hanging: return T(L"Hanging indent: ") + Length(r.indent - o);
     case RulerPart::LeftIndent: return T(L"Left indent: ") + Length(r.indent - o);

@@ -14,7 +14,7 @@ param(
   [Parameter(Mandatory)][string]$Exe,
   [Parameter(Mandatory)][string]$Json,
   [Parameter(Mandatory)][string]$Out,
-  [string]$Languages = "en,nl,de,fr,es",
+  [string[]]$Languages = @("en,nl,de,fr,es"),  # "en,nl" or, from PowerShell, en,nl (an array)
   [string]$Files = "")  # default: tests\office\generated
 $ErrorActionPreference = "Stop"
 if (-not $Files) { $Files = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "..\..\tests\office\generated" }
@@ -24,7 +24,7 @@ $surfaces = 0
 $clipped = New-Object System.Collections.Generic.List[string]
 $missing = New-Object System.Collections.Generic.List[string]
 $ran = New-Object System.Collections.Generic.List[string]
-foreach ($lang in $Languages -split ',') {
+foreach ($lang in ($Languages -join ",") -split ",") {
   $inUse = $true
   foreach ($kind in "docx", "xlsx", "pptx") {
     $file = Join-Path $Files "simple.$kind"

@@ -134,14 +134,16 @@ std::vector<Control*> DocPanelRows::LayOutRows(const std::vector<Row>& rows, con
     }
     y += h + 14 * ui;
   }
-  noteRc_ = RectF(left, y, right, y + 20 * ui);
+  // The note wraps (up to 3 lines: a longer language's sentence doesn't fit one).
+  const float noteH = note_.empty() ? 0 : Canvas().TextWrapped(note_, RectF(left, y, right, y + 100 * ui), {}, 12 * ui, 3, false);
+  noteRc_ = RectF(left, y, right, y + std::max(20 * ui, std::ceil(noteH) + 2 * ui));
   return out;
 }
 
 void DocPanelRows::DrawLabels(Canvas& c) const {
   const Palette& p = theme::P();
   for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
-  if (!note_.empty()) c.Text(note_, noteRc_, p.text, 12 * ui_);
+  if (!note_.empty()) c.TextWrapped(note_, noteRc_, p.text, 12 * ui_, 3);
 }
 
 // ---------------------------------------------------------------------------

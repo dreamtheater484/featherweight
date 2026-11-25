@@ -83,6 +83,14 @@ void DrawChoice(Canvas& c, const D2D1_RECT_F& r, const std::wstring& name, wchar
          DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
 }
 
+// A gallery tile as wide as its longest name needs (a longer language: "Hineinschweben"), at least as designed:
+// the name's 11-DIP line and 10 DIPs around it.
+float TileWidth(const std::vector<std::wstring>& names, float design) {
+  float w = design;
+  for (const std::wstring& n : names) w = std::max(w, std::ceil(Canvas().MeasureText(n, 11.f)) + 10);
+  return w;
+}
+
 const Shape* FindShapeIn(const std::vector<Shape>& shapes, uint32_t id) {
   for (const Shape& s : shapes) {
     if (s.id == id) return &s;
@@ -625,7 +633,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
       Done(ed::SetTransition(*ed2, SelectedSlides(), p));
     };
     RibbonGallery gal;
-    gal.choiceWidth = 66;
+    gal.choiceWidth = TileWidth(g.tool.choices, 66);
     gal.choiceHeight = 58;
     gal.columns = static_cast<int>(std::size(kTransitionGallery));
     gal.minColumns = 3;
@@ -687,7 +695,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     if (none) g.tool.choices.push_back(T(L"None"));
     for (ed::Anim a : kAnimGallery) g.tool.choices.push_back(AnimLabel(a));
     RibbonGallery gal;
-    gal.choiceWidth = 66;
+    gal.choiceWidth = TileWidth(g.tool.choices, 66);
     gal.choiceHeight = 58;
     gal.drawChoice = [none](Canvas& c, const D2D1_RECT_F& r, int i, float ui) {
       if (none && i == 0) {

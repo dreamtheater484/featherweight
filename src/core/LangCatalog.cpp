@@ -9,7 +9,8 @@
 namespace fw::lang::catalog {
 namespace {
 
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 1;      // LANG_<CODE>'s texts
+constexpr uint32_t kKeysVersion = 2;  // LANG_KEYS: Rice-coded differences and packed places
 
 uint32_t Get32(const uint8_t* p) {
   uint32_t v;
@@ -22,6 +23,35 @@ void Put32(std::vector<uint8_t>& out, uint32_t v) {
 }
 
 uint32_t Step(uint32_t h, uint32_t byte) { return (h ^ (byte & 0xFF)) * 16777619u; }
+
+// The key table's bits, low bits of each byte first.
+struct BitReader {
+  const uint8_t* p;
+  size_t n;       // bytes
+  size_t at = 0;  // bits read
+  bool Read(unsigned k, uint32_t& v) {
+    if (k > 32 || n * 8 - at < k) return false;
+    v = 0;
+    for (unsigned got = 0; got < k;) {
+      const unsigned off = at % 8, take = std::min(8 - off, k - got);
+      v |= static_cast<uint32_t>((p[at / 8] >> off) & ((1u << take) - 1)) << got;
+      got += take;
+      at += take;
+    }
+    return true;
+  }
+};
+
+struct BitWriter {
+  std::vector<uint8_t>& out;
+  size_t at = 0;
+  void Write(uint32_t v, unsigned k) {
+    for (unsigned b = 0; b < k; ++b, ++at) {
+      if (at % 8 == 0) out.push_back(0);
+      if ((v >> b) & 1) out.back() |= static_cast<uint8_t>(1u << (at % 8));
+    }
+  }
+};
 
 }  // namespace
 
@@ -45,16 +75,39 @@ uint32_t KeysCheck(const Keys& k) {
 }
 
 bool ReadKeys(const uint8_t* p, size_t n, Keys& keys) {
-  if (n < 16 || std::memcmp(p, "FWLK", 4) != 0 || Get32(p + 4) != kVersion) return false;
-  keys.seed = Get32(p + 8);
-  keys.count = Get32(p + 12);
-  if (keys.count == 0 || keys.count > 65536 || keys.count > (n - 16) / 6) return false;
-  keys.hashes = reinterpret_cast<const uint32_t*>(p + 16);
-  keys.places = reinterpret_cast<const uint16_t*>(p + 16 + 4 * static_cast<size_t>(keys.count));
-  for (uint32_t i = 0; i < keys.count; ++i) {
-    if (i > 0 && keys.hashes[i - 1] >= keys.hashes[i]) return false;
-    if (keys.places[i] >= keys.count) return false;
+  keys = {};
+  if (n < 18 || std::memcmp(p, "FWLK", 4) != 0 || Get32(p + 4) != kKeysVersion) return false;
+  const uint32_t seed = Get32(p + 8), count = Get32(p + 12);
+  const unsigned k = p[16], w = p[17];
+  if (count == 0 || count > 65536 || k > 31 || w == 0 || w > 16 || (count - 1) >> w) return false;
+  if ((n - 18) * 8 / (k + 1 + w) < count) return false;  // each key takes k + 1 + w bits at least
+  BitReader bits{p + 18, n - 18};
+  std::vector<uint32_t> hashes(count);
+  uint64_t h = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint64_t q = 0;
+    for (uint32_t one = 1; one;) {
+      if (!bits.Read(1, one)) return false;
+      if (one && ++q > (UINT32_MAX >> k)) return false;
+    }
+    uint32_t low = 0;
+    if (!bits.Read(k, low)) return false;
+    const uint64_t gap = q << k | low;
+    if (i > 0 && gap == 0) return false;  // strictly ascending
+    h += gap;
+    if (h > UINT32_MAX) return false;
+    hashes[i] = static_cast<uint32_t>(h);
   }
+  std::vector<uint16_t> places(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t v = 0;
+    if (!bits.Read(w, v) || v >= count) return false;
+    places[i] = static_cast<uint16_t>(v);
+  }
+  keys.seed = seed;
+  keys.count = count;
+  keys.hashes = std::move(hashes);
+  keys.places = std::move(places);
   return true;
 }
 
@@ -83,12 +136,32 @@ std::vector<uint8_t> WriteKeys(uint32_t seed, const std::vector<uint32_t>& hashe
   std::vector<uint16_t> order(hashes.size());
   std::iota(order.begin(), order.end(), uint16_t{0});
   std::sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) { return hashes[a] < hashes[b]; });
+  std::vector<uint32_t> gaps;
+  uint32_t last = 0;
+  for (uint16_t i : order) gaps.push_back(hashes[i] - last), last = hashes[i];
+  // The k that takes fewest bits; the smallest of equals.
+  unsigned k = 0;
+  uint64_t best = UINT64_MAX;
+  for (unsigned t = 0; t < 32; ++t) {
+    uint64_t sum = 0;
+    for (uint32_t g : gaps) sum += t + 1 + (g >> t);
+    if (sum < best) best = sum, k = t;
+  }
+  unsigned w = 1;
+  while (w < 16 && (hashes.size() - 1) >> w) ++w;
   std::vector<uint8_t> out = {'F', 'W', 'L', 'K'};
-  Put32(out, kVersion);
+  Put32(out, kKeysVersion);
   Put32(out, seed);
   Put32(out, static_cast<uint32_t>(hashes.size()));
-  for (uint16_t i : order) Put32(out, hashes[i]);
-  for (uint16_t i : order) out.push_back(static_cast<uint8_t>(i)), out.push_back(static_cast<uint8_t>(i >> 8));
+  out.push_back(static_cast<uint8_t>(k));
+  out.push_back(static_cast<uint8_t>(w));
+  BitWriter bits{out};
+  for (uint32_t g : gaps) {
+    for (uint32_t q = g >> k; q; --q) bits.Write(1, 1);
+    bits.Write(0, 1);
+    bits.Write(g, k);
+  }
+  for (uint16_t i : order) bits.Write(i, w);
   return out;
 }
 

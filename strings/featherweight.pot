@@ -54,6 +54,10 @@ msgstr ""
 msgid "%zu: %ld × %ld (main)"
 msgstr ""
 
+#: src/pdf/Print.cpp
+msgid "&Actual size"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "&Add to Print Area"
 msgstr ""
@@ -80,6 +84,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "&Fit Sheet on One Page"
+msgstr ""
+
+#: src/pdf/Print.cpp
+msgid "&Fit to page (recommended)"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -212,6 +220,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp
 msgid "1 pt"
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "1 slide couldn't be written to the folder {0}."
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -1022,6 +1034,10 @@ msgstr ""
 msgid "Accent 6"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Accent{0}"
+msgstr ""
+
 #: src/word/DocReview.cpp src/word/DocRibbon.cpp
 msgid "Accept"
 msgstr ""
@@ -1276,6 +1292,11 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp
 msgid "Allow"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Alt"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -1670,6 +1691,15 @@ msgstr ""
 msgid "Backspace"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Backspace"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Bad"
+msgstr ""
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Banded columns"
 msgstr ""
@@ -1678,7 +1708,12 @@ msgstr ""
 msgid "Banded rows"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp src/word/DocStyles.cpp
+#: src/word/DocStyles.cpp
+msgid "Bar"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Bar"
 msgstr ""
 
@@ -1720,6 +1755,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp
 msgid "Between"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Bibliography"
 msgstr ""
 
 #: src/sheet/view/WorkbookShapes.cpp
@@ -1788,6 +1827,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp src/word/DocStyles.cpp
 msgid "Bold italic"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Book Title"
 msgstr ""
 
 #: src/doc/edit/Inline.cpp src/word/DocRibbon.cpp
@@ -1974,7 +2017,7 @@ msgstr ""
 msgid "Calculating…"
 msgstr ""
 
-#: src/sheet/view/WorkbookRibbon.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp
 msgid "Calculation"
 msgstr ""
 
@@ -1984,6 +2027,10 @@ msgstr ""
 
 #: src/word/DocFormat.cpp
 msgid "Capitalize Each Word"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Caption"
 msgstr ""
 
 #: src/sheet/view/WorkbookCharts.cpp
@@ -2180,6 +2227,10 @@ msgstr ""
 
 #: src/word/DocForms.cpp
 msgid "Check box content control"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Check cell"
 msgstr ""
 
 #: src/App.cpp src/AppShell.cpp
@@ -2423,7 +2474,23 @@ msgid "Click to reply; its marker is outlined on the slide"
 msgstr ""
 
 #: src/word/DocRuler.cpp
-msgid "Click to set a {0}"
+msgid "Click to set a bar tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a center tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a decimal tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a left tab"
+msgstr ""
+
+#: src/word/DocRuler.cpp
+msgid "Click to set a right tab"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
@@ -2506,7 +2573,12 @@ msgstr ""
 msgid "Colors"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookData.cpp src/slide/view/ObjectTool.cpp
+#: src/sheet/view/WorkbookData.cpp
+msgid "Column"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Column"
 msgstr ""
 
@@ -2566,8 +2638,16 @@ msgstr ""
 msgid "Combo chart"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Comma"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Comma Style"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Comma [0]"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
@@ -2584,6 +2664,10 @@ msgstr ""
 
 #: src/doc/edit/Comments.cpp src/doc/edit/Editor.cpp src/sheet/view/WorkbookReview.cpp src/word/DocReview.cpp src/word/DocRibbon.cpp
 msgid "Comment"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Comment Text"
 msgstr ""
 
 #: src/word/DocReview.cpp
@@ -2918,12 +3002,21 @@ msgstr ""
 msgid "Crop the picture (drag its edges)"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Ctrl"
+msgstr ""
+
 #: src/slide/view/PresentationView.cpp
 msgid "Ctrl+click to follow the link"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Currency"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Currency [0]"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp
@@ -3170,6 +3263,10 @@ msgstr ""
 msgid "Decrease list level"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "Default Paragraph Font"
+msgstr ""
+
 #: src/word/DocStyles.cpp
 msgid "Default stops every {0} after these."
 msgstr ""
@@ -3190,11 +3287,21 @@ msgstr ""
 msgid "Degrees as radians."
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Del"
+msgstr ""
+
 #: src/slide/view/PresentationAnim.cpp
 msgid "Delay"
 msgstr ""
 
 #: src/doc/edit/Editor.cpp src/sheet/edit/Edit.cpp src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookNames.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/ShapeOps.cpp src/slide/view/ObjectTool.cpp src/slide/view/PresentationComments.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/ui/Uia.cpp src/word/DocPanels.cpp src/word/DocReview.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
+msgid "Delete"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
 msgid "Delete"
 msgstr ""
 
@@ -3598,6 +3705,11 @@ msgstr ""
 msgid "Down"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Down"
+msgstr ""
+
 #: src/sheet/view/WorkbookPageSetup.cpp
 msgid "Down, then over"
 msgstr ""
@@ -3790,6 +3902,10 @@ msgstr ""
 msgid "Effects"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "Emphasis"
+msgstr ""
+
 #: src/pdf/PdfView.cpp
 msgid "Empty note"
 msgstr ""
@@ -3818,6 +3934,11 @@ msgstr ""
 msgid "End"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "End"
+msgstr ""
+
 #: src/slide/show/PresenterView.cpp
 msgid "End of slide show"
 msgstr ""
@@ -3842,6 +3963,10 @@ msgstr ""
 msgid "Endnote"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "Endnote Text"
+msgstr ""
+
 #: src/slide/view/PresentationDesign.cpp
 msgid "Ensure fit"
 msgstr ""
@@ -3851,6 +3976,11 @@ msgid "Ensure fit scales the content down so all of it stays on the slide; Maxim
 msgstr ""
 
 #: src/ui/Uia.cpp
+msgid "Enter"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
 msgid "Enter"
 msgstr ""
 
@@ -3907,6 +4037,11 @@ msgid "Errors"
 msgstr ""
 
 #: src/ui/Uia.cpp
+msgid "Esc"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
 msgid "Esc"
 msgstr ""
 
@@ -3978,6 +4113,10 @@ msgstr ""
 msgid "Exit full screen\tF11"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Explanatory text"
+msgstr ""
+
 #: src/ui/FilePage.cpp
 msgid "Export"
 msgstr ""
@@ -4000,6 +4139,10 @@ msgstr ""
 
 #: src/pdf/PdfView.cpp src/sheet/view/WorkbookPrint.cpp src/slide/view/PresentationPrint.cpp src/word/DocPdf.cpp
 msgid "Exported 1 page to {0}"
+msgstr ""
+
+#: src/slide/view/PictureExport.cpp
+msgid "Exported 1 slide to the folder {0}"
 msgstr ""
 
 #: src/slide/view/PictureExport.cpp
@@ -4179,6 +4322,11 @@ msgid "Files you open show up here."
 msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/PresentationDesign.cpp src/word/DocShapes.cpp
+msgid "Fill"
+msgstr ""
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "verb"
 msgid "Fill"
 msgstr ""
 
@@ -4442,7 +4590,7 @@ msgstr ""
 msgid "Fonts in this document aren't installed: {0}. Lines may break differently than in Word."
 msgstr ""
 
-#: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/slide/view/PresentationDesign.cpp src/word/DocHeaders.cpp src/word/DocRibbon.cpp
+#: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/slide/view/PresentationDesign.cpp src/word/DocFormat.cpp src/word/DocHeaders.cpp src/word/DocRibbon.cpp
 msgid "Footer"
 msgstr ""
 
@@ -4452,6 +4600,10 @@ msgstr ""
 
 #: src/doc/edit/Notes.cpp src/word/DocNotes.cpp
 msgid "Footnote"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Footnote Text"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -4598,6 +4750,10 @@ msgstr ""
 msgid "Formula"
 msgstr ""
 
+#: src/sheet/data/Rules.cpp
+msgid "Formula: ={0}"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp
 msgid "Formulas"
 msgstr ""
@@ -4710,7 +4866,12 @@ msgstr ""
 msgid "Function Library"
 msgstr ""
 
-#: src/sheet/view/WorkbookFormat.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "General"
+msgstr ""
+
+#: src/word/DocPage.cpp
+msgctxt "heading"
 msgid "General"
 msgstr ""
 
@@ -4740,6 +4901,10 @@ msgstr ""
 
 #: src/ui/ColorPicker.cpp
 msgid "Gold, Accent 4"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Good"
 msgstr ""
 
 #: src/sheet/data/Rules.cpp
@@ -4862,7 +5027,7 @@ msgstr ""
 msgid "Hanging indent: "
 msgstr ""
 
-#: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/word/DocHeaders.cpp src/word/DocRibbon.cpp
+#: src/doc/edit/HeaderFooter.cpp src/sheet/view/WorkbookPageSetup.cpp src/word/DocFormat.cpp src/word/DocHeaders.cpp src/word/DocRibbon.cpp
 msgid "Header"
 msgstr ""
 
@@ -4894,23 +5059,52 @@ msgstr ""
 msgid "Header row"
 msgstr ""
 
-#: src/word/DocFormat.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
 msgid "Heading 1"
 msgstr ""
 
-#: src/word/DocFormat.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
 msgid "Heading 2"
 msgstr ""
 
-#: src/word/DocFormat.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
 msgid "Heading 3"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
+msgid "Heading 4"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Heading 5"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Heading 6"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Heading 7"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Heading 8"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Heading 9"
 msgstr ""
 
 #: src/word/DocPanels.cpp
 msgid "Heading: "
 msgstr ""
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPanels.cpp
+#: src/word/DocPanels.cpp
+msgid "Headings"
+msgstr ""
+
+#: src/sheet/view/WorkbookPageSetup.cpp
+msgctxt "row and column"
 msgid "Headings"
 msgstr ""
 
@@ -5046,6 +5240,11 @@ msgstr ""
 msgid "Home"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Home"
+msgstr ""
+
 #: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/slide/edit/TimingOps.cpp src/word/DocShapes.cpp
 msgid "Horizontal"
 msgstr ""
@@ -5086,7 +5285,11 @@ msgstr ""
 msgid "How many values fall in each bin."
 msgstr ""
 
-#: src/slide/view/PresentationText.cpp src/slide/view/TextFormat.cpp
+#: src/pdf/Print.cpp
+msgid "How should pages fit on the paper?"
+msgstr ""
+
+#: src/slide/view/PresentationText.cpp src/slide/view/TextFormat.cpp src/word/DocFormat.cpp
 msgid "Hyperlink"
 msgstr ""
 
@@ -5282,11 +5485,20 @@ msgstr ""
 msgid "Ink drawings aren't shown yet."
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Input"
+msgstr ""
+
 #: src/sheet/view/WorkbookData.cpp
 msgid "Input message"
 msgstr ""
 
 #: src/doc/edit/Editor.cpp src/sheet/view/WorkbookReview.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/sheet/view/WorkbookSheetOps.cpp src/slide/edit/Edit.cpp src/slide/view/PresentationRibbon.cpp src/word/DocFormat.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocTable.cpp
+msgid "Insert"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
 msgid "Insert"
 msgstr ""
 
@@ -5646,6 +5858,18 @@ msgstr ""
 msgid "Inside borders"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "Intense Emphasis"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Intense Quote"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Intense Reference"
+msgstr ""
+
 #: src/slide/view/ModelDeck.cpp
 msgid "It couldn't be opened — {0}"
 msgstr ""
@@ -5782,7 +6006,12 @@ msgstr ""
 msgid "Last year"
 msgstr ""
 
-#: src/slide/edit/SlideOps.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/word/DocPage.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocShapes.cpp
+#: src/slide/edit/SlideOps.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/word/DocPage.cpp src/word/DocPictures.cpp src/word/DocShapes.cpp
+msgid "Layout"
+msgstr ""
+
+#: src/word/DocRibbon.cpp
+msgctxt "ribbon tab"
 msgid "Layout"
 msgstr ""
 
@@ -5803,6 +6032,11 @@ msgid "Leader: line ____"
 msgstr ""
 
 #: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookPageSetup.cpp src/ui/Uia.cpp src/word/DocPage.cpp src/word/DocPanels.cpp src/word/DocRibbon.cpp src/word/DocStyles.cpp src/word/DocTable.cpp
+msgid "Left"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
 msgid "Left"
 msgstr ""
 
@@ -5858,7 +6092,12 @@ msgstr ""
 msgid "Less than or equal to"
 msgstr ""
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/ui/EmptyState.h src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
+msgid "Letter"
+msgstr ""
+
+#: src/ui/EmptyState.h
+msgctxt "template"
 msgid "Letter"
 msgstr ""
 
@@ -5930,7 +6169,12 @@ msgstr ""
 msgid "Lighter 80%"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPage.cpp
+msgid "Line"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Line"
 msgstr ""
 
@@ -6014,6 +6258,10 @@ msgstr ""
 msgid "Link to previous"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Linked cell"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
 msgid "Links"
 msgstr ""
@@ -6028,6 +6276,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp
 msgid "List"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "List Paragraph"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -6494,6 +6746,10 @@ msgstr ""
 msgid "Negative numbers"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Neutral"
+msgstr ""
+
 #: src/sheet/view/WorkbookNames.cpp src/slide/view/PresentationComments.cpp src/ui/EmptyState.cpp src/ui/FilePage.cpp
 msgid "New"
 msgstr ""
@@ -6682,6 +6938,10 @@ msgstr ""
 msgid "No Outline"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "No Spacing"
+msgstr ""
+
 #: src/slide/edit/TimingOps.cpp
 msgid "No animations are selected."
 msgstr ""
@@ -6795,7 +7055,7 @@ msgid "No tab stops of its own: tabs go to the default stops, every {0}."
 msgstr ""
 
 #: src/doc/edit/Toc.cpp
-msgid "No table of contents entries found.\r"
+msgid "No table of contents entries found."
 msgstr ""
 
 #: src/word/DocPage.cpp
@@ -6808,6 +7068,15 @@ msgstr ""
 
 #: src/sheet/view/WorkbookPageSetup.cpp src/sheet/view/WorkbookRibbon.cpp src/word/DocPage.cpp
 msgid "Normal"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
+msgctxt "style"
+msgid "Normal"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Normal (Web)"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -6838,7 +7107,7 @@ msgstr ""
 msgid "Not saved yet"
 msgstr ""
 
-#: src/App.cpp src/pdf/NoteEditor.cpp src/pdf/PdfView.cpp src/sheet/view/WorkbookReview.cpp
+#: src/App.cpp src/pdf/NoteEditor.cpp src/pdf/PdfView.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookReview.cpp
 msgid "Note"
 msgstr ""
 
@@ -7142,7 +7411,17 @@ msgstr ""
 msgid "Out"
 msgstr ""
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+#: src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+msgid "Outline"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgctxt "border"
+msgid "Outline"
+msgstr ""
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "row groups"
 msgid "Outline"
 msgstr ""
 
@@ -7160,6 +7439,10 @@ msgstr ""
 
 #: src/sheet/edit/Edit.cpp
 msgid "Outlines have at most 7 levels."
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Output"
 msgstr ""
 
 #: src/sheet/view/WorkbookFormat.cpp src/word/DocTable.cpp
@@ -7312,6 +7595,10 @@ msgstr ""
 
 #: src/App.cpp src/word/DocPage.cpp
 msgid "Page setup…"
+msgstr ""
+
+#: src/pdf/Print.cpp
+msgid "Page sizing"
 msgstr ""
 
 #: src/word/DocPage.cpp
@@ -7510,6 +7797,10 @@ msgstr ""
 msgid "Pause"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Percent"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Percent Style"
 msgstr ""
@@ -7524,6 +7815,16 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp
 msgid "Period"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "PgDn"
+msgstr ""
+
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "PgUp"
 msgstr ""
 
 #: src/word/DocPictures.cpp
@@ -7640,6 +7941,10 @@ msgstr ""
 
 #: src/slide/edit/ShapeOps.cpp
 msgid "Placeholders can't be grouped."
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Plain Text"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
@@ -8024,6 +8329,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
 msgid "Quick Styles"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Quote"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
@@ -8518,6 +8827,11 @@ msgstr ""
 msgid "Right"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Right"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp src/word/DocTable.cpp
 msgid "Right border"
 msgstr ""
@@ -8747,7 +9061,7 @@ msgid "Save as… (Ctrl+Shift+S)"
 msgstr ""
 
 #: src/App.cpp
-msgid "Save changes to “"
+msgid "Save changes to “{0}”?"
 msgstr ""
 
 #: src/pdf/NoteEditor.cpp
@@ -8816,6 +9130,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookNames.cpp
 msgid "Scoped to this sheet"
+msgstr ""
+
+#: src/slide/view/PresentationText.cpp
+msgid "ScreenTip"
 msgstr ""
 
 #: src/ui/CommandSearch.cpp
@@ -9126,6 +9444,11 @@ msgstr ""
 msgid "Sheets can't be added, deleted, moved, renamed or hidden."
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Shift"
+msgstr ""
+
 #: src/sheet/view/WorkbookSheetOps.cpp
 msgid "Shift cells down\tCtrl++"
 msgstr ""
@@ -9394,6 +9717,11 @@ msgstr ""
 msgid "Space"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Space"
+msgstr ""
+
 #: src/word/DocPage.cpp src/word/DocStyles.cpp
 msgid "Space after"
 msgstr ""
@@ -9566,6 +9894,10 @@ msgstr ""
 msgid "Strikethrough"
 msgstr ""
 
+#: src/word/DocFormat.cpp
+msgid "Strong"
+msgstr ""
+
 #: src/sheet/view/WorkbookReview.cpp
 msgid "Structure"
 msgstr ""
@@ -9584,6 +9916,18 @@ msgstr ""
 
 #: src/doc/edit/Format.cpp src/sheet/view/WorkbookFormat.cpp src/slide/view/PresentationText.cpp src/slide/view/TextFormat.cpp src/word/DocFormat.cpp src/word/DocRibbon.cpp
 msgid "Subscript"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Subtitle"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Subtle Emphasis"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Subtle Reference"
 msgstr ""
 
 #: src/sheet/view/WorkbookPivots.cpp
@@ -9608,6 +9952,22 @@ msgstr ""
 
 #: src/slide/show/PresenterView.cpp
 msgid "Swap displays"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "TOC 1"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "TOC 2"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "TOC 3"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "TOC Heading"
 msgstr ""
 
 #: src/sheet/calc/FunctionHelp.cpp
@@ -9682,6 +10042,11 @@ msgstr ""
 msgid "Tab"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Tab"
+msgstr ""
+
 #: src/sheet/edit/Edit.cpp
 msgid "Tab Color"
 msgstr ""
@@ -9712,6 +10077,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp src/word/DocRibbon.cpp
 msgid "Table Design"
+msgstr ""
+
+#: src/word/DocFormat.cpp
+msgid "Table Grid"
 msgstr ""
 
 #: src/slide/view/PresentationRibbon.cpp src/word/DocRibbon.cpp
@@ -9930,10 +10299,6 @@ msgstr ""
 msgid "That height can't be set."
 msgstr ""
 
-#: src/slide/view/ObjectTool.cpp
-msgid "That isn't a audio file Featherweight can insert."
-msgstr ""
-
 #: src/doc/edit/Editor.cpp
 msgid "That isn't a border Word knows."
 msgstr ""
@@ -9996,6 +10361,10 @@ msgstr ""
 
 #: src/doc/edit/Pictures.cpp src/doc/edit/Shapes.cpp
 msgid "That isn't an angle."
+msgstr ""
+
+#: src/slide/view/ObjectTool.cpp
+msgid "That isn't an audio file Featherweight can insert."
 msgstr ""
 
 #: src/slide/edit/TextOps.cpp
@@ -12478,7 +12847,7 @@ msgstr ""
 msgid "Timing"
 msgstr ""
 
-#: src/sheet/view/WorkbookData.cpp
+#: src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookFormat.cpp src/word/DocFormat.cpp
 msgid "Title"
 msgstr ""
 
@@ -12598,7 +12967,7 @@ msgstr ""
 msgid "Top, bottom"
 msgstr ""
 
-#: src/sheet/view/WorkbookData.cpp
+#: src/sheet/view/WorkbookData.cpp src/sheet/view/WorkbookFormat.cpp
 msgid "Total"
 msgstr ""
 
@@ -12874,6 +13243,11 @@ msgstr ""
 msgid "Up"
 msgstr ""
 
+#: src/core/Lang.cpp
+msgctxt "key"
+msgid "Up"
+msgstr ""
+
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Up to one digit (1/4)"
 msgstr ""
@@ -13076,6 +13450,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookData.cpp src/ui/Banner.cpp
 msgid "Warning"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "Warning text"
 msgstr ""
 
 #: src/word/DocShapes.cpp
@@ -14106,6 +14484,10 @@ msgstr ""
 msgid "{0} hours ago"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "{0} in red"
+msgstr ""
+
 #: src/slide/view/PresentationView.cpp
 msgid "{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."
 msgstr ""
@@ -14254,6 +14636,10 @@ msgstr ""
 msgid "{0} – Section {1}"
 msgstr ""
 
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "{0}% - Accent{1}"
+msgstr ""
+
 #: src/word/DocRuler.cpp
 msgid "{0}: a click on the ruler sets one. Click here for another kind."
 msgstr ""
@@ -14286,6 +14672,10 @@ msgstr ""
 msgid "—"
 msgstr ""
 
+#: src/App.cpp
+msgid "“{0}” and its folder can’t be found."
+msgstr ""
+
 #: src/pdf/Document.cpp
 msgid "“{0}” couldn't be opened — it seems to be damaged or isn't a PDF."
 msgstr ""
@@ -14314,18 +14704,14 @@ msgstr ""
 msgid "“{0}” couldn't be read, or isn't a picture Featherweight adds."
 msgstr ""
 
+#: src/PasswordCard.cpp
+msgid "“{0}” is protected"
+msgstr ""
+
 #: src/pdf/Document.cpp
 msgid "“{0}” is too large to open (more than 4 GB)."
 msgstr ""
 
 #: src/pdf/Document.cpp
 msgid "“{0}” uses a kind of protection Featherweight doesn't support."
-msgstr ""
-
-#: src/App.cpp
-msgid "” and its folder can’t be found."
-msgstr ""
-
-#: src/PasswordCard.cpp
-msgid "” is protected"
 msgstr ""

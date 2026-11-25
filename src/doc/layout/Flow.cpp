@@ -234,6 +234,7 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
   splitPageBreakAndMark_ = doc.Settings().Compat(Name("splitPgBreakAndParaMark"));
+  suppressTop_ = doc.Settings().Compat(Name("suppressTopSpacing"));
   CountStories();
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
@@ -815,7 +816,10 @@ struct Flow {
       if (wrap) space = e.SpaceBeside(f.zones, f.y, estimate, ColumnLeft(), ColumnRight());
       text::Line line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
       float h = e.LineHeight(pt, line, f.geom.gridPitch);
-      if (wrap && h > estimate + kEpsilon) {
+      // Beside floats, the room found for the estimated height again for the line's own, taller or
+      // shorter: a 6 pt line whose float starts 7.55 pt below it fits above the float, as in Word,
+      // where 12 pt didn't (the UN report's figures, each 6 pt lower here).
+      if (wrap && std::abs(h - estimate) > kEpsilon) {
         text::LineSpace again = e.SpaceBeside(f.zones, f.y, h, ColumnLeft(), ColumnRight());
         if (again.left != space.left || again.right != space.right || again.top != space.top) {
           br.Restore(state);
@@ -825,6 +829,7 @@ struct Flow {
         }
       }
       estimate = h;
+      if (f.pageEmpty && placed.empty()) h = e.TopLineHeight(pt, h);  // w:suppressTopSpacing
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
       // A line with nothing but a page or column break goes on this page or column even when it's

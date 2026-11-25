@@ -34,7 +34,7 @@ void PasswordCard::Draw(Canvas& c, const RECT& vp, float u, const std::wstring& 
   c.FillEllipse(x + w / 2, cy + 18 * u, 22 * u, 22 * u, Alpha(p.accent, 0.14f));
   c.Icon(icon::Lock, RectF(x, cy, x + w, cy + 36 * u), p.accentText, 18 * u);
   cy += 50 * u;
-  c.Text(L"“" + title + T(L"” is protected"), RectF(x + 20 * u, cy, x + w - 20 * u, cy + 22 * u), p.text, 15 * u,
+  c.Text(Fmt(T(L"“{0}” is protected"), {title}), RectF(x + 20 * u, cy, x + w - 20 * u, cy + 22 * u), p.text, 15 * u,
          DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   cy += 24 * u;
   c.Text(T(L"Enter the password to open it."), RectF(x + 20 * u, cy, x + w - 20 * u, cy + 20 * u), p.textSecondary,

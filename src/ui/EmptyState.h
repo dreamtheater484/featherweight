@@ -34,7 +34,7 @@ class EmptyState {
   };
   // The built-in templates, in fw::doc::docx::Template's order (after None).
   static constexpr int kTemplateCount = 3;
-  static constexpr UiText kTemplates[kTemplateCount] = {N_(L"Letter"), L"CV", N_(L"Report")};
+  static constexpr UiText kTemplates[kTemplateCount] = {NC_(L"Letter", L"template"), L"CV", N_(L"Report")};
 
   EmptyState();
   // `templates`: the user's own (usertemplates::List). `showRecent`: Settings::showRecent.

@@ -172,6 +172,31 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "fwstrings: too many strings (%zu)\n", keys.size());
     return 1;
   }
+  std::vector<std::pair<std::string, std::vector<Entry>>> languages;  // (code, entries)
+  for (const std::string& po : pos) {
+    std::vector<Entry> entries;
+    if (!ReadPo(po, entries, error)) {
+      std::fprintf(stderr, "fwstrings: %s\n", error.c_str());
+      return 1;
+    }
+    std::string code = po;
+    std::replace(code.begin(), code.end(), '\\', '/');
+    code = code.substr(code.rfind('/') + 1);
+    languages.emplace_back(code.substr(0, code.find('.')), std::move(entries));
+  }
+  // The texts' order, the same in every language: by their French, which packs the four catalogs
+  // 1.4 KB smaller than the template's order (by English); untranslated ones by their English.
+  for (const auto& [code, entries] : languages) {
+    if (code != "fr") continue;
+    std::map<std::string, std::string> french;
+    for (const Entry& e : entries)
+      if (!e.fuzzy && !e.str.empty()) french[Key(e)] = e.str;
+    auto sortText = [&](const Entry& k) -> const std::string& {
+      auto it = french.find(Key(k));
+      return it == french.end() ? k.id : it->second;
+    };
+    std::stable_sort(keys.begin(), keys.end(), [&](const Entry& a, const Entry& b) { return sortText(a) < sortText(b); });
+  }
   // A seed under which no two keys share a hash.
   std::vector<uint32_t> hashes(keys.size());
   uint32_t seed = 0;
@@ -199,29 +224,21 @@ int main(int argc, char** argv) {
   rc += "LANG_KEYS RCDATA \"" + fwd(outDir) + "/lang_keys.bin\"\n";
   std::map<std::string, size_t> place;
   for (size_t i = 0; i < keys.size(); ++i) place[Key(keys[i])] = i;
-  for (const std::string& po : pos) {
-    std::vector<Entry> entries;
-    if (!ReadPo(po, entries, error)) {
-      std::fprintf(stderr, "fwstrings: %s\n", error.c_str());
-      return 1;
-    }
-    std::string code = fwd(po);
-    code = code.substr(code.rfind('/') + 1);
-    code = code.substr(0, code.find('.'));
+  for (const auto& [code, entries] : languages) {
     std::vector<std::string> texts(keys.size());
     size_t translated = 0;
     for (const Entry& e : entries) {
       auto it = place.find(Key(e));
       if (it == place.end() || e.fuzzy || e.str.empty()) continue;
-      texts[it->second] = e.str;
       ++translated;
+      if (e.str != e.id) texts[it->second] = e.str;  // the same as the English: T() returns that anyway
     }
     const std::vector<uint8_t> raw = catalog::WriteTexts(table, texts);
     size_t packedSize = 0;
     const int flags = static_cast<int>(tdefl_create_comp_flags_from_zip_params(10, -15, MZ_DEFAULT_STRATEGY));
     void* packed = tdefl_compress_mem_to_heap(raw.data(), raw.size(), &packedSize, flags);
     if (!packed) {
-      std::fprintf(stderr, "fwstrings: %s doesn't compress\n", po.c_str());
+      std::fprintf(stderr, "fwstrings: %s doesn't compress\n", code.c_str());
       return 1;
     }
     std::vector<uint8_t> out = {'F', 'W', 'L', 'Z'};

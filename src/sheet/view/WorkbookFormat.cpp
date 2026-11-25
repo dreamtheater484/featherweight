@@ -36,7 +36,7 @@ const UiText kStyles[] = {N_(L"Regular"), N_(L"Italic"), N_(L"Bold"), N_(L"Bold 
 const UiText kUnderlines[] = {N_(L"None"), N_(L"Single"), N_(L"Double"), N_(L"Single accounting"), N_(L"Double accounting")};
 const wchar_t* const kSizes[] = {L"8",  L"9",  L"10", L"11", L"12", L"14", L"16", L"18",
                                  L"20", L"22", L"24", L"26", L"28", L"36", L"48", L"72"};
-const UiText kBorderButtons[] = {N_(L"None"), N_(L"Outline"), N_(L"All"),    N_(L"Inside"),      N_(L"Top"),
+const UiText kBorderButtons[] = {N_(L"None"), NC_(L"Outline", L"border"), N_(L"All"),    N_(L"Inside"),      N_(L"Top"),
                                         N_(L"Bottom"), N_(L"Left"),   N_(L"Right"), N_(L"Diagonal up"), N_(L"Diagonal down")};
 const UiText kDirections[] = {N_(L"Context"), N_(L"Left to right"), N_(L"Right to left")};  // readingOrder 0, 1, 2
 
@@ -422,10 +422,17 @@ void WorkbookView::FormatPanel::Place() {
   float y = body_.top + 8 * u;
   labels_.clear();
   sampleRc_ = {};
-  // Tabs along the top.
-  const float tw = (right - left - gap * static_cast<float>(kPages - 1)) / static_cast<float>(kPages);
-  for (int i = 0; i < kPages; ++i) tabs_[i].rc = RectF(left + static_cast<float>(i) * (tw + gap), y, left + static_cast<float>(i) * (tw + gap) + tw, y + 28 * u);
-  y += 40 * u;
+  // Tabs along the top: one row, or two of three when a name doesn't fit ("Ausrichtung").
+  float widest = 0;
+  for (const PanelButton& t : tabs_) widest = std::max(widest, Canvas().MeasureText(t.text, t.textSize * u));
+  const float oneRow = (right - left - gap * static_cast<float>(kPages - 1)) / static_cast<float>(kPages);
+  const int perRow = widest + 10 * u > oneRow ? kPages / 2 : kPages;
+  const float tw = (right - left - gap * static_cast<float>(perRow - 1)) / static_cast<float>(perRow);
+  for (int i = 0; i < kPages; ++i) {
+    const float x = left + static_cast<float>(i % perRow) * (tw + gap), top = y + static_cast<float>(i / perRow) * 34 * u;
+    tabs_[i].rc = RectF(x, top, x + tw, top + 28 * u);
+  }
+  y += 40 * u + static_cast<float>(kPages / perRow - 1) * 34 * u;
   // Every page's controls hidden; the page's rows show theirs.
   for (Control* c : std::initializer_list<Control*>{&category_, &decimals_, &thousands_, &negative_, &types_, &code_,
                                                     &horizontal_, &vertical_, &indent_, &rotation_, &wrap_, &shrink_,
@@ -556,7 +563,8 @@ void WorkbookView::FormatPanel::SyncNumber() {
     FormatChoice c = choice_;
     if (c.category != FormatCategory::Number && c.category != FormatCategory::Currency) c.category = FormatCategory::Number;
     c.negative = i;
-    negative_.items.push_back(Sample(FormatCode(c, loc), -1234.1) + (i & 1 ? L" in red" : L""));
+    const std::wstring sample = Sample(FormatCode(c, loc), -1234.1);
+    negative_.items.push_back(i & 1 ? Fmt(T(L"{0} in red"), {sample}) : sample);
   }
   negative_.selected = choice_.negative;
   // Dates and times by their sample, fractions by name.
@@ -943,6 +951,28 @@ std::vector<BuiltinStyle> MakeStyles() {
 const std::vector<BuiltinStyle>& Gallery() {
   static const std::vector<BuiltinStyle> styles = MakeStyles();
   return styles;
+}
+
+// A built-in cell style's name as the gallery shows it: in the interface's language, as Excel's are.
+// The workbook keeps the English name (Excel's own files do too).
+std::wstring ShownCellStyle(const std::wstring& name) {
+  static constexpr UiText kNames[] = {
+      N_(L"Good"),         N_(L"Bad"),          N_(L"Neutral"),  N_(L"Calculation"),
+      N_(L"Check cell"),  N_(L"Explanatory text"), N_(L"Input"),    N_(L"Linked cell"), N_(L"Note"),
+      N_(L"Output"),      N_(L"Warning text"), N_(L"Title"),        N_(L"Heading 1"), N_(L"Heading 2"),
+      N_(L"Heading 3"),   N_(L"Heading 4"),    N_(L"Total"),        N_(L"Comma"),    N_(L"Comma [0]"),
+      N_(L"Currency"),    N_(L"Currency [0]"), N_(L"Percent")};
+  if (name == L"Normal") return T(L"Normal", L"style");  // not the view: Standard in German
+  for (const UiText& n : kNames)
+    if (name == n.English()) return std::wstring(n);
+  // "Accent3" and "40% - Accent3".
+  const size_t at = name.find(L"Accent");
+  if (at != std::wstring::npos && at + 7 == name.size()) {
+    const std::wstring digit = name.substr(at + 6);
+    if (at == 0) return Fmt(T(L"Accent{0}"), {digit});
+    if (at == 6 && name.compare(2, 4, L"% - ") == 0) return Fmt(T(L"{0}% - Accent{1}"), {name.substr(0, 2), digit});
+  }
+  return name;
 }
 
 Color ThemeColor(int theme, double tint) {
@@ -1384,7 +1414,7 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       t.text = T(L"Styles");
       t.fitText = true;
       t.tooltip = T(L"Cell styles");
-      for (const BuiltinStyle& s : Gallery()) t.choices.push_back(s.name);
+      for (const BuiltinStyle& s : Gallery()) t.choices.push_back(ShownCellStyle(s.name));
       t.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
       break;
     case CmdNumberFormatBox: {
