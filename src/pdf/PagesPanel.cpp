@@ -207,7 +207,7 @@ void PdfView::PagesPanel::Draw(Canvas& c) {
     if (cell.label.bottom < g.top) continue;
     if (cell.box.top > g.bottom) break;
     // The page fitted in its box, as the tab shows it (with the view's rotation), on the label.
-    float pw = (*sizes)[i].w, ph = (*sizes)[i].h;
+    float pw = static_cast<float>((*sizes)[i].w), ph = static_cast<float>((*sizes)[i].h);
     if (v_.ViewRotation() % 2) std::swap(pw, ph);
     const float k = std::min(Width(cell.box) / std::max(1.0f, pw), Height(cell.box) / std::max(1.0f, ph));
     const float w = std::round(pw * k), h = std::round(ph * k);

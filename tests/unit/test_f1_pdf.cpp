@@ -6,6 +6,7 @@
 
 #include <fpdf_edit.h>
 #include <fpdf_save.h>
+#include <fpdf_signature.h>
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
@@ -16,6 +17,8 @@
 #include <vector>
 
 #include "pdf/ocr/Ocr.h"
+#include "pdf/sign/PdfObjects.h"
+#include "pdf/sign/Sign.h"
 #include "pdf/ocr/TextLayer.h"
 #include "pdf/tools/PageOps.h"
 
@@ -256,4 +259,159 @@ TEST(F1PdfOcrWritesFindableText) {
   CHECK(!pdfocr::NeedsText(again));
   FPDF_ClosePage(again);
   FPDF_CloseDocument(doc);
+}
+
+// ---- Certificate signatures (PAdES B-B through CNG) and the object reader under them
+
+namespace {
+
+std::string ReadAll(const std::string& path) {
+  std::string out;
+  FILE* f = nullptr;
+  if (fopen_s(&f, path.c_str(), "rb") == 0 && f) {
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    fclose(f);
+  }
+  return out;
+}
+
+const CERT_CONTEXT* TestSigner() {
+  std::string dir = FW_F1PDF_TESTDATA;
+  return pdfsign::LoadPfx(ReadAll(dir + "/signing/test-signer.pfx"), L"featherweight");
+}
+
+struct SigInfo {
+  int count = 0;
+  pdfsign::Verdict verdict;
+};
+
+// What a reader finds: PDFium's signature objects, checked against the bytes.
+SigInfo Check(const std::string& bytes, int index = 0) {
+  SigInfo info;
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(bytes.data(), bytes.size(), nullptr);
+  if (!doc) return info;
+  info.count = FPDF_GetSignatureCount(doc);
+  if (FPDF_SIGNATURE sig = FPDF_GetSignatureObject(doc, index)) {
+    std::vector<uint8_t> contents(FPDFSignatureObj_GetContents(sig, nullptr, 0));
+    FPDFSignatureObj_GetContents(sig, contents.data(), static_cast<unsigned long>(contents.size()));
+    std::vector<int> range(FPDFSignatureObj_GetByteRange(sig, nullptr, 0));
+    FPDFSignatureObj_GetByteRange(sig, range.data(), static_cast<unsigned long>(range.size()));
+    info.verdict = pdfsign::Verify(bytes, range, contents);
+  }
+  FPDF_CloseDocument(doc);
+  return info;
+}
+
+// A PDF with its objects in an object stream and a cross-reference stream, as PDF 1.5 writers make
+// them (not compressed, so it can be written here).
+std::string XrefStreamPdf() {
+  const std::string o1 = "<</Type /Catalog /Pages 2 0 R>>", o2 = "<</Type /Pages /Kids [3 0 R] /Count 1>>",
+                    o3 = "<</Type /Page /Parent 2 0 R /MediaBox [0 0 300 300]>>";
+  const std::string head = "1 0 2 " + std::to_string(o1.size() + 1) + " 3 " + std::to_string(o1.size() + o2.size() + 2) + " ";
+  const std::string body = o1 + " " + o2 + " " + o3;
+  std::string pdf = "%PDF-1.5\n%\xE2\xE3\xCF\xD3\n";
+  const size_t objStm = pdf.size();
+  pdf += "4 0 obj\n<</Type /ObjStm /N 3 /First " + std::to_string(head.size()) + " /Length " +
+         std::to_string(head.size() + body.size()) + ">>\nstream\n" + head + body + "\nendstream\nendobj\n";
+  const size_t xref = pdf.size();
+  std::string rows;
+  auto row = [&](int type, size_t a, int b) {
+    rows += static_cast<char>(type);
+    rows += static_cast<char>((a >> 8) & 0xFF);
+    rows += static_cast<char>(a & 0xFF);
+    rows += static_cast<char>(b);
+  };
+  row(0, 0, 0);
+  row(2, 4, 0);
+  row(2, 4, 1);
+  row(2, 4, 2);
+  row(1, objStm, 0);
+  row(1, xref, 0);
+  pdf += "5 0 obj\n<</Type /XRef /Size 6 /W [1 2 1] /Root 1 0 R /Length " + std::to_string(rows.size()) +
+         ">>\nstream\n" + rows + "\nendstream\nendobj\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return pdf;
+}
+
+}  // namespace
+
+TEST(F1PdfObjectReaderFollowsXrefStreams) {
+  InitPdfium();
+  const std::string pdf = XrefStreamPdf();
+  pdfobj::File f;
+  CHECK(f.Open(pdf));
+  CHECK(f.LastXrefIsStream());
+  CHECK_EQ(f.Size(), 6);
+  CHECK_EQ(f.FirstPage(), 3);
+  pdfobj::Obj page;
+  CHECK(f.Get(3, page));
+  CHECK(page.Get("MediaBox") && page.Get("MediaBox")->items.size() == 4);
+  // Written back as it was read.
+  pdfobj::Obj catalog;
+  CHECK(f.Get(1, catalog));
+  CHECK_EQ(pdfobj::Write(catalog), std::string("<</Type /Catalog/Pages 2 0 R>>"));
+  size_t at = 0;
+  pdfobj::Obj o;
+  const std::string sample = R"x(<</A [1 2.5 (a\)b) <0aF> /N#20x true null 7 0 R]>>)x";
+  CHECK(pdfobj::ParseObject(sample, at, o));
+  CHECK_EQ(pdfobj::Write(o), sample);
+  CHECK(!f.Open("%PDF-1.4 nothing else in here at all, no xref"));
+  // PDFium reads it too.
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(pdf.data(), pdf.size(), nullptr);
+  CHECK(doc != nullptr);
+  CHECK_EQ(FPDF_GetPageCount(doc), 1);
+  FPDF_CloseDocument(doc);
+}
+
+TEST(F1PdfSignsAndCatchesChanges) {
+  InitPdfium();
+  const CERT_CONTEXT* cert = TestSigner();
+  CHECK(cert != nullptr);
+  if (!cert) return;
+  FPDF_DOCUMENT doc = MakeDoc(2);
+  std::string bytes;
+  CHECK(pdftools::SaveBytes(doc, false, bytes));
+  FPDF_CloseDocument(doc);
+
+  pdfsign::Details d;
+  d.name = L"Featherweight Test Signer";
+  std::string signedPdf;
+  CHECK(pdfsign::SignPdf(bytes, cert, d, signedPdf) == pdfsign::Error::None);
+  CHECK(signedPdf.compare(0, bytes.size(), bytes) == 0);  // an update after the file, which stays as it was
+  SigInfo info = Check(signedPdf);
+  CHECK_EQ(info.count, 1);
+  // Intact; the test certificate is its own issuer, so Windows doesn't trust it.
+  CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
+  CHECK(info.verdict.signer == L"Featherweight Test Signer");
+
+  // A byte changed inside what was signed: invalid.
+  std::string tampered = signedPdf;
+  const size_t mediaBox = tampered.find("/MediaBox");
+  CHECK(mediaBox != std::string::npos);
+  tampered[mediaBox + 12] = tampered[mediaBox + 12] == '1' ? '2' : '1';
+  CHECK(Check(tampered).verdict.kind == pdfsign::Verdict::Invalid);
+
+  // A change saved after signing (PDFium's incremental update): changed after signing.
+  FPDF_DOCUMENT again = FPDF_LoadMemDocument64(signedPdf.data(), signedPdf.size(), nullptr);
+  CHECK(pdftools::Rotate(again, {0}, 1));
+  std::string changed;
+  CHECK(pdftools::SaveBytes(again, true, changed));
+  FPDF_CloseDocument(again);
+  CHECK(changed.size() > signedPdf.size() && changed.compare(0, signedPdf.size(), signedPdf) == 0);
+  CHECK(Check(changed).verdict.kind == pdfsign::Verdict::Changed);
+
+  // Signing again adds a second signature after the first; a file with a cross-reference stream
+  // gets one too.
+  std::string twice;
+  CHECK(pdfsign::SignPdf(signedPdf, cert, d, twice) == pdfsign::Error::None);
+  CHECK_EQ(Check(twice).count, 2);
+  CHECK(Check(twice, 1).verdict.kind == pdfsign::Verdict::Untrusted);
+  CHECK(Check(twice, 0).verdict.kind == pdfsign::Verdict::Changed);
+  std::string streamSigned;
+  CHECK(pdfsign::SignPdf(XrefStreamPdf(), cert, d, streamSigned) == pdfsign::Error::None);
+  info = Check(streamSigned);
+  CHECK_EQ(info.count, 1);
+  CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
+  CertFreeCertificateContext(cert);
 }

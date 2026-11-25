@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <wincrypt.h>
+
 #include <map>
 #include <memory>
 #include <string>
@@ -149,6 +151,19 @@ class PdfView : public PagedView, public DocumentHost {
   // The same, finished before it returns (the screen tests' pdftool:ocr). Returns the pages read.
   int OcrNow(const std::vector<int>& pages);
 
+  // ---- Signing (F1, f1-pdf: PdfSign.cpp) ----
+  // Checks every signature against the file and says what it found (`always`: also when unsigned).
+  void CheckSignatures(bool always);
+  // Why this PDF can't be signed (XFA, protected), or empty.
+  std::wstring SigningBlocked() const;
+  // Picks a certificate from the Windows store and where the signed PDF goes, then signs.
+  bool SignWithCertificate();
+  // Signs with `cert` and writes the signed PDF to `path`, which the tab then shows.
+  bool SignWith(const CERT_CONTEXT* cert, const std::wstring& path);
+  // The screen tests: a PFX loaded in memory, never into a certificate store.
+  bool SignWithPfxForTesting(const std::wstring& pfx, const std::wstring& password, const std::wstring& out);
+  void FillMenu(int which, HMENU menu) override;
+
   // The thumbnail for the Pages panel, asking for it when it isn't there yet.
   ID2D1Bitmap* Thumbnail(int page, int priority);
   int ViewRotation() const { return rotation_; }
@@ -272,7 +287,8 @@ class PdfView : public PagedView, public DocumentHost {
   void EndPageChange(bool ok, int focusPage);
   // The document was replaced or its pages changed: everything the view holds of them goes.
   void ForgetPages();
-  bool ChoosePdfToSave(const std::wstring& suggested, const std::wstring& title, std::wstring& path);
+  bool ChoosePdfToSave(const std::wstring& suggested, const std::wstring& title, std::wstring& path,
+                       bool allowThisFile = false);
   void TogglePagesPanel();
   struct PageUndo {
     std::string bytes;  // the document before (or, for Redo, after) the change

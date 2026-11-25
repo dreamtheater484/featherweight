@@ -117,6 +117,9 @@ class Document {
   // page and the form start again, without running the document's open scripts. The view drops
   // what it holds of the pages first (RenderCache::Clear).
   bool Reload(std::string bytes, bool modified);
+  // Writes `bytes` as the document's file at `path` (safely, keeping the original in the backups
+  // as Save does) and opens them in its place: after signing, later saves add to the signed file.
+  bool WriteAndReload(const std::wstring& path, std::string bytes, std::wstring& error);
   // Before pages are added, removed, moved or rotated: every page handle closed.
   void CloseAllPages();
   // After: the page sizes read again, and the document marked changed.
@@ -151,6 +154,7 @@ class Document {
   LinkTarget DestToTarget(FPDF_DEST dest);
 
   void InitForm(bool openActions);
+  bool WriteFile(const std::wstring& path, const std::string& bytes, std::wstring& error);
 
   std::wstring path_;
   std::string memory_;  // the whole file, for files that fit comfortably in memory

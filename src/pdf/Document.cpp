@@ -518,6 +518,35 @@ bool Document::Reload(std::string bytes, bool modified) {
   return true;
 }
 
+bool Document::WriteFile(const std::wstring& path, const std::string& bytes, std::wstring& error) {
+  const bool samePath = fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_));
+  FileSession::SaveJob job;
+  job.target = path;
+  job.name = fw::FileNameOf(path);
+  job.backups = FileSession::Config().backups;
+  job.opened = path_;
+  const bool exists = util::FileExists(path);
+  job.keepOriginal = samePath && exists && !backedUp_;
+  job.keepExisting = !samePath && exists;
+  const fw::pkg::SaveResult r = FileSession::WriteSave(job, std::vector<uint8_t>(bytes.begin(), bytes.end()), nullptr);
+  if (!r.Ok()) {
+    error = fw::Utf8ToWide(r.message);
+    return false;
+  }
+  backedUp_ = true;  // the original is kept, or this is our own file: later saves replace what we wrote
+  path_ = path;
+  return true;
+}
+
+bool Document::WriteAndReload(const std::wstring& path, std::string bytes, std::wstring& error) {
+  if (!WriteFile(path, bytes, error)) return false;
+  if (!Reload(std::move(bytes), false)) {
+    error = L"The file was saved, but it couldn't be opened again.";
+    return false;
+  }
+  return true;
+}
+
 bool Document::Save(const std::wstring& path, std::wstring& error) {
   if (form_) FORM_ForceToKillFocus(form_);
   const bool samePath = fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_));
@@ -529,23 +558,8 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
       error = L"The file couldn't be saved: the PDF couldn't be written.";
       return false;
     }
-    FileSession::SaveJob job;
-    job.target = path;
-    job.name = fw::FileNameOf(path);
-    job.backups = FileSession::Config().backups;
-    job.opened = path_;
-    const bool exists = util::FileExists(path);
-    job.keepOriginal = samePath && exists && !backedUp_;
-    job.keepExisting = !samePath && exists;
-    const fw::pkg::SaveResult r =
-        FileSession::WriteSave(job, std::vector<uint8_t>(bytes.begin(), bytes.end()), nullptr);
-    if (!r.Ok()) {
-      error = fw::Utf8ToWide(r.message);
-      return false;
-    }
-    backedUp_ = true;  // the original is kept, or this is our own file: later saves replace what we wrote
+    if (!WriteFile(path, bytes, error)) return false;
     if (!copied && modified_) savedEdits_ = true;  // memory_ is no longer what the document is
-    path_ = path;
     modified_ = false;
     return true;
   }

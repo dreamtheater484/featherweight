@@ -334,7 +334,8 @@ bool PdfView::InsertFiles(const std::vector<std::wstring>& paths, int at) {
   return true;
 }
 
-bool PdfView::ChoosePdfToSave(const std::wstring& suggested, const std::wstring& title, std::wstring& path) {
+bool PdfView::ChoosePdfToSave(const std::wstring& suggested, const std::wstring& title, std::wstring& path,
+                              bool allowThisFile) {
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return false;
   const std::wstring pdfName = T(L"PDF document");
@@ -354,7 +355,7 @@ bool PdfView::ChoosePdfToSave(const std::wstring& suggested, const std::wstring&
   if (FAILED(dlg->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &file))) return false;
   path = file;
   CoTaskMemFree(file);
-  if (fw::EqualsNoCase(util::FullPath(path), util::FullPath(Path()))) {
+  if (!allowThisFile && fw::EqualsNoCase(util::FullPath(path), util::FullPath(Path()))) {
     host_.ViewMessage(BannerKind::Info, T(L"That's this PDF. Choose another name for the new file."));
     return false;
   }
@@ -503,6 +504,11 @@ bool PdfView::RunPageScript(const std::wstring& arg) {
   if (op == L"extract") return ExtractTo(ToolPages(), rest);
   if (op == L"split") return SplitTo(pdftools::SplitEvery(PageCount(), std::max(1, _wtoi(field(0).c_str()))), field(1));
   if (op == L"ocr") return OcrNow(rest.empty() ? std::vector<int>{} : ToolPages()) > 0;
+  if (op == L"sign") return SignWithPfxForTesting(field(0), field(1), field(2));
+  if (op == L"checksig") {
+    CheckSignatures(true);
+    return doc_->SignatureCount() > 0;
+  }
   if (op == L"undo") return UndoPages();
   if (op == L"redo") return RedoPages();
   return false;

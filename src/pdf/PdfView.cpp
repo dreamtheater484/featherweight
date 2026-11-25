@@ -86,6 +86,7 @@ OpenResult PdfView::Load(const std::wstring& password, std::wstring& error) {
   notes_.clear();
   noteScanNext_ = 0;
   Relayout(nullptr);
+  if (doc_->SignatureCount() > 0) CheckSignatures(false);  // a signed PDF says so, and whether it's intact
   return r;
 }
 
@@ -1366,6 +1367,7 @@ struct CommandName {
 };
 
 constexpr wchar_t kPagesGlyph = 0xE8A9;  // ViewAll: a grid of pages
+constexpr wchar_t kSignGlyph = 0xE70F;   // Edit: a pen
 
 constexpr CommandName kCommandNames[] = {
     {CmdGoToPage, L"Go to page", L"Ctrl+G"},
@@ -1469,6 +1471,22 @@ CommandState PdfView::QueryCommand(int cmd) {
       s = {tools, OcrRunning()};
       s.label = OcrRunning() ? T(L"Stop recognizing text") : cmd == CmdPdfOcr ? T(L"Recognize text") : T(L"Recognize text on this page");
       return s;
+    case CmdPdfSignMenu:
+      s = {Ready(), false};
+      s.label = T(L"Sign");
+      return s;
+    case CmdPdfDrawSignature:
+      s = {tools, false};
+      s.label = T(L"Draw signature…");
+      return s;
+    case CmdPdfSignCertificate:
+      s = {Ready() && SigningBlocked().empty(), false};
+      s.label = T(L"Sign with a certificate…");
+      return s;
+    case CmdPdfSignatures:
+      s = {Ready() && doc_->SignatureCount() > 0, false};
+      s.label = T(L"Check signatures");
+      return s;
     case CmdUndo:
     case CmdRedo:
       s = {cmd == CmdUndo ? CanUndoPages() : CanRedoPages(), false};
@@ -1496,7 +1514,8 @@ CommandState PdfView::QueryCommand(int cmd) {
 
 std::vector<int> PdfView::Commands() {
   std::vector<int> ids = {CmdPdfPagesPanel,   CmdPdfRotatePagesRight, CmdPdfRotatePagesLeft, CmdPdfDeletePages,
-                          CmdPdfInsertPages, CmdPdfExtractPages,     CmdPdfOcr,             CmdPdfOcrPage};
+                          CmdPdfInsertPages, CmdPdfExtractPages,     CmdPdfOcr,             CmdPdfOcrPage,
+                          CmdPdfDrawSignature, CmdPdfSignCertificate, CmdPdfSignatures};
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   return ids;
 }
@@ -1526,6 +1545,8 @@ bool PdfView::Execute(int cmd) {
     case CmdPdfSplitSelected: SplitPages(pdftools::SplitAt(PageCount(), ToolPages())); return true;
     case CmdPdfOcr: StartOcr({}); return true;
     case CmdPdfOcrPage: StartOcr({CurrentPage()}); return true;
+    case CmdPdfSignCertificate: SignWithCertificate(); return true;
+    case CmdPdfSignatures: CheckSignatures(true); return true;
     case CmdUndo: UndoPages(); return true;
     case CmdRedo: RedoPages(); return true;
     case CmdCopy: Copy(); return true;
@@ -1583,7 +1604,13 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   ocr.enabled = QueryCommand(CmdPdfOcr).enabled;
   ocr.priority = 3;
   ocr.menuLabel = T(L"Recognize text");
-  m.left = {save, saveAs, print, pages, ocr};
+  ToolItem sign = item(CmdPdfSignMenu, kSignGlyph);
+  sign.tooltip = T(L"Sign: draw a signature, or sign with a certificate");
+  sign.dropdown = true;
+  sign.width = 52;
+  sign.priority = 3;
+  sign.menuLabel = T(L"Sign");
+  m.left = {save, saveAs, print, pages, ocr, sign};
 
   m.pager = true;
   m.page = currentPage_;
