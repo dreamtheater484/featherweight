@@ -647,4 +647,9 @@ enum Cmd : int {
   CmdRecentPin,               // a recent file's menu: Pin to list / Unpin from list
   CmdRecentRemove,            // Remove from list
   CmdRecentLocation,          // Open file location
+  // F1, f1-trust: help and support, 4150-4169.
+  CmdHelp = 4150,             // Help: the website's help pages, in the browser (F1)
+  CmdKnownIssues,             // Help: the known issues, on the website
+  CmdReportProblem,           // Help: a new GitHub issue, prefilled with the versions
+  CmdThirdPartyNotices,       // Help: THIRD_PARTY_NOTICES.md (also linked from About)
 };

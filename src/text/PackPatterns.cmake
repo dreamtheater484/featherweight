@@ -3,7 +3,7 @@
 #   cmake -DHYPH_UTF8=<dir> -DOPENTAAL=<dir> -DOUT=<file> -P PackPatterns.cmake
 # Each set is its patterns followed by its exceptions (the lines without digits).
 
-set(_ids en-us en-gb nl de fr es it pt da sv nb fi)
+set(_ids en-us en-gb nl de fr es it pt da nb)
 set(_en-us "${HYPH_UTF8}/hyph-en-us.pat.txt" "${HYPH_UTF8}/hyph-en-us.hyp.txt")
 set(_en-gb "${HYPH_UTF8}/hyph-en-gb.pat.txt" "${HYPH_UTF8}/hyph-en-gb.hyp.txt")
 set(_nl "${OPENTAAL}/hyph_nl_NL.dic")  # ISO 8859-1
@@ -13,9 +13,7 @@ set(_es "${HYPH_UTF8}/hyph-es.pat.txt")
 set(_it "${HYPH_UTF8}/hyph-it.pat.txt")
 set(_pt "${HYPH_UTF8}/hyph-pt.pat.txt" "${HYPH_UTF8}/hyph-pt.hyp.txt")
 set(_da "${HYPH_UTF8}/hyph-da.pat.txt")
-set(_sv "${HYPH_UTF8}/hyph-sv.pat.txt")
 set(_nb "${HYPH_UTF8}/hyph-nb.pat.txt" "${HYPH_UTF8}/hyph-nb.hyp.txt")  # Bokmål and Nynorsk share these
-set(_fi "${HYPH_UTF8}/hyph-fi.pat.txt")
 
 get_filename_component(_work "${OUT}" DIRECTORY)
 string(REPEAT "0x..," 32 _row)

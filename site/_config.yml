@@ -1,0 +1,18 @@
+# The project's website (F1, f1-trust): help, known issues, privacy. Built by .github/workflows/pages.yml
+# with GitHub's own Jekyll action and published on GitHub Pages once Pages is on (Roy's step 4).
+title: Featherweight
+description: A light, fast PDF reader and editor for documents, workbooks and presentations, for Windows.
+url: https://dreamtheater484.github.io
+baseurl: /featherweight
+repo: https://github.com/dreamtheater484/featherweight
+permalink: pretty
+markdown: kramdown
+kramdown:
+  auto_ids: true
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+exclude:
+  - README.md

@@ -97,6 +97,7 @@ int App::Run(const AppOptions& opts) {
   } else if (!sandbox_) {
     StartupNotices();
     OfferRecovery();  // after the notices: unsaved work matters more
+    OfferCrashReport();  // f1-trust: after recovery, or once it's done
   }
   Layout();
   int show = settings_.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
@@ -1457,6 +1458,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
     }
   }
   switch (vk) {
+    case VK_F1:  // f1-trust: Help, as in Office (Ctrl+F1 and Alt+F1 are the ribbon's and the tab's)
+      if (!ctrl && !shift && !(mods & kModAlt)) return CmdHelp;
+      break;
     case VK_F11:
       if (!shift) return CmdFullScreen;
       break;  // Shift+F11 is the tab's (a workbook inserts a sheet)
@@ -1525,6 +1529,15 @@ void App::Execute(int cmd) {
       case kActRecover: RecoverDocuments(true); break;
       case kActDiscard: RecoverDocuments(false); break;
       case kActReload: ReloadActive(); break;
+      case kActCrashReport:  // f1-trust: the issue in the browser, and the dump to attach
+        if (crash_) {
+          util::OpenExternalLink(crash::IssueUrl(&*crash_, FW_VERSION_WSTRING));
+          crash::ShowInFolder(crashFolder_, crash_->dump);
+        }
+        break;
+      case kActCrashFolder:
+        if (crash_) crash::ShowInFolder(crashFolder_, crash_->dump);
+        break;
       default: break;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1658,6 +1671,11 @@ void App::Execute(int cmd) {
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
+    // f1-trust: help and support open in the user's browser, only when clicked.
+    case CmdHelp: util::OpenExternalLink(crash::HelpUrl()); break;
+    case CmdKnownIssues: util::OpenExternalLink(crash::KnownIssuesUrl()); break;
+    case CmdReportProblem: util::OpenExternalLink(crash::IssueUrl(nullptr, FW_VERSION_WSTRING)); break;
+    case CmdThirdPartyNotices: crash::ShowNotices(FW_VERSION_WSTRING); break;
     case CmdClearRecent:
       settings_.ClearRecent();
       settings_.Save();
@@ -1789,6 +1807,12 @@ bool App::FillWindowMenu(int which, HMENU m) {
     AppendItem(m, CmdCheckUpdates, L"Check for updates now");
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
+    HMENU helpMenu = CreatePopupMenu();  // f1-trust
+    AppendItem(helpMenu, CmdHelp, L"Help\tF1");
+    AppendItem(helpMenu, CmdKnownIssues, L"Known issues");
+    AppendItem(helpMenu, CmdReportProblem, L"Report a problem");
+    AppendItem(helpMenu, CmdThirdPartyNotices, L"Third-party notices");
+    AppendSubmenu(m, helpMenu, L"Help");
     AppendItem(m, CmdAbout, L"About Featherweight");
   } else if (which == CmdToolbarOverflow) {
     toolbar_.FillOverflowMenu(m);  // what doesn't fit a narrow window
@@ -2639,7 +2663,8 @@ void App::ShowAbout() {
   std::wstring content = L"Version " FW_VERSION_WSTRING L"\n\nA light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.\n\n"
                          L"PDF engine: PDFium (build " + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
                          L")\nMIT License © 2026 Roy Clerx\n\n"
-                         L"<a href=\"https://github.com/dreamtheater484/featherweight\">github.com/dreamtheater484/featherweight</a>";
+                         L"<a href=\"https://github.com/dreamtheater484/featherweight\">github.com/dreamtheater484/featherweight</a>"
+                         L"\n<a href=\"notices\">Third-party notices</a>";  // f1-trust
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
   cfg.hwndParent = hwnd_;
   cfg.hInstance = GetModuleHandleW(nullptr);
@@ -2650,7 +2675,10 @@ void App::ShowAbout() {
   cfg.pszMainInstruction = L"Featherweight";
   cfg.pszContent = content.c_str();
   cfg.pfCallback = [](HWND, UINT msg, WPARAM, LPARAM lp, LONG_PTR) -> HRESULT {
-    if (msg == TDN_HYPERLINK_CLICKED) util::OpenExternalLink(reinterpret_cast<const wchar_t*>(lp));
+    if (msg != TDN_HYPERLINK_CLICKED) return S_OK;
+    const wchar_t* href = reinterpret_cast<const wchar_t*>(lp);
+    if (wcscmp(href, L"notices") == 0) crash::ShowNotices(FW_VERSION_WSTRING);  // f1-trust
+    else util::OpenExternalLink(href);
     return S_OK;
   };
   HideTooltip();
