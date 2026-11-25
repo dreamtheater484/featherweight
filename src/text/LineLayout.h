@@ -153,6 +153,9 @@ struct Paragraph {
   // The paragraph mark's properties: an empty paragraph's height, and the last line's.
   const TextStyle* markStyle = nullptr;
   ParagraphFormat format;
+  // A list label at the start of text (its number and the tab or space after it): never broken, and
+  // the text after it starts on its line however little room is left, as in Word.
+  uint32_t label = 0;
 };
 
 enum class LineEnd : uint8_t { Wrap, LineBreak, PageBreak, ColumnBreak, ParagraphEnd };

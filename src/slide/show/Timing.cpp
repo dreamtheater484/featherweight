@@ -410,11 +410,12 @@ void ParseValue(pugi::xml_node val, std::string& out) {
   }
 }
 
-// x and y of a <p:by>, <p:from> or <p:to> point (in 1000ths of a percent for animScale).
+// x and y of a <p:by>, <p:from> or <p:to> point (in 1000ths of a percent for animScale), held within
+// ±10,000 as anim values and path points are: further out, a float can't hold them.
 bool ParsePoint(pugi::xml_node n, double out[2], double scale) {
   if (!n) return false;
-  out[0] = Number(Attr(n, "x"), 0) / scale;
-  out[1] = Number(Attr(n, "y"), 0) / scale;
+  out[0] = std::clamp(Number(Attr(n, "x"), 0) / scale, -1e4, 1e4);
+  out[1] = std::clamp(Number(Attr(n, "y"), 0) / scale, -1e4, 1e4);
   return true;
 }
 
@@ -698,13 +699,17 @@ class Compiler {
         break;
       }
       case Behavior::Rotate: {
-        double v;
-        b.hasBy = ParseDouble(Attr(node, "by"), v);
-        if (b.hasBy) b.by[0] = v / 60000;
-        b.hasFrom = ParseDouble(Attr(node, "from"), v);
-        if (b.hasFrom) b.from[0] = v / 60000;
-        b.hasTo = ParseDouble(Attr(node, "to"), v);
-        if (b.hasTo) b.to[0] = v / 60000;
+        // Degrees, held within the 1,000 turns Apply wraps a rotation at: a larger angle overflowed
+        // the float pose to infinity, and the wrap made that NaN (fuzz_timing crash-7d4b40c3).
+        auto angle = [&](std::string_view name, double& out) {
+          double v;
+          if (!ParseDouble(Attr(node, name), v)) return false;
+          out = std::clamp(v / 60000, -360000.0, 360000.0);
+          return true;
+        };
+        b.hasBy = angle("by", b.by[0]);
+        b.hasFrom = angle("from", b.from[0]);
+        b.hasTo = angle("to", b.to[0]);
         if (!b.hasBy && !b.hasTo) return;
         b.attr = Behavior::Rotation;
         break;

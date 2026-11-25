@@ -829,9 +829,14 @@ struct Flow {
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
       // A line with nothing but a page or column break goes on this page or column even when it's
       // full: Word never starts a page or column just for the break (the region-3 QAPP's
-      // attachment page).
+      // attachment page). Except a page break alone in the paragraph right after a table, on a page
+      // without a document grid: its line must end within the text area, or it goes to the next
+      // page, which the break then leaves blank (worldbank-sustainable's page 13; D5's held rule C).
+      // With a grid, Word keeps it (gojp-mhlw-form-b3).
       const bool breakOnly =
-          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line);
+          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line) &&
+          !(line.ending == text::LineEnd::PageBreak && space.top + h > f.bottom + kEpsilon && placed.empty() &&
+            f.paraLines == 0 && f.next > 0 && f.items[f.next - 1].kind == BlockKind::Table && f.geom.gridPitch <= 0);
       const float hang = e.Hang(pt, line, h);
       // Above footnotes, a paragraph's last line needs room for its space after too (measured on
       // the corpus: Word moves the line to the next page instead).
@@ -1188,8 +1193,15 @@ struct Flow {
           float start = f.rowCut.empty() ? 0 : f.rowCut[i];
           float limit = start + room - c.marginTop - c.marginBottom;
           float to = start;
-          for (const LineBox& l : c.content.lines)
-            if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          // A paragraph's last line fits only with the paragraph's space after (D5's held rule A:
+          // the short-form contract's "12. Charges" row moves on whole, as in Word).
+          const std::vector<LineBox>& ls = c.content.lines;
+          for (size_t k = 0; k < ls.size(); ++k) {
+            const LineBox& l = ls[k];
+            float need = l.top + l.height;
+            if ((k + 1 == ls.size() || ls[k + 1].para != l.para) && l.para != kNone) need += e.SpaceAfter(e.ParaOf(l.para));
+            if (l.top >= start - kEpsilon && need <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          }
           to = KeepTogether(c.content, start, to);
           cutTo[i] = to;
           if (to > start + kEpsilon) any = true;

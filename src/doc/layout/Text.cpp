@@ -649,6 +649,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   out.fw.markStyle = styles_.Intern(mark);
   out.fw.text = out.text;
   out.fw.runs = out.runs;
+  out.fw.label = out.prefix;
   out.fw.format = FormatOf(props);
   // A display equation (m:oMathPara) alone in its paragraph is placed by its own m:jc, centered
   // unless it says otherwise, whatever the paragraph's alignment, as Word shows it.

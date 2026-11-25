@@ -54,9 +54,13 @@ struct Options {
   std::vector<std::wstring> regions;  // formulas: other regions to try a workbook with mismatches in
   bool threads = false;              // formulas: one thread against four, every value compared (S4)
   bool idleThreads = false;          // bench-app: list the threads that woke while idle, and when
+  bool modules = false;              // bench-app: the DLLs loaded once launched and settled (F1, f1-gate)
+  std::string languages;             // bench-app: launch in each of these interface languages ("en,de"; F1)
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt
+  std::filesystem::path pfx;        // pdf-torture: certificate signatures with this PFX (in memory only; F1)
+  std::wstring pfxPassword;         // its password
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -117,6 +121,12 @@ int RunCfb(const Options& options);
 int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
+int RunPdfValid(const Options& options);  // pdf-valid: any PDF's structure, PDFium, fonts, signatures (F1)
+// pdf-valid's structure check alone (no PDFium): what's wrong with a PDF's bytes, empty when nothing is.
+std::vector<std::string> PdfStructureErrors(std::string_view data);
+int RunPdfTorture(const Options& options);  // pdf-torture: random page operations, saved and checked (F1)
+// FW_FILE_LOG_DIR: logs every file this process opens or looks for (FileLog.cpp, F1's legal row).
+void InstallFileLog();
 int RunSlides(const Options& options);
 int RunTiming(const Options& options);  // timing: transitions and animations per slide (P3, p3-anim)
 int RunBenchApp(const Options& options);
