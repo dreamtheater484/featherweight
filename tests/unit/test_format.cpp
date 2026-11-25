@@ -1,8 +1,12 @@
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "DocFixture.h"
+#include "doc/docx/Blank.h"
+#include "doc/docx/Docx.h"
 #include "doc/edit/Case.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/TreeEdit.h"
@@ -1469,4 +1473,34 @@ TEST(Styles_HighlightingStaysOnTheText) {
   edit::ApplyStyle(ed, {{paras[0], 0}, {paras[0], 0}}, "Normal");
   CHECK(Has(MainXml(*doc), "<w:highlight w:val=\"yellow\"/>"));
   CHECK(SaveAndReopen(*doc) != nullptr);
+}
+
+TEST(Styles_BlankGalleryReachesTitleAndShowsTheNextHeading) {
+  // RF7 (docs/friction-review.md): a new document's gallery lists Normal, No Spacing, Heading 1,
+  // Heading 2 and Title first, as Word's does, so Title is one click at 1366 px. Heading 3 joins
+  // once Heading 2 is used, and stays in the file's styles all along.
+  pkg::Status st;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(docx::BlankDocx()), pkg::Limits::Default(), st);
+  auto doc = package ? docx::Read(std::move(package), st) : nullptr;
+  CHECK(doc);
+  if (!doc) return;
+  auto names = [&] {
+    std::vector<std::string> out;
+    for (const auto& e : edit::GalleryStyles(*doc)) out.push_back(e.name);
+    return out;
+  };
+  auto has = [](const std::vector<std::string>& v, const char* name) { return std::find(v.begin(), v.end(), name) != v.end(); };
+  std::vector<std::string> before = names();
+  CHECK(before.size() >= 5);
+  if (before.size() < 5) return;
+  CHECK(before[0] == "Normal" && before[1] == "No Spacing" && before[2] == "Heading 1" && before[3] == "Heading 2" &&
+        before[4] == "Title");
+  CHECK(!has(before, "Heading 3") && doc->FindStyle("Heading3") != nullptr);
+  const uint32_t p = MainParas(*doc)[0];
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Heading 1");
+  CHECK(!has(names(), "Heading 3"));  // Heading 2 was shown already
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Heading 2");
+  CHECK(has(names(), "Heading 3"));
 }

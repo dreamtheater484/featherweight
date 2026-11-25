@@ -48,7 +48,7 @@ FontMeasure::Face& FontMeasure::Get(const Font& f, const Font& base) {
   if (SUCCEEDED(dw->GetGlyphIndices(cps, 95, glyphs)) &&
       SUCCEEDED(dw->GetGdiCompatibleGlyphMetrics(static_cast<float>(ppem), 1, nullptr, FALSE, glyphs, 95, gm, FALSE))) {
     for (int i = 0; i < 95; ++i)
-      if (glyphs[i]) out.ascii[i] = static_cast<int>(std::lround(gm[i].advanceWidth * ppem / out.upem));
+      if (glyphs[i]) out.ascii[i] = static_cast<int>(std::lround(gm[i].advanceWidth * ppem / out.upem * face->WidthScale()));
   }
   int digit = 0;
   for (wchar_t d = L'0'; d <= L'9'; ++d) digit = std::max(digit, out.ascii[d - 32]);
@@ -80,7 +80,7 @@ int FontMeasure::DigitAt(const Font& f, const Font& base, int dpi) {
     if (SUCCEEDED(dw->GetGlyphIndices(cps, 10, glyphs)) &&
         SUCCEEDED(dw->GetGdiCompatibleGlyphMetrics(static_cast<float>(ppem), 1, nullptr, FALSE, glyphs, 10, gm, FALSE)))
       for (int i = 0; i < 10; ++i)
-        if (glyphs[i]) widest = std::max(widest, static_cast<int>(std::lround(gm[i].advanceWidth * ppem / upem)));
+        if (glyphs[i]) widest = std::max(widest, static_cast<int>(std::lround(gm[i].advanceWidth * ppem / upem * face->WidthScale())));
   }
   return widest > 0 ? widest : static_cast<int>(std::lround(Of(f, base).digit * dpi / 96.0));
 }

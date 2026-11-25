@@ -2,10 +2,12 @@
 
 #include <dwrite_3.h>
 
+#include <cmath>
+#include <span>
 #include <string>
 #include <vector>
 
-#include "draw/CloudFonts.h"
+#include "draw/FontSubstitutes.h"
 #include "text/Fonts.h"
 #include "text/Hyphenation.h"
 #include "text/LineLayout.h"
@@ -612,38 +614,54 @@ TEST(Text_AFullFaceNameIsThatFace) {
   CHECK_EQ(fonts.Substitutions().size(), 1u);
 }
 
-TEST(Text_OfficeCloudFontsAreUsedAsWordUsesThem) {
-  // Word's cloud fonts (%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts) count as installed, under
-  // the family Word downloaded (a folder each), never in place of one the PC has. Another name
-  // their fonts carry ("Open Sans Light") is substituted, as Word does. On a PC without the
-  // folder, only the first checks apply.
-  CHECK(!draw::CloudFontsHave(L""));
-  CHECK(!draw::CloudFontsHave(L"Calibri"));  // the PC's own
-  CHECK(!draw::CloudFontsHave(L"Open Sans Light"));
-  if (!draw::CloudFontsHave(L"Open Sans")) return;
+TEST(Text_OfficeFontsGetMeasuredSubstitutes) {
+  // A family Office downloads for documents that ask for it (Aptos) is never read from Office's
+  // own folders (F1): Featherweight draws a Windows family instead, with the width scale and line
+  // height measured on Word's renders (draw/FontSubstitutes.h), and the banner lists it. A PC with
+  // Aptos installed as a font of its own draws it.
   Fonts fonts;
-  CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
-  CHECK(fonts.Substitutions().empty());
-  const Face* face = fonts.FaceFor(L"Open Sans", true, false);
-  CHECK(face != nullptr && face->Family() == L"Open Sans");
-  CHECK(fonts.Resolve(L"Open Sans Light") != L"Open Sans Light");
+  if (fonts.Installed(L"Aptos") || !fonts.Installed(L"Segoe UI")) return;
+  const std::span<const draw::FontSubstitute> subs = draw::BuiltInSubstitutes(L"aptos");
+  CHECK(!subs.empty());
+  if (subs.empty()) return;
+  CHECK(std::wstring(subs[0].family) == L"Segoe UI");
+  CHECK(fonts.Resolve(L"Aptos") == L"Segoe UI");
   CHECK_EQ(fonts.Substitutions().size(), 1u);
+  const Face* face = fonts.FaceFor(L"Aptos", false, false);
+  const Face* own = fonts.FaceFor(L"Segoe UI", false, false);
+  CHECK(face != nullptr && own != nullptr);
+  if (!face || !own) return;
+  CHECK(face->Family() == L"Segoe UI");
+  CHECK_NEAR(face->WidthScale(), subs[0].scale, 1e-6);
+  CHECK_NEAR(own->WidthScale(), 1.0, 1e-6);  // Segoe UI asked for by name stays as designed
+  CHECK_NEAR(face->Advance(L'n', 10), own->Advance(L'n', 10) * subs[0].scale, 1e-4);
+  const FontMetrics m = face->Metrics(10);
+  if (subs[0].height > 0) CHECK_NEAR(m.ascent + m.descent + m.lineGap, subs[0].height * 10, 1e-3);
+  CHECK(fonts.FaceFor(L"Aptos", true, false) != face);  // bold is a face of its own
+  CHECK(fonts.FaceFor(L"Aptos", false, false) == face);
 }
 
-TEST(Text_OfficeCloudFontsAreUsedAsPowerPointUsesThem) {
-  // PowerPoint finds every face in the cloud fonts by its own family name too: "Open Sans Light",
-  // in Open Sans's folder, is drawn as it is (worldbank's PDF). Never a family the PC has.
-  CHECK(!draw::CloudFontsHave(L"", true));
-  CHECK(!draw::CloudFontsHave(L"Calibri", true));
-  if (!draw::CloudFontsHave(L"Open Sans Light", true)) return;
-  CHECK(draw::CloudFontsHave(L"Open Sans", true));
+TEST(Text_SubstituteTuningReplacesTableRows) {
+  // fwtool's FW_SUBSTITUTES, for measuring: rows of its own before the table's.
+  CHECK(draw::BuiltInSubstitutes(L"Nonexistent Family F1").empty());
+  draw::SetSubstituteTuning(L"Nonexistent Family F1=Arial:0.9:1.25, Times New Roman");
+  const std::span<const draw::FontSubstitute> subs = draw::BuiltInSubstitutes(L"nonexistent family f1");
+  CHECK_EQ(subs.size(), 2u);
+  if (subs.size() != 2) return;
+  CHECK(std::wstring(subs[0].family) == L"Arial");
+  CHECK_NEAR(subs[0].scale, 0.9, 1e-6);
+  CHECK_NEAR(subs[0].height, 1.25, 1e-6);
+  CHECK(std::wstring(subs[1].family) == L"Times New Roman");
+  CHECK_NEAR(subs[1].scale, 1.0, 1e-6);
   Fonts fonts;
-  fonts.SetAllCloudFaces(true);
-  CHECK(fonts.Resolve(L"Open Sans Light") == L"Open Sans Light");
-  CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
-  CHECK(fonts.Substitutions().empty());
-  const Face* face = fonts.FaceFor(L"Open Sans Light", false, false);
-  CHECK(face != nullptr && face->Weight() == DWRITE_FONT_WEIGHT_LIGHT);  // the light face, not Open Sans made thin
+  if (!fonts.Installed(L"Arial")) return;
+  CHECK(fonts.Resolve(L"Nonexistent Family F1") == L"Arial");
+  const Face* face = fonts.FaceFor(L"Nonexistent Family F1", false, false);
+  CHECK(face != nullptr && std::abs(face->WidthScale() - 0.9f) < 1e-6f);
+  // The same when the caller's substitute picks the table's family (a presentation's does).
+  Fonts chosen([](std::wstring_view) { return std::wstring(L"Arial"); });
+  const Face* picked = chosen.FaceFor(L"Nonexistent Family F1", false, false);
+  CHECK(picked != nullptr && std::abs(picked->WidthScale() - 0.9f) < 1e-6f);
 }
 
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
