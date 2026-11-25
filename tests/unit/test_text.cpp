@@ -461,10 +461,16 @@ TEST(Text_JustifySqueezesSpaces) {
   CHECK_NEAR(squeezed[0].CaretX(3), 2 * a + a - a / 5, 0.01);  // each space gives a fifth
   std::wstring two = L"aa aa aa aa aa aabb cc";  // over by 2: more than a quarter of 5 spaces
   CHECK(Texts(two, Lay(two, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aabb cc"}));
-  std::wstring last = L"aa aa aa aa aa aab";  // the last line isn't justified, so it can't shrink
-  CHECK(Texts(last, Lay(last, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab"}));
   ParagraphFormat start;
   CHECK(Texts(one, Lay(one, s, width, start)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab cc"}));
+  // A justified paragraph's last line is squeezed too, its spaces shrinking as a wrapped line's
+  // (Word: worldbank-guidance's "...included in the bid." and "...valve head isolation").
+  std::wstring last = L"aa aa aa aa aa aab";
+  auto lastLines = Lay(last, s, width, f);
+  CHECK(Texts(last, lastLines) == (std::vector<std::wstring>{L"aa aa aa aa aa aab"}));
+  CHECK(lastLines[0].ending == LineEnd::ParagraphEnd);
+  CHECK_NEAR(lastLines[0].contentRight, width, 0.01);
+  CHECK(Texts(last, Lay(last, s, width, start)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab"}));
 
   // The first part of a hyphenated word is squeezed in the same way.
   f.hyphenation.automatic = true;
@@ -474,6 +480,35 @@ TEST(Text_JustifySqueezesSpaces) {
   CHECK(TextOf(hyph, justified[0]) == L"a a a a a hyphen");
   CHECK(justified[0].hyphenated);
   CHECK(TextOf(hyph, Lay(hyph, s, 16 * a, start)[0]) == L"a a a a a hy");
+}
+
+TEST(Text_ListLabelKeepsItsText) {
+  // A list label is never broken, and the text after it stays on its line however narrow the line
+  // (Word: worldbank-guidance's "33.4" and the "o" after it on one line in a cell narrower than both).
+  TextStyle s = Style();
+  const float a = Advance(s);
+  std::wstring text = L"33.4\to";
+  Paragraph labelled = Para(text, s);
+  labelled.label = 5;
+  auto lines = Layout(TestFonts(), labelled, 2 * a);
+  CHECK(lines.size() == 1 && lines[0].ending == LineEnd::ParagraphEnd);
+  // The same text, not a label, breaks inside "33.4".
+  CHECK(Layout(TestFonts(), Para(text, s), 2 * a).size() > 1);
+}
+
+TEST(Text_ItalicWithoutTheScriptUsesTheFamilysOtherFace) {
+  // Times New Roman Italic has no Arabic: Word draws italic Arabic in Times New Roman's regular face
+  // (who-lqsi's front page), not in .notdef boxes.
+  TextStyle regular = Style(L"Times New Roman", 11);
+  TextStyle italic = regular;
+  italic.complexItalic = true;
+  std::wstring text = L"\u0627\u0644\u062A\u0648\u0642\u064A\u0639 \u0639\u0644\u0649";
+  auto r = Lay(text, regular, 1000);
+  auto i = Lay(text, italic, 1000);
+  CHECK(!r.empty() && !i.empty());
+  if (r.empty() || i.empty()) return;
+  CHECK_NEAR(i[0].contentRight - i[0].contentLeft, r[0].contentRight - r[0].contentLeft, 0.01);
+  CHECK(!i[0].pieces.empty() && FamilyOf(i[0].pieces[0]) == L"Times New Roman");
 }
 
 TEST(Text_DistributedSpreadsEveryLine) {

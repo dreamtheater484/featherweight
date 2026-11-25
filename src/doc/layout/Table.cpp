@@ -280,29 +280,23 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       }
       rb.cells.push_back(std::move(c));
     }
-    // Horizontal borders set on the cells themselves (w:tcBorders) take room inside them: the
-    // text starts below the stronger of a cell's top border and the bottom border of the cell
-    // above, and the last row's ends above its bottom border. The table's and its style's
-    // borders don't (measured on the corpus: counting those too makes rows of style-bordered
-    // tables taller than Word's).
+    // Horizontal borders take room inside the cells, as resolved from the cell's, the table's and
+    // its style's: the text starts below the stronger of a cell's top border and the bottom border
+    // of the cell above, and the last row's ends above its bottom border. Rows then sit where
+    // Word's do (D5's held rule B: the short-form contract, worldbank-sustainable, EPA's acronym
+    // table); it needs a split row's room for space after (rule A, Flow.cpp).
     {
-      auto own = [&](Node tc, uint32_t side) -> float {
-        Node b = tc.Child(Name("tcPr")).Child(Name("tcBorders")).Child(side);
-        if (!b) return 0;
-        std::string_view v = b.AttrOr(Name("val"));
-        if (v.empty() || v == "nil" || v == "none") return 0;
-        return static_cast<float>(ParseInt(b.AttrOr(Name("sz"))).value_or(0)) / 8.0f;
-      };
+      auto room = [](const Border& b) { return b.Present() ? Pt(b.width) : 0.0f; };
       const RowBox* above = r == 0 ? nullptr : &t.rows[r - 1];
       const bool lastRow = r + 1 == rows.size();
       for (CellBox& c : rb.cells) {
         if (c.continued) continue;
-        float top = own(c.tc, Name("top"));
+        float top = room(c.props.top);
         if (above)
           for (const CellBox& a : above->cells)
-            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f) top = std::max(top, own(a.tc, Name("bottom")));
+            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f) top = std::max(top, room(a.props.bottom));
         c.marginTop += top;
-        if (lastRow) c.marginBottom += own(c.tc, Name("bottom"));
+        if (lastRow) c.marginBottom += room(c.props.bottom);
       }
     }
     rb.keepNext = keepAll && anyPara;

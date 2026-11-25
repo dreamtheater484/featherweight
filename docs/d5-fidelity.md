@@ -40,6 +40,8 @@ Measure with `fwtool compare --json F <FW_CORPUS>\reference`.
 
 ### Held rule groups
 
+**Landed in F1 (f1-word, 2026-11-25):** A, B and C, with C not on document-grid pages, after the list-label and last-line squeeze fixes in fwtext; see docs/f1-plan.md.
+
 Each group is right where it was checked, but doesn't gain pages yet. The code is small: `docs/d5-held-rules.patch` applies to d5-int 79b6f6c. It puts each rule behind an environment switch, and also has the rejected `FW_SECTDROP` (below). Measure a group with its switches set, then land it without them.
 
 - **A. A split row needs room for each cell's space after** (`FW_CUTAFTER`, in Flow.cpp's row cut).
