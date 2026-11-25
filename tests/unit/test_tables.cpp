@@ -699,6 +699,52 @@ TEST(Tables_MergeKeepsRangesInOrder) {
   }
 }
 
+TEST(Tables_DeletingColumnsOrRowsKeepsRangesInOrder) {
+  // f1-gate's torture (worldbank-sustainable .odt): a bookmark from a kept cell into deleted ones
+  // had its end moved to the start of the kept cell, before its start. Now an end goes to the end of
+  // the last paragraph before what goes, and a start to the start of the first one after it.
+  const std::string run = "<w:r><w:t xml:space=\"preserve\">";
+  auto mark = [&](std::string& tbl, const char* id, const char* startCell, const char* endCell) {
+    tbl.replace(tbl.find(run + startCell), 0, std::string("<w:bookmarkStart w:id=\"") + id + "\" w:name=\"b" + id + "\"/>");
+    tbl.insert(tbl.find("</w:r>", tbl.find(run + endCell)) + 6, std::string("<w:bookmarkEnd w:id=\"") + id + "\"/>");
+  };
+  auto inOrder = [](const std::string& xml, std::initializer_list<const char*> ids) {
+    for (const char* id : ids) {
+      const size_t start = xml.find("bookmarkStart w:id=\"" + std::string(id) + "\""),
+                   end = xml.find("bookmarkEnd w:id=\"" + std::string(id) + "\"");
+      if (start == std::string::npos || end == std::string::npos || end < start) return false;
+    }
+    return true;
+  };
+  for (int rows = 0; rows < 2; ++rows) {
+    std::string tbl = Table({{"a", "b", "c"}, {"d", "e", "f"}});
+    if (rows) {
+      mark(tbl, "5", "b", "d");  // from the first row into the last, which goes
+    } else {
+      mark(tbl, "5", "a", "b");  // from the left cell into the middle column, which goes
+      mark(tbl, "6", "e", "f");  // from the middle column into the right cell
+    }
+    Fixture f;
+    f.body = tbl + Para("");
+    auto doc = LoadOk(f);
+    REQUIRE(doc);
+    const std::string before = Written(*doc);
+    Editor ed(*doc);
+    if (rows) {
+      REQUIRE(ed.DeleteRows(P(CellPara(*doc, 1, 0), 0), P(CellPara(*doc, 1, 0), 0)));
+      CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("a,b,c"));
+      CHECK(inOrder(MainXml(*doc), {"5"}));
+    } else {
+      REQUIRE(ed.DeleteColumns(P(CellPara(*doc, 0, 1), 0), P(CellPara(*doc, 0, 1), 0)));
+      CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("a,c|d,f"));
+      CHECK(inOrder(MainXml(*doc), {"5", "6"}));
+    }
+    CHECK(Consistent(*doc, f) && GridOk(*doc));
+    CHECK(UndoesAndRedoes(ed, *doc, before));
+    CHECK(ChecksOut(*doc));
+  }
+}
+
 TEST(Tables_NestedTablesAreTheirOwn) {
   Fixture f;
   f.body = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/>"
