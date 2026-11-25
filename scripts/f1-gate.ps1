@@ -499,9 +499,14 @@ Check "fidelity.word" long "Word pages and lines against Word's renders (fwtool 
   if ($ok) { Passed "$($c.pages.match) of $($c.pages.documents) page counts, $($c.lines.percent) % of lines" $n }
   else { Failed "$($c.pages.match) of $($c.pages.documents) page counts (148), $($c.lines.percent) % of lines (96.8)" $n }
 }
+# slide-pages.ps1 writes <out>\decks\<deck>\<deck>.pdf, the deck named by its corpus path (up to 77
+# characters), and fwtool and pdf-compare read paths of at most 260 characters: so a short folder, and a
+# check that it's short enough (a longer one loses decks silently: 11 decks, 150 slides on a trial run).
+$maxSlideOut = 259 - "\decks\".Length - 77 - 1 - 77 - ".pdf".Length
 function Invoke-SlidePages([string]$id, $base) {
   Need-Build
-  $o = Join-Path $script:outDir $id
+  $o = Join-Path $script:outDir "sl-$($base.folder)"
+  if ($o.Length -gt $maxSlideOut) { return [ordered]@{ error = "the output folder's path is $($o.Length) characters; the decks' names need it at most $maxSlideOut (use a shorter -Out)" } }
   $code = Invoke-Script $id "scripts\slide-pages.ps1" @("-Reference", (Join-Path $Corpus "reference"), "-Folders", $base.folder,
     "-Featherweight", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-Through", $base.through, "-MinSlides", "0")
   $s = Read-Json (Join-Path $o "summary.json")
@@ -514,7 +519,8 @@ Check "fidelity.slides" long "Slides against PowerPoint's (scripts\slide-pages.p
     $base = $baselines[$k]
     $m = Invoke-SlidePages "fidelity.slides-$($base.folder)" $base
     if (-not $m) { $bad += "$($base.folder): no summary"; continue }
-    $n[$base.folder] = "$($m.passing) of $($m.slides) ($($m.percent) %); 4.0: $($base.passing) of $($base.slides)"
+    if ($m.error) { $bad += "$($base.folder): $($m.error)"; continue }
+    $n[$base.folder] = "$($m.passing) of $($m.slides) ($($m.percent) %); 4.0 without cloud fonts: $($base.passing) of $($base.slides)"
     # The same slides: no fewer passing. Another count of slides (decks added or dropped): no lower share.
     $okCount = if ($m.slides -eq $base.slides) { $m.passing -ge $base.passing } else { ($m.passing / [math]::Max(1, $m.slides)) -ge ($base.passing / $base.slides) }
     if (-not $okCount) { $bad += $base.folder }
@@ -529,7 +535,7 @@ Check "fidelity.print" long "Printed workbook pages against Excel's (scripts\she
     @{ key = "printXlsOds"; ref = (Join-Path $Corpus "reference"); folders = "xls,ods" })
   $n = [ordered]@{}; $bad = @()
   foreach ($set in $sets) {
-    $o = Join-Path $script:outDir "fidelity.print-$($set.key)"
+    $o = Join-Path $script:outDir "pr-$($set.key)"  # short: sheet-pages names files after the workbooks
     $code = Invoke-Script "fidelity.print" "scripts\sheet-pages.ps1" @("-Reference", $set.ref, "-Folders", $set.folders,
       "-Featherweight", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", $o, "-MinPages", "0")
     $s = Read-Json (Join-Path $o "summary.json")
