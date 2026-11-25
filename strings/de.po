@@ -3788,6 +3788,10 @@ msgid "Download failed."
 msgstr "Fehler beim Herunterladen."
 
 #: src/App.cpp
+msgid "Downloading the script engine…"
+msgstr "Die Skript-Engine wird heruntergeladen…"
+
+#: src/App.cpp
 msgid "Downloading the update…"
 msgstr "Update wird heruntergeladen…"
 
@@ -4294,6 +4298,10 @@ msgstr "Featherweight kann Änderungen an Zeilen und Spalten einer Tabelle noch 
 msgid "Featherweight can't write this document back exactly, so it's shown but can't be edited."
 msgstr "Featherweight kann dieses Dokument nicht originalgetreu zurückschreiben; es wird daher angezeigt, kann aber nicht bearbeitet werden."
 
+#: src/Updater.cpp
+msgid "Featherweight can’t change its own folder."
+msgstr "Featherweight kann seinen eigenen Ordner nicht ändern."
+
 #: src/App.cpp
 msgid "Featherweight changes its language the next time it starts."
 msgstr "Featherweight ändert die Sprache beim nächsten Start."
@@ -4377,6 +4385,14 @@ msgstr "Featherweight {0} ist verfügbar."
 #: src/App.cpp
 msgid "Featherweight {0} is ready. It will be used the next time you start Featherweight."
 msgstr "Featherweight {0} ist bereit und wird beim nächsten Start von Featherweight verwendet."
+
+#: src/App.cpp
+msgid "Featherweight {0} will be used from the next start. Automatic updates turn off, so it stays; you can turn them on again in Options."
+msgstr "Featherweight {0} wird ab dem nächsten Start verwendet. Automatische Updates werden ausgeschaltet, damit diese Version bleibt; Sie können sie in den Optionen wieder einschalten."
+
+#: src/App.cpp
+msgid "Featherweight {0} will be used the next time you start Featherweight."
+msgstr "Featherweight {0} wird beim nächsten Start von Featherweight verwendet."
 
 #: src/pdf/Document.cpp
 msgid "Featherweight's PDF engine (pdfium.dll) is missing. Please reinstall Featherweight."
@@ -4971,6 +4987,30 @@ msgstr "Allgemein"
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "General format"
 msgstr "Standardformat"
+
+#: src/App.cpp src/AppShell.cpp
+msgid "Get beta versions"
+msgstr "Betaversionen erhalten"
+
+#: src/AppShell.cpp
+msgid "Get the form script engine"
+msgstr "Skript-Engine für Formulare herunterladen"
+
+#: src/App.cpp
+msgid "Get the script engine"
+msgstr "Skript-Engine herunterladen"
+
+#: src/AppShell.cpp
+msgid "Go back to the previous version"
+msgstr "Zur vorherigen Version zurückkehren"
+
+#: src/App.cpp
+msgid "Go back to the previous version?"
+msgstr "Zur vorherigen Version zurückkehren?"
+
+#: src/App.cpp
+msgid "Go back to version {0}"
+msgstr "Zu Version {0} zurückkehren"
 
 #: src/sheet/view/WorkbookPanels.h src/sheet/view/WorkbookSheetOps.cpp src/word/DocPanels.cpp
 msgid "Go to"
@@ -10800,6 +10840,10 @@ msgstr "Die Fisher-Transformation."
 msgid "The ISO week number of a date."
 msgstr "Die ISO-Kalenderwoche eines Datums."
 
+#: src/App.cpp
+msgid "The Microsoft Store keeps Featherweight up to date."
+msgstr "Der Microsoft Store hält Featherweight auf dem neuesten Stand."
+
 #: src/pdf/Document.cpp
 msgid "The PDF couldn't be exported."
 msgstr "Die PDF-Datei konnte nicht exportiert werden."
@@ -11088,9 +11132,17 @@ msgstr "Die Doppelfakultät einer Zahl."
 msgid "The download didn’t pass verification."
 msgstr "Der Download hat die Überprüfung nicht bestanden."
 
+#: src/Updater.cpp
+msgid "The download isn’t the script engine."
+msgstr "Der Download ist nicht die Skript-Engine."
+
 #: src/slide/edit/TimingOps.cpp
 msgid "The duration must be between 0.01 and 59 seconds."
 msgstr "Die Dauer muss zwischen 0,01 und 59 Sekunden liegen."
+
+#: src/Updater.cpp
+msgid "The earlier version couldn’t be put back."
+msgstr "Die frühere Version konnte nicht wiederhergestellt werden."
 
 #: src/slide/edit/EditInternal.h
 msgid "The edit was interrupted."
@@ -11832,6 +11884,18 @@ msgstr "Der Bildschirm ist schwarz"
 msgid "The screen is white"
 msgstr "Der Bildschirm ist weiß"
 
+#: src/Updater.cpp
+msgid "The script engine couldn’t be installed."
+msgstr "Die Skript-Engine konnte nicht installiert werden."
+
+#: src/App.cpp
+msgid "The script engine is installed. Restart Featherweight to run the forms’ scripts."
+msgstr "Die Skript-Engine ist installiert. Starten Sie Featherweight neu, um die Skripte der Formulare auszuführen."
+
+#: src/App.cpp
+msgid "The script engine wasn’t installed: {0}"
+msgstr "Die Skript-Engine wurde nicht installiert: {0}"
+
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The secant of an angle in radians."
 msgstr "Der Sekans eines Winkels im Bogenmaß."
@@ -12111,6 +12175,14 @@ msgstr "Die Einheitsmatrix einer Größe."
 #: src/Updater.cpp
 msgid "The update couldn’t be installed."
 msgstr "Das Update konnte nicht installiert werden."
+
+#: src/Updater.cpp
+msgid "The update was refused: the program isn’t the release’s version."
+msgstr "Das Update wurde abgelehnt: Das Programm ist nicht die Version des Release."
+
+#: src/Updater.cpp
+msgid "The update was refused: {0}."
+msgstr "Das Update wurde abgelehnt: {0}."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The value FALSE."
@@ -12400,6 +12472,10 @@ msgstr "Es gibt nichts zum Wiederholen."
 msgid "There's nothing to undo."
 msgstr "Es gibt nichts zum Rückgängigmachen."
 
+#: src/Updater.cpp
+msgid "There’s no earlier version to go back to."
+msgstr "Es gibt keine frühere Version, zu der zurückgekehrt werden kann."
+
 #: src/doc/edit/Editor.cpp
 msgid "These cells can't be merged: their rows don't line up."
 msgstr "Diese Zellen können nicht verbunden werden: Ihre Zeilen sind nicht aneinander ausgerichtet."
@@ -12536,6 +12612,10 @@ msgstr "Dieses PDF ist signiert. Eine Änderung macht die Signatur ungültig: PD
 msgid "This PDF's structure couldn't be read well enough to sign it."
 msgstr "Die Struktur dieses PDF konnte nicht gut genug gelesen werden, um es zu signieren."
 
+#: src/App.cpp
+msgid "This PDF’s form has scripts (calculations and checks) that need Featherweight’s optional script engine, a 30 MB download from GitHub."
+msgstr "Das Formular dieses PDF enthält Skripte (Berechnungen und Prüfungen), die die optionale Skript-Engine von Featherweight benötigen, einen Download von 30 MB von GitHub."
+
 #: src/sheet/edit/Pivots.cpp src/sheet/pivot/PivotLayout.cpp
 msgid "This PivotTable uses features Featherweight keeps but doesn't refresh."
 msgstr "Diese PivotTable verwendet Features, die Featherweight beibehält, aber nicht aktualisiert."
@@ -12636,7 +12716,7 @@ msgstr "Dieser Kommentar kann nicht geändert werden."
 msgid "This comment is in PowerPoint's older format, which can't mark it resolved."
 msgstr "Dieser Kommentar liegt im älteren Format von PowerPoint vor, in dem er nicht als gelöst markiert werden kann."
 
-#: src/slide/view/PresentationComments.cpp
+#: src/slide/view/PresentationComments.cpp src/word/DocReview.cpp
 msgid "This comment is too long to edit here: reply to it instead."
 msgstr "Dieser Kommentar ist zu lang, um ihn hier zu bearbeiten: Antworten Sie stattdessen darauf."
 
@@ -13143,6 +13223,14 @@ msgstr "Die Optionen dieses Übergangs können in Featherweight nicht geändert 
 #: src/sheet/view/WorkbookData.cpp
 msgid "This value doesn't match the data validation restrictions defined for this cell."
 msgstr "Dieser Wert entspricht nicht den für diese Zelle definierten Einschränkungen für die Datenüberprüfung."
+
+#: src/Updater.cpp
+msgid "This version’s release has no script engine."
+msgstr "Das Release dieser Version enthält keine Skript-Engine."
+
+#: src/Updater.cpp
+msgid "This version’s release wasn’t found."
+msgstr "Das Release dieser Version wurde nicht gefunden."
 
 #: src/sheet/data/Rules.h
 msgid "This week"
@@ -13680,6 +13768,10 @@ msgstr "Inhaltsverzeichnis aktualisieren: nur Seitenzahlen"
 #: src/AppRibbon.cpp
 msgid "Updates"
 msgstr "Updates"
+
+#: src/App.cpp
+msgid "Updates are turned off by your organization."
+msgstr "Updates wurden von Ihrer Organisation deaktiviert."
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Use 1000 separator"
@@ -14617,6 +14709,22 @@ msgstr "die XML-Deklaration steht an der falschen Stelle"
 msgid "the XML declaration is malformed"
 msgstr "die XML-Deklaration ist fehlerhaft"
 
+#: src/Updater.cpp
+msgid "the download is signed by another publisher"
+msgstr "Der Download ist von einem anderen Herausgeber signiert"
+
+#: src/Updater.cpp
+msgid "the download is signed for another product"
+msgstr "Der Download ist für ein anderes Produkt signiert"
+
+#: src/Updater.cpp
+msgid "the download isn’t signed"
+msgstr "Der Download ist nicht signiert"
+
+#: src/Updater.cpp
+msgid "the download’s signature isn’t valid"
+msgstr "Die Signatur des Downloads ist ungültig"
+
 #: src/pdf/Document.cpp
 msgid "the file no longer exists."
 msgstr "die Datei ist nicht mehr vorhanden."
@@ -14692,6 +14800,10 @@ msgstr "{0} (Seite {1})"
 #: src/pdf/PdfPages.cpp
 msgid "{0} (pages {1})"
 msgstr "{0} (Seiten {1})"
+
+#: src/App.cpp
+msgid "{0} (set by your organization)"
+msgstr "{0} (von Ihrer Organisation festgelegt)"
 
 #: src/word/DocView.cpp
 msgid "{0} (shown in {1})"

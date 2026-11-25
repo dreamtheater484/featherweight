@@ -1,5 +1,5 @@
 # The languages' clipping check (F1, f1-lang; docs/f1-plan.md "Languages"), run by ctest:
-#   cmake -DEXE=<Featherweight.exe> -DFILES=<tests/office/generated> -DOUT=<folder> [-DLANG=qps] -P lang.cmake
+#   cmake -DEXE=<Featherweight.exe> -DFILES=<tests/office/generated> [-DPDF=<a .pdf>] -DOUT=<folder> [-DLANG=qps] -P lang.cmake
 #
 # Each editor at 1366 x 768 in a language (the pseudo-language by default: every text 40 % longer and
 # in brackets), with `clipcheck`: the window drawn with each ribbon tab and each File page section, and
@@ -31,6 +31,9 @@ endfunction()
 foreach(kind docx xlsx pptx)
   run(${kind}-${LANG} "wait:100;clipcheck" "${FILES}/simple.${kind}")
 endforeach()
+if(PDF)  # the PDF view: its toolbar, the Pages and Signature panels
+  run(pdf-${LANG} "wait:100;clipcheck" "${PDF}")
+endif()
 if(failed)
   message(FATAL_ERROR "clipped labels in${failed} (${OUT})")
 endif()
