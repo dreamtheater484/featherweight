@@ -647,6 +647,26 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     }
     ribbon_.Select(was);
     Layout();
+    // Each group's ↘ launcher that opens a side panel (Format Cells, Paragraph, Page Setup): the panel too.
+    if (TabContent* v = Active(); v && v->Ready()) {
+      RibbonModel model;
+      v->BuildRibbon(model, ToolbarContext{settings_.invert, search_.IsOpen(), fullscreen_});
+      std::vector<std::pair<std::wstring, int>> launchers;
+      for (const RibbonTab& t : model.tabs)
+        for (const RibbonGroup& g : t.groups)
+          if (g.launcher && std::none_of(launchers.begin(), launchers.end(), [&](const auto& l) { return l.second == g.launcher; }))
+            launchers.push_back({t.name + L" › " + g.name + L" ↘", g.launcher});
+      for (const auto& [where, cmd] : launchers) {
+        ViewShowPanel(nullptr);
+        Execute(cmd);
+        if (!ViewShownPanel()) continue;  // not a side panel
+        Layout();
+        look(where);
+      }
+      ViewShowPanel(nullptr);
+      ribbon_.Select(was);
+      Layout();
+    }
     if (ribbonShown_ && !presentation_) {
       OpenFilePage();
       for (int s = 0; s < ui::FilePage::kSectionCount; ++s) {

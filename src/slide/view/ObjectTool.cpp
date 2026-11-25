@@ -2361,7 +2361,7 @@ bool ObjectTool::InsertMediaFile(const std::wstring& file, bool video) {
   for (wchar_t& c : ext) c = static_cast<wchar_t>(std::towlower(c));
   if (!fw::slide::show::PlayableMediaExtension(ext)) {
     Refused(video ? T(L"That isn't a video Featherweight can insert.")
-                  : T(L"That isn't a audio file Featherweight can insert."));
+                  : T(L"That isn't an audio file Featherweight can insert."));
     return false;
   }
   std::string read;

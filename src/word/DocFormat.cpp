@@ -701,6 +701,25 @@ void DocFormat::InsertDateTime(size_t index) {
   done_(d);
 }
 
+std::wstring ShownStyleName(std::string_view name) {
+  const std::wstring shown = W(std::string_view(edit::DisplayName(name)));
+  // Word's built-in styles its galleries and style lists show, which Word shows in its own language.
+  static constexpr UiText kBuiltIn[] = {
+      N_(L"Normal"),           N_(L"No Spacing"),        N_(L"Heading 1"),         N_(L"Heading 2"),
+      N_(L"Heading 3"),        N_(L"Heading 4"),         N_(L"Heading 5"),         N_(L"Heading 6"),
+      N_(L"Heading 7"),        N_(L"Heading 8"),         N_(L"Heading 9"),         N_(L"Title"),
+      N_(L"Subtitle"),         N_(L"Subtle Emphasis"),   N_(L"Emphasis"),          N_(L"Intense Emphasis"),
+      N_(L"Strong"),           N_(L"Quote"),             N_(L"Intense Quote"),     N_(L"Subtle Reference"),
+      N_(L"Intense Reference"), N_(L"Book Title"),       N_(L"List Paragraph"),    N_(L"Caption"),
+      N_(L"TOC Heading"),      N_(L"Header"),            N_(L"Footer"),            N_(L"Footnote Text"),
+      N_(L"Endnote Text"),     N_(L"Hyperlink"),         N_(L"Default Paragraph Font"), N_(L"Bibliography"),
+      N_(L"Plain Text"),       N_(L"Normal (Web)"),      N_(L"TOC 1"),             N_(L"TOC 2"),
+      N_(L"TOC 3"),            N_(L"Comment Text"),      N_(L"Table Grid")};
+  for (const UiText& b : kBuiltIn)
+    if (shown == b.en) return std::wstring(b);
+  return shown;
+}
+
 ToolItem DocFormat::StyleBox() {
   const edit::FormatState& st = State();
   ToolItem style;
@@ -710,11 +729,11 @@ ToolItem DocFormat::StyleBox() {
   style.enabled = target_().any && Editable();
   const auto& gallery = Gallery();
   for (size_t i = 0; i < gallery.size(); ++i) {
-    style.choices.push_back(W(std::string_view(gallery[i].name)));
+    style.choices.push_back(ShownStyleName(gallery[i].name));
     if (st.paraStyle && !gallery[i].id.empty() && gallery[i].id == *st.paraStyle) style.choice = static_cast<int>(i);
   }
   if (style.choice < 0 && st.paraStyle)
-    if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = W(std::string_view(edit::DisplayName(s->name)));
+    if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = ShownStyleName(s->name);
   style.onChange = [this](const ToolValue& v) {
     const auto& g = Gallery();
     const int n = static_cast<int>(g.size());
@@ -821,7 +840,7 @@ void DocFormat::StylePreview(gfx::Canvas& c, const D2D1_RECT_F& r, int index, fl
     c.Text(L"AaBbCcDd", gfx::RectF(r.left + 4 * ui, r.top + 2 * ui, r.right - 4 * ui, r.bottom - nameH), color, px,
            run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
   }
-  c.Text(W(std::string_view(g[static_cast<size_t>(index)].name)), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
+  c.Text(ShownStyleName(g[static_cast<size_t>(index)].name), gfx::RectF(r.left + 2 * ui, r.bottom - nameH, r.right - 2 * ui, r.bottom - 2 * ui),
          p.textSecondary, 11 * ui, DWRITE_FONT_WEIGHT_REGULAR, gfx::Align::Center);
   c.PopClip();
 }

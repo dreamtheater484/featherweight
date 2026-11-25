@@ -945,6 +945,27 @@ const std::vector<BuiltinStyle>& Gallery() {
   return styles;
 }
 
+// A built-in cell style's name as the gallery shows it: in the interface's language, as Excel's are.
+// The workbook keeps the English name (Excel's own files do too).
+std::wstring ShownCellStyle(const std::wstring& name) {
+  static constexpr UiText kNames[] = {
+      N_(L"Normal"),      N_(L"Good"),         N_(L"Bad"),          N_(L"Neutral"),  N_(L"Calculation"),
+      N_(L"Check cell"),  N_(L"Explanatory text"), N_(L"Input"),    N_(L"Linked cell"), N_(L"Note"),
+      N_(L"Output"),      N_(L"Warning text"), N_(L"Title"),        N_(L"Heading 1"), N_(L"Heading 2"),
+      N_(L"Heading 3"),   N_(L"Heading 4"),    N_(L"Total"),        N_(L"Comma"),    N_(L"Comma [0]"),
+      N_(L"Currency"),    N_(L"Currency [0]"), N_(L"Percent")};
+  for (const UiText& n : kNames)
+    if (name == n.en) return std::wstring(n);
+  // "Accent3" and "40% - Accent3".
+  const size_t at = name.find(L"Accent");
+  if (at != std::wstring::npos && at + 7 == name.size()) {
+    const std::wstring digit = name.substr(at + 6);
+    if (at == 0) return Fmt(T(L"Accent{0}"), {digit});
+    if (at == 6 && name.compare(2, 4, L"% - ") == 0) return Fmt(T(L"{0}% - Accent{1}"), {name.substr(0, 2), digit});
+  }
+  return name;
+}
+
 Color ThemeColor(int theme, double tint) {
   Color c;
   c.kind = Color::Kind::Theme;
@@ -1384,7 +1405,7 @@ ToolItem WorkbookView::FormatTool(int cmd) {
       t.text = T(L"Styles");
       t.fitText = true;
       t.tooltip = T(L"Cell styles");
-      for (const BuiltinStyle& s : Gallery()) t.choices.push_back(s.name);
+      for (const BuiltinStyle& s : Gallery()) t.choices.push_back(ShownCellStyle(s.name));
       t.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
       break;
     case CmdNumberFormatBox: {
