@@ -4,6 +4,8 @@
 #include <map>
 #include <utility>
 
+#include "core/Lang.h"
+
 namespace fw::doc::edit {
 
 namespace cliptable {
@@ -92,7 +94,7 @@ Result Fill(Editor& ed, Pos from, Pos to, const Clip& clip, const CellText& cell
   part.paras.emplace_back();
   r = PasteClip(ed, from, to, part, target);
   if (!r) return r;
-  if (r.caret.para == 0 || r.caret.offset != 0) return Failed(u"The pasted cell didn't land where it should.");
+  if (r.caret.para == 0 || r.caret.offset != 0) return Failed(T(u"The pasted cell didn't land where it should."));
   return ed.JoinParagraphs(r.caret.para - 1);
 }
 
@@ -120,7 +122,7 @@ Result NewTable(Editor& ed, Pos caret, const Clip& clip, size_t b, size_t e, uin
   const uint32_t first = r.caret.para;
   const uint32_t gap = first - caret.para;
   if (first < caret.para || gap > 1 || doc.Paragraphs().size() != before + gap + static_cast<size_t>(s.rows) * cols)
-    return Failed(u"The pasted table didn't land where it should.");
+    return Failed(T(u"The pasted table didn't land where it should."));
   // From the last cell back, so that the cells before keep their places.
   for (auto it = s.cells.rbegin(); it != s.cells.rend(); ++it) {
     const Pos at{first + it->row * cols + static_cast<uint32_t>(it->col), 0};
@@ -135,19 +137,19 @@ Result NewTable(Editor& ed, Pos caret, const Clip& clip, size_t b, size_t e, uin
 Result Overwrite(Editor& ed, Pos caret, const Clip& clip, size_t b, size_t e, uint64_t target) {
   const Shape s = ShapeOf(clip, b, e);
   auto start = ed.CellAt(caret);
-  if (!start) return Failed(u"Put the cursor in a cell first.");
+  if (!start) return Failed(T(u"Put the cursor in a cell first."));
   const Pos home = start->start;
   std::vector<Editor::CellInfo> cells = ed.TableCells(home);
-  if (cells.empty()) return Failed(u"This table can't take the pasted cells.");
+  if (cells.empty()) return Failed(T(u"This table can't take the pasted cells."));
   // Rows: the table's last ones copied below it (as many as missing, or all of it), until enough.
   for (uint32_t have = start->tableRows, need = start->row + s.rows; have < need;) {
     const uint32_t k = std::min(need - have, have);
     auto from = std::find_if(cells.begin(), cells.end(), [&](const Editor::CellInfo& c) { return c.row >= have - k; });
-    if (from == cells.end()) return Failed(u"This table can't take the pasted rows.");
+    if (from == cells.end()) return Failed(T(u"This table can't take the pasted rows."));
     Result r = ed.InsertRows(from->start, cells.back().start, true);
     if (!r) return r;
     cells = ed.TableCells(home);
-    if (cells.empty() || cells.front().tableRows <= have) return Failed(u"This table can't take the pasted rows.");
+    if (cells.empty() || cells.front().tableRows <= have) return Failed(T(u"This table can't take the pasted rows."));
     have = cells.front().tableRows;
   }
   // Each of the clip's cells over the table's cell at its place; a merged cell takes the first.
@@ -262,7 +264,7 @@ Result PasteTables(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t targ
     }
     if (!one || b == SIZE_MAX) return PasteClip(ed, from, to, Flatten(clip), target);
   }
-  ed.BeginGroup(u"Paste");
+  ed.BeginGroup(T(u"Paste"));
   auto fail = [&](Result r) {
     ed.CancelGroup();
     r.ok = false;

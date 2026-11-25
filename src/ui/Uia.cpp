@@ -6,6 +6,7 @@
 #include <atomic>
 #include <tuple>
 
+#include "core/Lang.h"
 #include "ui/Widgets.h"
 
 #pragma comment(lib, "uiautomationcore.lib")
@@ -27,9 +28,9 @@ Key Mix(Key parent, int64_t id) {
 bool IsEmpty(const D2D1_RECT_F& r) { return r.right <= r.left || r.bottom <= r.top; }
 
 bool IsKeyName(const std::wstring& part) {
-  static const wchar_t* const kNames[] = {L"Ctrl",  L"Shift",   L"Alt",       L"Esc",    L"Enter", L"Tab",
-                                          L"Space", L"Home",    L"End",       L"Delete", L"Up",    L"Down",
-                                          L"Left",  L"Right",   L"Page Up",   L"Page Down", L"Backspace"};
+  static const wchar_t* const kNames[] = {L"Ctrl",  L"Shift",   L"Alt",       T(L"Esc"),    T(L"Enter"), T(L"Tab"),
+                                          T(L"Space"), T(L"Home"),    T(L"End"),       T(L"Delete"), T(L"Up"),    T(L"Down"),
+                                          T(L"Left"),  T(L"Right"),   T(L"Page Up"),   T(L"Page Down"), T(L"Backspace")};
   for (const wchar_t* n : kNames)
     if (part == n) return true;
   if (part.size() == 1) return true;  // a letter, digit or symbol: "O", "=", "−"

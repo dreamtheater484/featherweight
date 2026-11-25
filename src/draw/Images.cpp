@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "draw/D2DPainter.h"
 #include "pkg/XmlDom.h"
 
@@ -373,16 +374,16 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
     if (error) *error = why;
     return nullptr;
   };
-  if (bytes.size() > limits.maxBytes) return fail("The picture is larger than Featherweight opens.");
+  if (bytes.size() > limits.maxBytes) return fail(T("The picture is larger than Featherweight opens."));
   std::shared_ptr<Image> img(new Image());
   img->limits_ = limits;
   img->format_ = SniffImageFormat(bytes.data(), bytes.size());
   switch (img->format_) {
     case ImageFormat::Unknown:
-      return fail("The picture is in a format Featherweight can't show.");
+      return fail(T("The picture is in a format Featherweight can't show."));
     case ImageFormat::Emf: {
       Size size;
-      if (!EmfSize(bytes, size)) return fail("The picture is damaged.");
+      if (!EmfSize(bytes, size)) return fail(T("The picture is damaged."));
       img->natural_ = size;
       img->vector_ = std::make_shared<VectorImage>(VectorImage::Kind::Emf, std::move(bytes), size);
       return img;
@@ -390,7 +391,7 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
     case ImageFormat::Wmf: {
       std::vector<uint8_t> emf;
       Size size;
-      if (!WmfToEmf(bytes, emf, size)) return fail("The picture is damaged.");
+      if (!WmfToEmf(bytes, emf, size)) return fail(T("The picture is damaged."));
       img->natural_ = size;
       img->vector_ = std::make_shared<VectorImage>(VectorImage::Kind::Emf, std::move(emf), size);
       return img;
@@ -398,7 +399,7 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
     case ImageFormat::Svg: {
       Size size;
       bool faithful = false;
-      if (!InspectSvg(bytes, size, faithful)) return fail("The picture is damaged.");
+      if (!InspectSvg(bytes, size, faithful)) return fail(T("The picture is damaged."));
       img->natural_ = size;
       img->faithful_ = faithful;
       img->vector_ = std::make_shared<VectorImage>(VectorImage::Kind::Svg, std::move(bytes), size);
@@ -411,11 +412,11 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
   Decoder dec;
   UINT w = 0, h = 0;
   if (!dec.Open(img->format_, bytes) || FAILED(dec.frame->GetSize(&w, &h)) || w == 0 || h == 0) {
-    return fail("The picture is damaged.");
+    return fail(T("The picture is damaged."));
   }
   if (w > limits.maxDimension || h > limits.maxDimension || uint64_t{w} * h > limits.maxSourcePixels ||
       DecoderBytes(img->format_, bytes, w, h) > static_cast<double>(limits.maxDecoderBytes)) {
-    return fail("The picture is larger than Featherweight shows.");
+    return fail(T("The picture is larger than Featherweight shows."));
   }
   double dpiX = 96, dpiY = 96;
   if (FAILED(dec.frame->GetResolution(&dpiX, &dpiY)) || !(dpiX >= 1 && dpiX <= 10000)) dpiX = 96;
@@ -430,7 +431,7 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
 std::shared_ptr<Image> Image::OpenFrom(Reader read, const ImageLimits& limits, std::string* error) {
   std::vector<uint8_t> bytes;
   if (!read || !read(bytes)) {
-    if (error) *error = "The picture couldn't be read.";
+    if (error) *error = T("The picture couldn't be read.");
     return nullptr;
   }
   std::shared_ptr<Image> img = Open(std::move(bytes), limits, error);

@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "slide/Presentation.h"
 #include "slide/edit/Edit.h"
@@ -55,7 +56,7 @@ std::wstring Seconds(double ms) {
 std::wstring AnimLabel(ed::Anim a) {
   std::wstring n = W(ed::AnimName(a));
   if (ed::ClassOf(a) == ed::AnimClass::Exit && (a == ed::Anim::FadeOut || a == ed::Anim::SplitOut || a == ed::Anim::WipeOut || a == ed::Anim::ZoomOut))
-    n += L" (exit)";
+    n = Fmt(T(L"{0} (exit)"), {n});
   return n;
 }
 
@@ -267,10 +268,10 @@ PresentationView::AnimationPane::AnimationPane(PresentationView& v) : v_(v) {
     b.textSize = 12;
     b.onInvoke = std::move(fn);
   };
-  button(play_, L"Play", [this] { v_.StartPreview(false, picked_.empty() ? 0 : picked_.front()); });
-  button(up_, L"Move up", [this] { v_.AnimCommand(CmdAnimEarlier); });
-  button(down_, L"Move down", [this] { v_.AnimCommand(CmdAnimLater); });
-  button(remove_, L"Remove", [this] { v_.AnimCommand(CmdAnimRemove); });
+  button(play_, T(L"Play"), [this] { v_.StartPreview(false, picked_.empty() ? 0 : picked_.front()); });
+  button(up_, T(L"Move up"), [this] { v_.AnimCommand(CmdAnimEarlier); });
+  button(down_, T(L"Move down"), [this] { v_.AnimCommand(CmdAnimLater); });
+  button(remove_, T(L"Remove"), [this] { v_.AnimCommand(CmdAnimRemove); });
 }
 
 // The slide's sequence again, when the deck or the slide changed.
@@ -286,9 +287,11 @@ void PresentationView::AnimationPane::Sync() {
   const Slide* slide = deck && slide_ < deck->SlideCount() ? const_cast<Presentation*>(deck)->GetSlide(slide_) : nullptr;
   for (const ed::AnimEffect& a : seq_) {
     const Shape* sh = slide ? FindShapeIn(slide->shapes, a.shape) : nullptr;
-    std::wstring name = sh && !sh->name.empty() ? fw::Utf8ToWide(sh->name) : a.shape ? L"Shape " + std::to_wstring(a.shape) : L"Sound";
-    if (a.paragraph >= 0) name += L", paragraph " + std::to_wstring(a.paragraph + 1);
-    names_.push_back((a.anim == ed::Anim::Other ? std::wstring(L"Custom") : W(ed::AnimName(a.anim))) + L": " + name);
+    std::wstring name = sh && !sh->name.empty() ? fw::Utf8ToWide(sh->name)
+                        : a.shape               ? Fmt(T(L"Shape {0}"), {std::to_wstring(a.shape)})
+                                                : T(L"Sound");
+    if (a.paragraph >= 0) name += Fmt(T(L", paragraph {0}"), {std::to_wstring(a.paragraph + 1)});
+    names_.push_back((a.anim == ed::Anim::Other ? std::wstring(T(L"Custom")) : W(ed::AnimName(a.anim))) + L": " + name);
   }
 }
 
@@ -315,7 +318,7 @@ void PresentationView::AnimationPane::Draw(Canvas& c) {
   const float rowH = 26 * ui_;
   c.PushClip(list_);
   if (seq_.empty()) {
-    c.TextWrapped(!why_.empty() ? W(why_) : std::wstring(L"No animations on this slide. Select a shape and pick an animation on the Animations tab."),
+    c.TextWrapped(!why_.empty() ? W(why_) : std::wstring(T(L"No animations on this slide. Select a shape and pick an animation on the Animations tab.")),
                   RectF(list_.left, list_.top, list_.right, list_.top + 60 * ui_), p.textSecondary, 12 * ui_, 3);
   }
   int click = 0;
@@ -434,10 +437,10 @@ std::wstring PresentationView::AnimationPane::TooltipAt(float x, float y) {
   const size_t i = static_cast<size_t>((y - list_.top + scroll_) / (26 * ui_));
   if (i >= seq_.size()) return {};
   const ed::AnimEffect& a = seq_[i];
-  const wchar_t* start = a.trigger == ed::AnimTrigger::OnClick ? L"On Click" : a.trigger == ed::AnimTrigger::WithPrevious ? L"With Previous" : L"After Previous";
+  const wchar_t* start = a.trigger == ed::AnimTrigger::OnClick ? T(L"On Click") : a.trigger == ed::AnimTrigger::WithPrevious ? T(L"With Previous") : T(L"After Previous");
   std::wstring t = names_[i] + L"\n" + start + L", " + Seconds(a.durationMs);
-  if (a.delayMs > 0) t += L", after a delay of " + Seconds(a.delayMs);
-  if (!a.editable) t += L"\nFeatherweight keeps this effect as it is; it can be moved, retimed or removed.";
+  if (a.delayMs > 0) t += Fmt(T(L", after a delay of {0}"), {Seconds(a.delayMs)});
+  if (!a.editable) t += T(L"\nFeatherweight keeps this effect as it is; it can be moved, retimed or removed.");
   return t;
 }
 
@@ -523,7 +526,7 @@ void PresentationView::ApplyAnim(int index, bool add) {
       s.byParagraph = TextParagraphs(sh) > 1;
     return s;
   };
-  edit::EditGroup group(*e, add ? u"Add Animation" : index == 0 ? u"Remove Animation" : u"Animation");
+  edit::EditGroup group(*e, add ? T(u"Add Animation") : index == 0 ? T(u"Remove Animation") : T(u"Animation"));
   bool ok = true;
   if (index == 0) {
     if (!targets.empty()) ok = Done(ed::RemoveAnimations(*e, current_, targets));
@@ -602,12 +605,12 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
   };
 
   // ---- Transitions
-  tab(L"Transitions", L"K");
-  group(L"Preview");
-  add(CmdTransitionPreview, kPlay, RibbonSize::Large, L"Preview", L"P");
-  group(L"Transition to This Slide", 3, 1);
+  tab(T(L"Transitions"), L"K");
+  group(T(L"Preview"));
+  add(CmdTransitionPreview, kPlay, RibbonSize::Large, T(L"Preview"), L"P");
+  group(T(L"Transition to This Slide"), 3, 1);
   {
-    RibbonItem& g = add(CmdTransitionStyles, icon::Slideshow, RibbonSize::Large, L"Transitions", L"TS");
+    RibbonItem& g = add(CmdTransitionStyles, icon::Slideshow, RibbonSize::Large, T(L"Transitions"), L"TS");
     for (size_t i = 0; i < std::size(kTransitionGallery); ++i) {
       g.tool.choices.push_back(W(ed::TransitionName(kTransitionGallery[i])));
       if (kTransitionGallery[i] == tr.effect) g.tool.choice = static_cast<int>(i);
@@ -632,21 +635,21 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     };
     g.gallery = std::move(gal);
   }
-  add(CmdTransitionOptionsMenu, kOptions, RibbonSize::Large, L"Effect\nOptions", L"EO").menu =
+  add(CmdTransitionOptionsMenu, kOptions, RibbonSize::Large, T(L"Effect\nOptions"), L"EO").menu =
       menuOf(CmdTransitionOption, ed::TransitionOptions(tr.effect).size());
   m.tabs.back().groups.back().items.back().tool.dropdown = true;
-  group(L"Timing");
-  spin(CmdTransitionDuration, L"Duration", L"DU", tr.durationMs / 1000, 59, [this](double s) {
+  group(T(L"Timing"));
+  spin(CmdTransitionDuration, T(L"Duration"), L"DU", tr.durationMs / 1000, 59, [this](double s) {
     edit::Editor* ed2 = SlideEditor();
     if (!ed2 || !CanEditSlides()) return;
     ed::TransitionPatch p;
     p.durationMs = std::clamp(s, 0.01, 59.0) * 1000;
     Done(ed::SetTransition(*ed2, SelectedSlides(), p));
   });
-  add(CmdTransitionApplyAll, kApplyAll, RibbonSize::Medium, L"Apply To All", L"AL");
-  check(CmdTransitionOnClick, L"On Mouse Click", L"MC").newColumn = true;
-  check(CmdTransitionAfter, L"After:", L"AF");
-  RibbonItem& after = spin(CmdTransitionAfterTime, L"After (seconds)", L"AT", std::max(0.0, tr.advanceAfterMs) / 1000, 86399, [this](double s) {
+  add(CmdTransitionApplyAll, kApplyAll, RibbonSize::Medium, T(L"Apply To All"), L"AL");
+  check(CmdTransitionOnClick, T(L"On Mouse Click"), L"MC").newColumn = true;
+  check(CmdTransitionAfter, T(L"After:"), L"AF");
+  RibbonItem& after = spin(CmdTransitionAfterTime, T(L"After (seconds)"), L"AT", std::max(0.0, tr.advanceAfterMs) / 1000, 86399, [this](double s) {
     edit::Editor* ed2 = SlideEditor();
     if (!ed2 || !CanEditSlides()) return;
     ed::TransitionPatch p;
@@ -676,19 +679,19 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     }
   }
   const bool shapes = ready && !Objects().Selection().empty();
-  tab(L"Animations", L"A");
-  group(L"Preview");
-  add(CmdAnimPreview, kPlay, RibbonSize::Large, L"Preview", L"P");
-  group(L"Animation", 3, 1);
+  tab(T(L"Animations"), L"A");
+  group(T(L"Preview"));
+  add(CmdAnimPreview, kPlay, RibbonSize::Large, T(L"Preview"), L"P");
+  group(T(L"Animation"), 3, 1);
   auto animChoices = [&](RibbonItem& g, bool none) {
-    if (none) g.tool.choices.push_back(L"None");
+    if (none) g.tool.choices.push_back(T(L"None"));
     for (ed::Anim a : kAnimGallery) g.tool.choices.push_back(AnimLabel(a));
     RibbonGallery gal;
     gal.choiceWidth = 66;
     gal.choiceHeight = 58;
     gal.drawChoice = [none](Canvas& c, const D2D1_RECT_F& r, int i, float ui) {
       if (none && i == 0) {
-        DrawChoice(c, r, L"None", icon::Cancel, theme::P().textSecondary, ui);
+        DrawChoice(c, r, T(L"None"), icon::Cancel, theme::P().textSecondary, ui);
         return;
       }
       const int k = i - (none ? 1 : 0);
@@ -698,7 +701,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     g.gallery = std::move(gal);
   };
   {
-    RibbonItem& g = add(CmdAnimStyles, kStar, RibbonSize::Large, L"Animation\nStyles", L"AS");
+    RibbonItem& g = add(CmdAnimStyles, kStar, RibbonSize::Large, T(L"Animation\nStyles"), L"AS");
     animChoices(g, true);
     g.gallery->columns = 7;
     g.gallery->minColumns = 3;
@@ -709,16 +712,16 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
   }
   {
     const ed::Anim a = common > 0 ? kAnimGallery[common - 1] : ed::Anim::Other;
-    RibbonItem& it = add(CmdAnimOptionsMenu, kOptions, RibbonSize::Large, L"Effect\nOptions", L"EM");
+    RibbonItem& it = add(CmdAnimOptionsMenu, kOptions, RibbonSize::Large, T(L"Effect\nOptions"), L"EM");
     it.tool.dropdown = true;
     it.menu = menuOf(CmdAnimOption, ed::AnimOptions(a).size());
     if (!it.menu.empty()) it.menu.push_back(0);
     it.menu.push_back(CmdAnimAsOneObject);
     it.menu.push_back(CmdAnimByParagraph);
   }
-  group(L"Advanced Animation");
+  group(T(L"Advanced Animation"));
   {
-    RibbonItem& g = add(CmdAnimAddMenu, icon::Add, RibbonSize::Large, L"Add\nAnimation", L"AA");
+    RibbonItem& g = add(CmdAnimAddMenu, icon::Add, RibbonSize::Large, T(L"Add\nAnimation"), L"AA");
     animChoices(g, false);
     g.gallery->columns = 0;
     g.gallery->popupColumns = 6;
@@ -726,15 +729,15 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     g.tool.enabled = shapes;
     g.tool.onChange = [this](const ToolValue& v) { ApplyAnim(v.index + 1, true); };
   }
-  add(CmdAnimPane, kPane, RibbonSize::Medium, L"Animation Pane", L"C").tool.toggle = true;
-  group(L"Timing");
+  add(CmdAnimPane, kPane, RibbonSize::Medium, T(L"Animation Pane"), L"C").tool.toggle = true;
+  group(T(L"Timing"));
   {
-    RibbonItem& it = add(CmdAnimStart, 0, RibbonSize::Medium, L"Start", L"ST");
+    RibbonItem& it = add(CmdAnimStart, 0, RibbonSize::Medium, T(L"Start"), L"ST");
     it.tool.kind = ToolKind::Dropdown;
     it.tool.width = 130;
-    it.tool.choices = {L"On Click", L"With Previous", L"After Previous"};
+    it.tool.choices = {T(L"On Click"), T(L"With Previous"), T(L"After Previous")};
     it.tool.choice = targets.empty() ? -1 : static_cast<int>(trigger);
-    it.tool.tooltip = L"Start";
+    it.tool.tooltip = T(L"Start");
     it.tool.onChange = [this](const ToolValue& v) {
       edit::Editor* ed2 = SlideEditor();
       const std::vector<size_t> t = AnimTargets();
@@ -744,7 +747,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
       Done(ed::SetAnimationTiming(*ed2, current_, t, p));
     };
   }
-  spin(CmdAnimDuration, L"Duration", L"DU", duration, 59, [this](double s) {
+  spin(CmdAnimDuration, T(L"Duration"), L"DU", duration, 59, [this](double s) {
     edit::Editor* ed2 = SlideEditor();
     const std::vector<size_t> t = AnimTargets();
     if (!ed2 || t.empty() || !CanEditSlides()) return;
@@ -752,7 +755,7 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     p.durationMs = std::clamp(s, 0.01, 59.0) * 1000;
     Done(ed::SetAnimationTiming(*ed2, current_, t, p));
   });
-  spin(CmdAnimDelay, L"Delay", L"DE", delay, 59, [this](double s) {
+  spin(CmdAnimDelay, T(L"Delay"), L"DE", delay, 59, [this](double s) {
     edit::Editor* ed2 = SlideEditor();
     const std::vector<size_t> t = AnimTargets();
     if (!ed2 || t.empty() || !CanEditSlides()) return;
@@ -760,8 +763,8 @@ void PresentationView::BuildAnimTabs(RibbonModel& m) {
     p.delayMs = std::clamp(s, 0.0, 59.0) * 1000;
     Done(ed::SetAnimationTiming(*ed2, current_, t, p));
   });
-  add(CmdAnimEarlier, icon::ChevronUp, RibbonSize::Medium, L"Move Earlier", L"ME").newColumn = true;
-  add(CmdAnimLater, icon::ChevronDown, RibbonSize::Medium, L"Move Later", L"ML");
+  add(CmdAnimEarlier, icon::ChevronUp, RibbonSize::Medium, T(L"Move Earlier"), L"ME").newColumn = true;
+  add(CmdAnimLater, icon::ChevronDown, RibbonSize::Medium, T(L"Move Later"), L"ML");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -784,7 +787,7 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdTransitionOption);
     s.enabled = ready && i < opts.size();
     s.checked = s.enabled && tr.option == static_cast<int>(i);
-    s.label = i < opts.size() ? W(opts[i]) : L"Effect option " + std::to_wstring(i + 1);
+    s.label = i < opts.size() ? W(opts[i]) : Fmt(T(L"Effect option {0}"), {std::to_wstring(i + 1)});
     return true;
   }
   if (cmd >= CmdAnimOption && cmd < CmdAnimOption + 8) {
@@ -802,55 +805,55 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
     const size_t i = static_cast<size_t>(cmd - CmdAnimOption);
     s.enabled = editable && i < opts.size();
     s.checked = s.enabled && option == static_cast<int>(i);
-    s.label = i < opts.size() ? W(opts[i]) : L"Effect option " + std::to_wstring(i + 1);
+    s.label = i < opts.size() ? W(opts[i]) : Fmt(T(L"Effect option {0}"), {std::to_wstring(i + 1)});
     return true;
   }
   switch (cmd) {
     case CmdTransitionPreview:
       s.enabled = ready && tr.effect != ed::TransitionEffect::None;
-      s.label = L"Preview the transition";
+      s.label = T(L"Preview the transition");
       break;
     case CmdTransitionStyles:
       s.enabled = ready;
-      s.label = L"Transition to this slide";
+      s.label = T(L"Transition to this slide");
       break;
     case CmdTransitionOptionsMenu:
       s.enabled = ready && !ed::TransitionOptions(tr.effect).empty();
-      s.label = L"Transition effect options";
+      s.label = T(L"Transition effect options");
       break;
     case CmdTransitionDuration:
       s.enabled = ready && timed;
-      s.label = L"Transition duration";
+      s.label = T(L"Transition duration");
       break;
     case CmdTransitionApplyAll:
       s.enabled = ready && SlideCount() > 1;
-      s.label = L"Apply this transition to all slides";
+      s.label = T(L"Apply this transition to all slides");
       break;
     case CmdTransitionOnClick:
       s.enabled = ready;
       s.checked = tr.advanceOnClick;
-      s.label = L"Advance slide on mouse click";
+      s.label = T(L"Advance slide on mouse click");
       break;
     case CmdTransitionAfter:
       s.enabled = ready;
       s.checked = tr.advanceAfterMs >= 0;
-      s.label = L"Advance slide after a time";
+      s.label = T(L"Advance slide after a time");
       break;
     case CmdTransitionAfterTime:
       s.enabled = ready;
-      s.label = L"Advance after (seconds)";
+      s.label = T(L"Advance after (seconds)");
       break;
     case CmdAnimPreview:
       s.enabled = ready && !AnimNow().seq.empty();
-      s.label = L"Preview the animations";
+      s.label = T(L"Preview the animations");
       break;
     case CmdAnimStyles:
       s.enabled = ready && (!Objects().Selection().empty() || !AnimTargets().empty());
-      s.label = L"Animation";
+      s.label = T(L"Animation");
       break;
     case CmdAnimAddMenu:
       s.enabled = ready && !Objects().Selection().empty();
-      s.label = L"Add animation";
+      s.label = T(L"Add animation");
       break;
     case CmdAnimOptionsMenu:
     case CmdAnimAsOneObject:
@@ -861,29 +864,29 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
       const bool sequence = SequenceApplies(slide, seq, t);
       if (cmd == CmdAnimOptionsMenu) {
         s.enabled = !t.empty() && seq[t.front()].editable && (!ed::AnimOptions(seq[t.front()].anim).empty() || sequence);
-        s.label = L"Animation effect options";
+        s.label = T(L"Animation effect options");
       } else {
         s.enabled = sequence;
         s.checked = sequence && (seq[t.front()].paragraph >= 0) == (cmd == CmdAnimByParagraph);
-        s.label = cmd == CmdAnimByParagraph ? L"By Paragraph" : L"As One Object";
+        s.label = cmd == CmdAnimByParagraph ? T(L"By Paragraph") : T(L"As One Object");
       }
       break;
     }
     case CmdAnimPane:
       s.enabled = Ready();
       s.checked = animPane_ && host_.ViewShownPanel() == animPane_.get();
-      s.label = L"Animation pane";
+      s.label = T(L"Animation pane");
       break;
     case CmdAnimStart:
     case CmdAnimDelay:
       s.enabled = ready && !AnimTargets().empty();
-      s.label = cmd == CmdAnimStart ? L"Animation start" : L"Animation delay";
+      s.label = cmd == CmdAnimStart ? T(L"Animation start") : T(L"Animation delay");
       break;
     case CmdAnimDuration: {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
       const std::vector<ed::AnimEffect> seq = ready ? AnimNow().seq : std::vector<ed::AnimEffect>{};
       s.enabled = !t.empty() && std::all_of(t.begin(), t.end(), [&](size_t k) { return seq[k].editable && seq[k].durationMs > 0; });
-      s.label = L"Animation duration";
+      s.label = T(L"Animation duration");
       break;
     }
     case CmdAnimEarlier:
@@ -891,12 +894,12 @@ bool PresentationView::AnimCommandState(int cmd, CommandState& s) {
       const std::vector<size_t> t = ready ? AnimTargets() : std::vector<size_t>{};
       const size_t n = ready ? AnimNow().seq.size() : 0;
       s.enabled = !t.empty() && (cmd == CmdAnimEarlier ? t.front() > 0 : t.back() + 1 < n);
-      s.label = cmd == CmdAnimEarlier ? L"Move animation earlier" : L"Move animation later";
+      s.label = cmd == CmdAnimEarlier ? T(L"Move animation earlier") : T(L"Move animation later");
       break;
     }
     case CmdAnimRemove:
       s.enabled = ready && !AnimTargets().empty();
-      s.label = L"Remove animation";
+      s.label = T(L"Remove animation");
       break;
     default:
       return false;
@@ -983,7 +986,7 @@ bool PresentationView::AnimCommand(int cmd) {
         if (k < seq.size() && std::none_of(one.begin(), one.end(), [&](size_t j) { return seq[j].shape == seq[k].shape; }))
           one.push_back(k);
       std::sort(one.rbegin(), one.rend());
-      edit::EditGroup group(*e, u"Effect Options");
+      edit::EditGroup group(*e, T(u"Effect Options"));
       bool ok = !one.empty();
       for (size_t k : one) ok = ok && Done(ed::SetAnimationSequence(*e, current_, k, cmd == CmdAnimByParagraph));
       group.done = ok;
@@ -1046,7 +1049,7 @@ bool PresentationView::AnimScriptOp(const std::wstring& op, const std::wstring& 
       fwprintf(stderr, L"animdump: %zu. shape %u%ls %ls option %d, %ls, %.0f ms, delay %.0f ms%ls\n", i + 1, a.shape,
                paragraph.c_str(), W(ed::AnimName(a.anim)).c_str(), a.option,
                a.trigger == ed::AnimTrigger::OnClick ? L"click" : a.trigger == ed::AnimTrigger::WithPrevious ? L"with" : L"after",
-               a.durationMs, a.delayMs, std::find(targets.begin(), targets.end(), i) != targets.end() ? L", selected" : L"");
+               a.durationMs, a.delayMs, std::find(targets.begin(), targets.end(), i) != targets.end() ? L", selected" : L"");  // lang: no
     }
     fflush(stderr);
   }

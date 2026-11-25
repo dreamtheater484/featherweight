@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/DrawingEdit.h"
 #include "pkg/Mce.h"
@@ -87,7 +88,7 @@ bool Locate(ShapeFrame& f, std::u16string& why) {
   pugi::xml_node data = Child(Child(f.root, kA, "graphic"), kA, "graphicData");
   f.shape = Child(data, kWps, "wsp");
   if (!f.root || !f.shape) {
-    why = u"Only shapes and text boxes can be changed here. This is a picture, a group, a chart or another kind of drawing.";
+    why = T(u"Only shapes and text boxes can be changed here. This is a picture, a group, a chart or another kind of drawing.");
     return false;
   }
   f.wp = PrefixOf(f.root);
@@ -100,25 +101,25 @@ bool LoadShape(const Editor& editor, uint32_t i, ShapeFrame& f, std::u16string& 
   const Document& doc = editor.Doc();
   if (!editor.CanEdit(&why)) return false;
   if (i >= doc.Drawings().size() || doc.Drawings()[i].pos.para == kNone || !doc.Drawings()[i].node) {
-    why = u"That shape isn't in the document any more.";
+    why = T(u"That shape isn't in the document any more.");
     return false;
   }
   const Drawing& d = doc.Drawings()[i];
   if (d.kind != DrawingKind::DrawingML) {
-    why = d.kind == DrawingKind::Vml ? u"This shape is in an older format, so it can't be changed. The text in it can be edited."
-                                      : u"Only shapes and text boxes can be changed here.";
+    why = d.kind == DrawingKind::Vml ? T(u"This shape is in an older format, so it can't be changed. The text in it can be edited.")
+                                      : T(u"Only shapes and text boxes can be changed here.");
     return false;
   }
   const Part* part = PartOf(doc, d.part);
   if (!part || !part->Editable() || !part->writable) {
-    why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
+    why = T(u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.");
     return false;
   }
   if (doc.Stories()[doc.Para(d.pos.para).story].drawing != kNone) {
-    why = u"Shapes in a text box can't be changed yet.";
+    why = T(u"Shapes in a text box can't be changed yet.");
     return false;
   }
-  const std::u16string kept = u"This shape is kept with other content of the file, so it can't be changed.";
+  const std::u16string kept = T(u"This shape is kept with other content of the file, so it can't be changed.");
   if (d.displayOnly) {
     if (d.kept == 0 || !FindTagged(doc, d.pos.para, d.kept, f) ||
         !f.dom.Parse(f.fragments[f.index].xml, doc.Package().GetLimits()).Ok() ||
@@ -145,7 +146,7 @@ bool LoadShape(const Editor& editor, uint32_t i, ShapeFrame& f, std::u16string& 
       }
     }
     if (!found) {
-      why = u"Only shapes and text boxes can be changed here.";
+      why = T(u"Only shapes and text boxes can be changed here.");
       return false;
     }
   }
@@ -440,7 +441,7 @@ Result ChangeShape(Editor& editor, uint32_t i, const char* name, const std::func
   if (!edit(f, why)) return Fail(why);
   RewriteFallback(f, doc);
   std::string xml = pkg::RoundTripStore::SerializeFragment(f.dom.Root());
-  if (!XmlSafe(xml)) return Fail(u"That can't be written in the document.");
+  if (!XmlSafe(xml)) return Fail(T(u"That can't be written in the document."));
   if (xml == f.fragments[f.index].xml) {
     Result r;
     r.caret = was.pos;
@@ -451,7 +452,7 @@ Result ChangeShape(Editor& editor, uint32_t i, const char* name, const std::func
   now.kept = was.kept;
   now.keptXml = was.displayOnly ? pkg::RoundTripStore::SerializeFragment(f.root) : std::string();
   now.textBoxes = was.textBoxes;
-  if (tweak && !tweak(now)) return Fail(u"That can't be done to this shape.");
+  if (tweak && !tweak(now)) return Fail(T(u"That can't be done to this shape."));
   now.boxesWritable = BoxesLineUp(f, now.textBoxes.size());
   auto step = std::make_shared<DrawingStep>();
   step->doc = &doc;
@@ -562,14 +563,14 @@ Result Shapes::Insert(uint32_t para, ShapeKind kind, Emu x, Emu y, Emu cx, Emu c
   Document& doc = const_cast<Document&>(editor_.Doc());
   std::u16string why;
   if (!editor_.CanEdit(&why)) return Fail(why);
-  if (para >= doc.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  if (para >= doc.Paragraphs().size()) return Fail(T(u"That place isn't in the document."));
   const Story& story = doc.Stories()[doc.Para(para).story];
   const Part* part = PartOf(doc, story.part);
-  if (!part || story.drawing != kNone || doc.ParaNode(para).DisplayOnly()) return Fail(u"A shape can't go here.");
+  if (!part || story.drawing != kNone || doc.ParaNode(para).DisplayOnly()) return Fail(T(u"A shape can't go here."));
   // Word doesn't open a file with one there (D5 torture).
   if (story.kind == StoryKind::Footnote || story.kind == StoryKind::Endnote || story.kind == StoryKind::Comment)
-    return Fail(u"Shapes can't go in a footnote, an endnote or a comment.");
-  if (Strict(*part)) return Fail(u"Shapes can't be added to documents saved as Strict Open XML yet.");
+    return Fail(T(u"Shapes can't go in a footnote, an endnote or a comment."));
+  if (Strict(*part)) return Fail(T(u"Shapes can't be added to documents saved as Strict Open XML yet."));
   const bool line = kind == ShapeKind::Line || kind == ShapeKind::Arrow;
   const bool text = kind == ShapeKind::TextBox || kind == ShapeKind::Callout;
   int64_t w = Side(cx.Value(), line), h = Side(cy.Value(), line);
@@ -586,7 +587,7 @@ Result Shapes::Insert(uint32_t para, ShapeKind kind, Emu x, Emu y, Emu cx, Emu c
                           "\" xmlns:wp=\"" + std::string(kWp) + "\" xmlns:a=\"" + std::string(kA) + "\" xmlns:wps=\"" +
                           std::string(kWps) + "\"><mc:Choice Requires=\"wps\"><w:drawing>" +
                           AnchorXml(kind, id, name, px, py, w, h, TopZ(doc)) + "</w:drawing></mc:Choice></mc:AlternateContent>";
-  if (!f.dom.Parse(xml, doc.Package().GetLimits()).Ok() || !Locate(f, why)) return Fail(u"This shape can't be added.");
+  if (!f.dom.Parse(xml, doc.Package().GetLimits()).Ok() || !Locate(f, why)) return Fail(T(u"This shape can't be added."));
   RewriteFallback(f, doc);
   std::string block = pkg::RoundTripStore::SerializeFragment(f.dom.Root());
   Drawing info;
@@ -597,7 +598,7 @@ Result Shapes::Insert(uint32_t para, ShapeKind kind, Emu x, Emu y, Emu cx, Emu c
   if (text) {
     // Its text, a story made outside undo, for the drawing about to be added.
     const uint32_t s = NewTextStory(editor_, doc, story.part, static_cast<uint32_t>(doc.Drawings().size()));
-    if (s == kNone) return Fail(u"This shape can't be added.");
+    if (s == kNone) return Fail(T(u"This shape can't be added."));
     info.textBoxes = {s};
     info.boxesWritable = true;
   }
@@ -640,7 +641,7 @@ Result Shapes::Resize(uint32_t drawing, Emu cx, Emu cy) {
 }
 
 Result Shapes::Rotate(uint32_t drawing, double degrees) {
-  if (!std::isfinite(degrees)) return Fail(u"That isn't an angle.");
+  if (!std::isfinite(degrees)) return Fail(T(u"That isn't an angle."));
   const double d = std::fmod(std::fmod(degrees, 360.0) + 360.0, 360.0);
   const int64_t rot = std::llround(d * 60000) % 21600000;
   return ChangeShape(editor_, drawing, "Rotate shape", [&](ShapeFrame& f, std::u16string&) {
@@ -654,7 +655,7 @@ Result Shapes::Rotate(uint32_t drawing, double degrees) {
 Result Shapes::Move(uint32_t drawing, Emu x, Emu y) {
   return ChangeShape(editor_, drawing, "Move shape", [&](ShapeFrame& f, std::u16string& why) {
     if (pkg::LocalNameOf(f.root) != "anchor") {
-      why = u"A shape in line with the text moves with it.";
+      why = T(u"A shape in line with the text moves with it.");
       return false;
     }
     SetPosition(f, std::clamp<int64_t>(x.Value(), -kMaxEmu, kMaxEmu), std::clamp<int64_t>(y.Value(), -kMaxEmu, kMaxEmu));
@@ -664,7 +665,7 @@ Result Shapes::Move(uint32_t drawing, Emu x, Emu y) {
 
 Result Shapes::SetWrap(uint32_t drawing, Wrap wrap, Emu x, Emu y) {
   const Document& doc = editor_.Doc();
-  return ChangeShape(editor_, drawing, wrap == Wrap::Inline ? "In line with text" : "Wrap text", [&](ShapeFrame& f, std::u16string& why) {
+  return ChangeShape(editor_, drawing, wrap == Wrap::Inline ? T("In line with text") : "Wrap text", [&](ShapeFrame& f, std::u16string& why) {
     const bool inlineNow = pkg::LocalNameOf(f.root) == "inline";
     if (wrap == Wrap::Inline) return inlineNow || ToInline(f, why);
     if (inlineNow) ToAnchor(f, doc, wrap, x.Value(), y.Value());
@@ -676,7 +677,7 @@ Result Shapes::SetWrap(uint32_t drawing, Wrap wrap, Emu x, Emu y) {
 Result Shapes::SetFill(uint32_t drawing, std::optional<uint32_t> rgb) {
   return ChangeShape(editor_, drawing, "Shape fill", [&](ShapeFrame& f, std::u16string& why) {
     if (IsLine(f.shape)) {
-      why = u"A line has no fill. Change its outline.";
+      why = T(u"A line has no fill. Change its outline.");
       return false;
     }
     SetFillXml(f, rgb);
@@ -702,11 +703,11 @@ Result Shapes::AddText(uint32_t drawing) {
       editor_, drawing, "Add text",
       [&](ShapeFrame& f, std::u16string& why) {
         if (IsLine(f.shape)) {
-          why = u"A line can't hold text.";
+          why = T(u"A line can't hold text.");
           return false;
         }
         if (Child(f.shape, kWps, "txbx") || Child(f.shape, kWps, "linkedTxbx")) {
-          why = u"This shape's text can't be edited here.";
+          why = T(u"This shape's text can't be edited here.");
           return false;
         }
         const std::string wps = PrefixOf(f.shape);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -21,8 +22,8 @@ constexpr wchar_t kTips[FilePage::kSectionCount] = {L'N', L'O', L'I', L'S', L'A'
 }  // namespace
 
 const wchar_t* FilePage::SectionName(Section s) {
-  static const wchar_t* const names[kSectionCount] = {L"New",   L"Open",   L"Info",  L"Save",   L"Save as",
-                                                      L"Print", L"Export", L"Close", L"Options"};
+  static const wchar_t* const names[kSectionCount] = {T(L"New"),   T(L"Open"),   T(L"Info"),  T(L"Save"),   T(L"Save as"),
+                                                      T(L"Print"), T(L"Export"), T(L"Close"), T(L"Options")};
   return names[s];
 }
 
@@ -297,7 +298,7 @@ bool FilePage::OnKeyDown(UINT vk, bool shift) {
 std::wstring FilePage::TooltipAt(int x, int y) const {
   const int i = HotAt(x, y);
   if (i < 0) return {};
-  if (hots_[i].back) return L"Back (Esc)";
+  if (hots_[i].back) return T(L"Back (Esc)");
   if (hots_[i].entry >= 0) {
     const Entry& e = model_.entries[section_][hots_[i].entry];
     return e.detail.empty() ? L"" : e.detail;
@@ -307,10 +308,10 @@ std::wstring FilePage::TooltipAt(int x, int y) const {
 
 void FilePage::Describe(uia::Tree& t, int parent) {
   if (!open_) return;
-  int page = t.Add(parent, 30000, UIA_PaneControlTypeId, L"File", RectF(rc_));
+  int page = t.Add(parent, 30000, UIA_PaneControlTypeId, T(L"File"), RectF(rc_));
   for (int i = 0; i < static_cast<int>(hots_.size()); ++i) {
     const Hot& h = hots_[i];
-    const std::wstring name = h.back ? L"Back" : h.section >= 0 ? SectionName(static_cast<Section>(h.section))
+    const std::wstring name = h.back ? T(L"Back") : h.section >= 0 ? SectionName(static_cast<Section>(h.section))
                                                                : model_.entries[section_][h.entry].label;
     int n = t.Add(page, 30001 + i, UIA_ButtonControlTypeId, name, h.rc);
     t[n].invoke = [this, i] { Activate(i); };

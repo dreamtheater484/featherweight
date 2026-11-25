@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/Lang.h"
 #include "doc/edit/Styles.h"
 #include "doc/model/Internal.h"
 
@@ -238,7 +239,7 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
   }
   if (!ed.CanChange(paras) || ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem)
     return;
-  ed.Begin(kind == ListKind::Bullet ? u"Bullets" : kind == ListKind::Number ? u"Numbering" : u"Multilevel list");
+  ed.Begin(kind == ListKind::Bullet ? T(u"Bullets") : kind == ListKind::Number ? T(u"Numbering") : T(u"Multilevel list"));
   ed.Local(true);  // the numbers after it change too
   std::string numId;
   int32_t level = 0;
@@ -260,7 +261,7 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
 
 void RemoveList(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(u"Remove list");
+  ed.Begin(T(u"Remove list"));
   ed.Local(true);
   for (uint32_t p : ParagraphsOf(doc, range)) {
     const ParaProps& pp = doc.ResolvedPara(p);
@@ -292,7 +293,7 @@ void RestartNumbering(TreeEdit& ed, uint32_t para) {
   int32_t level = pp.ilvl;
   int64_t start = 0;
   if (Node l = doc.NumberingLevel(pp.numId, level)) start = l.Child(kStart).Int(kVal).value_or(0);
-  ed.Begin(u"Restart numbering");
+  ed.Begin(T(u"Restart numbering"));
   ed.Local(true);
   std::string id = std::to_string(NextIds(doc).second);
   std::string xml = "<w:num w:numId=\"" + id + "\"><w:abstractNumId w:val=\"" + Escape(absId) + "\"/><w:lvlOverride w:ilvl=\"" +
@@ -315,7 +316,7 @@ bool ContinueNumbering(TreeEdit& ed, uint32_t para) {
     if (InList(qp) && qp.numId != own && KindOfList(doc, qp.numId) == kind) target = std::string(qp.numId);
   }
   if (target.empty()) return false;
-  ed.Begin(u"Continue numbering");
+  ed.Begin(T(u"Continue numbering"));
   ed.Local(true);
   Repoint(ed, para, target);
   ed.Commit();

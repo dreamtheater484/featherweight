@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/calc/Bytecode.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Functions.h"
@@ -256,7 +257,7 @@ class Parser {
     SkipSpace();
     char c = At(i_);
     if (c == '-' || c == '+' || c == '@') {
-      if (++depth_ > kMaxDepth) return Fail("nested too deeply");
+      if (++depth_ > kMaxDepth) return Fail(::T("nested too deeply"));
       ++i_;
       bool ok = c == '@' ? RangeExpr() : PrefixExpr();
       --depth_;
@@ -287,11 +288,11 @@ class Parser {
       while (k < s_.size() && IsSpace(s_[k])) ++k;
       if (At(k) != ',') return true;
       // Only references join in a union: Excel refuses =(1,2) typed.
-      if (at_.typed && Constant(unionStart)) return Fail("a union takes references");
+      if (at_.typed && Constant(unionStart)) return Fail(::T("a union takes references"));
       i_ = k + 1;
       size_t next = code_.size();
       if (!IsectExpr()) return false;
-      if (at_.typed && Constant(next)) return Fail("a union takes references");
+      if (at_.typed && Constant(next)) return Fail(::T("a union takes references"));
       Binary(kUnion);
     }
   }
@@ -334,7 +335,7 @@ class Parser {
   }
 
   bool Primary() {
-    if (++depth_ > kMaxDepth) return Fail("nested too deeply");
+    if (++depth_ > kMaxDepth) return Fail(::T("nested too deeply"));
     bool ok = PrimaryInner();
     --depth_;
     return ok;
@@ -368,7 +369,7 @@ class Parser {
     if (c == '#') {
       size_t len = 0;
       Err e = ParseErr(s_.substr(i_), &len);
-      if (e == Err::None) return Fail("unknown error value");
+      if (e == Err::None) return Fail(::T("unknown error value"));
       size_t start = i_;
       i_ += len;
       if (e == Err::Ref && RefErrTail()) {  // #REF!A1: a reference to a deleted sheet, as Excel writes it
@@ -431,7 +432,7 @@ class Parser {
         i_ = k;
       }
     }
-    if (i_ - start > 400) return Fail("number too long");
+    if (i_ - start > 400) return Fail(::T("number too long"));
     // Excel keeps 15 significant digits of a literal and drops the rest (truncating).
     char buf[408];
     size_t k = 0, sig = 0;
@@ -451,7 +452,7 @@ class Parser {
     }
     buf[k] = '\0';
     v = std::strtod(buf, nullptr);
-    if (!(v - v == 0)) return Fail("number out of range");  // inf
+    if (!(v - v == 0)) return Fail(::T("number out of range"));  // inf
     return true;
   }
 
@@ -481,7 +482,7 @@ class Parser {
       } else if (c == '#') {
         size_t len = 0;
         Err e = ParseErr(s_.substr(i_), &len);
-        if (e == Err::None) return Fail("unknown error value");
+        if (e == Err::None) return Fail(::T("unknown error value"));
         i_ += len;
         items.push_back(kErr);
         items.push_back(static_cast<uint8_t>(e));
@@ -498,12 +499,12 @@ class Parser {
         size_t e = i_;
         while (e < s_.size() && IsLetter(s_[e])) ++e;
         std::string_view w = s_.substr(i_, e - i_);
-        if (!EqualNoCase(w, "TRUE") && !EqualNoCase(w, "FALSE")) return Fail("constant expected in the array");
+        if (!EqualNoCase(w, "TRUE") && !EqualNoCase(w, "FALSE")) return Fail(::T("constant expected in the array"));
         items.push_back(kBool);
         items.push_back(EqualNoCase(w, "TRUE") ? 1 : 0);
         i_ = e;
       } else {
-        return Fail("constant expected in the array");
+        return Fail(::T("constant expected in the array"));
       }
       ++col;
       SkipSpace();
@@ -514,7 +515,7 @@ class Parser {
       }
       if (c == ';' || c == '}') {
         if (rows == 0) cols = col;
-        else if (col != cols) return Fail("array rows differ in length");
+        else if (col != cols) return Fail(::T("array rows differ in length"));
         ++rows;
         col = 0;
         ++i_;
@@ -523,7 +524,7 @@ class Parser {
       }
       return Fail("',', ';' or '}' expected");
     }
-    if (rows > 65535 || cols > 65535) return Fail("array too large");
+    if (rows > 65535 || cols > 65535) return Fail(::T("array too large"));
     Op(kArray);
     Put<uint16_t>(static_cast<uint16_t>(rows));
     Put<uint16_t>(static_cast<uint16_t>(cols));
@@ -648,7 +649,7 @@ class Parser {
     char c = At(i_);
     if (c == '#') {
       size_t len = 0;
-      if (ParseErr(s_.substr(i_), &len) != Err::Ref) return Fail("reference expected after the sheet");
+      if (ParseErr(s_.substr(i_), &len) != Err::Ref) return Fail(::T("reference expected after the sheet"));
       i_ += len;
       Op(kRefErr);
       Op(sheetFlags);
@@ -657,13 +658,13 @@ class Parser {
     }
     Part a;
     size_t la = ScanPart(i_, a);
-    if (la == 0 && IsDigit(c) && !at_.r1c1) return Fail("reference expected after the sheet");
+    if (la == 0 && IsDigit(c) && !at_.r1c1) return Fail(::T("reference expected after the sheet"));
     if (la && TryReference(a, la, sheetFlags, s1, s2)) return true;
     // A name on that sheet.
     size_t e = i_;
     while (e < s_.size() && IsNameChar(s_[e])) ++e;
-    if (e == i_ || !IsNameStart(s_[i_])) return Fail("reference expected after the sheet");
-    if (sheetFlags & kSheet3D) return Fail("a name can't be on several sheets");
+    if (e == i_ || !IsNameStart(s_[i_])) return Fail(::T("reference expected after the sheet"));
+    if (sheetFlags & kSheet3D) return Fail(::T("a name can't be on several sheets"));
     std::string_view name = s_.substr(i_, e - i_);
     i_ = e;
     Op(kName);
@@ -705,7 +706,7 @@ class Parser {
       std::string name;
       ++i_;
       for (;;) {
-        if (i_ >= n) return Fail("unterminated sheet name");
+        if (i_ >= n) return Fail(::T("unterminated sheet name"));
         char d = s_[i_++];
         if (d == '\'') {
           if (At(i_) == '\'') {
@@ -717,7 +718,7 @@ class Parser {
         }
         name += d;
       }
-      if (At(i_) != '!') return Fail("'!' expected after the sheet name");
+      if (At(i_) != '!') return Fail(::T("'!' expected after the sheet name"));
       ++i_;
       bool external = !name.empty() && (name[0] == '[' || name.find(']') != std::string::npos);
       if (external && name.size() > 2 && name[0] == '[' && name[1] == '0' && name[2] == ']') {
@@ -827,7 +828,7 @@ class Parser {
     Part a;
     size_t la = ScanPart(i_, a);
     if (la && TryReference(a, la, 0, 0, 0)) return true;
-    if (dollar || !IsNameStart(c)) return Fail("not a valid reference or name");
+    if (dollar || !IsNameStart(c)) return Fail(::T("not a valid reference or name"));
     i_ = e;
     if (EqualNoCase(w, "TRUE") || EqualNoCase(w, "FALSE")) {
       Op(kBool);
@@ -894,7 +895,7 @@ class Parser {
         else if (EqualNoCase(content, "#Headers")) items |= kHeaders;
         else if (EqualNoCase(content, "#Totals")) items |= kTotals;
         else if (EqualNoCase(content, "#This Row")) items |= kThisRow;
-        else return Fail("unknown table item");
+        else return Fail(::T("unknown table item"));
         return true;
       }
       if (!content.empty() && content[0] == '@') {  // [@Col], the formula bar's #This Row
@@ -902,7 +903,7 @@ class Parser {
         content.remove_prefix(1);
         if (content.empty()) return true;
       }
-      if (ncols >= 2) return Fail("too many table columns");
+      if (ncols >= 2) return Fail(::T("too many table columns"));
       cols[ncols++] = std::string(content);
       return true;
     };
@@ -1026,7 +1027,7 @@ class Parser {
           unionOk_ = saveUnion;
           if (!ok) return false;
         }
-        if (++argc > 255) return Fail("too many arguments");
+        if (++argc > 255) return Fail(::T("too many arguments"));
         SkipSpace();
         d = At(i_);
         if (d == ',') {
@@ -1042,7 +1043,7 @@ class Parser {
     }
     if (let) {
       let_.resize(letScope);
-      if (argc % 2 == 0 || letNames != argc / 2) return Fail("LET wants names with values, then a calculation");
+      if (argc % 2 == 0 || letNames != argc / 2) return Fail(::T("LET wants names with values, then a calculation"));
     }
     if (!fn) {
       Op(kUnknown);
@@ -1052,8 +1053,8 @@ class Parser {
       f_.flags |= Formula::kUnsupported;
       return true;
     }
-    if (argc < fn->minArgs) return Fail("too few arguments");
-    if (argc > fn->maxArgs) return Fail("too many arguments");
+    if (argc < fn->minArgs) return Fail(::T("too few arguments"));
+    if (argc > fn->maxArgs) return Fail(::T("too many arguments"));
     if (fn->flags & kFnVolatile) f_.flags |= Formula::kVolatile;
     if (!std::strcmp(fn->name, "SUBTOTAL") || !std::strcmp(fn->name, "AGGREGATE")) f_.flags |= Formula::kSubtotal;
     if (fn->flags & kFnDynRef) f_.flags |= Formula::kDynamicRefs;

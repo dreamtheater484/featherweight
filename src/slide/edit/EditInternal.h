@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "pkg/References.h"
 #include "slide/Internal.h"
 #include "slide/edit/Edit.h"
@@ -171,7 +172,7 @@ class Call {
     impl_.BeginCall();
   }
   ~Call() {
-    if (!ended_) End(Result::Fail(u"The edit was interrupted."));
+    if (!ended_) End(Result::Fail(T(u"The edit was interrupted.")));
   }
   Call(const Call&) = delete;
   Call& operator=(const Call&) = delete;

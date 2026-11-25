@@ -4,6 +4,9 @@
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
+// The interface's catalogs, one per language (f1-lang; made at build time by tools/strings).
+#include "lang/LangData.rc"
+
 IDI_APP ICON "Featherweight.ico"
 IDI_FILE_DOCUMENT ICON "FileDocument.ico"
 IDI_FILE_WORKBOOK ICON "FileWorkbook.ico"

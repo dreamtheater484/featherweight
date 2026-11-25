@@ -2,39 +2,40 @@
 
 #include <cmath>
 
+#include "core/Lang.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
 using namespace gfx;
 
 SearchPanel::SearchPanel() {
-  box_.placeholder = L"Find in document";
+  box_.placeholder = T(L"Find in document");
   box_.maxLength = 256;
   prev_.id = CmdFindPrev;
   prev_.glyph = icon::ChevronUp;
-  prev_.tooltip = L"Previous match (Shift+Enter)";
+  prev_.tooltip = T(L"Previous match (Shift+Enter)");
   next_.id = CmdFindNext;
   next_.glyph = icon::ChevronDown;
-  next_.tooltip = L"Next match (Enter)";
+  next_.tooltip = T(L"Next match (Enter)");
   case_.id = CmdSearchCase;
   case_.glyph = icon::FontCase;
-  case_.tooltip = L"Match case";
+  case_.tooltip = T(L"Match case");
   words_.id = CmdSearchWords;
   words_.text = L"ab";  // underlined in Draw, as other programs show whole words
-  words_.tooltip = L"Whole words";
+  words_.tooltip = T(L"Whole words");
   close_.id = CmdCloseFind;
   close_.glyph = icon::Cancel;
   close_.glyphSize = 12;
-  close_.tooltip = L"Close (Esc)";
+  close_.tooltip = T(L"Close (Esc)");
   prev_.glyphSize = next_.glyphSize = 13;
-  with_.placeholder = L"Replace with";
+  with_.placeholder = T(L"Replace with");
   with_.maxLength = 256;
   one_.id = CmdReplaceOne;
-  one_.text = L"Replace";
-  one_.tooltip = L"Replace this match (Enter)";
+  one_.text = T(L"Replace");
+  one_.tooltip = T(L"Replace this match (Enter)");
   all_.id = CmdReplaceAll;
-  all_.text = L"All";
-  all_.tooltip = L"Replace all matches";
+  all_.text = T(L"All");
+  all_.tooltip = T(L"Replace all matches");
   set_.Add(&one_);
   set_.Add(&all_);
   set_.Add(&prev_);
@@ -165,7 +166,7 @@ std::wstring SearchPanel::TooltipAt(int x, int y) const {
 void SearchPanel::Describe(uia::Tree& t, int parent, const std::wstring& status, const std::function<void(int)>& run,
                            const std::function<void(TextBox*)>& focusBox) {
   if (!open_) return;
-  int pane = t.Add(parent, CmdFind, UIA_PaneControlTypeId, L"Find", Card());
+  int pane = t.Add(parent, CmdFind, UIA_PaneControlTypeId, T(L"Find"), Card());
   t[pane].layer = 1;
   uia::AddTextBox(t, pane, 1, box_, box_.placeholder + L" (Ctrl+F)", [focusBox, this] { focusBox(&box_); });
   if (!status.empty()) {

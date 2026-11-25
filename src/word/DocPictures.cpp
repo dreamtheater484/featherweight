@@ -16,6 +16,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/Images.h"
 #include "ui/Gfx.h"
@@ -464,14 +465,14 @@ bool DocView::PictureMouseUp(int x, int y) {
     switch (g.kind) {
       case PictureDrag::Move:
         if (floating && g.dropPage != g.page) {
-          host_.ViewMessage(BannerKind::Info, L"A shape stays on the page of the paragraph it's anchored to.");
+          host_.ViewMessage(BannerKind::Info, T(L"A shape stays on the page of the paragraph it's anchored to."));
           return true;
         }
         r = shapes_->Move(g.drawing, emu(g.now.left), emu(g.now.top));
         break;
       case PictureDrag::Resize: {
         const bool moved = g.now.left != g.start.left || g.now.top != g.start.top;
-        editor_->BeginGroup(u"Resize shape");
+        editor_->BeginGroup(T(u"Resize shape"));
         r = shapes_->Resize(g.drawing, emu(g.now.right - g.now.left), emu(g.now.bottom - g.now.top));
         if (r && floating && moved) r = shapes_->Move(g.drawing, emu(g.now.left), emu(g.now.top));
         if (r) editor_->EndGroup();
@@ -501,7 +502,7 @@ bool DocView::PictureMouseUp(int x, int y) {
     case PictureDrag::Resize: {
       const fw::Emu cx = emu(g.now.right - g.now.left), cy = emu(g.now.bottom - g.now.top);
       const bool moved = g.now.left != g.start.left || g.now.top != g.start.top;
-      editor_->BeginGroup(u"Resize picture");
+      editor_->BeginGroup(T(u"Resize picture"));
       edit::Result r = pictures_->Resize(g.drawing, cx, cy);
       if (r && floating && moved) r = pictures_->MoveFloating(g.drawing, emu(g.now.left), emu(g.now.top));
       if (r) editor_->EndGroup();
@@ -514,7 +515,7 @@ bool DocView::PictureMouseUp(int x, int y) {
       return true;
     case PictureDrag::Crop: {
       const bool moved = g.now.left != g.start.left || g.now.top != g.start.top;
-      editor_->BeginGroup(u"Crop picture");
+      editor_->BeginGroup(T(u"Crop picture"));
       edit::Result r = pictures_->SetCrop(g.drawing, g.crop);
       if (r && floating && moved) r = pictures_->MoveFloating(g.drawing, emu(g.now.left), emu(g.now.top));
       if (r) editor_->EndGroup();
@@ -583,12 +584,12 @@ fw::Emu DocView::ColumnWidthAt(TextPos pos) {
 bool DocView::InsertPictureBytes(const std::vector<uint8_t>& bytes, std::u16string_view name, std::optional<TextPos> at) {
   if (!Editing() || !pictures_) return false;
   if (!edit::Pictures::Accepts(bytes)) {
-    host_.ViewMessage(BannerKind::Warning, L"That isn't a picture Featherweight adds: PNG, JPEG, GIF, BMP, TIFF or SVG.");
+    host_.ViewMessage(BannerKind::Warning, T(L"That isn't a picture Featherweight adds: PNG, JPEG, GIF, BMP, TIFF or SVG."));
     return false;
   }
   const bool replace = !at && HasSelection();
   const TextPos where = at ? *at : std::min(anchor_, focus_);
-  editor_->BeginGroup(u"Insert picture");
+  editor_->BeginGroup(T(u"Insert picture"));
   edit::Result r;
   if (replace) r = editor_->Delete(SelFrom(), SelTo());
   if (r) r = pictures_->Insert(ToDoc(where), bytes, ColumnWidthAt(where), name);
@@ -606,7 +607,8 @@ bool DocView::InsertPictureFiles(const std::vector<std::wstring>& files, int x, 
     if (!IsPictureFile(path)) continue;
     std::string data;
     if (!util::ReadFileBytes(path, data, kMaxPictureFile)) {
-      host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(path) + L"” couldn't be read, or is too big to add.");
+      host_.ViewMessage(BannerKind::Warning,
+                        Fmt(T(L"“{0}” couldn't be read, or is too big to add."), {fw::FileNameOf(path)}));
       continue;
     }
     const std::wstring name = fw::FileNameOf(path);
@@ -626,11 +628,11 @@ void DocView::InsertPictureDialog() {
   if (!Editing()) return;
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
-  COMDLG_FILTERSPEC filters[] = {{L"Pictures", L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff;*.svg"},
-                                 {L"All files", L"*.*"}};
+  COMDLG_FILTERSPEC filters[] = {{T(L"Pictures"), L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib;*.tif;*.tiff;*.svg"},
+                                 {T(L"All files"), L"*.*"}};
   dlg->SetFileTypes(2, filters);
-  dlg->SetTitle(L"Insert picture");
-  dlg->SetOkButtonLabel(L"Insert");
+  dlg->SetTitle(T(L"Insert picture"));
+  dlg->SetOkButtonLabel(T(L"Insert"));
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -652,7 +654,7 @@ void DocView::InsertPictureDialog() {
   for (const auto& f : files)
     if (IsPictureFile(f)) pictures.push_back(f);
   if (pictures.empty() && !files.empty()) {
-    host_.ViewMessage(BannerKind::Warning, L"Pick a PNG, JPEG, GIF, BMP, TIFF or SVG picture.");
+    host_.ViewMessage(BannerKind::Warning, T(L"Pick a PNG, JPEG, GIF, BMP, TIFF or SVG picture."));
     return;
   }
   InsertPictureFiles(pictures);
@@ -727,7 +729,7 @@ bool DocView::CopyPicture() {
 std::optional<CommandState> DocView::QueryPicture(int cmd) {
   if (cmd < CmdInsertPicture || cmd > CmdPicturePanel) return std::nullopt;
   CommandState s;
-  if (cmd == CmdPictureWrapBox) s.label = L"Wrap text";  // the ribbon's menu
+  if (cmd == CmdPictureWrapBox) s.label = T(L"Wrap text");  // the ribbon's menu
   if (cmd == CmdInsertPicture) {
     s.enabled = Editing();
     return s;
@@ -845,7 +847,7 @@ void DocView::SyncPicturePanel() {
   if (key == panelShown_) return;
   panelShown_ = key;
   if (d == kNone) {
-    picturePanel_->Show(std::nullopt, L"Select a picture to change its size, rotation and alt text.");
+    picturePanel_->Show(std::nullopt, T(L"Select a picture to change its size, rotation and alt text."));
   } else if (!PictureInfoOf(d).picture) {
     picturePanel_->Show(std::nullopt, Wide(PictureInfoOf(d).why));
   } else {
@@ -862,25 +864,25 @@ void DocView::FillPictureMenu(HMENU m) {
   const bool picture = PictureInfoOf(d).picture;  // else a shape (DocShapes.cpp)
   const edit::Wrap w = picture ? PictureInfoOf(d).wrap : ShapeInfoOf(d).wrap;
   HMENU wrap = CreatePopupMenu();
-  AppendItem(wrap, CmdPictureInline, L"In line with text", true, w == edit::Wrap::Inline, true);
-  AppendItem(wrap, CmdPictureSquare, L"Square", true, w == edit::Wrap::Square, true);
-  AppendItem(wrap, CmdPictureTight, L"Tight", true, w == edit::Wrap::Tight, true);
-  AppendItem(wrap, CmdPictureTopBottom, L"Top and bottom", true, w == edit::Wrap::TopAndBottom, true);
-  AppendItem(wrap, CmdPictureBehind, L"Behind text", true, w == edit::Wrap::Behind, true);
-  AppendItem(wrap, CmdPictureInFront, L"In front of text", true, w == edit::Wrap::InFront, true);
-  menu::AppendSubmenu(m, wrap, L"Wrap text");
+  AppendItem(wrap, CmdPictureInline, T(L"In line with text"), true, w == edit::Wrap::Inline, true);
+  AppendItem(wrap, CmdPictureSquare, T(L"Square"), true, w == edit::Wrap::Square, true);
+  AppendItem(wrap, CmdPictureTight, T(L"Tight"), true, w == edit::Wrap::Tight, true);
+  AppendItem(wrap, CmdPictureTopBottom, T(L"Top and bottom"), true, w == edit::Wrap::TopAndBottom, true);
+  AppendItem(wrap, CmdPictureBehind, T(L"Behind text"), true, w == edit::Wrap::Behind, true);
+  AppendItem(wrap, CmdPictureInFront, T(L"In front of text"), true, w == edit::Wrap::InFront, true);
+  menu::AppendSubmenu(m, wrap, T(L"Wrap text"));
   if (!picture) {
     const edit::ShapeInfo& info = ShapeInfoOf(d);
-    if (!info.line) AppendItem(m, info.text ? CmdShapeEditText : CmdShapeAddText, info.text ? L"Edit text" : L"Add text");
-    AppendItem(m, CmdPictureRotate, L"Rotate 90°");
-    AppendItem(m, CmdShapePanel, L"Wrap, size, fill and outline…");
+    if (!info.line) AppendItem(m, info.text ? CmdShapeEditText : CmdShapeAddText, info.text ? T(L"Edit text") : T(L"Add text"));
+    AppendItem(m, CmdPictureRotate, T(L"Rotate 90°"));
+    AppendItem(m, CmdShapePanel, T(L"Wrap, size, fill and outline…"));
     AppendSeparator(m);
     return;
   }
-  AppendItem(m, CmdPictureCrop, L"Crop", true, cropMode_);
-  AppendItem(m, CmdPictureRotate, L"Rotate 90°");
-  AppendItem(m, CmdPictureReset, L"Reset size");
-  AppendItem(m, CmdPicturePanel, L"Size, rotation and alt text…");
+  AppendItem(m, CmdPictureCrop, T(L"Crop"), true, cropMode_);
+  AppendItem(m, CmdPictureRotate, T(L"Rotate 90°"));
+  AppendItem(m, CmdPictureReset, T(L"Reset size"));
+  AppendItem(m, CmdPicturePanel, T(L"Size, rotation and alt text…"));
   AppendSeparator(m);
 }
 
@@ -895,8 +897,8 @@ constexpr float kRow = 44;
 PicturePanel::PicturePanel(Actions actions) : actions_(std::move(actions)) {
   wchar_t measure[4] = {};
   metric_ = !(GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IMEASURE, measure, 4) > 0 && measure[0] == L'1');
-  wrap_.items = {L"In line with text", L"Square", L"Tight", L"Top and bottom", L"Behind text", L"In front of text"};
-  wrap_.label = L"Wrap text";
+  wrap_.items = {T(L"In line with text"), T(L"Square"), T(L"Tight"), T(L"Top and bottom"), T(L"Behind text"), T(L"In front of text")};
+  wrap_.label = T(L"Wrap text");
   wrap_.onChange = [this](int i) {
     if (i >= 0 && i < 6 && actions_.wrap) actions_.wrap(static_cast<fw::doc::edit::Wrap>(i));
   };
@@ -907,8 +909,8 @@ PicturePanel::PicturePanel(Actions actions) : actions_(std::move(actions)) {
     s->maxValue = metric_ ? 55.88 : 22;
     s->unit = metric_ ? L" cm" : L"″";
   }
-  width_.label = L"Width";
-  height_.label = L"Height";
+  width_.label = T(L"Width");
+  height_.label = T(L"Height");
   width_.onChange = [this](double v) {
     const double w = FromUnit(v), h = lockAspect_ ? w * aspect_ : FromUnit(height_.value);
     if (actions_.size) actions_.size(w, h);
@@ -921,31 +923,31 @@ PicturePanel::PicturePanel(Actions actions) : actions_(std::move(actions)) {
   rotation_.maxValue = 359;
   rotation_.step = 15;
   rotation_.unit = L"°";
-  rotation_.label = L"Rotation";
+  rotation_.label = T(L"Rotation");
   rotation_.onChange = [this](double v) {
     if (actions_.rotate) actions_.rotate(v);
   };
   alt_.autoComplete = false;
-  alt_.label = L"Alt text";
-  alt_.tooltip = L"What the picture shows, for people who can't see it";
+  alt_.label = T(L"Alt text");
+  alt_.tooltip = T(L"What the picture shows, for people who can't see it");
   alt_.onCommit = [this](const std::wstring& text, int) {
     if (actions_.altText) actions_.altText(text);
   };
-  crop_.text = L"Crop";
+  crop_.text = T(L"Crop");
   crop_.glyph = icon::Crop;
-  crop_.label = L"Crop";
+  crop_.label = T(L"Crop");
   crop_.onInvoke = [this] {
     if (actions_.crop) actions_.crop();
   };
-  reset_.text = L"Reset size";
+  reset_.text = T(L"Reset size");
   reset_.glyph = icon::Undo;
-  reset_.label = L"Reset size";
+  reset_.label = T(L"Reset size");
   reset_.onInvoke = [this] {
     if (actions_.reset) actions_.reset();
   };
-  rows_ = {{L"Layout", nullptr}, {L"Wrap text", &wrap_},  {L"Size", nullptr},    {L"Width", &width_},
-           {L"Height", &height_}, {L"Rotation", &rotation_}, {L"", &crop_},  {L"", &reset_},
-           {L"Alt text", nullptr}, {L"Description", &alt_}};
+  rows_ = {{T(L"Layout"), nullptr}, {T(L"Wrap text"), &wrap_},  {T(L"Size"), nullptr},    {T(L"Width"), &width_},
+           {T(L"Height"), &height_}, {T(L"Rotation"), &rotation_}, {L"", &crop_},  {L"", &reset_},
+           {T(L"Alt text"), nullptr}, {T(L"Description"), &alt_}};
 }
 
 double PicturePanel::ToUnit(int64_t emu) const { return emu / (metric_ ? 360000.0 : 914400.0); }

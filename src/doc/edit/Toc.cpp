@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <unordered_map>
 
+#include "core/Lang.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Inline.h"
 #include "doc/edit/Page.h"
@@ -115,10 +116,10 @@ Result Build(Editor& editor, Pos at, const PageText& pages, const std::string& c
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
   if (at.para >= doc.Paragraphs().size() || at.offset > doc.Para(at.para).text.size())
-    return Fail(u"That place isn't in the document.");
+    return Fail(T(u"That place isn't in the document."));
   if (doc.Para(at.para).story != doc.MainStory())
-    return Fail(u"A table of contents goes in the document's text, not in a header, a footer, a note or a text box.");
-  if (InsideField(doc, at)) return Fail(u"A table of contents can't go inside a field.");
+    return Fail(T(u"A table of contents goes in the document's text, not in a header, a footer, a note or a text box."));
+  if (InsideField(doc, at)) return Fail(T(u"A table of contents can't go inside a field."));
 
   // The headings, and their pages as laid out now (the entries' first numbers).
   std::vector<TocHeading> headings = TocHeadings(doc, levels);
@@ -152,18 +153,18 @@ Result Build(Editor& editor, Pos at, const PageText& pages, const std::string& c
   }
   std::u16string text;
   for (size_t i = 0; i < headings.size(); ++i) text += headings[i].text + u"\t" + shown[i] + u"\r";
-  if (headings.empty()) text = u"No table of contents entries found.\r";
+  if (headings.empty()) text = T(u"No table of contents entries found.\r");
   const uint32_t first = q.para;
   const auto count = static_cast<uint32_t>(headings.empty() ? 1 : headings.size());
   const uint32_t endPara = first + count;
   if (Result r = editor.InsertText({first, 0}, text); !r) return r;
   if (endPara >= doc.Paragraphs().size() || !doc.Para(endPara).text.empty())
-    return Fail(u"A table of contents can't go here.");
+    return Fail(T(u"A table of contents can't go here."));
 
   // The styles part, outside undo, once the entries are in: a table that can't go there leaves
   // none behind (torture finding 30). Then their styles, the entries' right tab at the text's
   // edge, and no list: one step.
-  if (check.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
+  if (check.EnsurePart(PartKind::Styles) == kNoElem) return Fail(T(u"This document's styles can't change."));
   {
     TreeEdit te(editor, {first, 0});
     te.Begin(name);
@@ -255,7 +256,7 @@ std::optional<TocInfo> TocAt(const Document& doc, Pos at) {
 }
 
 Result InsertToc(Editor& editor, Pos at, const PageText& pages) {
-  return Build(editor, at, pages, kCode, 3, u"Table of Contents");
+  return Build(editor, at, pages, kCode, 3, T(u"Table of Contents"));
 }
 
 Result UpdateTocPages(Editor& editor, const TocInfo& toc, const PageText& pages) {
@@ -266,7 +267,7 @@ Result UpdateTocPages(Editor& editor, const TocInfo& toc, const PageText& pages)
   uint32_t index = kNone;
   for (uint32_t k = 0; k < fields.size() && index == kNone; ++k)
     if (fields[k].begin == toc.begin && SameWord(fields[k].Type(), u"TOC")) index = k;
-  if (index == kNone) return Fail(u"There's no table of contents here.");
+  if (index == kNone) return Fail(T(u"There's no table of contents here."));
   std::unordered_map<std::string, uint32_t> marks;  // bookmark (lower case) -> its paragraph
   for (const BookmarkInfo& b : Bookmarks(doc)) marks.emplace(LowerAscii(b.name), b.from.para);
   struct Fix {
@@ -286,7 +287,7 @@ Result UpdateTocPages(Editor& editor, const TocInfo& toc, const PageText& pages)
   Result out;
   out.caret = toc.end;
   if (fixes.empty()) return out;
-  EditGroup group(editor, u"Update Table");
+  EditGroup group(editor, T(u"Update Table"));
   for (auto it = fixes.rbegin(); it != fixes.rend(); ++it)
     if (Result r = editor.Replace(it->from, it->to, it->text); !r) return r;
   group.done = true;
@@ -298,10 +299,10 @@ Result UpdateToc(Editor& editor, const TocInfo& toc, const PageText& pages) {
   const Document& doc = editor.Doc();
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (!TocAt(doc, toc.begin)) return Fail(u"There's no table of contents here.");
-  EditGroup group(editor, u"Update Table");
+  if (!TocAt(doc, toc.begin)) return Fail(T(u"There's no table of contents here."));
+  EditGroup group(editor, T(u"Update Table"));
   if (Result r = editor.Delete(toc.begin, {toc.end.para, toc.end.offset + 1}); !r) return r;
-  Result r = Build(editor, toc.begin, pages, ToUtf8(toc.code), toc.levels, u"Update Table");
+  Result r = Build(editor, toc.begin, pages, ToUtf8(toc.code), toc.levels, T(u"Update Table"));
   if (!r) return r;
   group.done = true;
   return r;

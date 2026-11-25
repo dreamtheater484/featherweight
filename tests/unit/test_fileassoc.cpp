@@ -64,7 +64,7 @@ TEST(FileAssoc_EveryKindOnceShipped) {
   for (FileKind kind : all) {
     const fw::FileKindInfo& k = fw::Info(kind);
     const std::wstring progId = L"Software\\Classes\\" + std::wstring(k.progId);
-    CHECK(Has(plan, {progId, L"", k.typeName}));
+    CHECK(Has(plan, {progId, L"", std::wstring(k.typeName)}));
     CHECK(Has(plan, {progId + L"\\DefaultIcon", L"", L"\"" + kExe + L"\"," + std::to_wstring(k.iconIndex)}));
     CHECK(Has(plan, {progId + L"\\shell\\open\\command", L"", L"\"" + kExe + L"\" \"%1\""}));
     for (const wchar_t* ext : k.extensions) {

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "draw/Painter.h"
 #include "slide/edit/Edit.h"
 
@@ -21,7 +22,7 @@ namespace fw::slide::edit {
 
 // Who writes (File > Options > User name, else Windows' name).
 struct CommentAuthor {
-  std::wstring name = L"Author";
+  std::wstring name = N_(L"Author");
   std::wstring initials;  // empty: made from the name ("Ann Lee" -> "AL")
 };
 

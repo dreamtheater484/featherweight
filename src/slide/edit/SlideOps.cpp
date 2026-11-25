@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <random>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/ShapeXml.h"
 #include "slide/edit/SlideCopy.h"
@@ -296,14 +297,14 @@ void MapPlaceholders(pugi::xml_node slideRoot, pugi::xml_node layoutRoot, std::s
 // ---- Slides
 
 Result Editor::NewSlide(size_t at, size_t layout, uint32_t* id) {
-  Call call(*this, u"New Slide");
+  Call call(*this, T(u"New Slide"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
-  if (at > list.size()) return call.End(Result::Fail(u"That isn't a place in the presentation."));
-  if (layout >= deck_.Layouts().size()) return call.End(Result::Fail(u"That layout isn't in the presentation."));
+  if (at > list.size()) return call.End(Result::Fail(T(u"That isn't a place in the presentation.")));
+  if (layout >= deck_.Layouts().size()) return call.End(Result::Fail(T(u"That layout isn't in the presentation.")));
   const Layout& l = *deck_.Layouts()[layout];
   pugi::xml_node layoutRoot = m.Root(l.part);
-  if (!layoutRoot) return call.End(Result::Fail(u"That layout can't be read."));
+  if (!layoutRoot) return call.End(Result::Fail(T(u"That layout can't be read.")));
   std::string part = m.NewName("/ppt/slides/slide", ".xml");
   std::string xml =
       "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
@@ -349,7 +350,7 @@ Result Editor::NewSlide(size_t at, size_t layout, uint32_t* id) {
 }
 
 Result Editor::DuplicateSlides(const std::vector<size_t>& slides, std::vector<uint32_t>* ids) {
-  Call call(*this, slides.size() > 1 ? u"Duplicate Slides" : u"Duplicate Slide");
+  Call call(*this, slides.size() > 1 ? T(u"Duplicate Slides") : T(u"Duplicate Slide"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
@@ -364,7 +365,7 @@ Result Editor::DuplicateSlides(const std::vector<size_t>& slides, std::vector<ui
     const Impl::SlideEntry& e = list[index];
     SlideCopier copier(m, nullptr);
     std::string part = copier.CopySlide(e.part);
-    if (part.empty()) return call.End(Result::Fail(u"The slide can't be copied, because a part of it can't be read."));
+    if (part.empty()) return call.End(Result::Fail(T(u"The slide can't be copied, because a part of it can't be read.")));
     std::string rel = m.AddRel(pres, kRelSlide, part);
     pugi::xml_node root = m.Edit(pres);
     uint32_t newId = NewSlideId(root);
@@ -380,11 +381,11 @@ Result Editor::DuplicateSlides(const std::vector<size_t>& slides, std::vector<ui
 
 // A deletion refused: something Featherweight doesn't know names the slide (an empty r:id would damage).
 static Result Unknown() {
-  return Result::Fail(u"The slide can't be deleted, because another part of the presentation refers to it in a way Featherweight doesn't know.");
+  return Result::Fail(T(u"The slide can't be deleted, because another part of the presentation refers to it in a way Featherweight doesn't know."));
 }
 
 Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
-  Call call(*this, slides.size() > 1 ? u"Delete Slides" : u"Delete Slide");
+  Call call(*this, slides.size() > 1 ? T(u"Delete Slides") : T(u"Delete Slide"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
@@ -405,7 +406,7 @@ Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
     impact[1].values.assign(rels.begin(), rels.end());
     if (!m.registry.WouldStrand(m.Root(pres), impact).empty()) {
       return call.End(Result::Fail(
-          u"The slide can't be deleted, because the presentation has content from a newer program that may refer to it."));
+          T(u"The slide can't be deleted, because the presentation has content from a newer program that may refer to it.")));
     }
   }
   pugi::xml_node root = m.Edit(pres);
@@ -484,14 +485,14 @@ Result Editor::DeleteSlides(const std::vector<size_t>& slides) {
 }
 
 Result Editor::MoveSlides(const std::vector<size_t>& slides, size_t to) {
-  Call call(*this, slides.size() > 1 ? u"Move Slides" : u"Move Slide");
+  Call call(*this, slides.size() > 1 ? T(u"Move Slides") : T(u"Move Slide"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
   std::vector<size_t> order = slides;
   std::sort(order.begin(), order.end());
   order.erase(std::unique(order.begin(), order.end()), order.end());
-  if (to > list.size() - order.size()) return call.End(Result::Fail(u"That isn't a place in the presentation."));
+  if (to > list.size() - order.size()) return call.End(Result::Fail(T(u"That isn't a place in the presentation.")));
   std::vector<size_t> rest;
   for (size_t i = 0; i < list.size(); ++i) {
     if (!std::binary_search(order.begin(), order.end(), i)) rest.push_back(i);
@@ -535,7 +536,7 @@ Result Editor::MoveSlides(const std::vector<size_t>& slides, size_t to) {
 }
 
 Result Editor::HideSlides(const std::vector<size_t>& slides, bool hidden) {
-  Call call(*this, hidden ? u"Hide Slide" : u"Show Slide");
+  Call call(*this, hidden ? T(u"Hide Slide") : T(u"Show Slide"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
@@ -555,14 +556,14 @@ Result Editor::HideSlides(const std::vector<size_t>& slides, bool hidden) {
 }
 
 Result Editor::SetLayout(const std::vector<size_t>& slides, size_t layout) {
-  Call call(*this, u"Layout");
+  Call call(*this, T(u"Layout"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
-  if (layout >= deck_.Layouts().size()) return call.End(Result::Fail(u"That layout isn't in the presentation."));
+  if (layout >= deck_.Layouts().size()) return call.End(Result::Fail(T(u"That layout isn't in the presentation.")));
   const Layout& l = *deck_.Layouts()[layout];
   pugi::xml_node layoutRoot = m.Root(l.part);
-  if (!layoutRoot) return call.End(Result::Fail(u"That layout can't be read."));
+  if (!layoutRoot) return call.End(Result::Fail(T(u"That layout can't be read.")));
   for (size_t i : slides) {
     const std::string& part = list[i].part;
     // The shapes' places now, for content whose placeholder the new layout lacks.
@@ -777,21 +778,21 @@ std::string MakeNotesSlide(Editor::Impl& m, std::string_view slidePart) {
 Result Editor::SetNotesText(size_t slide, std::wstring_view text) {
   const std::wstring clean = XmlText(text, true);  // what XML can't hold dropped
   text = clean;
-  Call call(*this, u"Edit Notes");
+  Call call(*this, T(u"Edit Notes"));
   Impl& m = *impl_;
   std::string part = m.SlidePart(slide);
-  if (part.empty()) return call.End(Result::Fail(u"That slide isn't in the presentation."));
+  if (part.empty()) return call.End(Result::Fail(T(u"That slide isn't in the presentation.")));
   std::string notes = NotesPartOf(m, part);
   if (notes.empty() || !m.Exists(notes)) {
     if (text.empty()) return call.End({});
     notes = MakeNotesSlide(m, part);
     if (notes.empty()) {
-      return call.End(Result::Fail(u"Notes can't be added to this presentation, because its theme can't be read."));
+      return call.End(Result::Fail(T(u"Notes can't be added to this presentation, because its theme can't be read.")));
     }
   }
   pugi::xml_node root = m.Edit(notes);
   pugi::xml_node body = NotesBody(root);
-  if (!body) return call.End(Result::Fail(u"This slide's notes page has no place for notes."));
+  if (!body) return call.End(Result::Fail(T(u"This slide's notes page has no place for notes.")));
   body = Impl::Unwrap(body);
   pugi::xml_node txBody = P(body, "txBody");
   if (!txBody) {
@@ -800,7 +801,7 @@ Result Editor::SetNotesText(size_t slide, std::wstring_view text) {
     txBody.append_child((a + ":bodyPr").c_str());
     txBody.append_child((a + ":lstStyle").c_str());
   }
-  if (HoldsMath(txBody)) return call.End(Result::Fail(u"These notes hold an equation, which Featherweight can't edit yet."));
+  if (HoldsMath(txBody)) return call.End(Result::Fail(T(u"These notes hold an equation, which Featherweight can't edit yet.")));
   SetPlainText(txBody, text);
   return call.End({});
 }

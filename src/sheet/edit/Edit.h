@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/edit/Charts.h"
 #include "sheet/data/Shapes.h"
 #include "sheet/edit/Drawing.h"
@@ -185,8 +186,8 @@ class Editor {
   // is left); the rest stay. Rich text, notes, hyperlinks, conditional formats and validations
   // stay where they are (not moved yet). Refused over part of a merge or an array, and over
   // tables, PivotTables and data tables.
-  Result MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName = u"Paste");
-  Result MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName = u"Paste") {
+  Result MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName = T(u"Paste"));
+  Result MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName = T(u"Paste")) {
     return MoveCells(sheet, from, sheet, to, std::move(stepName));
   }
   Result DeleteCells(int sheet, const Range& r, Direction shift);  // Left or Up

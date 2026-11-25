@@ -1,5 +1,7 @@
 #include "ui/Menu.h"
 
+#include "core/Lang.h"
+
 namespace menu {
 
 void AppendItem(HMENU m, UINT id, const std::wstring& text, bool enabled, bool checked, bool radio) {
@@ -8,7 +10,10 @@ void AppendItem(HMENU m, UINT id, const std::wstring& text, bool enabled, bool c
   mi.fType = MFT_STRING | (radio ? MFT_RADIOCHECK : 0);
   mi.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
   mi.wID = id;
-  mi.dwTypeData = const_cast<wchar_t*>(text.c_str());
+  // The shortcut after the tab as the language writes it (Strg+S in German).
+  const size_t tab = text.find(L'\t');
+  const std::wstring shown = tab == std::wstring::npos ? text : text.substr(0, tab) + fw::lang::KeyNames(text.substr(tab));
+  mi.dwTypeData = const_cast<wchar_t*>(shown.c_str());
   InsertMenuItemW(m, GetMenuItemCount(m), TRUE, &mi);
 }
 

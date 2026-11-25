@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -44,6 +45,23 @@ inline float Width(const D2D1_RECT_F& r) { return r.right - r.left; }
 inline float Height(const D2D1_RECT_F& r) { return r.bottom - r.top; }
 
 enum class Align { Leading, Center, Trailing };
+
+#if FW_TEST_SCREENS
+// The clipping check (F1, f1-lang; the script step clipcheck): while a list is given, every Text() and
+// TextWrapped() that doesn't fit its box adds itself to it.
+struct ClippedText {
+  std::wstring text;
+  float need = 0, room = 0;  // pixels: width for one line, height for wrapped text
+};
+void WatchClipping(std::vector<ClippedText>* into);
+std::vector<ClippedText>* WatchingClipping();
+// Around text that's cut by design (a style's "AaBbCcDd" sample, as Word's): not noted.
+struct ClippingPause {
+  std::vector<ClippedText>* was = WatchingClipping();
+  ClippingPause() { WatchClipping(nullptr); }
+  ~ClippingPause() { WatchClipping(was); }
+};
+#endif
 
 // Thin drawing helper over a Direct2D device context. Coordinates are device pixels.
 class Canvas {

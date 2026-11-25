@@ -9,6 +9,7 @@
 
 #include "PagedView.h"
 #include "PasswordCard.h"
+#include "core/Lang.h"
 #include "pdf/Document.h"
 #include "pdf/RenderCache.h"
 #include "pdf/Search.h"
@@ -89,7 +90,7 @@ class PdfView : public PagedView, public DocumentHost {
   bool SearchActive() const { return search_.Active(); }
 
   bool Save(const std::wstring& path, std::wstring& error) override;
-  SaveFormat SaveAsFormat() const override { return {L"PDF document", L"*.pdf", L"pdf"}; }
+  SaveFormat SaveAsFormat() const override { return {T(L"PDF document"), L"*.pdf", L"pdf"}; }
   bool CanPrint() const override { return doc_ && doc_->CanPrint(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // A copy with form fields and annotations flattened into the pages: what printing to a PDF

@@ -59,7 +59,7 @@ std::vector<Value> Plan(const std::wstring& exe, const std::vector<fw::FileKind>
   for (fw::FileKind kind : kinds) {
     const fw::FileKindInfo& k = fw::Info(kind);
     const std::wstring progId = kClasses + std::wstring(k.progId);
-    v.push_back({progId, L"", k.typeName});
+    v.push_back({progId, L"", std::wstring(k.typeName)});
     v.push_back({progId + L"\\DefaultIcon", L"", L"\"" + exe + L"\"," + std::to_wstring(k.iconIndex)});
     v.push_back({progId + L"\\shell\\open\\command", L"", command});
     v.push_back({progId + L"\\Application", L"ApplicationName", kAppName});
