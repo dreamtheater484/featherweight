@@ -91,6 +91,7 @@ if ($Unsigned) {
   }
   if ($bad) { throw "$bad files carry a signature" }
   Write-Host "$($Unsigned.Count) files, none signed"
+  $global:LASTEXITCODE = 0  # signtool's "no signature" exit code is the expected answer, not the step's result
 }
 
 if ($Releasable) {
