@@ -737,7 +737,7 @@ Check "lang.catalog" quick "The catalog check: NL, DE, FR, ES translated, placeh
   if (-not $tool) { return NotBuilt "f1-lang" "the catalog check (python tools\strings\check.py --build --json: see FeatherweightNotes\f1\gate-contract.md)" }
   $j = Join-Path $script:outDir "lang-catalog.json"
   if ($tool -like "*.ps1") { $code = Invoke-Script "lang.catalog" $tool @("-Build", (Full $Build), "-Json", $j) }
-  else { $code = Invoke-Tool "lang.catalog" "python" @("-I", (Full $tool), "--build", (Full $Build), "--json", $j) }
+  else { $code = Invoke-Tool "lang.catalog" "python" @("-I", "-B", (Full $tool), "--build", (Full $Build), "--json", $j) }
   $c = Read-Json $j
   if (-not $c) { return Failed "the catalog check wrote nothing (exit $code)" }
   $n = [ordered]@{}; $bad = @()
