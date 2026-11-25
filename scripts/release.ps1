@@ -96,7 +96,7 @@ for ($i = 0; $i -lt 60 -and -not $run; $i++) {
 }
 if (-not $run) { throw "release.yml didn't start for $tag" }
 gh run watch $run.databaseId --repo $repo --exit-status --interval 60
-if ($LASTEXITCODE -ne 0) { throw "release.yml failed for $tag: https://github.com/$repo/actions/runs/$($run.databaseId)" }
+if ($LASTEXITCODE -ne 0) { throw "release.yml failed for ${tag}: https://github.com/$repo/actions/runs/$($run.databaseId)" }
 # Its "reproducible (compare)" job built the commit a second time on fresh runners: the release can't be drafted
 # unless the program files matched byte for byte.
 $jobs = (gh run view $run.databaseId --repo $repo --json jobs | ConvertFrom-Json).jobs
