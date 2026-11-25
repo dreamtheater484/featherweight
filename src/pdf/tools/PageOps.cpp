@@ -218,7 +218,26 @@ int Insert(FPDF_DOCUMENT doc, const Source& src, int at) {
   if (adding <= 0) return 0;
   at = std::clamp(at, 0, count);
   if (!FPDF_ImportPagesByIndex(doc, src.doc, nullptr, 0, at)) return 0;
-  return FPDF_GetPageCount(doc) - count;
+  const int added = FPDF_GetPageCount(doc) - count;
+  // An imported page has no /Rotate of its own when its source page had none, and would take the
+  // one its new branch of the page tree passes down (f1-gate's finding): its rotation and visible
+  // area are written on it, as the source showed them.
+  for (int k = 0; k < added && k < adding; ++k) {
+    FPDF_PAGE from = FPDF_LoadPage(src.doc, k);
+    FPDF_PAGE to = FPDF_LoadPage(doc, at + k);
+    if (from && to) {
+      FPDFPage_SetRotation(to, FPDFPage_GetRotation(from));
+      FS_RECTF seen{};
+      float l = 0, b = 0, r = 0, t = 0;
+      if (FPDF_GetPageBoundingBox(from, &seen)) {
+        if (!FPDFPage_GetMediaBox(to, &l, &b, &r, &t)) FPDFPage_SetMediaBox(to, seen.left, seen.bottom, seen.right, seen.top);
+        FPDFPage_SetCropBox(to, seen.left, seen.bottom, seen.right, seen.top);
+      }
+    }
+    if (to) FPDF_ClosePage(to);
+    if (from) FPDF_ClosePage(from);
+  }
+  return added;
 }
 
 bool Extract(FPDF_DOCUMENT doc, const std::vector<int>& pages, std::string& out) {

@@ -57,7 +57,10 @@ struct Source {
 // Opens `bytes` (moved in) as a source; a protected file needs `password`. A file whose
 // permissions don't allow copying its content is refused (NotAllowed).
 SourceError OpenSource(std::string bytes, const std::string& password, Source& out);
-// Inserts every page of `src` before page `at` (count: at the end). Returns the pages inserted.
+// Inserts every page of `src` before page `at` (count: at the end), each with the rotation and
+// visible area it had there. Returns the pages inserted. PDFium's imported pages go on reading
+// from `src` (their streams) until `doc` is written and loaded again: keep `src` open until then
+// (Editor::Insert and the tab do it at once).
 int Insert(FPDF_DOCUMENT doc, const Source& src, int at);
 
 // A new PDF with `pages` of `doc`, in that order, as its bytes.

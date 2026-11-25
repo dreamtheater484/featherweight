@@ -236,6 +236,9 @@ class PdfView : public PagedView, public DocumentHost {
 
   PdfHost& pdfHost_;
   std::wstring path_;
+  // PDFs pages were inserted from, kept open only when the document couldn't be opened again after
+  // the insert (its imported pages read from them). Declared before doc_, so they close after it.
+  std::vector<std::unique_ptr<pdftools::Source>> importedFrom_;
   std::unique_ptr<Document> doc_;
   std::unique_ptr<RenderCache> cache_;
   LoadState state_ = LoadState::Empty;

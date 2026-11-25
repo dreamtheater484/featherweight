@@ -46,7 +46,7 @@ class Editor {
   bool Rotate(const std::vector<int>& pages, int quarterTurns);
   bool Delete(const std::vector<int>& pages);
   bool Move(const std::vector<int>& pages, int gap);  // pins inherited attributes first
-  int Insert(const Source& src, int at);              // the pages inserted
+  int Insert(const Source& src, int at);              // the pages inserted; `src` may close after
   bool Extract(const std::vector<int>& pages, std::string& out) const;
 
   // Recognize text (OCR) on `pages`, or every page when empty; pages that already have text are

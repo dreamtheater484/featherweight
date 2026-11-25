@@ -110,9 +110,13 @@ class Document {
   // file as it is, byte for byte.
   bool Save(const std::wstring& path, std::wstring& error);
   // ---- The whole document (f1-pdf: page tools, undo, signing) ----
-  // The document as a save writes it now: the file as opened while nothing changed, otherwise the
-  // file with PDFium's incremental update after it. False when it couldn't be written.
+  // The document as a save writes it now: the file as opened while nothing changed, otherwise
+  // written whole, or incrementally when it's signed (pdftools::SaveDocument). False when it
+  // couldn't be written.
   bool CurrentBytes(std::string& out);
+  // The document as edited, written and opened again, so it reads only from its own bytes: pages
+  // inserted from another PDF go on reading from that file's until then.
+  bool ReloadAsEdited();
   // Opens `bytes` in place of the document: the same object, so the view's references stay. Every
   // page and the form start again, without running the document's open scripts. The view drops
   // what it holds of the pages first (RenderCache::Clear).

@@ -482,6 +482,12 @@ bool Document::Encrypted() const { return doc_ && FPDF_GetSecurityHandlerRevisio
 
 int Document::SignatureCount() const { return doc_ ? std::max(0, FPDF_GetSignatureCount(doc_)) : 0; }
 
+bool Document::ReloadAsEdited() {
+  modified_ = true;  // CurrentBytes writes the document, not the file as opened
+  std::string bytes;
+  return CurrentBytes(bytes) && Reload(std::move(bytes), true);
+}
+
 bool Document::Reload(std::string bytes, bool modified) {
   if (bytes.empty()) return false;
   FPDF_DOCUMENT fresh =

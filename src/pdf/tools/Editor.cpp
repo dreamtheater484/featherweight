@@ -71,9 +71,17 @@ bool Editor::Move(const std::vector<int>& pages, int gap) {
 
 int Editor::Insert(const Source& src, int at) {
   if (PageToolsBlocked() != Block::None) return 0;
+  // The inserted pages read from `src` until the document is written and loaded again, which is
+  // done here, so the caller may close `src` (f1-gate's finding: a crash once it was closed).
+  const bool wasModified = modified_;
+  std::string before, after;
+  if (!Bytes(before)) return 0;
   const int added = pdftools::Insert(doc_, src, at);
-  if (added > 0) modified_ = true;
-  return added;
+  if (added <= 0) return 0;
+  modified_ = true;
+  if (Bytes(after) && Reload(std::move(after), true)) return added;
+  Reload(std::move(before), wasModified);  // the insert can't be kept without `src`
+  return 0;
 }
 
 bool Editor::Extract(const std::vector<int>& pages, std::string& out) const {

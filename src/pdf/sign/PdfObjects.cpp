@@ -604,17 +604,23 @@ int File::FirstPage() {
   if (!root || root->type != Obj::Ref || !Get(root->num, catalog) || catalog.type != Obj::Dict) return -1;
   const Obj* pages = catalog.Get("Pages");
   if (!pages || pages->type != Obj::Ref) return -1;
-  int num = pages->num;
   std::set<int> seen;
-  for (int depth = 0; depth < 64; ++depth) {
-    Obj node;
-    if (!seen.insert(num).second || !Get(num, node) || node.type != Obj::Dict) return -1;
-    const Obj* kids = node.Get("Kids");
-    if (!kids) return node.Get("Type") && node.Get("Type")->IsName("Page") ? num : -1;
-    Obj list;
-    if (!Resolve(*kids, list) || list.type != Obj::Array || list.items.empty() || list.items[0].type != Obj::Ref)
-      return -1;
-    num = list.items[0].num;
+  const int first = FirstLeaf(pages->num, 0, seen);
+  return first >= 0 ? first : -1;
+}
+
+int File::FirstLeaf(int num, int depth, std::set<int>& seen) {
+  if (depth > 64 || seen.size() > 100'000 || !seen.insert(num).second) return -2;
+  Obj node;
+  if (!Get(num, node) || node.type != Obj::Dict) return -2;
+  const Obj* kids = node.Get("Kids");
+  if (!kids) return node.Get("Type") && node.Get("Type")->IsName("Page") ? num : -2;
+  Obj list;
+  if (!Resolve(*kids, list) || list.type != Obj::Array) return -2;
+  for (const Obj& kid : list.items) {
+    if (kid.type != Obj::Ref) return -2;
+    const int leaf = FirstLeaf(kid.num, depth + 1, seen);
+    if (leaf != -1) return leaf;  // a page, or a failure
   }
   return -1;
 }

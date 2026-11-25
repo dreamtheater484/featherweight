@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -61,7 +62,8 @@ class File {
   bool Get(int num, Obj& out, int* gen = nullptr);
   // `o` itself, or the object it refers to.
   bool Resolve(const Obj& o, Obj& out);
-  // The first page's object number (through the page tree).
+  // The first page's object number (through the page tree, in order, past branches left empty
+  // when their pages were deleted). -1 when there's none or the tree can't be read.
   int FirstPage();
 
  private:
@@ -76,6 +78,8 @@ class File {
   bool StreamData(const Obj& stream, std::string_view source, std::string& out);
   bool ObjectAt(size_t offset, int num, Obj& out, int* gen);
   bool FromObjectStream(int stream, uint32_t index, int num, Obj& out);
+  // FirstPage's walk: a leaf's number, -1 for a branch without pages, -2 for anything unexpected.
+  int FirstLeaf(int num, int depth, std::set<int>& seen);
 
   std::string_view data_;
   std::map<int, Entry> xref_;

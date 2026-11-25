@@ -319,6 +319,17 @@ bool PdfView::InsertFiles(const std::vector<std::wstring>& paths, int at) {
     at += got;
     added += got;
   }
+  // The inserted pages read from the sources until the document is written and opened again
+  // (f1-gate's finding: closing them first crashed a later save). If that can't be done, the
+  // insert goes back; with no snapshot to go back to, the sources stay open with the document.
+  if (added > 0 && !doc_->ReloadAsEdited()) {
+    if (!pageBefore_.empty()) {
+      EndPageChange(false, first);
+      host_.ViewMessage(BannerKind::Error, T(L"The pages couldn't be inserted."));
+      return false;
+    }
+    for (auto& src : sources) importedFrom_.push_back(std::move(src));
+  }
   sources.clear();
   EndPageChange(added > 0, first);
   if (added == 0) {

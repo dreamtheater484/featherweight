@@ -518,12 +518,11 @@ static std::string ClassicPdf(const std::vector<std::string>& objects) {
   return pdf;
 }
 
-// f1-gate's finding: FPDF_MovePages gives a moved page its new parent's inherited attributes. Two
-// branches: the first turned and landscape with a font, the second portrait without.
-TEST(F1PdfMoveKeepsInheritedAttributes) {
-  InitPdfium();
+// Two branches of the page tree: the first turned and landscape with a font, the second portrait
+// without. Pages 0-1 are in the first, 2-3 in the second.
+static std::string TwoBranchPdf() {
   const std::string content = "BT /F1 24 Tf 72 72 Td (Hello) Tj ET";
-  const std::string pdf = ClassicPdf({
+  return ClassicPdf({
       "<</Type /Catalog /Pages 2 0 R>>",
       "<</Type /Pages /Kids [3 0 R 4 0 R] /Count 4>>",
       "<</Type /Pages /Parent 2 0 R /Kids [5 0 R 6 0 R] /Count 2 /Rotate 90 /MediaBox [0 0 842 595] /Resources 9 0 R>>",
@@ -535,6 +534,13 @@ TEST(F1PdfMoveKeepsInheritedAttributes) {
       "<</Font <</F1 <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>>>>>",
       "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "\nendstream",
   });
+}
+
+// f1-gate's finding: FPDF_MovePages gives a moved page its new parent's inherited attributes. Two
+// branches: the first turned and landscape with a font, the second portrait without.
+TEST(F1PdfMoveKeepsInheritedAttributes) {
+  InitPdfium();
+  const std::string pdf = TwoBranchPdf();
   auto movedLooksRight = [](FPDF_DOCUMENT doc) {
     // The first page, moved to the end, is still turned and landscape.
     FPDF_PAGE page = FPDF_LoadPage(doc, 3);
@@ -646,4 +652,81 @@ TEST(F1PdfEditorWithoutAWindow) {
   CHECK(form.PageToolsBlocked() == pdftools::Block::Xfa);
   CHECK(!form.Rotate({0}, 1));
   CHECK(form.SigningBlocked() == pdfsign::Error::Encrypted);
+}
+
+// f1-gate's round 2, finding 5: pages inserted from another PDF read from it until the document is
+// written and opened again; the Editor does that before returning, so the source may close.
+TEST(F1PdfInsertSurvivesItsSourceClosing) {
+  InitPdfium();
+  // A source whose first page has an annotation (a drawn signature), whose streams PDFium reads late.
+  FPDF_DOCUMENT made = MakeDoc(2);
+  FPDF_PAGE page = FPDF_LoadPage(made, 0);
+  CHECK(page != nullptr);
+  const pdfsign::Ink ink = pdfsign::InkFromPoints({{{0.f, 0.f}, {10.f, 5.f}, {20.f, 0.f}}});
+  CHECK(pdfsign::AddSignatureStamp(made, page, pdfsign::StampRect(page, 50, 250, 60, ink.Aspect()), ink) >= 0);
+  FPDF_ClosePage(page);
+  std::string source;
+  CHECK(pdftools::SaveBytes(made, false, source));
+  FPDF_CloseDocument(made);
+
+  pdftools::Editor ed;
+  CHECK(ed.Open(source) == pdftools::SourceError::None);
+  {
+    pdftools::Source src;
+    CHECK(pdftools::OpenSource(source, {}, src) == pdftools::SourceError::None);
+    CHECK_EQ(ed.Insert(src, ed.PageCount()), 2);
+  }  // the source closes here
+  std::string out;
+  CHECK(ed.Bytes(out));
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(out.data(), out.size(), nullptr);
+  CHECK(doc != nullptr);
+  CHECK_EQ(FPDF_GetPageCount(doc), 4);
+  FPDF_PAGE copied = FPDF_LoadPage(doc, 2);
+  CHECK(copied && FPDFPage_GetAnnotCount(copied) == 1);
+  if (copied) FPDF_ClosePage(copied);
+  FPDF_CloseDocument(doc);
+}
+
+// Round 2, finding 6: an inserted page without a /Rotate of its own keeps the rotation it had,
+// not the one its new branch passes down.
+TEST(F1PdfInsertKeepsTheSourcesRotation) {
+  InitPdfium();
+  const std::string pdf = TwoBranchPdf();
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(pdf.data(), pdf.size(), nullptr);
+  CHECK(doc != nullptr);
+  FPDF_DOCUMENT one = MakeDoc(1);  // 100 x 500, no /Rotate
+  std::string oneBytes;
+  CHECK(pdftools::SaveBytes(one, false, oneBytes));
+  FPDF_CloseDocument(one);
+  pdftools::Source src;
+  CHECK(pdftools::OpenSource(oneBytes, {}, src) == pdftools::SourceError::None);
+  CHECK_EQ(pdftools::Insert(doc, src, 1), 1);  // into the turned branch
+  FPDF_PAGE page = FPDF_LoadPage(doc, 1);
+  FS_RECTF box{};
+  CHECK(page && FPDFPage_GetRotation(page) == 0 && FPDF_GetPageBoundingBox(page, &box));
+  CHECK(std::fabs(box.right - box.left - 100) < 0.5f && std::fabs(box.top - box.bottom - 500) < 0.5f);
+  if (page) FPDF_ClosePage(page);
+  FPDF_CloseDocument(doc);
+}
+
+// Round 2, finding 7: signing finds the first page past a branch left empty by deleting its pages.
+TEST(F1PdfSignsAfterTheFirstBranchIsEmptied) {
+  InitPdfium();
+  pdftools::Editor ed;
+  CHECK(ed.Open(TwoBranchPdf()) == pdftools::SourceError::None);
+  CHECK(ed.Delete({0, 1}));
+  std::string bytes;
+  CHECK(ed.Bytes(bytes));
+  pdfobj::File f;
+  CHECK(f.Open(bytes));
+  CHECK(f.FirstPage() >= 0);
+  const CERT_CONTEXT* cert = TestSigner();
+  CHECK(cert != nullptr);
+  if (!cert) return;
+  pdfsign::Details d;
+  d.name = L"Featherweight test";
+  CHECK(ed.Sign(cert, d) == pdfsign::Error::None);
+  CertFreeCertificateContext(cert);
+  CHECK(ed.Bytes(bytes));
+  CHECK(Check(bytes).verdict.kind == pdfsign::Verdict::Untrusted);
 }
