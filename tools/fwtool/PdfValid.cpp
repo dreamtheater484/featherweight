@@ -7,7 +7,8 @@
 //  - PDFium: it opens, every page loads with a size, its text, and renders.
 //  - The fonts it embeds (the legal row: no cloud-font family) and its signatures: each byte range,
 //    and whether it covers the whole file (a change after signing leaves bytes outside it).
-// Output: one line per file, and with --json the details. Exit 1 when a file has errors.
+// Output: one line per file, and with --json the details; --out DIR writes each PDF's text to
+// DIR\<name>.txt (pages separated by a form feed). Exit 1 when a file has errors.
 #include <windows.h>
 
 #include <fpdf_edit.h>
@@ -427,6 +428,7 @@ struct Result {
   long long chars = 0;
   std::set<std::string> embedded, notEmbedded;
   std::vector<Signature> signatures;
+  std::wstring text;  // with --out: every page's text, pages separated by a form feed
 };
 
 void Fonts(FPDF_PAGEOBJECT obj, Result& r, int depth) {
@@ -454,7 +456,7 @@ const char* LoadError(unsigned long e) {
   }
 }
 
-Result Check(const std::filesystem::path& file, const std::wstring& password) {
+Result Check(const std::filesystem::path& file, const std::wstring& password, bool keepText) {
   Result r;
   r.file = Display(file);
   std::ifstream in(file, std::ios::binary);
@@ -481,6 +483,12 @@ Result Check(const std::filesystem::path& file, const std::wstring& password) {
       int n = FPDFText_CountChars(text);
       if (n < 0) r.errors.push_back("PDFium: page " + std::to_string(i + 1) + "'s text can't be read");
       else r.chars += n;
+      if (n > 0 && keepText) {
+        std::vector<unsigned short> buf(static_cast<size_t>(n) + 1);
+        int got = FPDFText_GetText(text, 0, n, buf.data());
+        if (got > 1) r.text.append(reinterpret_cast<const wchar_t*>(buf.data()), static_cast<size_t>(got - 1));
+      }
+      if (keepText) r.text += L'\f';
       FPDFText_ClosePage(text);
     }
     for (int k = 0, n = FPDFPage_CountObjects(page); k < n; ++k) Fonts(FPDFPage_GetObject(page, k), r, 0);
@@ -561,7 +569,14 @@ int RunPdfValid(const Options& options) {
   int bad = 0;
   std::string json = "{\n  \"format\": \"featherweight-pdf-valid\",\n  \"files\": [";
   for (size_t i = 0; i < files.size(); ++i) {
-    Result r = Check(files[i], options.password);
+    Result r = Check(files[i], options.password, !options.outDir.empty());
+    if (!options.outDir.empty()) {
+      // The text as PDFium reads it (an OCR text layer included): <out>\<name>.txt, UTF-8.
+      std::error_code ec;
+      std::filesystem::create_directories(options.outDir, ec);
+      std::ofstream t(options.outDir / (files[i].stem().wstring() + L".txt"), std::ios::binary);
+      t << fw::WideToUtf8(r.text);
+    }
     if (!r.errors.empty()) ++bad;
     std::printf("[%s] %s: %d pages, %s xref (%d sections), %zu embedded fonts, %zu signatures%s%s\n",
                 r.errors.empty() ? "OK" : "FAIL", r.file.c_str(), r.pages, r.st.xref.c_str(), r.st.sections,
