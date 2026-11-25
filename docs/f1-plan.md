@@ -51,7 +51,7 @@ Roy, 2026-11-24: F1 starts right after release 4.0 is published, and 4.1 is publ
   - **Each output:**
     - passes `fwtool pdfcheck`;
     - reopens without errors in PDFium, in Windows' own PDF parser (`Windows.Data.Pdf`, not PDFium) and in Word;
-    - also opens in Acrobat Reader once it's on the reference PC (Roy's step 9).
+    - also opens in Adobe Acrobat, which is on the reference PC (Roy's step 9 is moot).
   - **Accuracy:** OCR gets ≥ 95 % of words right on the generated scan set (English, 300 dpi). Signatures pass an independent validator.
 - **Product basics:**
   - **Code signing:** releases are built in GitHub Actions and signed through the SignPath Foundation (free for open-source projects): the exe, the DLL and the installers. Until SignPath approves (Roy's step 1), the same workflow signs with a test certificate, so nothing else waits.
@@ -123,7 +123,7 @@ These need Roy: accounts, identity, money, submissions, and work only a person c
 | 6 | Coverity Scan: register the project and set its token as a secret. OpenSSF Best Practices: sign in with GitHub and submit the prepared answers. | f1-trust | The workflow and the answers wait. CodeQL and Scorecard run anyway. |
 | 7 | NLnet (NGI Zero): submit the application in Roy's name. A session drafts it. The grant can include a security audit by Radically Open Security. | f1-trust | No effect on 4.1. |
 | 8 | Translators: a native speaker reviews each language, as volunteers or through a Weblate project. | f1-lang: drafts, a glossary per language, review files | 4.1 ships the machine-checked translations. Native fixes land in 4.1.x. |
-| 9 | Optional: a yes to installing Adobe Acrobat Reader on the reference PC, as a second check of the PDF tools. | f1-gate | Windows' PDF parser and Word stand in. |
+| 9 | Moot: Adobe Acrobat DC is already on the reference PC (f1-gate, 2026-11-25). | f1-gate | Nothing waits for it. |
 | 10 | The business side, not in F1's gate (analysis §10): trade mark clearance and an EU filing; a lawyer's look at the ribbon and the terms; a registered business; the paid Store edition and a sponsor page. | — | No effect on 4.1. |
 
 **What can't be automated, and isn't in the gate:**
@@ -246,7 +246,7 @@ Also:
 | Fidelity | `fwtool compare` without cloud fonts; the slide and print SSIM sets; S1's cell text | Pages ≥ 148 of 152, lines ≥ 96.8 %; the rest no lower than 4.0's |
 | Legal | A file-open hook in `fwtool` during the corpus runs; the source; the fonts embedded by Export PDF on the corpus; notices against the SBOM; the hyphenation files | No path under `FontCache\4\CloudFonts` opened or named; no cloud-font family embedded; notices match; hyphenation as decided |
 | Languages | The catalog check for NL/DE/FR/ES (placeholders, access keys); the clipping check over every tab, panel and dialog at 1366 × 768; each catalog's size | 100 % translated, 0 clipped, ≤ 40 KB each |
-| PDF tools | Round trips through PDFium, `Windows.Data.Pdf`, Word and `fwtool pdfcheck` (and Acrobat Reader if present); OCR on the scan set; signatures through pyHanko on a CI runner | All open without errors; ≥ 95 % of words; every signature valid, every change after signing caught |
+| PDF tools | Round trips through PDFium, `Windows.Data.Pdf`, Word and `fwtool pdfcheck` and Adobe Acrobat; OCR on the scan set; signatures through pyHanko on a CI runner | All open without errors; ≥ 95 % of words; every signature valid, every change after signing caught |
 | Product basics | The release workflow's dry run (test-signed, or signed by SignPath after step 1): `signtool verify /pa` on every file; the updater tests (unsigned and wrong-publisher files refused, channels, rollback, the policy); the MSIX through the Windows App Certification Kit; silent per-machine install and uninstall of the MSI and the installer on a CI runner; the winget, Chocolatey and Scoop manifests; the ADMX keys against what the app reads | All pass. SignPath and the Store wait for steps 1 and 2 |
 | External review | Two CI builds without their signatures; VirusTotal and Hybrid Analysis (step 5); Coverity (step 6) | Byte-identical; Microsoft Defender clean, and other detections listed in the notes; sandbox traffic only to GitHub |
 | Lightweight | `budgets.ps1` on the shipped build; `-Timings -Runs 3 -Record` on the final head; the module list after launch | Exe ≤ 4.0's + 1,024 KB; download ≤ 10 MB; launch, memory and idle no worse than 4.0's; `long-300.docx`'s worst key < 50 ms; no new module at launch |
@@ -323,3 +323,8 @@ As in P3 (its "Rules"), plus:
 - **f1-trust, 2026-11-25: a release scan passes on Defender and the network.** Microsoft Defender clean and sandbox traffic only to GitHub (Windows' own services listed apart); other engines' detections are listed in the notes, not failed.
 - **f1-trust, 2026-11-25: the SBOM names PDFium's bundled libraries,** each with an SPDX expression that `make_sbom.py` checks against its licence text, so a PDFium update that changes a licence fails until it's reviewed.
 - **f1-trust, 2026-11-25: NLnet gets material, not a proposal.** NLnet asks for proposals "made by humans, not AI" and about AI-written code, so Roy writes it himself from `roy-steps/step-7-nlnet.md`; the next deadline is 3 January 2027.
+- **f1-gate, 2026-11-25: a long gate check's result counts for later commits when only docs changed since** (docs\, *.md, the ledger); quick and CI checks run every time, and a report made on a tree with uncommitted changes counts for nothing.
+- **f1-gate, 2026-11-25: "no worse than 4.0's" for launch, memory and opening is budgets.ps1's rule**: no more than 10 % slower or 10 % more memory than 4.0's final timing entry (57930657), and idle CPU 0.
+- **f1-gate, 2026-11-25: OCR counts a word right when the page's text layer has it, spelled exactly, in any order**; the share in reading order is reported beside it. Windows' OCR (the app's engine) reads every table column by column: in strict order, table pages score about 50 % with every word recognised. On the generated set Windows' OCR alone gets 99.48 % (96.46 % in order).
+- **f1-gate, 2026-11-25: a reader that can't open an output is excused when it can't open the original either** (Windows.Data.Pdf opens no AES-256 file at all); pdf.readers lists those apart.
+- **f1-gate, 2026-11-25: Adobe Acrobat is already installed on the reference PC** (C:\Program Files\Adobe\Acrobat DC), so pdf.readers opens the outputs in it too, in its own instance only, never one Roy has open. Roy's step 9 is moot (the coordinator, 2026-11-25), and pdf.acrobat no longer waits for it.
