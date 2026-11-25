@@ -498,18 +498,19 @@ Check "legal.exe" quick "The shipped exe doesn't name the cloud-font folder" "No
 Check "legal.fileopen" long "No file under FontCache\4\CloudFonts opened or probed during the corpus runs (fwtool's file-open hook)" "0 paths under the cloud-font folder; the hook was on" {
   Need-Build
   $dir = Join-Path $script:outDir "filelog"
-  # The corpus runs of this gate log into $dir (FW_FILE_LOG_DIR); if none ran, render a sample now.
-  $logs = @(Get-ChildItem $dir -Filter "fwtool-*.txt" -ErrorAction SilentlyContinue)
-  if (-not $logs.Count) {
-    $code = Invoke-Tool "legal.fileopen" (Get-Fwtool) @("--help")
-    $usage = Get-Content (Log "legal.fileopen") -Raw
-    if ($usage -notmatch "FW_FILE_LOG_DIR") { return NotBuilt "f1-gate" "fwtool's file-open hook (FW_FILE_LOG_DIR)" }
+  $code = Invoke-Tool "legal.fileopen" (Get-Fwtool) @("--help")
+  if ((Get-Content (Log "legal.fileopen") -Raw) -notmatch "FW_FILE_LOG_DIR") { return NotBuilt "f1-gate" "fwtool's file-open hook (FW_FILE_LOG_DIR)" }
+  # The corpus runs of this gate log into $dir (FW_FILE_LOG_DIR); if none ran, render the documents and decks now.
+  if (-not @(Get-ChildItem $dir -Filter "fwtool-*.txt" -ErrorAction SilentlyContinue).Count) {
     foreach ($kind in @(@("render", "docx"), @("slides", "pptx"))) {
       $src = Join-Path $Corpus $kind[1]
       if (Test-Path $src) { Invoke-Tool "legal.fileopen" (Get-Fwtool) @($kind[0], "--out", (Join-Path $script:outDir "fileopen-$($kind[1])"), $src) | Out-Null }
     }
-    $logs = @(Get-ChildItem $dir -Filter "fwtool-*.txt" -ErrorAction SilentlyContinue)
   }
+  # And text laid out in each cloud-font family, which makes the font lookup look for it (at 4.0 that
+  # read the cloud-font folder and the family's files: the hook's check that it would see them).
+  foreach ($fam in Get-CloudFamilies) { Invoke-Tool "legal.fileopen" (Get-Fwtool) @("wrap", "--font", $fam, "Featherweight 4.1 laid out in $fam") | Out-Null }
+  $logs = @(Get-ChildItem $dir -Filter "fwtool-*.txt" -ErrorAction SilentlyContinue)
   if (-not $logs.Count) { return Failed "no file log was written" }
   $hooked = 0; $paths = 0; $cloud = @()
   foreach ($l in $logs) {
@@ -822,7 +823,10 @@ Check "light.modules" quick "Nothing loads before it's used: the modules after l
   $m = Read-Json $j
   if (-not $m -or -not $m.modules) { return NotBuilt "f1-gate" "fwtool bench-app --modules" }
   $mods = @($m.modules | ForEach-Object { $_.ToLowerInvariant() })
-  $forbidden = @("windows.media.ocr.dll", "dbghelp.dll", "dbgcore.dll", "windows.applicationmodel.datatransfer.dll", "sharehost.dll", "dataexchange.dll", "ncryptsslp.dll", "windows.globalization.dll")
+  # OCR (Windows.Media.Ocr), the share sheet (DataTransferManager), CNG key storage for signing, dbghelp
+  # for crash dumps. (dataexchange.dll is OLE's clipboard and drag and drop, loaded at 4.0 already.)
+  $forbidden = @("windows.media.ocr.dll", "windows.globalization.dll", "windows.applicationmodel.dll", "windows.applicationmodel.datatransfer.dll",
+                 "sharehost.dll", "ncrypt.dll", "ncryptprov.dll", "dbghelp.dll", "dbgcore.dll")
   $bad = @($mods | Where-Object { $_ -in $forbidden })
   $baseFile = Join-Path $root "tests\pdf\modules-4.0.txt"
   $new = @()

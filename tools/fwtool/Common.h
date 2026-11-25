@@ -54,6 +54,7 @@ struct Options {
   std::vector<std::wstring> regions;  // formulas: other regions to try a workbook with mismatches in
   bool threads = false;              // formulas: one thread against four, every value compared (S4)
   bool idleThreads = false;          // bench-app: list the threads that woke while idle, and when
+  bool modules = false;              // bench-app: the DLLs loaded once launched and settled (F1, f1-gate)
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt
@@ -117,6 +118,9 @@ int RunCfb(const Options& options);
 int RunCsv(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunPdfCompare(const Options& options);
+int RunPdfValid(const Options& options);  // pdf-valid: any PDF's structure, PDFium, fonts, signatures (F1)
+// FW_FILE_LOG_DIR: logs every file this process opens or looks for (FileLog.cpp, F1's legal row).
+void InstallFileLog();
 int RunSlides(const Options& options);
 int RunTiming(const Options& options);  // timing: transitions and animations per slide (P3, p3-anim)
 int RunBenchApp(const Options& options);

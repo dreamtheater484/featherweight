@@ -119,6 +119,12 @@ constexpr const char* kUsage =
     "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
     "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
     "      pages in DIR; lists its links, bookmarks, title and author.\n"
+    "  fwtool pdf-valid [--json FILE] [--samples LIST] [--password P] <pdf or folder>...\n"
+    "      Any PDF as a reader meets it (F1, f1-gate: the PDF tools' outputs): its structure without\n"
+    "      PDFium (every cross-reference section, tables and streams and the /Prev chain, each object\n"
+    "      where its entry says, each stream's /Length, /Root a catalog), then PDFium (opens, every page\n"
+    "      loads with a size and text, and renders), the fonts it embeds, and each signature's byte\n"
+    "      range and whether it covers the whole file. LIST names more PDFs, one per line.\n"
     "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
     "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
@@ -156,11 +162,12 @@ constexpr const char* kUsage =
     "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
     "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
     "      with small ones in hex.\n"
-    "  fwtool bench-app [--runs N] [--json FILE] [--idle-threads] <Featherweight.exe> [<file>...]\n"
+    "  fwtool bench-app [--runs N] [--json FILE] [--idle-threads] [--modules] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
     "      included, and never touches the user's settings or a running Featherweight.\n"
+    "      --modules lists the DLLs loaded once launched and settled (F1: nothing before it's used).\n"
     "  fwtool spelling <file or folder>...\n"
     "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
     "      as the app does in idle time, and times both (plan §6.2, §11).\n"
@@ -203,7 +210,10 @@ constexpr const char* kUsage =
     "      --password opens an encrypted .ppt (also with other commands that take --password).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
-    "      Word's. Run it without text for its options.\n";
+    "      Word's. Run it without text for its options.\n"
+    "Environment:\n"
+    "  FW_FILE_LOG_DIR=DIR  every file each fwtool opens or looks for, by any module (fonts too), is\n"
+    "      logged once to DIR\\fwtool-<pid>.txt (F1, f1-gate's legal row: no cloud-font file read).\n";
 
 std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;
@@ -323,6 +333,7 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  fwtool::InstallFileLog();  // FW_FILE_LOG_DIR: before anything opens a file
   fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
   // The count first: with no arguments argv[1] is null (fwtool alone then prints the usage below).
@@ -377,6 +388,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
     else if (arg == L"--threads") options.threads = true;
     else if (arg == L"--idle-threads") options.idleThreads = true;
+    else if (arg == L"--modules") options.modules = true;
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
@@ -407,7 +419,7 @@ int wmain(int argc, wchar_t** argv) {
       return 2;
     } else options.inputs.emplace_back(arg);
   }
-  if (options.inputs.empty()) {
+  if (options.inputs.empty() && !(command == L"pdf-valid" && !options.samples.empty())) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
   }
@@ -434,6 +446,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"cfb") return fwtool::RunCfb(options);
   if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
+  if (command == L"pdf-valid") return fwtool::RunPdfValid(options);
   if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   if (command == L"slides") return fwtool::RunSlides(options);
   if (command == L"timing") return fwtool::RunTiming(options);

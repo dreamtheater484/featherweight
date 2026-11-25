@@ -8,6 +8,7 @@
 #include <winternl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -158,6 +159,7 @@ std::map<ULONG_PTR, ULONG> ContextSwitches(DWORD pid) {
 // an offset into it), whether it's the UI thread, its CPU time, and when it woke (ms into the idle
 // window). Looked at every 5 ms, which itself wakes nothing in the app.
 bool g_idleThreads = false;
+bool g_listModules = false;  // --modules (F1, f1-gate): the DLLs loaded once settled
 double g_settleMs = 0;  // diagnosis: settle at least this long (FW_BENCH_SETTLE_MS)
 
 struct ThreadLook {
@@ -398,6 +400,7 @@ struct Run {
   // a window opening, which runs alongside the app's work.
   double onScreenMs = -1;
   Memory memory;  // once settled
+  std::vector<std::string> modules;  // with --modules: the DLLs loaded then, lower case, sorted
   double idleCpuMs = -1, idleWakeups = -1;  // in all, over kIdleSeconds once settled
 };
 
@@ -514,6 +517,21 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
       }
     }
     run.memory = MemoryOf(pi.hProcess);
+    if (g_listModules) {
+      HMODULE mods[1024];
+      DWORD bytes = 0;
+      if (EnumProcessModulesEx(pi.hProcess, mods, sizeof mods, &bytes, LIST_MODULES_ALL)) {
+        for (DWORD i = 0; i < bytes / sizeof(HMODULE) && i < 1024; ++i) {
+          char name[MAX_PATH] = {};
+          if (GetModuleBaseNameA(pi.hProcess, mods[i], name, MAX_PATH)) {
+            std::string n = name;
+            std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            run.modules.push_back(n);
+          }
+        }
+        std::sort(run.modules.begin(), run.modules.end());
+      }
+    }
     // Moving the mouse over the window or typing wakes the app: then measure again, or not at all.
     for (int attempt = 0; idle && attempt < 3; ++attempt) {
       LASTINPUTINFO before{sizeof(before)}, after{sizeof(after)};
@@ -594,6 +612,8 @@ int RunBenchApp(const Options& options) {
   for (size_t i = 1; i < options.inputs.size(); ++i) files.push_back(std::filesystem::absolute(options.inputs[i]));
   const int runs = std::max(1, options.runs);
   g_idleThreads = options.idleThreads;
+  g_listModules = options.modules;
+  std::vector<std::string> launchModules;
   if (const char* v = std::getenv("FW_BENCH_SETTLE_MS")) g_settleMs = std::atof(v);
   std::printf("%s %s: the median of %d runs after a warm-up, each a fresh start, in ms from the launch.\n",
               Display(source).c_str(), fw::WideToUtf8(version).c_str(), runs);
@@ -623,6 +643,7 @@ int RunBenchApp(const Options& options) {
       if (!r.error.empty()) error = r.error;
       window.push_back(r.windowMs);
       ready.push_back(r.readyMs);
+      if (file.empty() && launchModules.empty() && !r.modules.empty()) launchModules = r.modules;
       loaded.push_back(r.loadedMs);
       onScreen.push_back(r.onScreenMs);
       memory.push_back(r.error.empty() ? r.memory.privateWorkingSetMB : -1);
@@ -651,7 +672,19 @@ int RunBenchApp(const Options& options) {
             ", \"privateBytesMB\": " + Num(Median(privateBytes)) + ", \"idleCpuMs\": " + Num(first.idleCpuMs) +
             ", \"idleWakeups\": " + Num(first.idleWakeups, 0) + "}";
   }
-  json += "\n  ]\n}\n";
+  json += "\n  ]";
+  if (g_listModules) {
+    // F1: nothing loads before it's used (OCR, the share sheet, CNG signing, dbghelp).
+    std::printf("\nModules once launched and settled (%zu):", launchModules.size());
+    json += ",\n  \"modules\": [";
+    for (size_t i = 0; i < launchModules.size(); ++i) {
+      std::printf("%s%s", i % 8 ? " " : "\n  ", launchModules[i].c_str());
+      json += std::string(i ? ", " : "") + JsonString(launchModules[i]);
+    }
+    std::printf("\n");
+    json += "]";
+  }
+  json += "\n}\n";
   timeEndPeriod(1);
   std::filesystem::remove_all(sandbox, ec);
   if (!options.jsonOut.empty()) {
