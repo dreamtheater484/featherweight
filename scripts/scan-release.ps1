@@ -23,9 +23,13 @@
   scan-report.json (everything), and summary.json for the 4.1 gate (gate-contract.md, review.scans):
   { "pass": true, "verdict": "...", "waiting": false }.
 
-  -FromCi doesn't scan: it finds the latest scan-release run for the commit (HEAD, or -Commit) and
-  downloads its report. Without one it says waiting while the repository has no keys, and fails once
-  it has them.
+  -FromCi doesn't scan: it finds the newest workflow run on the commit (HEAD, or -Commit) with a
+  "scan-report" artifact (scan-release.yml's own runs, or release.yml's, which calls it) and
+  downloads that report. Without one it says waiting while the repository has no keys, and fails
+  once it has them.
+
+  -Reuse with -Tag: when a run on the tag's commit already scanned it (release.yml's build of the
+  tag), that report is used instead of uploading the same files again.
 #>
 param(
   [string]$Tag = "",
@@ -33,6 +37,7 @@ param(
   [string[]]$Files = @(),
   [switch]$FromCi,
   [string]$Commit = "",
+  [switch]$Reuse,
   [string]$OutDir = "",
   [switch]$UpdateNotes,
   [int]$WaitMinutes = 40,
@@ -52,35 +57,76 @@ function Write-Summary([bool]$pass, [string]$verdict, [bool]$waiting, [string]$c
     ConvertTo-Json | Set-Content $Summary -Encoding utf8
 }
 
+# The newest completed run on the commit with a "scan-report" artifact (whichever workflow made it),
+# copied into OutDir; its run id, or "" when there's none (or only a waiting one, with -NotWaiting).
+function Get-CiScan([string]$sha, [switch]$NotWaiting) {
+  $eap = $ErrorActionPreference
+  $script:ErrorActionPreference = "Continue"  # gh's messages on stderr aren't failures here
+  try {
+    $runs = gh api "repos/{owner}/{repo}/actions/runs?head_sha=$sha&status=completed&per_page=30" --jq '.workflow_runs[].id' 2>$null
+    foreach ($id in @($runs)) {
+      if (-not $id) { continue }
+      $has = gh api "repos/{owner}/{repo}/actions/runs/$id/artifacts" --jq '.artifacts[] | select(.name == "scan-report" and (.expired | not)) | .id' 2>$null
+      if (-not $has) { continue }
+      $tmp = Join-Path ([IO.Path]::GetTempPath()) ("fw-scan-ci-" + [guid]::NewGuid())
+      gh run download $id --name scan-report --dir $tmp 2>$null
+      $got = Get-ChildItem $tmp -Recurse -Filter summary.json -ErrorAction SilentlyContinue | Select-Object -First 1
+      $skip = $got -and $NotWaiting -and (Get-Content $got.FullName -Raw | ConvertFrom-Json).waiting
+      if ($got -and -not $skip) {
+        Get-ChildItem $got.DirectoryName -File | Copy-Item -Destination $OutDir -Force
+        Remove-Item $tmp -Recurse -Force
+        return "$id"
+      }
+      Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return ""
+  } finally { $script:ErrorActionPreference = $eap }
+}
+
 # --- The gate: the CI scan of this commit (the keys exist only as repository secrets).
 if ($FromCi) {
-  $ErrorActionPreference = "Continue"  # gh's messages on stderr aren't failures here
+  $ErrorActionPreference = "Continue"
   if (-not $Commit) { $Commit = (git -C $root rev-parse HEAD).Trim() }
-  $runs = gh api "repos/{owner}/{repo}/actions/workflows/scan-release.yml/runs?head_sha=$Commit&status=completed&per_page=5" --jq '.workflow_runs[].id' 2>$null
-  foreach ($id in @($runs)) {
-    if (-not $id) { continue }
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("fw-scan-ci-" + [guid]::NewGuid())
-    gh run download $id --name scan-report --dir $tmp 2>$null
-    $got = Get-ChildItem $tmp -Recurse -Filter summary.json -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($got) {
-      Get-ChildItem $got.DirectoryName -File | Copy-Item -Destination $OutDir -Force
-      Remove-Item $tmp -Recurse -Force
-      Write-Host "The scan of $($Commit.Substring(0, 8)) from run $id"
-      Get-Content $Summary -Raw
-      exit 0
-    }
-    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  $id = Get-CiScan $Commit
+  if ($id) {
+    Write-Host "The scan of $($Commit.Substring(0, 8)) from run $id"
+    Get-Content $Summary -Raw
+    exit 0
   }
   $secrets = @(gh secret list --json name --jq '.[].name' 2>$null)
   if ($LASTEXITCODE -ne 0) {
     Write-Summary $false "no scan-release run for this commit, and the repository's secrets can't be read" $true $Commit
   } elseif ('VT_API_KEY' -in $secrets -and 'HA_API_KEY' -in $secrets) {
-    Write-Summary $false "no scan-release run for $($Commit.Substring(0, 8)) yet: run it on the release's files" $false $Commit
+    Write-Summary $false "no scan of $($Commit.Substring(0, 8)) yet: run release.yml with scan, or scan-release.yml" $false $Commit
   } else {
     Write-Summary $false "waiting for Roy's step 5 (the VirusTotal and Hybrid Analysis keys)" $true $Commit
   }
   Get-Content $Summary -Raw
   exit 0
+}
+
+# The release notes keep one scans section, between markers, replaced on every run.
+function Update-Notes([string[]]$lines) {
+  $body = (gh release view $Tag --json body --jq .body) -join "`n"
+  $section = "<!-- scans -->`n" + ($lines -join "`n") + "`n<!-- /scans -->"
+  if ($body -match '(?s)<!-- scans -->.*<!-- /scans -->') { $body = $body -replace '(?s)<!-- scans -->.*<!-- /scans -->', $section }
+  else { $body = $body.TrimEnd() + "`n`n" + $section }
+  $notes = Join-Path ([IO.Path]::GetTempPath()) "fw-scan-notes.md"
+  Set-Content $notes $body -Encoding utf8
+  gh release edit $Tag --notes-file $notes
+  if ($LASTEXITCODE) { throw "gh release edit failed" }
+}
+
+# --- A published release whose tag build already scanned the same files: that report, no new uploads.
+if ($Reuse -and $Tag -and -not $Offline) {
+  $sha = "$(gh api "repos/{owner}/{repo}/commits/$Tag" --jq .sha 2>$null)".Trim()
+  if ($sha -and (Get-CiScan $sha -NotWaiting)) {
+    $s = Get-Content $Summary -Raw | ConvertFrom-Json
+    Write-Host "Reusing the scan of $Tag's commit ($($sha.Substring(0, 8))): $($s.verdict)"
+    if ($UpdateNotes) { Update-Notes @(Get-Content $Report) }
+    if (-not $s.pass) { exit 1 }
+    exit 0
+  }
 }
 $vtKey = $env:VT_API_KEY
 $haKey = $env:HA_API_KEY
@@ -284,16 +330,6 @@ $verdict = switch ($status) {
 Write-Summary ($status -eq 'pass') $verdict ($status -eq 'waiting') $head
 Step "Scan $status; report in $Report"
 
-if ($UpdateNotes -and $Tag -and $status -ne 'waiting') {
-  # The release notes keep one scans section, between markers, replaced on every run.
-  $body = (gh release view $Tag --json body --jq .body) -join "`n"
-  $section = "<!-- scans -->`n" + ($md -join "`n") + "`n<!-- /scans -->"
-  if ($body -match '(?s)<!-- scans -->.*<!-- /scans -->') { $body = $body -replace '(?s)<!-- scans -->.*<!-- /scans -->', $section }
-  else { $body = $body.TrimEnd() + "`n`n" + $section }
-  $notes = Join-Path ([IO.Path]::GetTempPath()) "fw-scan-notes.md"
-  Set-Content $notes $body -Encoding utf8
-  gh release edit $Tag --notes-file $notes
-  if ($LASTEXITCODE) { throw "gh release edit failed" }
-}
+if ($UpdateNotes -and $Tag -and $status -ne 'waiting') { Update-Notes $md }
 if ($work) { Remove-Item $work -Recurse -Force }
 if ($status -eq 'fail') { exit 1 }
