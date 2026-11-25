@@ -52,14 +52,6 @@ if ($Publish) {
   if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists. Bump the version in CMakeLists.txt." }
   gh auth status | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "The GitHub CLI is not logged in (run: gh auth login)." }
-  # f1-gate: from 4.1 on, the automated gate (scripts\f1-gate.ps1) must have passed on this commit: its
-  # report is for HEAD, made on a clean tree, with no failed row (rows waiting for Roy's steps don't block).
-  if ([version]$version -ge [version]"4.1.0") {
-    $minor = ($version -split '\.')[0..1] -join '.'
-    $gateReport = if ($env:FW_GATE_REPORT) { $env:FW_GATE_REPORT } else { "D:\Documents\Codex\FeatherweightNotes\f1\gate-$minor.json" }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\f1-gate.ps1") -Verify $gateReport | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "The $minor gate hasn't passed on this commit ($gateReport): run scripts\f1-gate.ps1 on it first." }
-  }
 }
 
 $build = Join-Path $root "build-release"

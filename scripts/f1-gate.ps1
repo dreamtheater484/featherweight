@@ -106,7 +106,6 @@ $roySteps = @{
   4 = "private vulnerability reporting and GitHub Pages"
   5 = "VirusTotal and Hybrid Analysis keys"
   6 = "Coverity Scan token and OpenSSF Best Practices"
-  9 = "Adobe Acrobat Reader on the reference PC"
 }
 $rowTitles = [ordered]@{
   build = "Build and tests"; damage = "Never damage"; fidelity = "Fidelity"; legal = "Legal"; lang = "Languages"
@@ -142,8 +141,11 @@ function Invoke-Script([string]$id, [string]$file, [object[]]$arguments) {
   $log = Log $id
   New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
   "== $(Get-Date -Format s) $file $($arguments -join ' ')" | Out-File -FilePath $log -Append -Encoding utf8
-  & powershell -NoProfile -ExecutionPolicy Bypass -File (Full $file) @arguments *>&1 | Out-File -FilePath $log -Append -Encoding utf8
-  $LASTEXITCODE
+  $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Full $file) @arguments *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Append -Encoding utf8
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $prev
+  $code
 }
 # Runs a program, its output to the check's log. Returns the exit code.
 function Invoke-Tool([string]$id, [string]$exe, [object[]]$arguments) {
@@ -228,12 +230,33 @@ function Get-CiRuns {
   $script:runsCache
 }
 # The latest run of a workflow (by its file name) on this commit, with its jobs.
+$script:workflowCache = @{}
 function Get-WorkflowRun([string]$file) {
+  if ($script:workflowCache.ContainsKey($file)) { return $script:workflowCache[$file] }
   $runs = @(Get-CiRuns | Where-Object { $_.path -like "*/$file" } | Sort-Object { [datetime]$_.created_at } -Descending)
-  if (-not $runs.Count) { return $null }
-  $r = $runs[0]
-  $jobs = @((Gh-Json "repos/$repoSlug/actions/runs/$($r.id)/jobs?per_page=100").jobs)
-  [pscustomobject]@{ run = $r; jobs = $jobs; url = $r.html_url; status = $r.status; conclusion = $r.conclusion }
+  $w = $null
+  if ($runs.Count) {
+    $r = $runs[0]
+    $jobs = @((Gh-Json "repos/$repoSlug/actions/runs/$($r.id)/jobs?per_page=100").jobs)
+    $w = [pscustomobject]@{ run = $r; jobs = $jobs; url = $r.html_url; status = $r.status; conclusion = $r.conclusion }
+  }
+  $script:workflowCache[$file] = $w
+  $w
+}
+# An artifact of this commit's (finished) run of a workflow, downloaded once into <Out>\artifacts\<run id>\<name>.
+# $null when there's no such run or artifact.
+function Get-RunArtifact([string]$file, [string]$name) {
+  $w = Get-WorkflowRun $file
+  if (-not $w -or $w.status -ne "completed") { return $null }
+  $dir = Join-Path $script:outDir "artifacts\$($w.run.id)\$name"
+  if (-not (Test-Path $dir)) {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    & gh run download $w.run.id -R $repoSlug -n $name -D $dir 2>&1 | Out-Null
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    if ($code) { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue; return $null }
+  }
+  [pscustomobject]@{ dir = $dir; run = $w.url }
 }
 # A workflow's run on this commit as a result: passed when it succeeded (and the named jobs did).
 function Test-Workflow([string]$file, [string[]]$jobs = @(), [string]$piece = "", [string]$what = "") {
@@ -332,25 +355,54 @@ Check "build.ctest" long "ctest on the shipped build (x64, locally)" "100 % of t
   $n.tests = $names
   if ($code -or $n.failed) { Failed "$($n.failed) of $($n.total) tests failed" $n } else { Passed "$($n.total) of $($n.total) pass" $n }
 }
+# ossf/scorecard-action runs only on the default branch (it refuses any other; f1-trust): this commit's run when it's
+# on main, else main's latest finished run. None yet is "later", not a failure: it first runs once F1 is merged.
+function Test-Scorecard {
+  if (-not (Test-Path (Join-Path $root ".github\workflows\scorecard.yml"))) { return NotBuilt "f1-trust" "the OpenSSF Scorecard (.github\workflows\scorecard.yml)" }
+  if (Get-WorkflowRun "scorecard.yml") { return Test-Workflow "scorecard.yml" @() "f1-trust" "the OpenSSF Scorecard" }
+  try { $j = Gh-Json "repos/$repoSlug/actions/workflows/scorecard.yml/runs?branch=main&status=completed&per_page=1" } catch { $j = $null }
+  $r = @($j.workflow_runs) | Select-Object -First 1
+  if (-not $r) { return New-GateResult "later" "Scorecard runs only on main, where it hasn't run yet (F1 isn't merged to main)" }
+  $n = [ordered]@{ run = $r.html_url; commit = "$($r.head_sha)".Substring(0, 8); conclusion = $r.conclusion }
+  if ($r.conclusion -eq "success") { Passed "main's latest Scorecard run succeeded" $n } else { Failed "main's latest Scorecard run: $($r.conclusion)" $n }
+}
 Check "build.ci" ci "CI on this commit: build (with arm64's ctest), fuzz, CodeQL, Scorecard" "Every workflow and job succeeded" {
   if (-not $repoSlug) { return Failed "no GitHub remote" }
   if (-not @(Invoke-Git branch -r --contains $script:head).Count) { return Failed "this commit isn't pushed" }
   $parts = [ordered]@{
     build = Test-Workflow "build.yml" @("^build", "fuzz", "arm64") "f1-ship" "the arm64 job"
     codeql = Test-Workflow "codeql.yml" @() "f1-trust" "CodeQL code scanning"
-    scorecard = Test-Workflow "scorecard.yml" @() "f1-trust" "the OpenSSF Scorecard"
+    scorecard = Test-Scorecard
   }
   $n = [ordered]@{}
   foreach ($k in $parts.Keys) { $n[$k] = "$($parts[$k].status): $($parts[$k].detail)" }
-  $bad = @($parts.Keys | Where-Object { $parts[$_].status -ne "passed" })
+  $bad = @($parts.Keys | Where-Object { $parts[$_].status -notin "passed", "later" })
   if ($bad.Count) { Failed ("not green: " + ($bad -join ", ")) $n } else { Passed "all green" $n }
 }
 Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 open high or critical alerts" {
   if (-not (Test-Path (Join-Path $root ".github\workflows\codeql.yml"))) { return NotBuilt "f1-trust" "CodeQL code scanning (.github\workflows\codeql.yml)" }
-  try { $alerts = @(Gh-Json "repos/$repoSlug/code-scanning/alerts?state=open&per_page=100") }
-  catch { return Failed "code scanning can't be read: $($_.Exception.Message)" }
+  # The branch gated: this checkout's, else the first of f1-int and main that has the commit (codeql.yml runs on
+  # pushes to those). Without ref the API answers for the default branch only.
+  $pushed = @(Invoke-Git branch -r --contains $script:head | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^origin/' -and $_ -notmatch ' -> ' } | ForEach-Object { $_ -replace '^origin/', '' })
+  $branch = @(@((Invoke-Git rev-parse --abbrev-ref HEAD), "claude/f1-int", "main") + $pushed | Where-Object { $_ -and $_ -in $pushed }) | Select-Object -First 1
+  if (-not $branch) { return Failed "this commit isn't on a pushed branch" }
+  $ref = "refs/heads/$branch"
+  # The alerts API answers "none open" for a branch CodeQL never analysed: the analysis of this commit (or of one
+  # with only docs changed since) must be there first.
+  try { $analyses = @(Gh-Json "repos/$repoSlug/code-scanning/analyses?ref=$ref&per_page=20") } catch { $analyses = @() }
+  $a = @($analyses | Where-Object { $_.commit_sha -eq $script:head }) | Select-Object -First 1
+  if (-not $a) { $a = @($analyses | Where-Object { $_.commit_sha -and (Test-OnlyDocsSince $_.commit_sha) }) | Select-Object -First 1 }
+  if (-not $a) {
+    $last = @($analyses) | Select-Object -First 1
+    return Failed ("not run yet: no CodeQL analysis of this commit on $ref" + $(if ($last) { " (the latest is of $("$($last.commit_sha)".Substring(0, 8)))" } else { " (none at all; codeql.yml runs on pushes to main and claude/f1-int)" }))
+  }
+  try { $alerts = @(Gh-Json "repos/$repoSlug/code-scanning/alerts?state=open&ref=$ref&per_page=100") }
+  catch {
+    if ("$($_.Exception.Message)" -match '(?i)no analysis found|404') { return Failed "not run yet: CodeQL hasn't analysed $ref (codeql.yml runs on pushes to main and claude/f1-int)" }
+    return Failed "code scanning can't be read: $($_.Exception.Message)"
+  }
   $severe = @($alerts | Where-Object { $_.rule.security_severity_level -in "high", "critical" })
-  $n = [ordered]@{ open = $alerts.Count; highOrCritical = $severe.Count }
+  $n = [ordered]@{ ref = $ref; analysedCommit = "$($a.commit_sha)".Substring(0, 8); open = $alerts.Count; highOrCritical = $severe.Count }
   if ($severe.Count) { $n.first = "$($severe[0].rule.id) $($severe[0].most_recent_instance.location.path)"; Failed "$($severe.Count) open high or critical alerts" $n }
   else { Passed "$($alerts.Count) open alerts, none high or critical" $n }
 }
@@ -548,15 +600,21 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
   if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings" $n } else { Passed "none in $($pdfs.Count) PDFs" $n }
 }
 Check "legal.notices" quick "THIRD_PARTY_NOTICES matches the SBOM, and About shows it" "Every SBOM component in the notices and back; About shows the notices" {
-  $sbom = @(Get-ChildItem (Join-Path $root "tools\sbom") -Recurse -Include *.cdx.json, sbom*.json -ErrorAction SilentlyContinue | Select-Object -First 1)
-  if (-not $sbom.Count) { return NotBuilt "f1-trust" "the SBOM (tools\sbom\, CycloneDX)" }
-  $doc = Read-Json $sbom[0].FullName
+  # No SBOM is committed (it would go stale): tools\sbom\make-sbom.ps1 writes it, and exits 1 when
+  # THIRD_PARTY_NOTICES.md and the SBOM name different components (f1-trust).
+  if (-not (Test-Path (Join-Path $root "tools\sbom\make-sbom.ps1"))) { return NotBuilt "f1-trust" "the SBOM (tools\sbom\make-sbom.ps1, CycloneDX)" }
+  $out = Join-Path $script:outDir "sbom.cdx.json"
+  Remove-Item $out -ErrorAction SilentlyContinue
+  $code = Invoke-Script "legal.notices" "tools\sbom\make-sbom.ps1" @("-Out", $out)
+  $doc = Read-Json $out
+  if (-not $doc) { return Failed "make-sbom.ps1 wrote no SBOM (exit $code; its log)" }
   $notices = Get-Content (Join-Path $root "THIRD_PARTY_NOTICES.md") -Raw -Encoding UTF8
   $names = @($doc.components | ForEach-Object name)
   $missing = @($names | Where-Object { $notices -notmatch [regex]::Escape($_) })
   $about = @(Find-InFiles @("src") "THIRD_PARTY_NOTICES")
-  $n = [ordered]@{ components = $names.Count; missingFromNotices = $missing.Count; aboutMentions = $about.Count }
+  $n = [ordered]@{ components = $names.Count; missingFromNotices = $missing.Count; aboutMentions = $about.Count; makeSbomExit = $code }
   if ($missing.Count) { $n.first = $missing[0]; return Failed "$($missing.Count) SBOM components not in THIRD_PARTY_NOTICES.md" $n }
+  if ($code) { return Failed "make-sbom.ps1: THIRD_PARTY_NOTICES.md names components the SBOM hasn't (its log)" $n }
   if (-not $about.Count) { return Failed "About doesn't show THIRD_PARTY_NOTICES (no mention in src\)" $n }
   Passed "$($names.Count) components, all in the notices; About shows them" $n
 }
@@ -659,10 +717,10 @@ Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the tor
   foreach ($p in $r.totals.PSObject.Properties) { $n[$p.Name] = $p.Value }
   if ($code -eq 0 -and $r.pass) { Passed $r.verdict $n } else { Failed $r.verdict $n }
 }
-Check "pdf.acrobat" quick "Adobe Acrobat Reader opens the outputs too, once it's on the reference PC (Roy's step 9, optional)" "Opens without errors, or waits for step 9" {
+Check "pdf.acrobat" quick "Adobe Acrobat (on the reference PC) opens the outputs too, in its own instance" "Opens without errors" {
   $acro = @("${env:ProgramFiles}\Adobe\Acrobat DC\Acrobat\Acrobat.exe", "${env:ProgramFiles(x86)}\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
             "${env:ProgramFiles}\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $acro) { return Waiting 9 "Acrobat Reader isn't installed; Windows' PDF parser and Word stand in" }
+  if (-not $acro) { return Failed "Acrobat isn't installed on this PC (the reference PC has Acrobat DC)" }
   $r = Read-Json (Join-Path $script:outDir "pdf.readers\summary.json")
   if ($r -and $null -ne $r.totals.acrobatFailed) { if ($r.totals.acrobatFailed) { Failed "$($r.totals.acrobatFailed) outputs fail in Acrobat" } else { Passed "all open in Acrobat" } }
   else { Failed "Acrobat is installed but pdf.readers didn't check it yet" }
@@ -715,19 +773,33 @@ Check "ship.msix" ci "The MSIX through the Windows App Certification Kit; the St
 Check "ship.install" ci "Silent per-machine install and uninstall of the MSI and the installer on a CI runner" "Both install and uninstall silently" {
   Test-Workflow "release.yml" @("(?i)install") "f1-ship" "the silent install job"
 }
-Check "ship.manifests" quick "The winget, Chocolatey and Scoop manifests (packaging\): this version, the release's files and hashes" "All three present and consistent; Chocolatey and Scoop wait for step 3" {
+Check "ship.manifests" ci "The winget, Chocolatey and Scoop manifests (release.yml's manifests artifact on this commit): this version, the run's own files and hashes" "All three made and consistent; Chocolatey and Scoop wait for step 3" {
+  # Before the release the manifests are the release workflow's (from its SHA256SUMS.txt); release.ps1 -Publish
+  # commits them under packaging\ from the published release's (f1-ship).
+  if (-not (Test-Path (Join-Path $root ".github\workflows\release.yml"))) { return NotBuilt "f1-ship" "the release workflow (.github\workflows\release.yml)" }
   $cm = Get-Content (Join-Path $root "CMakeLists.txt") -Raw
   $ver = if ($cm -match 'project\(Featherweight VERSION (\d+\.\d+\.\d+)') { $Matches[1] } else { "" }
-  $n = [ordered]@{ version = $ver }; $missing = @()
+  $m = Get-RunArtifact "release.yml" "manifests"
+  if (-not $m) { return Failed "no manifests artifact from a finished release.yml run on this commit" }
+  $p = Get-RunArtifact "release.yml" "packages"
+  $sums = if ($p) { Get-ChildItem $p.dir -Recurse -Filter SHA256SUMS.txt -ErrorAction SilentlyContinue | Select-Object -First 1 }
+  $runHashes = @(if ($sums) { [regex]::Matches((Get-Content $sums.FullName -Raw), '(?i)\b[0-9a-f]{64}\b') | ForEach-Object { $_.Value.ToLowerInvariant() } })
+  $n = [ordered]@{ version = $ver; run = $m.run; runHashes = $runHashes.Count }; $missing = @()
+  $expect = @{ winget = @("$ver\*.yaml"); chocolatey = @("featherweight.nuspec", "tools\chocolateyinstall.ps1"); scoop = @("featherweight.json") }
   foreach ($k in "winget", "chocolatey", "scoop") {
-    $files = @(Get-ChildItem (Join-Path $root "packaging\$k") -Recurse -File -ErrorAction SilentlyContinue)
+    $dir = Join-Path $m.dir $k
+    $files = @(Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue)
     $n[$k] = $files.Count
-    if (-not $files.Count) { $missing += $k; continue }
+    if (-not $files.Count) { $missing += "$k (none)"; continue }
+    foreach ($e in $expect[$k]) { if (-not (Test-Path (Join-Path $dir $e))) { $missing += "$k ($e)" } }
     $text = ($files | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
     if ($ver -and $text -notmatch [regex]::Escape($ver)) { $missing += "$k (not $ver)" }
-    if ($text -notmatch '(?i)[0-9a-f]{64}') { $missing += "$k (no SHA-256)" }
+    $own = @([regex]::Matches($text, '(?i)\b[0-9a-f]{64}\b') | ForEach-Object { $_.Value.ToLowerInvariant() } | Sort-Object -Unique)
+    if (-not $own.Count) { $missing += "$k (no SHA-256)" }
+    elseif ($runHashes.Count) { $foreign = @($own | Where-Object { $_ -notin $runHashes }); if ($foreign.Count) { $missing += "$k ($($foreign.Count) hashes not in the run's SHA256SUMS.txt)" } }
+    else { $missing += "$k (the run's SHA256SUMS.txt wasn't found to compare)" }
   }
-  if ($missing.Count) { return NotBuilt "f1-ship" ("manifests: " + ($missing -join ", ")) }
+  if ($missing.Count) { return Failed ("manifests: " + ($missing -join ", ")) $n }
   Waiting 3 "the manifests are ready; Chocolatey and Scoop need Roy's account and OK" $n
 }
 Check "ship.admx" quick "The ADMX policies match what the app reads (HKLM\SOFTWARE\Policies\Featherweight)" "Every ADMX value is read by src\Policy.cpp and back" {
@@ -762,15 +834,25 @@ Check "review.defender" long "Microsoft Defender scans the release files clean" 
 Check "review.scans" quick "VirusTotal and Hybrid Analysis (Roy's step 5): Defender clean, other detections listed, sandbox traffic only to GitHub" "Reports linked; traffic only to GitHub" {
   $s = Join-Path $root "scripts\scan-release.ps1"
   if (-not (Test-Path $s)) { return NotBuilt "f1-trust" "scripts\scan-release.ps1" }
-  $r = Read-Json (Join-Path $root "build\scan-release\summary.json")
-  if (-not $r -or $r.waiting) { return Waiting 5 "the upload script is ready; the keys are Roy's" }
-  if ($r.pass) { Passed $r.verdict } else { Failed $r.verdict }
+  $o = Join-Path $script:outDir "scan-release"
+  Remove-Item (Join-Path $o "summary.json") -ErrorAction SilentlyContinue
+  $code = Invoke-Script "review.scans" "scripts\scan-release.ps1" @("-FromCi", "-Commit", $script:head, "-OutDir", $o)
+  $r = Read-Json (Join-Path $o "summary.json")
+  if (-not $r) { return Failed "scan-release.ps1 -FromCi wrote no summary (exit $code; its log)" }
+  $n = [ordered]@{ verdict = $r.verdict }
+  if ($r.waiting) { return Waiting 5 "the scan workflow is ready; the keys are Roy's" $n }
+  if ($r.pass) { Passed $r.verdict $n } else { Failed $r.verdict $n }
 }
 Check "review.coverity" ci "Coverity Scan runs weekly (Roy's step 6)" "A successful Coverity run, or waiting for step 6" {
   if (-not (Test-Path (Join-Path $root ".github\workflows\coverity.yml"))) { return NotBuilt "f1-trust" ".github\workflows\coverity.yml" }
-  try { $j = Gh-Json "repos/$repoSlug/actions/workflows/coverity.yml/runs?per_page=5" } catch { return Waiting 6 "no Coverity run yet" }
-  $ok = @($j.workflow_runs | Where-Object { $_.conclusion -eq "success" })
-  if ($ok.Count) { Passed "last success $($ok[0].created_at)" ([ordered]@{ run = $ok[0].html_url }) } else { Waiting 6 "the workflow waits for its token" }
+  try { $j = Gh-Json "repos/$repoSlug/actions/workflows/coverity.yml/runs?status=completed&per_page=10" } catch { return Waiting 6 "no Coverity run yet" }
+  # The run succeeds while its scan job is skipped (no token yet): only a scan job's success counts.
+  foreach ($run in @($j.workflow_runs | Where-Object { $_.conclusion -eq "success" })) {
+    $jobs = @((Gh-Json "repos/$repoSlug/actions/runs/$($run.id)/jobs?per_page=100").jobs)
+    $scan = @($jobs | Where-Object { $_.name -match '^scan\b' })
+    if (@($jobs | Where-Object { $_.name -match '^token\b' }).Count -and $scan.Count -and $scan[0].conclusion -eq "success") { return Passed "last scan $($run.created_at)" ([ordered]@{ run = $run.html_url }) }
+  }
+  Waiting 6 "the workflow is in; its scan job is skipped until the token is there"
 }
 
 # ===== Lightweight =====
@@ -780,11 +862,17 @@ Check "light.size" quick "Size (budgets.ps1 on the shipped build): the exe, and 
   $code = Invoke-Script "light.size" "scripts\budgets.ps1" @("-Build", $Build, "-Json", $j)
   $b = Read-Json $j
   if (-not $b) { return Failed "budgets.ps1 wrote nothing (exit $code)" }
-  $exe = [long]$b.size.exe; $dl = [long]$b.size.download
+  $exe = [long]$b.size.exe
+  # The default download is the x64 installer that release.yml's package job makes (its packages artifact).
+  $p = Get-RunArtifact "release.yml" "packages"
+  $setup = if ($p) { Get-ChildItem $p.dir -Recurse -Filter "Featherweight-*-Setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+  $dl = if ($setup) { [long]$setup.Length } else { 0 }
   $n = [ordered]@{ exeBytes = $exe; exeGrowthKB = [math]::Round(($exe - $exe40) / 1024, 1); downloadBytes = $dl; downloadMB = [math]::Round($dl / 1MB, 2); budgetsExit = $code }
+  $n.download = if ($setup) { "$($setup.Name) from $($p.run)" } else { "none" }
   $bad = @()
+  if (-not $setup) { $bad += "the download: no installer from a finished release.yml run on this commit" }
   if ($exe -gt $exeBudget) { $bad += "exe $([math]::Round(($exe - $exe40) / 1024)) KB over 4.0's (1,024 allowed)" }
-  if ($dl -gt $downloadBudget) { $bad += "download $($n.downloadMB) MB (10 MB; f1-ship's V8-less PDFium)" }
+  if ($setup -and $dl -gt $downloadBudget) { $bad += "download $($n.downloadMB) MB (10 MB; f1-ship's V8-less PDFium)" }
   if ($code) { $bad += "budgets.ps1 failed (unrecorded growth?)" }
   if ($bad.Count) { Failed ($bad -join "; ") $n } else { Passed "exe +$($n.exeGrowthKB) KB, download $($n.downloadMB) MB" $n }
 }
@@ -878,9 +966,10 @@ Check "docs.readme" quick "The README: the network wording exactly, the badges (
     wording = $readme.IndexOf($wording, [StringComparison]::OrdinalIgnoreCase) -ge 0
     codeqlBadge = [bool]($readme -match '(?i)codeql[^)\n]*\.svg|badge[^)\n]*codeql')
     scorecardBadge = [bool]($readme -match '(?i)scorecard')
-    bestPracticesBadge = [bool]($readme -match '(?i)bestpractices|best practices')
+    bestPracticesBadge = [bool]($readme -match '(?i)bestpractices\.(coreinfrastructure\.org|dev)/[^)\s]*projects/\d+')
   }
   $missing = @($n.Keys | Where-Object { -not $n[$_] })
+  if ($missing.Count -eq 1 -and $missing[0] -eq "bestPracticesBadge") { return Waiting 6 "the wording and the CodeQL and Scorecard badges are in; the Best Practices badge needs the project number step 6 makes" $n }
   if ($missing.Count) { NotBuilt "f1-trust" ("README: " + ($missing -join ", ")) } else { Passed "all present" $n }
 }
 Check "docs.security" quick "SECURITY.md: private reporting, response times, supported versions; reporting on (step 4)" "Present; the reporting link waits for step 4" {
