@@ -1,3 +1,4 @@
+// PDF syntax only, no text a person reads.  // lang: skip-file
 #include "pdf/tools/PageOps.h"
 
 #include <fpdf_edit.h>

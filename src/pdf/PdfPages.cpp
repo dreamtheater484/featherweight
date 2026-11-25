@@ -32,7 +32,7 @@ std::wstring BaseName(const std::wstring& path) {
 
 // "report (pages 2-4)" or "report (page 3)".
 std::wstring PartName(const std::wstring& base, const std::vector<int>& pages) {
-  return pdftext::Fill(pages.size() == 1 ? T(L"{0} (page {1})") : T(L"{0} (pages {1})"), {base, pdftools::PageList(pages)});
+  return Fmt(pages.size() == 1 ? T(L"{0} (page {1})") : T(L"{0} (pages {1})"), {base, pdftools::PageList(pages)});
 }
 
 // `path`, or "path (2).pdf" and so on when it's taken.
@@ -193,7 +193,7 @@ bool PdfView::DeletePages(const std::vector<int>& pages) {
   }
   if (!BeginPageChange()) return false;
   const bool undoable = !pageBefore_.empty();
-  if (!undoable && !host_.ViewConfirm(pdftext::Fill(T(L"Delete {0}? This PDF is too large to undo it."),
+  if (!undoable && !host_.ViewConfirm(Fmt(T(L"Delete {0}? This PDF is too large to undo it."),
                                                     {pdftext::Pages(static_cast<int>(pages.size()))}),
                                       T(L"Delete"))) {
     EndPageChange(false, CurrentPage());
@@ -206,9 +206,9 @@ bool PdfView::DeletePages(const std::vector<int>& pages) {
   const int at = std::min(first, PageCount() - 1);
   if (pagesPanel_) pagesPanel_->Select({at}, at);
   host_.ViewMessage(BannerKind::Success,
-                    undoable ? pdftext::Fill(T(L"Deleted {0}. Ctrl+Z brings them back."),
+                    undoable ? Fmt(T(L"Deleted {0}. Ctrl+Z brings them back."),
                                              {pdftext::Pages(static_cast<int>(pages.size()))})
-                             : pdftext::Fill(T(L"Deleted {0}."), {pdftext::Pages(static_cast<int>(pages.size()))}));
+                             : Fmt(T(L"Deleted {0}."), {pdftext::Pages(static_cast<int>(pages.size()))}));
   return true;
 }
 
@@ -293,15 +293,15 @@ bool PdfView::InsertFiles(const std::vector<std::wstring>& paths, int at) {
         sources.push_back(std::move(src));
         names.push_back(name);
         continue;
-      case pdftools::SourceError::Read: problem = pdftext::Fill(T(L"{0} couldn't be read."), {name}); break;
-      case pdftools::SourceError::NotPdf: problem = pdftext::Fill(T(L"{0} isn't a PDF, or it's damaged."), {name}); break;
+      case pdftools::SourceError::Read: problem = Fmt(T(L"{0} couldn't be read."), {name}); break;
+      case pdftools::SourceError::NotPdf: problem = Fmt(T(L"{0} isn't a PDF, or it's damaged."), {name}); break;
       case pdftools::SourceError::Password:
-        problem = pdftext::Fill(T(L"{0} has a password. Open it, save a copy without one, and insert that."), {name});
+        problem = Fmt(T(L"{0} has a password. Open it, save a copy without one, and insert that."), {name});
         break;
       case pdftools::SourceError::NotAllowed:
-        problem = pdftext::Fill(T(L"{0} doesn't allow copying its pages."), {name});
+        problem = Fmt(T(L"{0} doesn't allow copying its pages."), {name});
         break;
-      case pdftools::SourceError::Empty: problem = pdftext::Fill(T(L"{0} has no pages."), {name}); break;
+      case pdftools::SourceError::Empty: problem = Fmt(T(L"{0} has no pages."), {name}); break;
     }
   }
   if (sources.empty()) {
@@ -331,8 +331,8 @@ bool PdfView::InsertFiles(const std::vector<std::wstring>& paths, int at) {
     pagesPanel_->Select(inserted, first);
   }
   std::wstring message = names.size() == 1
-                             ? pdftext::Fill(T(L"Inserted {0} from {1}."), {pdftext::Pages(added), names.front()})
-                             : pdftext::Fill(T(L"Inserted {0} from {1} files."),
+                             ? Fmt(T(L"Inserted {0} from {1}."), {pdftext::Pages(added), names.front()})
+                             : Fmt(T(L"Inserted {0} from {1} files."),
                                              {pdftext::Pages(added), std::to_wstring(names.size())});
   if (!problem.empty()) message += L" " + problem;
   host_.ViewMessage(problem.empty() && okAll ? BannerKind::Success : BannerKind::Warning, message);
@@ -390,7 +390,7 @@ bool PdfView::ExtractTo(const std::vector<int>& sorted, const std::wstring& path
     host_.ViewMessage(BannerKind::Error, error);
     return false;
   }
-  host_.ViewMessage(BannerKind::Success, pdftext::Fill(T(L"Extracted {0} to {1}."),
+  host_.ViewMessage(BannerKind::Success, Fmt(T(L"Extracted {0} to {1}."),
                                                        {pdftext::Pages(static_cast<int>(sorted.size())), fw::FileNameOf(path)}));
   return true;
 }
@@ -422,12 +422,12 @@ bool PdfView::SplitTo(const std::vector<std::vector<int>>& parts, const std::wst
   }
   if (!error.empty()) {
     host_.ViewMessage(BannerKind::Error,
-                      written > 0 ? pdftext::Fill(T(L"{0} files were made, then: {1}"), {std::to_wstring(written), error})
+                      written > 0 ? Fmt(T(L"{0} files were made, then: {1}"), {std::to_wstring(written), error})
                                   : error);
     return false;
   }
   host_.ViewMessage(BannerKind::Success,
-                    pdftext::Fill(T(L"Split into {0} PDFs in {1}."), {std::to_wstring(written), fw::FileNameOf(dir)}));
+                    Fmt(T(L"Split into {0} PDFs in {1}."), {std::to_wstring(written), fw::FileNameOf(dir)}));
   return true;
 }
 

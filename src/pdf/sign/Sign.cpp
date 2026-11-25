@@ -1,3 +1,4 @@
+// PDF syntax only, no text a person reads.  // lang: skip-file
 // The signer's signature algorithm (ECDSA keys) is a CMS field of CMSG_SIGNER_ENCODE_INFO.
 #define CMSG_SIGNER_ENCODE_INFO_HAS_CMS_FIELDS
 #define CMSG_SIGNED_ENCODE_INFO_HAS_CMS_FIELDS

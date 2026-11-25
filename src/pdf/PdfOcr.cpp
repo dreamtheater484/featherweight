@@ -92,7 +92,7 @@ bool PdfView::OcrStep() {
   }
   job.page = page;
   job.busy = true;
-  host_.ViewMessage(BannerKind::Info, pdftext::Fill(T(L"Recognizing text on page {0} of {1}… Esc stops."),
+  host_.ViewMessage(BannerKind::Info, Fmt(T(L"Recognizing text on page {0} of {1}… Esc stops."),
                                                     {std::to_wstring(page + 1), std::to_wstring(PageCount())}));
   std::shared_ptr<OcrJob> shared = ocr_;
   std::thread([shared] {
@@ -118,7 +118,7 @@ void PdfView::FinishOcr() {
     message = T(L"Windows can't recognize text in any of your languages. A language with its optical character "
                 L"recognition can be added in Windows' language settings.");
   } else if (changed) {
-    message = pdftext::Fill(T(L"Recognized {0} words on {1}. They can be found, selected and copied now."),
+    message = Fmt(T(L"Recognized {0} words on {1}. They can be found, selected and copied now."),
                             {std::to_wstring(job->words), pdftext::Pages(job->recognized)});
   } else if (job->stop) {
     kind = BannerKind::Info;

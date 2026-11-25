@@ -42,7 +42,7 @@ std::wstring TempFolder() {
   wchar_t temp[MAX_PATH + 1] = {};
   std::wstring dir(temp, GetTempPathW(MAX_PATH + 1, temp));
   if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
-  dir += L"Featherweight share";
+  dir += L"Featherweight share";  // lang: no
   CreateDirectoryW(dir.c_str(), nullptr);
   // Copies from earlier shares: a day is plenty for any app to have read them.
   FILETIME nowTime;

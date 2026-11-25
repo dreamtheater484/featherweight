@@ -69,25 +69,25 @@ void PdfView::CheckSignatures(bool always) {
   signatureWarned_ = false;
   if (!invalid.empty()) {
     host_.ViewMessage(BannerKind::Error,
-                      pdftext::Fill(T(L"The signature by {0} isn't valid: what was signed has been changed, or the "
+                      Fmt(T(L"The signature by {0} isn't valid: what was signed has been changed, or the "
                                       L"signature can't be checked."),
                                     {Joined(invalid)}));
   } else if (!changed.empty()) {
     host_.ViewMessage(BannerKind::Warning,
-                      pdftext::Fill(T(L"Signed by {0}, but the PDF was changed after it was signed."), {Joined(changed)}));
+                      Fmt(T(L"Signed by {0}, but the PDF was changed after it was signed."), {Joined(changed)}));
   } else if (!untrusted.empty()) {
     std::vector<std::wstring> all = valid;
     all.insert(all.end(), untrusted.begin(), untrusted.end());
     host_.ViewMessage(BannerKind::Info,
-                      valid.empty() ? pdftext::Fill(T(L"Signed by {0}. The PDF is as it was signed, but Windows doesn't "
+                      valid.empty() ? Fmt(T(L"Signed by {0}. The PDF is as it was signed, but Windows doesn't "
                                                       L"trust the certificate it was signed with."),
                                                     {Joined(all)})
-                                    : pdftext::Fill(T(L"Signed by {0}. The PDF is as it was signed, but Windows doesn't "
+                                    : Fmt(T(L"Signed by {0}. The PDF is as it was signed, but Windows doesn't "
                                                       L"trust the certificate of {1}."),
                                                     {Joined(all), Joined(untrusted)}));
   } else {
     host_.ViewMessage(BannerKind::Success,
-                      pdftext::Fill(T(L"Signed by {0}. The signature is valid: the PDF is as it was signed."),
+                      Fmt(T(L"Signed by {0}. The signature is valid: the PDF is as it was signed."),
                                     {Joined(valid)}));
   }
 }
@@ -152,7 +152,7 @@ bool PdfView::SignWithCertificate() {
   HMENU m = CreatePopupMenu();
   for (size_t i = 0; i < certs.size() && i < 50; ++i)
     menu::AppendItem(m, static_cast<UINT>(i + 1),
-                     pdftext::Fill(T(L"{0}, issued by {1}"), {pdfsign::CertName(certs[i]), pdfsign::CertIssuer(certs[i])}));
+                     Fmt(T(L"{0}, issued by {1}"), {pdfsign::CertName(certs[i]), pdfsign::CertIssuer(certs[i])}));
   POINT pt{};
   GetCursorPos(&pt);
   theme::ApplyToMenus();
@@ -160,7 +160,7 @@ bool PdfView::SignWithCertificate() {
   DestroyMenu(m);
   bool ok = false;
   std::wstring path;
-  if (chosen > 0 && ChoosePdfToSave(pdftext::Fill(T(L"{0} (signed)"), {BaseOf(Path())}), T(L"Save the signed PDF"),
+  if (chosen > 0 && ChoosePdfToSave(Fmt(T(L"{0} (signed)"), {BaseOf(Path())}), T(L"Save the signed PDF"),
                                     path, true))
     ok = SignWith(certs[static_cast<size_t>(chosen - 1)], path);
   for (const CERT_CONTEXT* c : certs) CertFreeCertificateContext(c);
@@ -189,7 +189,7 @@ void PdfView::FillMenu(int which, HMENU m) {
   const int n = Ready() ? doc_->SignatureCount() : 0;
   menu::AppendItem(m, CmdPdfSignatures,
                    n == 0 ? std::wstring(T(L"No signatures in this PDF"))
-                          : pdftext::Fill(T(L"Check signatures ({0})"), {std::to_wstring(n)}),
+                          : Fmt(T(L"Check signatures ({0})"), {std::to_wstring(n)}),
                    n > 0);
 }
 

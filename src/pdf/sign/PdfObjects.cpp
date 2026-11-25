@@ -1,3 +1,4 @@
+// PDF syntax only, no text a person reads.  // lang: skip-file
 #include "pdf/sign/PdfObjects.h"
 
 #include <miniz.h>

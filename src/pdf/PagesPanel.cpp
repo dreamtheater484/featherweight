@@ -248,7 +248,7 @@ void PdfView::PagesPanel::Draw(Canvas& c) {
   } else {
     const size_t chosen = Selection().size();
     const std::wstring line = chosen == 0 ? pdftext::Pages(n)
-                                          : pdftext::Fill(T(L"{0} of {1} selected"),
+                                          : Fmt(T(L"{0} of {1} selected"),
                                                           {std::to_wstring(chosen), pdftext::Pages(n)});
     c.Text(line, status, p.textSecondary, 12 * u);
   }
@@ -406,7 +406,7 @@ std::wstring PdfView::PagesPanel::TooltipAt(float x, float y) {
     default: break;
   }
   const int page = PageAt(x, y);
-  return page >= 0 ? pdftext::Fill(T(L"Page {0}"), {std::to_wstring(page + 1)}) : std::wstring();
+  return page >= 0 ? Fmt(T(L"Page {0}"), {std::to_wstring(page + 1)}) : std::wstring();
 }
 
 void PdfView::PagesPanel::Describe(uia::Tree&, int, const std::function<void()>&) {}

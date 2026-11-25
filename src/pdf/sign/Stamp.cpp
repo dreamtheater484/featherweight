@@ -7,6 +7,8 @@
 #include <cmath>
 #include <string>
 
+#include "pdf/PdfText.h"
+
 namespace pdfsign {
 
 namespace {
@@ -64,8 +66,8 @@ int AddSignatureStamp(FPDF_DOCUMENT doc, FPDF_PAGE page, const FS_RECTF& rect, c
   if (!annot) return -1;
   const float l = rect.left, t = rect.top, w = rect.right - rect.left, h = rect.top - rect.bottom;
   bool ok = FPDFAnnot_SetRect(annot, &rect) && FPDFAnnot_SetFlags(annot, FPDF_ANNOT_FLAG_PRINT);
-  const std::u16string label = u"Signature";
-  FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(label.c_str()));
+  // What other readers show for the stamp (wchar_t is UTF-16 here, as FPDF_WIDESTRING is).
+  FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(T(L"Signature")));
   if (ok && !ink.bgra.empty()) {
     // A picture: near-white is see-through, so it sits on the page as ink would.
     std::vector<uint8_t> px = ink.bgra;

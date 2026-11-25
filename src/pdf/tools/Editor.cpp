@@ -136,7 +136,7 @@ bool Editor::Bytes(std::string& out) {
 bool Editor::SaveTo(const std::wstring& path, std::wstring& error, const fw::pkg::SaveFaults* faults) {
   std::string bytes;
   if (!Bytes(bytes)) {
-    error = L"The PDF couldn't be written.";
+    error = L"The PDF couldn't be written.";  // lang: no (fwtool's, in English)
     return false;
   }
   const fw::pkg::SaveResult r = fw::pkg::SafeWrite(
