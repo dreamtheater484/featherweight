@@ -4751,6 +4751,10 @@ msgstr "Formate"
 msgid "Formula"
 msgstr "Formel"
 
+#: src/sheet/data/Rules.cpp
+msgid "Formula: ={0}"
+msgstr "Formel: ={0}"
+
 #: src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp
 msgid "Formulas"
 msgstr "Formeln"
@@ -9128,6 +9132,10 @@ msgstr "Gültig für die Arbeitsmappe"
 #: src/sheet/view/WorkbookNames.cpp
 msgid "Scoped to this sheet"
 msgstr "Gültig für dieses Blatt"
+
+#: src/slide/view/PresentationText.cpp
+msgid "ScreenTip"
+msgstr "QuickInfo"
 
 #: src/ui/CommandSearch.cpp
 msgid "Search for a command"
@@ -14476,6 +14484,10 @@ msgstr "{0} hat ein Element mit mehr als {1} Attributen; das ist mehr, als Feath
 #: src/core/Strings.cpp
 msgid "{0} hours ago"
 msgstr "vor {0} Stunden"
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "{0} in red"
+msgstr "{0} in Rot"
 
 #: src/slide/view/PresentationView.cpp
 msgid "{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."

@@ -99,6 +99,10 @@ void Init(const std::wstring& chosen);
 // The language in use ("en" until Init chose another).
 const wchar_t* Current();
 
+// A name inside a sentence, "Undo {0}" with "Typing": lower case in English ("Undo typing"), as it
+// is in the other languages, whose nouns may keep their capitals ("Rückgängig: Eingabe", as Office).
+std::wstring InSentence(std::wstring_view name);
+
 // A shortcut's key names as the language's keyboards write them: "Ctrl+Shift+S" is "Strg+Umschalt+S"
 // in German. Only names joined by "+" change ("Bold (Ctrl+B)", "\tCtrl+Enter"); each comes from the
 // catalog with the context "key". In English `text` comes back as it is.

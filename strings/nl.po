@@ -4751,6 +4751,10 @@ msgstr "Opmaak"
 msgid "Formula"
 msgstr "Formule"
 
+#: src/sheet/data/Rules.cpp
+msgid "Formula: ={0}"
+msgstr "Formule: ={0}"
+
 #: src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp
 msgid "Formulas"
 msgstr "Formules"
@@ -9128,6 +9132,10 @@ msgstr "Bereik: de werkmap"
 #: src/sheet/view/WorkbookNames.cpp
 msgid "Scoped to this sheet"
 msgstr "Bereik: dit blad"
+
+#: src/slide/view/PresentationText.cpp
+msgid "ScreenTip"
+msgstr "Scherminfo"
 
 #: src/ui/CommandSearch.cpp
 msgid "Search for a command"
@@ -14476,6 +14484,10 @@ msgstr "{0} heeft een element met meer dan {1} kenmerken, en dat is meer dan Fea
 #: src/core/Strings.cpp
 msgid "{0} hours ago"
 msgstr "{0} uur geleden"
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "{0} in red"
+msgstr "{0} in rood"
 
 #: src/slide/view/PresentationView.cpp
 msgid "{0} is a PowerPoint 97–2003 presentation. Saving makes a new {1}.pptx and leaves it as it is."

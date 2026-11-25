@@ -214,6 +214,13 @@ void Init(const std::wstring& chosen) {
 
 const wchar_t* Current() { return g_current; }
 
+std::wstring InSentence(std::wstring_view name) {
+  std::wstring out(name);
+  if (!out.empty() && g_current[0] == L'e' && g_current[1] == L'n' && !g_current[2])
+    CharLowerBuffW(out.data(), static_cast<DWORD>(out.size()));
+  return out;
+}
+
 namespace {
 // A key's name in the language, or nullptr for a letter, a digit, F1 or a name that stays.
 const wchar_t* KeyName(std::wstring_view k) {

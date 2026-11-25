@@ -535,7 +535,7 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region) {
     if (op == CfOp::NotBetween) return Fmt(T(L"Cell Value not between {0} and {1}"), {formula(0), formula(1)});
     return Fmt(T(L"Cell Value {0} {1}"), {kSigns[static_cast<size_t>(op)], formula(0)});
   }
-  if (t == "expression") return L"Formula: =" + formula(0);
+  if (t == "expression") return Fmt(T(L"Formula: ={0}"), {formula(0)});
   const std::wstring text = Utf8ToWide(AttrOf(r, "text"));
   if (t == "containsText") return Fmt(T(L"Cell Value contains \"{0}\""), {text});
   if (t == "notContainsText") return Fmt(T(L"Cell Value does not contain \"{0}\""), {text});

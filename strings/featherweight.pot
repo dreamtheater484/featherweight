@@ -4750,6 +4750,10 @@ msgstr ""
 msgid "Formula"
 msgstr ""
 
+#: src/sheet/data/Rules.cpp
+msgid "Formula: ={0}"
+msgstr ""
+
 #: src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookSheetOps.cpp
 msgid "Formulas"
 msgstr ""
@@ -9126,6 +9130,10 @@ msgstr ""
 
 #: src/sheet/view/WorkbookNames.cpp
 msgid "Scoped to this sheet"
+msgstr ""
+
+#: src/slide/view/PresentationText.cpp
+msgid "ScreenTip"
 msgstr ""
 
 #: src/ui/CommandSearch.cpp
@@ -14474,6 +14482,10 @@ msgstr ""
 
 #: src/core/Strings.cpp
 msgid "{0} hours ago"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "{0} in red"
 msgstr ""
 
 #: src/slide/view/PresentationView.cpp

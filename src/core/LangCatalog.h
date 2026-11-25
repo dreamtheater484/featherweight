@@ -4,10 +4,11 @@
 // compiler (tools/strings/fwstrings.cpp) and the fuzzer (tests/fuzz/fuzz_catalog.cpp).
 //
 // Two kinds of resource (RCDATA):
-//   LANG_KEYS: "FWLK", version 2, seed, count, then the template's keys' hashes, ascending, each as
-//              its difference from the one before (LEB128: 7 bits a byte, low first; the first from
-//              0), then a byte w and each hash's place in the template in w bits (packed, low bits
-//              first). One table serves every language.
+//   LANG_KEYS: "FWLK", version 2, seed, count, a byte k, a byte w, then bits (low bits of each byte
+//              first): the keys' hashes, ascending, each as its difference from the one before (the
+//              first from 0) in Rice code (the difference >> k as that many 1 bits and a 0, then
+//              its low k bits), then each hash's place among the texts in w bits. One table serves
+//              every language.
 //   LANG_<CODE> (LANG_DE): "FWLZ", the inflated size, then raw deflate of
 //              "FWLT", version 1, count, the keys' check (KeysCheck), then count UTF-8 texts in the
 //              template's order (sorted by their English, which compresses best), each ended by a 0

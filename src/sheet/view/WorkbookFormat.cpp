@@ -563,7 +563,8 @@ void WorkbookView::FormatPanel::SyncNumber() {
     FormatChoice c = choice_;
     if (c.category != FormatCategory::Number && c.category != FormatCategory::Currency) c.category = FormatCategory::Number;
     c.negative = i;
-    negative_.items.push_back(Sample(FormatCode(c, loc), -1234.1) + (i & 1 ? L" in red" : L""));
+    const std::wstring sample = Sample(FormatCode(c, loc), -1234.1);
+    negative_.items.push_back(i & 1 ? Fmt(T(L"{0} in red"), {sample}) : sample);
   }
   negative_.selected = choice_.negative;
   // Dates and times by their sample, fractions by name.
