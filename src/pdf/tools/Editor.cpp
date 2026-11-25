@@ -24,6 +24,7 @@ SourceError Editor::Open(std::string bytes, const std::string& password) {
   password_ = password;
   doc_ = FPDF_LoadMemDocument64(bytes_.data(), bytes_.size(), password_.empty() ? nullptr : password_.c_str());
   if (!doc_) return FPDF_GetLastError() == FPDF_ERR_PASSWORD ? SourceError::Password : SourceError::NotPdf;
+  branched_ = HasPageBranches(bytes_);
   return SourceError::None;
 }
 
@@ -62,8 +63,9 @@ bool Editor::Delete(const std::vector<int>& pages) {
 
 bool Editor::Move(const std::vector<int>& pages, int gap) {
   if (PageToolsBlocked() != Block::None) return false;
+  // Only a tree with branches can pass different attributes down (and PDFium never adds any).
   std::string now, pinned;
-  if (Bytes(now) && PinInherited(now, pages, PageCount(), pinned)) Reload(std::move(pinned), true);
+  if (branched_ && Bytes(now) && PinInherited(now, pages, PageCount(), pinned)) Reload(std::move(pinned), true);
   if (!pdftools::Move(doc_, pages, gap)) return false;
   modified_ = true;
   return true;
@@ -71,17 +73,18 @@ bool Editor::Move(const std::vector<int>& pages, int gap) {
 
 int Editor::Insert(const Source& src, int at) {
   if (PageToolsBlocked() != Block::None) return 0;
-  // The inserted pages read from `src` until the document is written and loaded again, which is
-  // done here, so the caller may close `src` (f1-gate's finding: a crash once it was closed).
-  const bool wasModified = modified_;
-  std::string before, after;
-  if (!Bytes(before)) return 0;
-  const int added = pdftools::Insert(doc_, src, at);
+  // The inserted pages read from their source until the document is written and opened again,
+  // which is done here (f1-gate's finding 5: a crash once the source was closed). They come from
+  // the Editor's own copy of the source, kept if that fails, so the caller may close `src` either way.
+  if (!src.doc) return 0;
+  auto own = std::make_unique<Source>();
+  if (OpenSource(src.bytes, src.password, *own) != SourceError::None) return 0;
+  const int added = pdftools::Insert(doc_, *own, at);
   if (added <= 0) return 0;
   modified_ = true;
-  if (Bytes(after) && Reload(std::move(after), true)) return added;
-  Reload(std::move(before), wasModified);  // the insert can't be kept without `src`
-  return 0;
+  std::string after;
+  if (!Bytes(after) || !Reload(std::move(after), true)) kept_.push_back(std::move(own));
+  return added;
 }
 
 bool Editor::Extract(const std::vector<int>& pages, std::string& out) const {

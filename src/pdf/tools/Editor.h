@@ -10,6 +10,7 @@
 
 #include <fpdfview.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -70,10 +71,14 @@ class Editor {
  private:
   bool Reload(std::string bytes, bool modified);
 
+  // Copies of sources pages were inserted from, kept only when the document couldn't be opened
+  // again after the insert (its imported pages read from them). Before doc_: they close after it.
+  std::vector<std::unique_ptr<Source>> kept_;
   std::string bytes_;  // PDFium reads from these while the document is open
   std::string password_;
   FPDF_DOCUMENT doc_ = nullptr;
   bool modified_ = false;
+  bool branched_ = false;  // HasPageBranches(bytes_) when they were opened: moves may need pinning
 };
 
 }  // namespace pdftools

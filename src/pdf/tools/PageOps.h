@@ -41,6 +41,9 @@ bool Move(FPDF_DOCUMENT doc, std::vector<int> pages, int gap);
 // instead); false when not needed (one branch, or nothing inherited), or when the file can't be read
 // strictly or is encrypted (then Move's own pinning is what there is). `pageCount` is PDFium's.
 bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pageCount, std::string& out);
+// Whether PinInherited can ever be needed for `bytes`: its page tree has more than one branch (and
+// can be read). PDFium's page operations never add branches, so one look per file opened is enough.
+bool HasPageBranches(std::string_view bytes);
 // Where the first moved page ends up: what FPDF_MovePages calls the destination.
 int MoveDestination(const std::vector<int>& sortedPages, int gap);
 
@@ -48,6 +51,7 @@ int MoveDestination(const std::vector<int>& sortedPages, int gap);
 enum class SourceError { None, Read, NotPdf, Password, NotAllowed, Empty };
 struct Source {
   std::string bytes;  // PDFium reads from these while the document is open
+  std::string password;  // what it was opened with
   FPDF_DOCUMENT doc = nullptr;
   Source() = default;
   Source(const Source&) = delete;

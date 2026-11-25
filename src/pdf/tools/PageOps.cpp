@@ -164,8 +164,10 @@ bool Move(FPDF_DOCUMENT doc, std::vector<int> pages, int gap) {
   return FPDF_MovePages(doc, pages.data(), static_cast<unsigned long>(pages.size()), dest) != FALSE;
 }
 
-bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pageCount, std::string& out) {
-  pdfobj::File f;
+namespace {
+
+// The page tree of `bytes`, read strictly. False for an encrypted file or one that can't be.
+bool ReadTree(std::string_view bytes, pdfobj::File& f, std::vector<Leaf>& leaves, int& branches) {
   if (!f.Open(bytes) || f.Trailer().Get("Encrypt")) return false;
   const pdfobj::Obj* root = f.Trailer().Get("Root");
   pdfobj::Obj catalog;
@@ -173,10 +175,25 @@ bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pag
     return false;
   const pdfobj::Obj* tree = catalog.Get("Pages");
   if (!tree || tree->type != pdfobj::Obj::Ref) return false;
-  std::vector<Leaf> leaves;
   std::set<int> seen;
+  branches = 0;
+  return WalkPages(f, tree->num, Inherited{}, 0, seen, leaves, branches);
+}
+
+}  // namespace
+
+bool HasPageBranches(std::string_view bytes) {
+  pdfobj::File f;
+  std::vector<Leaf> leaves;
   int branches = 0;
-  if (!WalkPages(f, tree->num, Inherited{}, 0, seen, leaves, branches)) return false;
+  return ReadTree(bytes, f, leaves, branches) && branches >= 2;
+}
+
+bool PinInherited(std::string_view bytes, const std::vector<int>& pages, int pageCount, std::string& out) {
+  pdfobj::File f;
+  std::vector<Leaf> leaves;
+  int branches = 0;
+  if (!ReadTree(bytes, f, leaves, branches)) return false;
   // A tree PDFium reads otherwise (it repaired the file), or one branch, where a move keeps
   // every page's parent.
   if (static_cast<int>(leaves.size()) != pageCount || branches < 2) return false;
@@ -202,6 +219,7 @@ Source::~Source() {
 SourceError OpenSource(std::string bytes, const std::string& password, Source& out) {
   if (bytes.empty()) return SourceError::Read;
   out.bytes = std::move(bytes);
+  out.password = password;
   out.doc = FPDF_LoadMemDocument64(out.bytes.data(), out.bytes.size(), password.empty() ? nullptr : password.c_str());
   if (!out.doc) {
     const unsigned long err = FPDF_GetLastError();
