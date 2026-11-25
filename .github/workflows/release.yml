@@ -11,8 +11,8 @@ name: release
 # Without SignPath the package job also builds the unsigned set from the unsigned program files (the artifact
 # packages-unsigned: the portable zips, installers and MSIs for x64 and ARM64, the updater's files, the Group Policy
 # templates, the SBOM and its own SHA256SUMS.txt; no MSIX, which doesn't install unsigned), and a tag drafts that.
-# A tag only drafts the release: scripts/release.ps1 -Publish publishes it, and refuses a draft whose files carry a
-# signature Windows doesn't trust.
+# Before drafting, the release job refuses any file whose signature Windows doesn't trust (SignPath's or none pass),
+# and it runs that check on every push. A tag only drafts the release; scripts/release.ps1 -Publish publishes it.
 #
 # Every push to main, claude/f1-int and claude/f1-ship runs it as a dry run (the 4.1 gate reads its result for the
 # head). A v* tag also drafts the GitHub release.
@@ -454,10 +454,11 @@ jobs:
       tag: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     secrets: inherit
 
-  # On a v* tag: the draft release, from the package job's release-set (SignPath's signed packages, or until then the
-  # unsigned set; never the test-signed packages). scripts/release.ps1 -Publish publishes it.
+  # The release's files: the package job's release-set (SignPath's signed packages, or until then the unsigned set;
+  # never the test-signed packages). On every run, on a fresh runner that never trusted the test certificate, no
+  # program file or package may carry a signature Windows doesn't trust; a dry run without SignPath also shows the
+  # test-signed packages refused. Only a v* tag drafts the release; scripts/release.ps1 -Publish publishes it.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [package, reproducible-compare, msix-wack, install, smoke]
     runs-on: windows-2022
     permissions:
@@ -470,15 +471,32 @@ jobs:
         with:
           name: ${{ needs.package.outputs.release-set }}
           path: dist
+      - name: No signature Windows doesn't trust (SignPath's or none)
+        shell: pwsh
+        run: |
+          Write-Host "The release's files: ${{ needs.package.outputs.release-set }}"
+          if (Test-Path dist\test-publisher.cer) { throw "the test-signed packages: never drafted" }
+          packaging\test-signing.ps1 -Releasable dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: github.ref_type != 'tag' && needs.package.outputs.release-set == 'packages-unsigned'
+        with:
+          name: packages
+          path: test-signed
+      - name: The check refuses the test-signed packages
+        if: github.ref_type != 'tag' && needs.package.outputs.release-set == 'packages-unsigned'
+        shell: pwsh
+        run: |
+          $refused = $false
+          try { packaging\test-signing.ps1 -Releasable test-signed } catch { $refused = $true; Write-Host "Refused, as it must be: $_" }
+          if (-not $refused) { throw "the test-signed packages passed the check" }
       - name: Draft the release
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          Write-Host "Drafting from ${{ needs.package.outputs.release-set }}"
-          if (Test-Path dist\test-publisher.cer) { throw "the test-signed packages: never drafted" }
           $notes = "docs\release-notes\$version.md"
           if (-not (Test-Path $notes)) { $notes = $null }
           $files = (Get-ChildItem dist -File).FullName

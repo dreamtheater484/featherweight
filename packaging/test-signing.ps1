@@ -8,8 +8,12 @@
     -Verify files signtool verify /pa /all on each; fails on the first that doesn't pass.
     -Unsigned files  each carries no signature at all (signtool verify /pa: "No signature found"; Windows:
                   NotSigned): the unsigned set a release drafts until SignPath.
+    -Releasable dir  every program file and package in the folder, and the program files inside its portable
+                  zips, is signed by a publisher Windows trusts (SignPath) or not signed at all; any other
+                  signature fails, such as the test certificate's on a runner that doesn't trust it. The release
+                  job runs it before drafting.
 #>
-param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify, [string[]]$Unsigned)
+param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify, [string[]]$Unsigned, [string]$Releasable)
 $ErrorActionPreference = "Stop"
 $dir = Join-Path ($(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() })) "fw-test-signing"
 function SdkTool($name) {
@@ -87,4 +91,25 @@ if ($Unsigned) {
   }
   if ($bad) { throw "$bad files carry a signature" }
   Write-Host "$($Unsigned.Count) files, none signed"
+}
+
+if ($Releasable) {
+  $Releasable = (Resolve-Path $Releasable).Path
+  $inside = Join-Path ([IO.Path]::GetTempPath()) "fw-releasable-$([Guid]::NewGuid().ToString('N'))"
+  foreach ($z in Get-ChildItem $Releasable -File -Filter "*-Portable*.zip") {
+    Expand-Archive $z.FullName (Join-Path $inside $z.BaseName)
+  }
+  $files = @(Get-ChildItem "$Releasable\*" -File -Include *.exe, *.dll, *.msi, *.msix)
+  if (Test-Path $inside) { $files += @(Get-ChildItem $inside -Recurse -File -Include *.exe, *.dll) }
+  if (-not $files.Count) { throw "no program files or packages in $Releasable" }
+  $bad = @()
+  foreach ($f in $files) {
+    $s = Get-AuthenticodeSignature $f.FullName
+    $who = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { "-" }
+    Write-Host ("{0,-14} {1}  ({2})" -f $s.Status, $f.FullName.Substring($f.FullName.IndexOf($f.Directory.Name)), $who)
+    if ("$($s.Status)" -ne "Valid" -and "$($s.Status)" -ne "NotSigned") { $bad += "$($f.Name) ($($s.Status))" }
+  }
+  Remove-Item -Recurse -Force $inside -ErrorAction SilentlyContinue
+  if ($bad.Count) { throw "$($bad.Count) files carry a signature Windows doesn't trust: $($bad -join ', ')" }
+  Write-Host "$($files.Count) files: each signed by a trusted publisher or not signed"
 }
