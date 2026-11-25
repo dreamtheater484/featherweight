@@ -6,8 +6,10 @@
                   install accept it. CI only: runners are thrown away; the reference PC never gets a test
                   certificate in a store (docs/f1-plan.md, "Reference PC").
     -Verify files signtool verify /pa /all on each; fails on the first that doesn't pass.
+    -Unsigned files  each carries no signature at all (signtool verify /pa: "No signature found"; Windows:
+                  NotSigned): the unsigned set a release drafts until SignPath.
 #>
-param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify)
+param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify, [string[]]$Unsigned)
 $ErrorActionPreference = "Stop"
 $dir = Join-Path ($(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() })) "fw-test-signing"
 function SdkTool($name) {
@@ -68,4 +70,21 @@ if ($Verify) {
     else { Write-Host "verified: $(Split-Path -Leaf $f)" }
   }
   if ($bad) { throw "$bad files didn't verify" }
+}
+
+if ($Unsigned) {
+  $signtool = SdkTool "signtool.exe"
+  $bad = 0
+  foreach ($f in $Unsigned) {
+    $ErrorActionPreference = "Continue"  # signtool reports the missing signature on stderr
+    $out = (& $signtool verify /pa $f 2>&1 | Out-String)
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $status = (Get-AuthenticodeSignature $f).Status
+    if ($code -eq 0 -or $out -notmatch 'No signature found' -or "$status" -ne "NotSigned") {
+      Write-Host "::error::signed: $f ($status)"; $out | Out-Host; $bad++
+    } else { Write-Host "no signature: $(Split-Path -Leaf $f)" }
+  }
+  if ($bad) { throw "$bad files carry a signature" }
+  Write-Host "$($Unsigned.Count) files, none signed"
 }

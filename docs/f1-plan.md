@@ -295,6 +295,10 @@ As in P3 (its "Rules"), plus:
   - `release.yml` builds from the tag, signs, makes the checksums and the SBOM, and drafts the GitHub release.
   - `release.ps1 -Publish`, run locally, checks the gate report and tags. It then waits for the workflow, compares the files with a second CI build, and publishes the draft.
   - The local build stays for testing.
+- **f1-ship, 2026-11-25: until SignPath, a release is the unsigned set (the coordinator's fix for step 1's row).** Every run still test-signs, verifies, runs the App Certification Kit and the installs on the `packages` artifact, but those files never go out.
+  - Without the SignPath secret, the package job also builds `packages-unsigned` from the unsigned program files: the portable zips, installers and MSIs for x64 and ARM64, the updater's files (`Featherweight[-arm64].exe`, `pdfium-standard[-arm64].dll`, `pdfium-v8[-arm64].dll`: 4.0's updater and the script engine download need them), the ADMX zip, the SBOM and its own SHA256SUMS.txt. There is no MSIX, since it doesn't install unsigned. A step checks that the list is exactly that, that the sums name every file, and that `signtool verify` finds no signature on any program file, including those inside the portable zips.
+  - A tag drafts from the package job's `release-set` (`packages` with SignPath, else `packages-unsigned`), and the scan job scans the same set. A draft holding test-publisher.cer is refused.
+  - `release.ps1 -Publish` downloads the draft's program files and the portable zips, and refuses any file whose signature isn't Valid or NotSigned.
 - **Plan, 2026-11-25: the updater trusts what it is.**
   - A signed exe requires the same publisher on every update.
   - An unsigned one (4.0, or 4.1 before step 1) keeps the SHA-256 check.

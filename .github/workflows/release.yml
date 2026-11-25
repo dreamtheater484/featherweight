@@ -5,9 +5,14 @@ name: release
 # zip, installer, per-machine MSI, MSIX), signtool verify on every file, the App Certification Kit on the MSIX,
 # silent installs and uninstalls, the SBOM and SHA256SUMS.txt.
 #
-# Signing: through the SignPath Foundation once the repository has its secrets (Roy's step 1); until then with a
-# throwaway test certificate made in the job, so every step still runs and nothing waits. Test-signed files are
-# never published: on a tag the release job only drafts the release, and scripts/release.ps1 -Publish publishes it.
+# Signing: through the SignPath Foundation once the repository has its secrets (Roy's step 1). Until then every run
+# also test-signs with a throwaway certificate made in the job, so the signing, signtool verify, the App Certification
+# Kit and the installs still run on every push; those test-signed files (the packages artifact) are never released.
+# Without SignPath the package job also builds the unsigned set from the unsigned program files (the artifact
+# packages-unsigned: the portable zips, installers and MSIs for x64 and ARM64, the updater's files, the Group Policy
+# templates, the SBOM and its own SHA256SUMS.txt; no MSIX, which doesn't install unsigned), and a tag drafts that.
+# A tag only drafts the release: scripts/release.ps1 -Publish publishes it, and refuses a draft whose files carry a
+# signature Windows doesn't trust.
 #
 # Every push to main, claude/f1-int and claude/f1-ship runs it as a dry run (the 4.1 gate reads its result for the
 # head). A v* tag also drafts the GitHub release.
@@ -226,12 +231,15 @@ jobs:
           }
           exit $bad
 
-  # Signs the program files, builds the packages from them, signs those, and checks every signature.
+  # Signs the program files, builds the packages from them, signs those, and checks every signature. Without SignPath
+  # it also builds the unsigned set, which a release drafts until then (its output release-set names the artifact).
   package:
     needs: build
     runs-on: windows-2022
     env:
       SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    outputs:
+      release-set: ${{ steps.version.outputs.release-set }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,6 +253,8 @@ jobs:
         run: |
           if ((Get-Content CMakeLists.txt -Raw) -notmatch 'project\(Featherweight VERSION (\d+\.\d+\.\d+)') { throw "no version" }
           "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          # What a tag's release drafts (and the scan scans): the signed set, or the unsigned one until SignPath.
+          "release-set=$(if ($env:SIGNPATH -eq 'true') { 'packages' } else { 'packages-unsigned' })" >> $env:GITHUB_OUTPUT
       - name: Tools (Inno Setup and WiX, pinned)
         shell: pwsh
         run: packaging\ci-tools.ps1
@@ -351,6 +361,49 @@ jobs:
           name: packages
           path: dist/
 
+      # --- The unsigned set: what a release drafts until SignPath (no MSIX: it doesn't install unsigned) ---
+      - name: Unsigned packages (from the unsigned program files)
+        if: env.SIGNPATH != 'true'
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          foreach ($arch in 'x64', 'arm64') {
+            packaging\package.ps1 -Stage "unsigned-$arch\stage" -Arch $arch -Version $v -Out dist-unsigned -Kinds Zip, Setup, Msi -Strict
+          }
+          Copy-Item unsigned-x64\stage\featherweight.cdx.json "dist-unsigned\Featherweight-$v.cdx.json"
+          scripts\release-hashes.ps1 -Dir dist-unsigned -Out dist-unsigned\SHA256SUMS.txt -Sums
+          Get-ChildItem dist-unsigned -File | Format-Table Name, Length -AutoSize | Out-Host
+          $download = (Get-Item "dist-unsigned\Featherweight-$v-Setup.exe").Length
+          Write-Host ("The unsigned download (the x64 installer): {0:N0} bytes, {1:N2} MB of 10" -f $download, ($download / 1MB))
+      - name: signtool verify shows no signature in the unsigned set
+        if: env.SIGNPATH != 'true'
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          # Exactly these files, and SHA256SUMS.txt names every other one.
+          $want = @("Featherweight-$v-admx.zip", "Featherweight-$v.cdx.json", 'SHA256SUMS.txt')
+          foreach ($s in '', '-arm64') {
+            $want += "Featherweight-$v-Portable$s.zip", "Featherweight-$v-Setup$s.exe", "Featherweight-$v$s.msi",
+                     "Featherweight$s.exe", "pdfium-standard$s.dll", "pdfium-v8$s.dll"
+          }
+          $have = @(Get-ChildItem dist-unsigned -File | ForEach-Object Name)
+          $diff = Compare-Object ($want | Sort-Object) ($have | Sort-Object)
+          if ($diff) { $diff | Out-Host; throw "the unsigned set isn't the expected files" }
+          $summed = @((Get-Content dist-unsigned\SHA256SUMS.txt) | ForEach-Object { ($_ -split '  ', 2)[1] })
+          $diff = Compare-Object ($have | Where-Object { $_ -ne 'SHA256SUMS.txt' } | Sort-Object) ($summed | Sort-Object)
+          if ($diff) { $diff | Out-Host; throw "SHA256SUMS.txt doesn't name exactly the unsigned set" }
+          # No signature anywhere: the set's files, the program files inside the portable zips, and the unsigned
+          # program files the installers and MSIs were built from.
+          foreach ($z in Get-ChildItem dist-unsigned -Filter '*-Portable*.zip') { Expand-Archive $z.FullName "unsigned-check\$($z.BaseName)" }
+          $files = @(Get-ChildItem dist-unsigned\*, unsigned-check -Recurse -File -Include *.exe, *.dll, *.msi, *.msix) +
+                   @(Get-ChildItem unsigned-x64\stage\*, unsigned-arm64\stage\* -File -Include *.exe, *.dll)
+          packaging\test-signing.ps1 -Unsigned $files.FullName
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.SIGNPATH != 'true'
+        with:
+          name: packages-unsigned
+          path: dist-unsigned/
+
   # The Windows App Certification Kit on the x64 MSIX (the Store runs the same tests).
   msix-wack:
     name: msix (App Certification Kit)
@@ -385,8 +438,8 @@ jobs:
         shell: pwsh
         run: packaging\install-test.ps1 -Dist dist
 
-  # On a v* tag: the draft release with every file. scripts/release.ps1 -Publish publishes it.
-  # The packages to VirusTotal and Hybrid Analysis (f1-trust's scan-release.yml), on a tag or a dispatch with scan:
+  # The release's files (the package job's release-set: packages-unsigned until SignPath) to VirusTotal and Hybrid
+  # Analysis (f1-trust's scan-release.yml), on a tag or a dispatch with scan:
   # not on every push (the free limits; every Hybrid Analysis report is public). It writes "waiting" until the keys
   # are there (Roy's step 5), and its scan-report artifact is what the gate and release.ps1 -Publish read.
   scan:
@@ -397,10 +450,12 @@ jobs:
       actions: read
     uses: ./.github/workflows/scan-release.yml
     with:
-      artifact: packages
+      artifact: ${{ needs.package.outputs.release-set }}
       tag: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     secrets: inherit
 
+  # On a v* tag: the draft release, from the package job's release-set (SignPath's signed packages, or until then the
+  # unsigned set; never the test-signed packages). scripts/release.ps1 -Publish publishes it.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [package, reproducible-compare, msix-wack, install, smoke]
@@ -413,7 +468,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: packages
+          name: ${{ needs.package.outputs.release-set }}
           path: dist
       - name: Draft the release
         shell: pwsh
@@ -422,7 +477,8 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          Remove-Item dist\test-publisher.cer -ErrorAction SilentlyContinue
+          Write-Host "Drafting from ${{ needs.package.outputs.release-set }}"
+          if (Test-Path dist\test-publisher.cer) { throw "the test-signed packages: never drafted" }
           $notes = "docs\release-notes\$version.md"
           if (-not (Test-Path $notes)) { $notes = $null }
           $files = (Get-ChildItem dist -File).FullName
