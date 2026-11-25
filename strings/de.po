@@ -1709,7 +1709,12 @@ msgstr "Gebänderte Spalten"
 msgid "Banded rows"
 msgstr "Gebänderte Zeilen"
 
-#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp src/word/DocStyles.cpp
+#: src/word/DocStyles.cpp
+msgid "Bar"
+msgstr "Vertikale Linie"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Bar"
 msgstr "Balken"
 
@@ -2569,7 +2574,12 @@ msgstr "Farbig"
 msgid "Colors"
 msgstr "Farben"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookData.cpp src/slide/view/ObjectTool.cpp
+#: src/sheet/view/WorkbookData.cpp
+msgid "Column"
+msgstr "Spalte"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Column"
 msgstr "Säule"
 
@@ -6079,9 +6089,14 @@ msgstr "Kleiner als"
 msgid "Less than or equal to"
 msgstr "Kleiner als oder gleich"
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/ui/EmptyState.h src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
 msgid "Letter"
 msgstr "Letter"
+
+#: src/ui/EmptyState.h
+msgctxt "template"
+msgid "Letter"
+msgstr "Brief"
 
 #: src/App.cpp src/AppRibbon.cpp src/sheet/view/WorkbookData.cpp
 msgid "Light"
@@ -6151,7 +6166,12 @@ msgstr "Heller 60%"
 msgid "Lighter 80%"
 msgstr "Heller 80%"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPage.cpp
+msgid "Line"
+msgstr "Linie"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Line"
 msgstr "Linie"
 
@@ -7388,9 +7408,19 @@ msgstr "Andere Seiten"
 msgid "Out"
 msgstr "Hinaus"
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+#: src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
 msgid "Outline"
 msgstr "Kontur"
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgctxt "border"
+msgid "Outline"
+msgstr "Außen"
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "row groups"
+msgid "Outline"
+msgstr "Gliederung"
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Outline border"

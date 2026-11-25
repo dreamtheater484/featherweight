@@ -53,6 +53,14 @@ TEST(Lang_FmtFillsPlaceholders) {
 TEST(Lang_ContextSeparatesKeys) {
   CHECK(catalog::Hash(0, L"verb", L"Open") != catalog::Hash(0, nullptr, L"Open"));
   CHECK(catalog::Hash(1, nullptr, L"Open") != catalog::Hash(0, nullptr, L"Open"));
+  // A table's string with a context (NC_) is one literal whose hash is the key's with that context,
+  // shown, and English(), without it.
+  constexpr UiText bar = NC_(L"Bar", L"chart");
+  CHECK(catalog::Hash(5, nullptr, bar.key) == catalog::Hash(5, L"chart", L"Bar"));
+  CHECK(std::wcscmp(bar, L"Bar") == 0 && std::wcscmp(bar.English(), L"Bar") == 0);
+  constexpr UiText8 outline = NC_("Outline", "row groups");
+  CHECK(std::strcmp(outline, "Outline") == 0 && std::strcmp(outline.English(), "Outline") == 0);
+  CHECK(std::wcscmp(UiText(L"Left").English(), L"Left") == 0);
 }
 
 TEST(Lang_CatalogReadsBack) {

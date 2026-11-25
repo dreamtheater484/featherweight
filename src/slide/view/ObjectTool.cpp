@@ -276,7 +276,7 @@ struct TableSize {
   int columns, rows;
 };
 constexpr TableSize kTables[] = {{2, 2}, {3, 2}, {3, 3}, {4, 3}, {4, 4}, {5, 4}, {5, 5}, {6, 6}};
-constexpr UiText kChartNames[] = {N_(L"Column"), N_(L"Bar"), N_(L"Line"), N_(L"Pie")};
+constexpr UiText kChartNames[] = {NC_(L"Column", L"chart"), NC_(L"Bar", L"chart"), NC_(L"Line", L"chart"), N_(L"Pie")};
 
 struct ArrangeItem {
   int cmd;
@@ -2471,7 +2471,7 @@ bool ObjectTool::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   }
   if (what == L"chart") {
     for (int i = 0; i < 4; ++i)
-      if (fw::ToLower(rest) == fw::ToLower(kChartNames[i].en)) return InsertChart(i) ? true : fail(L"not done");
+      if (fw::ToLower(rest) == fw::ToLower(kChartNames[i].English())) return InsertChart(i) ? true : fail(L"not done");
     return fail(T(L"chart|column, bar, line or pie"));
   }
   if (what == L"shape") {

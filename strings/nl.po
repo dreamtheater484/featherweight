@@ -1709,7 +1709,12 @@ msgstr "Gestreepte kolommen"
 msgid "Banded rows"
 msgstr "Gestreepte rijen"
 
-#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp src/word/DocStyles.cpp
+#: src/word/DocStyles.cpp
+msgid "Bar"
+msgstr "Lijn"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Bar"
 msgstr "Staaf"
 
@@ -2569,7 +2574,12 @@ msgstr "Kleurrijk"
 msgid "Colors"
 msgstr "Kleuren"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookData.cpp src/slide/view/ObjectTool.cpp
+#: src/sheet/view/WorkbookData.cpp
+msgid "Column"
+msgstr "Kolom"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Column"
 msgstr "Kolom"
 
@@ -6079,9 +6089,14 @@ msgstr "Kleiner dan"
 msgid "Less than or equal to"
 msgstr "Kleiner dan of gelijk aan"
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/ui/EmptyState.h src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
 msgid "Letter"
 msgstr "Letter"
+
+#: src/ui/EmptyState.h
+msgctxt "template"
+msgid "Letter"
+msgstr "Brief"
 
 #: src/App.cpp src/AppRibbon.cpp src/sheet/view/WorkbookData.cpp
 msgid "Light"
@@ -6151,7 +6166,12 @@ msgstr "Lichter 60%"
 msgid "Lighter 80%"
 msgstr "Lichter 80%"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPage.cpp
+msgid "Line"
+msgstr "Lijn"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Line"
 msgstr "Lijn"
 
@@ -7388,9 +7408,19 @@ msgstr "Overige pagina's"
 msgid "Out"
 msgstr "Uit"
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+#: src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
 msgid "Outline"
 msgstr "Contour"
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgctxt "border"
+msgid "Outline"
+msgstr "Omtrek"
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "row groups"
+msgid "Outline"
+msgstr "Overzicht"
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Outline border"

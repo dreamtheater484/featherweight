@@ -126,6 +126,12 @@ bool InTemplate(const wchar_t* context, const wchar_t* en) {
 }
 
 const wchar_t* PseudoWide(const wchar_t* en, const wchar_t* context) {
+  std::wstring split;  // a table's key with its context (NC_): "chart\x04Bar"
+  if (const wchar_t* sep = context ? nullptr : wcschr(en, L'\x04')) {
+    split.assign(en, sep);
+    context = split.c_str();
+    en = sep + 1;
+  }
   AcquireSRWLockExclusive(&g_pseudoLock);
   if (!g_pseudoWide) g_pseudoWide = new std::unordered_map<std::wstring, std::wstring>;
   const std::wstring key = context ? std::wstring(context) + L'\x04' + en : std::wstring(en);
@@ -302,6 +308,26 @@ std::string Fmt(const char* pattern, std::initializer_list<std::string_view> arg
 }
 std::u16string Fmt(const char16_t* pattern, std::initializer_list<std::u16string_view> args) {
   return FormatWith(pattern, args);
+}
+
+namespace {
+template <class C>
+const C* Shown(const C* key, const C* t) {  // T()'s result, without a context it didn't translate
+  if (t != key) return t;
+  for (const C* p = key; *p; ++p)
+    if (*p == C(4)) return p + 1;
+  return key;
+}
+}  // namespace
+
+const wchar_t* TKey(const wchar_t* key) {
+  return key ? Shown(key, T(key)) : key;
+}
+const char16_t* TKey(const char16_t* key) {
+  return key ? Shown(key, T(key)) : key;
+}
+const char* TKey(const char* key) {
+  return key ? Shown(key, T(key)) : key;
 }
 
 const char16_t* T(const char16_t* en) {

@@ -36,7 +36,7 @@ const UiText kStyles[] = {N_(L"Regular"), N_(L"Italic"), N_(L"Bold"), N_(L"Bold 
 const UiText kUnderlines[] = {N_(L"None"), N_(L"Single"), N_(L"Double"), N_(L"Single accounting"), N_(L"Double accounting")};
 const wchar_t* const kSizes[] = {L"8",  L"9",  L"10", L"11", L"12", L"14", L"16", L"18",
                                  L"20", L"22", L"24", L"26", L"28", L"36", L"48", L"72"};
-const UiText kBorderButtons[] = {N_(L"None"), N_(L"Outline"), N_(L"All"),    N_(L"Inside"),      N_(L"Top"),
+const UiText kBorderButtons[] = {N_(L"None"), NC_(L"Outline", L"border"), N_(L"All"),    N_(L"Inside"),      N_(L"Top"),
                                         N_(L"Bottom"), N_(L"Left"),   N_(L"Right"), N_(L"Diagonal up"), N_(L"Diagonal down")};
 const UiText kDirections[] = {N_(L"Context"), N_(L"Left to right"), N_(L"Right to left")};  // readingOrder 0, 1, 2
 
@@ -422,10 +422,17 @@ void WorkbookView::FormatPanel::Place() {
   float y = body_.top + 8 * u;
   labels_.clear();
   sampleRc_ = {};
-  // Tabs along the top.
-  const float tw = (right - left - gap * static_cast<float>(kPages - 1)) / static_cast<float>(kPages);
-  for (int i = 0; i < kPages; ++i) tabs_[i].rc = RectF(left + static_cast<float>(i) * (tw + gap), y, left + static_cast<float>(i) * (tw + gap) + tw, y + 28 * u);
-  y += 40 * u;
+  // Tabs along the top: one row, or two of three when a name doesn't fit ("Ausrichtung").
+  float widest = 0;
+  for (const PanelButton& t : tabs_) widest = std::max(widest, Canvas().MeasureText(t.text, t.textSize * u));
+  const float oneRow = (right - left - gap * static_cast<float>(kPages - 1)) / static_cast<float>(kPages);
+  const int perRow = widest + 10 * u > oneRow ? kPages / 2 : kPages;
+  const float tw = (right - left - gap * static_cast<float>(perRow - 1)) / static_cast<float>(perRow);
+  for (int i = 0; i < kPages; ++i) {
+    const float x = left + static_cast<float>(i % perRow) * (tw + gap), top = y + static_cast<float>(i / perRow) * 34 * u;
+    tabs_[i].rc = RectF(x, top, x + tw, top + 28 * u);
+  }
+  y += 40 * u + static_cast<float>(kPages / perRow - 1) * 34 * u;
   // Every page's controls hidden; the page's rows show theirs.
   for (Control* c : std::initializer_list<Control*>{&category_, &decimals_, &thousands_, &negative_, &types_, &code_,
                                                     &horizontal_, &vertical_, &indent_, &rotation_, &wrap_, &shrink_,
@@ -956,7 +963,7 @@ std::wstring ShownCellStyle(const std::wstring& name) {
       N_(L"Currency"),    N_(L"Currency [0]"), N_(L"Percent")};
   if (name == L"Normal") return T(L"Normal", L"style");  // not the view: Standard in German
   for (const UiText& n : kNames)
-    if (name == n.en) return std::wstring(n);
+    if (name == n.English()) return std::wstring(n);
   // "Accent3" and "40% - Accent3".
   const size_t at = name.find(L"Accent");
   if (at != std::wstring::npos && at + 7 == name.size()) {

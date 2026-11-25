@@ -2943,7 +2943,7 @@ void App::RunScript(const std::wstring& script) {
       // new:workbook for a new workbook ("Book1").
       int kind = 0;
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
-        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i].en)) kind = i + 1;
+        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i].English())) kind = i + 1;
       if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
       else if (fw::EqualsNoCase(arg, L"presentation")) NewPresentation();  // new:presentation (P2)
       else NewDocument(kind);

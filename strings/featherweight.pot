@@ -1708,7 +1708,12 @@ msgstr ""
 msgid "Banded rows"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp src/word/DocStyles.cpp
+#: src/word/DocStyles.cpp
+msgid "Bar"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Bar"
 msgstr ""
 
@@ -2568,7 +2573,12 @@ msgstr ""
 msgid "Colors"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookData.cpp src/slide/view/ObjectTool.cpp
+#: src/sheet/view/WorkbookData.cpp
+msgid "Column"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Column"
 msgstr ""
 
@@ -6078,7 +6088,12 @@ msgstr ""
 msgid "Less than or equal to"
 msgstr ""
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/ui/EmptyState.h src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
+msgid "Letter"
+msgstr ""
+
+#: src/ui/EmptyState.h
+msgctxt "template"
 msgid "Letter"
 msgstr ""
 
@@ -6150,7 +6165,12 @@ msgstr ""
 msgid "Lighter 80%"
 msgstr ""
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPage.cpp
+msgid "Line"
+msgstr ""
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Line"
 msgstr ""
 
@@ -7387,7 +7407,17 @@ msgstr ""
 msgid "Out"
 msgstr ""
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+#: src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+msgid "Outline"
+msgstr ""
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgctxt "border"
+msgid "Outline"
+msgstr ""
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "row groups"
 msgid "Outline"
 msgstr ""
 

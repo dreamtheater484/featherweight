@@ -1239,7 +1239,7 @@ bool WorkbookView::PageScriptOp(const std::wstring& arg) {
   }
   if (key == L"margins") {
     for (const MarginPreset& m : kMargins)
-      if (_wcsicmp(value.c_str(), m.name.en) == 0)
+      if (_wcsicmp(value.c_str(), m.name.English()) == 0)
         return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {m.left, m.right, m.top, m.bottom, m.header, m.footer}; });
     if (!numbers(v) || v.size() != 6) return false;
     return set([&](PageSetup& p, HeaderFooter&, bool&) { p.margins = {v[2], v[3], v[0], v[1], v[4], v[5]}; });

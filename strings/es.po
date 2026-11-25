@@ -1709,7 +1709,12 @@ msgstr "Columnas con bandas"
 msgid "Banded rows"
 msgstr "Filas con bandas"
 
-#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp src/word/DocStyles.cpp
+#: src/word/DocStyles.cpp
+msgid "Bar"
+msgstr "Barra"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Bar"
 msgstr "Barra"
 
@@ -2569,7 +2574,12 @@ msgstr "Colorido"
 msgid "Colors"
 msgstr "Colores"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookData.cpp src/slide/view/ObjectTool.cpp
+#: src/sheet/view/WorkbookData.cpp
+msgid "Column"
+msgstr "Columna"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Column"
 msgstr "Columna"
 
@@ -6079,7 +6089,12 @@ msgstr "Menor que"
 msgid "Less than or equal to"
 msgstr "Menor o igual que"
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/ui/EmptyState.h src/word/DocPage.cpp
+#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPage.cpp
+msgid "Letter"
+msgstr "Carta"
+
+#: src/ui/EmptyState.h
+msgctxt "template"
 msgid "Letter"
 msgstr "Carta"
 
@@ -6151,7 +6166,12 @@ msgstr "Claro 60%"
 msgid "Lighter 80%"
 msgstr "Claro 80%"
 
-#: src/sheet/view/WorkbookCharts.cpp src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/slide/view/ObjectTool.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocPage.cpp
+msgid "Line"
+msgstr "Línea"
+
+#: src/sheet/view/WorkbookCharts.cpp src/slide/view/ObjectTool.cpp
+msgctxt "chart"
 msgid "Line"
 msgstr "Línea"
 
@@ -7388,9 +7408,19 @@ msgstr "Otras páginas"
 msgid "Out"
 msgstr "Fuera"
 
-#: src/sheet/view/WorkbookFormat.cpp src/sheet/view/WorkbookRibbon.cpp src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
+#: src/sheet/view/WorkbookShapes.cpp src/word/DocShapes.cpp
 msgid "Outline"
 msgstr "Contorno"
+
+#: src/sheet/view/WorkbookFormat.cpp
+msgctxt "border"
+msgid "Outline"
+msgstr "Contorno"
+
+#: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "row groups"
+msgid "Outline"
+msgstr "Esquema"
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Outline border"

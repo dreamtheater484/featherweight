@@ -717,7 +717,7 @@ std::wstring ShownStyleName(std::string_view name) {
       N_(L"TOC 3"),            N_(L"Comment Text"),      N_(L"Table Grid")};
   if (shown == L"Normal") return T(L"Normal", L"style");  // not the view: Standard in German
   for (const UiText& b : kBuiltIn)
-    if (shown == b.en) return std::wstring(b);
+    if (shown == b.English()) return std::wstring(b);
   return shown;
 }
 
