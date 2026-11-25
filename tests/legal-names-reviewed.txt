@@ -1,0 +1,12 @@
+# Strings the 4.1 gate's legal.names row lists that were reviewed as descriptions, not names (F1).
+# The rule (docs/f1-plan.md, "Legal"): Word, Excel and PowerPoint only describe what a file is or what
+# those programs do; nothing of Featherweight's is named after them.
+# One string per line, as its msgid reads in strings/featherweight.pot (\n for a line break), then a tab,
+# then why it's fine. A string not listed here fails the row until someone reviews it and adds it.
+Word count	the English word "word" (a count of words), not the program
+Word\nCount	the same label, on two lines in the ribbon
+Capitalize Each Word	the English word "word" (a case option)
+PowerPoint slide show	the .ppsx file type in the save dialog, beside "PowerPoint template"
+That isn't a border Word knows.	says what Word does (an allowed description)
+This picture has a second version for older Word versions, so it can't be changed yet.	says what older Word versions do
+\"History\" is a name Excel keeps for itself.	says what Excel does (a reserved sheet name)

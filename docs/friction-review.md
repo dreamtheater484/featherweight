@@ -862,18 +862,28 @@ This is F1's part of the friction review (docs/f1-plan.md, exit criteria "Fricti
 
 | Flow | Piece | Target (the budget) | Featherweight |
 |---|---|---|---|
-| RF2. Reply to and resolve comments in a received contract | f1-word | Word: **7 C + 2 K** (4.0: 8 C + 2 K, the Review pane one click away) | *not built yet* |
-| RF7. Title from the Styles gallery, window 1366 px wide | f1-word | Word: **1 C** (4.0: 2 C, More then Title) | *not built yet* |
+| RF2. Reply to and resolve comments in a received contract | f1-word | Word: **7 C + 2 K** (4.0: 8 C + 2 K, the Review pane one click away) | The contract opens with the Review pane. Next, Accept, Reject, the thread's card, Enter (the reply), its card, Resolve, Ctrl+S: **6 C + 2 K**, at 1366 x 768 (DocView.cpp, DocReview.cpp) |
+| RF7. Title from the Styles gallery, window 1366 px wide | f1-word | Word: **1 C** (4.0: 2 C, More then Title) | Title in the gallery's first row: **1 C** (DocStyles.cpp) |
 | F1-1. Merge: with A open, add B's pages after A's, save | f1-pdf | Acrobat: All tools, Combine files, Add files, B, Open, Combine, Ctrl+S, the name, Save: **6 C + 1 K, 2 D** *(check in Acrobat)* | Pages, the last page's thumbnail, Insert (+), B, Open, Ctrl+S: **5 C + 1 K, 1 D** (the Pages panel inserts after the selected pages; PdfPages.cpp InsertFiles) |
 | F1-2. Sign: draw a signature, place it on page 1, save | f1-pdf | Acrobat (Reader's Fill & Sign): Sign, Add signature, Draw, the drawing, Apply, place it, Ctrl+S, the name, Save: **5 C + 1 drag + 1 K, 1 D** *(check in Acrobat)* | Sign ▾, Draw signature…, the drawing, Place on a page, the click on the page, Ctrl+S: **4 C + 1 drag + 1 K, 1 D** (SignaturePanel.cpp, PdfSign.cpp) |
 | F1-2b. Sign with a certificate (Windows' store), save | f1-pdf | Acrobat: All tools, Use a certificate, Digitally sign, drag the box, the ID, Continue, Sign, the name, Save: **6 C + 1 drag, 2 D** *(check in Acrobat)* | Sign ▾, Sign with a certificate…, the certificate, Enter in Save as with "<name> (signed)" suggested: **3 C + 1 K, 2 D**; no box to drag, the signature is invisible (PdfSign.cpp) |
 | F1-3. OCR a scanned PDF, save | f1-pdf | Acrobat: All tools, Scan & OCR, Recognize text, In this file, Recognize text, Ctrl+S: **5 C + 1 K** *(check in Acrobat)* | Recognize text on the toolbar, Ctrl+S: **1 C + 1 K** (PdfOcr.cpp) |
-| F1-4. Change the interface language | f1-lang | Acrobat: Menu, Preferences, Language, the list, the language, OK, then close and start it again: **8 C, 1 D** *(check in Acrobat)*. Word's Options > Language takes as many. | *not built yet* |
+| F1-4. Change the interface language | f1-lang | Acrobat: Menu, Preferences, Language, the list, the language, OK, then close and start it again: **8 C, 1 D** *(check in Acrobat)*. Word's Options > Language takes as many. | File, Options, the language, then close and start it again: **5 C, 1 D** (AppRibbon.cpp's Language section; the language applies at the next start, as in Office) |
 | F1-5. Share as PDF: send the open document as a PDF attachment | f1-pdf | Word: File, Share, Email, Send as PDF: **4 C** (Acrobat's Share sends a link to its cloud, not the file) | File, Share, Share as PDF: **3 C** to the share sheet (AppRibbon.cpp's Share section, Share.cpp); a PDF opens the sheet from its toolbar's Share in 1 C |
 
 **Share runs Windows' share sheet,** which a snapshot run can't drive (like the Save dialog, RF3). F1-5 is counted to the share sheet; the target is picked there, as in Word's mail program.
 
 **f1-pdf's flows run through `tests\f1-friction-checks.ps1`** (2026-11-25, all within Acrobat's): merge 6 steps and 1 decision against 7 and 2, drawn signature 6 and 1 against 7 and 1, certificate 4 and 2 against 7 and 2, OCR 2 against 6, share as PDF 3 against Word's 4. Dialogs a snapshot run can't open are script steps counted as their clicks: Insert's Open dialog (`pdftool:insert`), the certificate's menu and Save as (`pdftool:sign`, with the test PFX standing in for a certificate in Windows' store), the drawing (`pdftool:stamp`).
+
+**All eight run through `tests\f1-friction-checks.ps1`** (f1-gate, 2026-11-25, on f1-int ab6ee8b4): RF2 8 steps against Word's 9, RF7 1 against 1, language 5 and 1 decision against 8 and 1. Each run checks what the flow made:
+- RF2: the reply in comments.xml, the thread resolved, two change marks fewer, `fwtool check` clean.
+- RF7: a Title paragraph in `fwtool dump --model`.
+- Language: the close and start again are counted, not run, since a snapshot run doesn't save its settings. The check starts it with `--lang de`, as the saved setting would, and finds German in command search.
+
+**Found while scripting RF2 and the language flow (f1-gate, 2026-11-25):**
+- **Enter leaves a posted reply in Word's Review pane box, and a second Enter posts it again.** This is p3-review's slide bug: `ComboBox::SetText` does nothing while the box has the keyboard. 0e6ca275 fixed it in the slides' pane only (`ReplaceText`). Word's Reply and Post still call `SetText` (`src/word/DocReview.cpp` Reply, Post). Seen in a script run: two identical replies saved.
+- **At 1072 x 686 the Review pane shows no comment cards.** The card list gets only the room under the Edit, Resolve and Delete row, and the pane doesn't scroll. At 1366 x 768 only the first card's head shows, so RF2 is counted there.
+- **The language's banner ("Featherweight changes its language the next time it starts") isn't shown while File > Options is open,** where the choice is made. It shows after going back to the document.
 
 ### Found while building the gate
 
