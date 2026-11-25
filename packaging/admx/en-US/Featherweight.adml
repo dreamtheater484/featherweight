@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           revision="1.0" schemaVersion="1.0"
+                           xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Featherweight</displayName>
+  <description>Policies for Featherweight, the light PDF reader and office suite.</description>
+  <resources>
+    <stringTable>
+      <string id="Featherweight">Featherweight</string>
+      <string id="SUPPORTED_Featherweight_4_1">Featherweight 4.1 or later</string>
+      <string id="DisableUpdates">Turn off updates</string>
+      <string id="DisableUpdates_Help">If you enable this policy, Featherweight never checks for updates and never updates itself, and the update options in File &gt; Options can't be changed. Its only network access is the update check, so with updates off Featherweight makes no network connections of its own.
+
+Install new versions with the MSI or the installer instead.
+
+If you disable or don't configure this policy, users choose in File &gt; Options whether Featherweight updates itself (on by default).</string>
+      <string id="UpdateChannel">Update channel</string>
+      <string id="UpdateChannel_Help">Chooses which releases Featherweight updates to.
+
+Stable: the latest release.
+Beta: the newest release, beta versions (pre-releases on GitHub) included.
+
+If you enable this policy, users can't change the channel in File &gt; Options. If you disable or don't configure it, users choose (stable by default). This policy has no effect while "Turn off updates" is enabled.</string>
+      <string id="Channel_Stable">Stable</string>
+      <string id="Channel_Beta">Beta</string>
+      <string id="Language">Interface language</string>
+      <string id="Language_Help">Sets the language of Featherweight's menus, ribbon and dialogs.
+
+If you enable this policy, users can't choose another language. If you disable or don't configure it, Featherweight follows Windows' display language, unless the user chooses a language in File &gt; Options.</string>
+      <string id="Language_en">English</string>
+      <string id="Language_nl">Dutch (Nederlands)</string>
+      <string id="Language_de">German (Deutsch)</string>
+      <string id="Language_fr">French (Français)</string>
+      <string id="Language_es">Spanish (Español)</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="UpdateChannel">
+        <dropdownList refId="UpdateChannel" defaultItem="0">Update channel:</dropdownList>
+      </presentation>
+      <presentation id="Language">
+        <dropdownList refId="Language" defaultItem="0">Interface language:</dropdownList>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

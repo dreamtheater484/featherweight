@@ -30,9 +30,12 @@ using Action = fw::text::SpellChecker::Action;
 namespace {
 
 // One spell checker for the process: Windows' own, with its dictionaries and the user's word list.
+// Never destroyed: it holds COM objects of Windows' spell checking, and a static's destructor runs at exit, after
+// main's OleUninitialize, when Windows may have unloaded that DLL already. Releasing them then crashed every
+// close after a document was open on Windows Server 2022, the Windows 10 family (4.0.0 too; f1-ship's smoke test).
 fw::text::SpellChecker& Checker() {
-  static fw::text::SpellChecker checker;
-  return checker;
+  static fw::text::SpellChecker* checker = new fw::text::SpellChecker;
+  return *checker;
 }
 
 constexpr size_t kSuggestions = 5;

@@ -25,6 +25,10 @@ bool g_actualSize = false;  // remembered for the session
 INT_PTR CALLBACK OptionsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM) {
   switch (msg) {
     case WM_INITDIALOG:
+      // The texts in the interface's language (resource.rc has the English, for the layout).
+      SetDlgItemTextW(dlg, IDC_PRINT_QUESTION, T(L"How should pages fit on the paper?"));
+      SetDlgItemTextW(dlg, IDC_PRINT_FIT, T(L"&Fit to page (recommended)"));
+      SetDlgItemTextW(dlg, IDC_PRINT_ACTUAL, T(L"&Actual size"));
       CheckRadioButton(dlg, IDC_PRINT_FIT, IDC_PRINT_ACTUAL, g_actualSize ? IDC_PRINT_ACTUAL : IDC_PRINT_FIT);
       return TRUE;
     case WM_COMMAND:
@@ -122,6 +126,8 @@ PrintOutcome PrintDocument(HWND owner, Document& doc, int currentPage, const std
   PROPSHEETPAGEW psp{sizeof(psp)};
   psp.hInstance = GetModuleHandleW(nullptr);
   psp.pszTemplate = MAKEINTRESOURCEW(IDD_PRINT_OPTIONS);
+  psp.dwFlags |= PSP_USETITLE;  // the tab's name in the interface's language, not the template's
+  psp.pszTitle = T(L"Page sizing");
   psp.pfnDlgProc = OptionsProc;
   HPROPSHEETPAGE pages[1] = {CreatePropertySheetPageW(&psp)};
 

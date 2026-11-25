@@ -66,6 +66,7 @@ void Settings::LoadFrom(const std::wstring& path) {
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
+  updateChannel = ini_.Get(kGeneral, L"UpdateChannel");  // f1-ship
   lastRunVersion = ini_.Get(kGeneral, L"LastRunVersion");
   for (const fw::FileKindInfo& k : fw::FileKinds())
     offeredDefaultApp[static_cast<int>(k.kind)] = ini_.GetBool(kGeneral, OfferKey(k), false);
@@ -119,6 +120,7 @@ bool Settings::Save() {
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);
+  if (!updateChannel.empty() || ini_.Has(kGeneral, L"UpdateChannel")) ini_.Set(kGeneral, L"UpdateChannel", updateChannel);  // f1-ship
   ini_.Set(kGeneral, L"LastRunVersion", lastRunVersion);
   for (const fw::FileKindInfo& k : fw::FileKinds()) {
     const bool offered = offeredDefaultApp[static_cast<int>(k.kind)];

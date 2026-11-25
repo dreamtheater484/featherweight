@@ -95,6 +95,12 @@ def pdfium_components(dirs):
     for m in re.finditer(r'set\(_fw_pdfium_variant "(\w+)"\)\s*set\(_fw_pdfium_asset "([^"]+)"\)\s*'
                          r'set\(_fw_pdfium_sha256 "([0-9a-f]{64})"\)', text):
         variants[m.group(1)] = (m.group(2), m.group(3))
+    # f1-ship's pins: a hash per build and architecture, the asset named by both (fw_fetch_pdfium); the folders
+    # are <build>-<variant>[-arm64].
+    for m in re.finditer(r'set\(_fw_pdfium_sha256_(standard|v8)_(x64|arm64) "([0-9a-f]{64})"\)', text):
+        variant, arch, sha256 = m.groups()
+        asset = f"pdfium{'-v8' if variant == 'v8' else ''}-win-{arch}.tgz"
+        variants[variant + ("-arm64" if arch == "arm64" else "")] = (asset, sha256)
     if not dirs:
         dirs = sorted(glob.glob(os.path.join(ROOT, "third_party", "pdfium", f"{build}-*")))
     if not dirs:
@@ -127,7 +133,7 @@ def pdfium_components(dirs):
             "name": "pdfium",
             "version": f"chromium/{build}",
             "description": f"PDFium, prebuilt ({variant}); pdfium.dll"
-                           + (", or the script component" if variant == "v8" else ""),
+                           + (", or the script component" if variant.startswith("v8") else ""),
             "licenses": [{"expression": "BSD-3-Clause AND Apache-2.0"}],
             "hashes": [{"alg": "SHA-256", "content": sha256}],
             "purl": f"pkg:github/bblanchon/pdfium-binaries@chromium%2F{build}#{asset}",

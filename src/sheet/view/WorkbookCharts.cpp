@@ -393,7 +393,7 @@ bool WorkbookView::ChartsCommand(int cmd) {
 namespace {
 
 // Translated when read (UiText): built before main, before the language is chosen.
-constexpr UiText kKinds[] = {N_(L"Column"), N_(L"Bar"),  N_(L"Line"),    N_(L"Pie"),
+constexpr UiText kKinds[] = {NC_(L"Column", L"chart"), NC_(L"Bar", L"chart"), NC_(L"Line", L"chart"),    N_(L"Pie"),
                              N_(L"Doughnut"), N_(L"Area"), N_(L"Scatter"), N_(L"Combo")};
 constexpr UiText kLegends[] = {N_(L"None"), N_(L"Bottom"), N_(L"Right"), N_(L"Top"), N_(L"Left")};
 constexpr char kLegendPos[] = {0, 'b', 'r', 't', 'l'};

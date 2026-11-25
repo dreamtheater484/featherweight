@@ -46,8 +46,17 @@ def seed_file(seed, keys, texts):
     hs = [hash_key(seed, c, e) for c, e in keys]
     order = sorted(range(len(hs)), key=lambda i: hs[i])
     hashes = [hs[i] for i in order]
-    table = b'FWLK' + struct.pack('<III', 1, seed, len(hs))
-    table += b''.join(struct.pack('<I', h) for h in hashes) + b''.join(struct.pack('<H', i) for i in order)
+    gaps = [h - p for h, p in zip(hashes, [0] + hashes[:-1])]
+    k = min(range(32), key=lambda t: (sum(t + 1 + (g >> t) for g in gaps), t))
+    w = max(1, (len(hs) - 1).bit_length())
+    bits = []  # Rice-coded differences, then the places in w bits; low bits first
+    for g in gaps:
+        bits += [1] * (g >> k) + [0] + [(g >> b) & 1 for b in range(k)]
+    for i in order:
+        bits += [(i >> b) & 1 for b in range(w)]
+    packed = sum(b << n for n, b in enumerate(bits))
+    table = b'FWLK' + struct.pack('<III', 2, seed, len(hs)) + bytes([k, w])
+    table += packed.to_bytes((len(bits) + 7) // 8, 'little')
     body = b'FWLT' + struct.pack('<III', 1, len(hs), keys_check(seed, hashes, order))
     body += b''.join(t.encode('utf-8') + b'\0' for t in texts)
     return struct.pack('<I', len(table)) + table + body

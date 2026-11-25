@@ -165,7 +165,7 @@ constexpr Spec kData[] = {
     {0, 0, icon::RemoveDuplicates, 3, 0, "ZD", N_("Data Tools")},
     {CmdRemoveDuplicates, 0, icon::RemoveDuplicates, L, 0, "M", N_("Remove Duplicates")},
     {CmdDataValidation, 0, icon::DropDownList, L, kSplit, "V", N_("Data Validation")},
-    {0, 0, icon::Add, 3, 0, "ZO", N_("Outline")},
+    {0, 0, icon::Add, 3, 0, "ZO", NC_("Outline", "row groups")},
     {CmdGroup, 0, icon::GroupRows, L, 0, "G", N_("Group")},
     {CmdUngroup, 0, icon::UngroupRows, L, 0, "U", N_("Ungroup")},
 };
@@ -333,7 +333,7 @@ const char* Turned(int cmd, const CommandState& q) {
 // Excel's KeyTips for the ↘ launchers, by group (the ribbon's own lead with the group's letter, and
 // Number's clashed with its box, N).
 const wchar_t* LauncherKey(const char* group) {
-  // The groups by their English names (Spec::label.en): the keys don't change with the language.
+  // The groups by their English names (Spec::label.English()): the keys don't change with the language.
   static constexpr std::pair<const char*, const wchar_t*> kKeys[] = {
       {"Font", L"FN"},       {"Alignment", L"FA"},    {"Number", L"FM"},         {"Charts", L"K"},  // lang: no
       {"Page Setup", L"SP"}, {"Scale to Fit", L"SC"}, {"Picture Styles", L"O"}, {"Shape Styles", L"O"}};  // lang: no
@@ -369,7 +369,7 @@ void WorkbookView::BuildRibbon(RibbonModel& m, const ToolbarContext&) {
         group.glyph = s.glyph;
         group.rows = s.size;
         group.launcher = s.launcher;
-        if (s.launcher) group.launcherKeyTip = LauncherKey(s.label.en);
+        if (s.launcher) group.launcherKeyTip = LauncherKey(s.label.English());
         group.shrinkFirst = s.flags;  // a group's flags: how early it shrinks
         continue;
       }
@@ -567,7 +567,7 @@ bool WorkbookView::RibbonCommandState(int cmd, CommandState& s) {
   };
   switch (cmd) {
     case CmdCellsFormatMenu: return set(T(L"Format"), grid);
-    case CmdFillMenu: return set(T(L"Fill"), cells);
+    case CmdFillMenu: return set(T(L"Fill", L"verb"), cells);
     case CmdClearMenu: return set(T(L"Clear"), cells);
     case CmdSortFilterMenu: return set(T(L"Sort & Filter"), cells);
     case CmdFindSelectMenu: return set(T(L"Find & Select"), grid);

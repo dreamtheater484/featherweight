@@ -375,10 +375,15 @@ ui::FilePage::Model App::CurrentFilePage() {
                               : T(L"This file")));
   own(RibbonFilePlace::Options, opt, true);
   if (opt.size() == before + 1) opt.pop_back();
-  opt.push_back(heading(T(L"Updates")));
-  opt.push_back(command(CmdToggleAutoUpdate, 0, {}, true));
-  opt.push_back(command(CmdCheckUpdates, icon::Download));
+  if (QueryCommand(CmdCheckUpdates).visible) {  // f1-ship: inside an MSIX package the Store updates the app
+    opt.push_back(heading(T(L"Updates")));
+    opt.push_back(command(CmdToggleAutoUpdate, 0, {}, true));
+    opt.push_back(command(CmdUpdateBeta, 0, {}, true));
+    opt.push_back(command(CmdCheckUpdates, icon::Download));
+    if (QueryCommand(CmdRollBackUpdate).visible) opt.push_back(command(CmdRollBackUpdate, icon::Undo));
+  }
   opt.push_back(heading(L"Featherweight"));
+  if (QueryCommand(CmdScriptEngine).visible) opt.push_back(command(CmdScriptEngine, icon::Download));  // f1-ship
   if (QueryCommand(CmdMakeDefault).visible) opt.push_back(command(CmdMakeDefault, icon::PDF));
   if (fw::pkg::backups::Any(DocFile::Config().backups))
     opt.push_back(entry(CmdDeleteBackups, T(L"Delete backups"), icon::Delete, T(L"The originals kept for Restore original, in every folder")));
@@ -654,6 +659,26 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     }
     ribbon_.Select(was);
     Layout();
+    // Each group's ↘ launcher that opens a side panel (Format Cells, Paragraph, Page Setup): the panel too.
+    if (TabContent* v = Active(); v && v->Ready()) {
+      RibbonModel model;
+      v->BuildRibbon(model, ToolbarContext{settings_.invert, search_.IsOpen(), fullscreen_});
+      std::vector<std::pair<std::wstring, int>> launchers;
+      for (const RibbonTab& t : model.tabs)
+        for (const RibbonGroup& g : t.groups)
+          if (g.launcher && std::none_of(launchers.begin(), launchers.end(), [&](const auto& l) { return l.second == g.launcher; }))
+            launchers.push_back({t.name + L" › " + g.name + L" ↘", g.launcher});
+      for (const auto& [where, cmd] : launchers) {
+        ViewShowPanel(nullptr);
+        Execute(cmd);
+        if (!ViewShownPanel()) continue;  // not a side panel
+        Layout();
+        look(where);
+      }
+      ViewShowPanel(nullptr);
+      ribbon_.Select(was);
+      Layout();
+    }
     if (ribbonShown_ && !presentation_) {
       OpenFilePage();
       for (int s = 0; s < ui::FilePage::kSectionCount; ++s) {

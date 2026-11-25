@@ -6,7 +6,8 @@
 // or "Save" itself in English, where no catalog is loaded at all. The English text is the key
 // (gettext's model), so strings need no ids. A context separates words that translate two ways:
 // T(L"Open", L"verb"). A table built before main (constexpr, or at namespace scope) marks its strings
-// with N_(), which only tells the catalog about them, and the code that shows one calls T() on it.
+// with N_(), which only tells the catalog about them, and the code that shows one calls T() on it;
+// NC_(L"Bar", L"chart") is a table's string with a context.
 //
 // Catalogs are gettext PO files, strings/<code>.po, with strings/featherweight.pot as their template
 // (tools/strings). The build compiles them into one compressed resource per language, and only the
@@ -31,6 +32,16 @@ __declspec(noinline) const char* T(const char* en);  // UTF-8 in, UTF-8 out
 
 // Marks a string for the catalog where T() can't run yet (constexpr tables, namespace scope).
 #define N_(s) s
+// The same with a context: one literal, "chart\x04Bar", which is the catalog's key for T(L"Bar",
+// L"chart") (a key is its context, a \x04, then the English). Only for a UiStr table, whose reader
+// drops the context: UiStr's English() and TKey().
+#define NC_(s, context) context "\x04" s
+
+// T() for a table's string (UiStr): the key may start with a context and a \x04 (NC_), which isn't
+// shown when the language has no translation for it.
+__declspec(noinline) const wchar_t* TKey(const wchar_t* key);
+__declspec(noinline) const char16_t* TKey(const char16_t* key);
+__declspec(noinline) const char* TKey(const char* key);
 
 // A sentence with numbers or names in it, whole, so each language orders its words: {0}, {1} ...
 // replaced by `args`. Fmt(T(L"Page {0} of {1}"), {std::to_wstring(page), std::to_wstring(count)}).
@@ -41,13 +52,19 @@ std::u16string Fmt(const char16_t* pattern, std::initializer_list<std::u16string
 
 // A table's string, translated each time it's read: a table built before main keeps its N_()
 // strings in this type (UiText label; constexpr UiText kNames[] = {N_(L"Left"), ...}), and every
-// reader gets T() without asking for it. `en` is the English, for the rare reader that wants it.
+// reader gets T() without asking for it. English() is the English, for the rare reader that wants
+// it (a script's names, keys that don't change with the language).
 template <class C>
 struct UiStr {
-  const C* en;
-  constexpr UiStr(const C* s) : en(s) {}  // implicit, so tables keep their {L"..."} form
-  operator const C*() const { return T(en); }
-  operator std::basic_string_view<C>() const { return T(en); }
+  const C* key;  // the English, or with NC_ its context, a \x04, then the English
+  constexpr UiStr(const C* s) : key(s) {}  // implicit, so tables keep their {L"..."} form
+  operator const C*() const { return TKey(key); }
+  operator std::basic_string_view<C>() const { return TKey(key); }
+  const C* English() const {
+    for (const C* p = key; *p; ++p)
+      if (*p == C(4)) return p + 1;
+    return key;
+  }
 };
 template <class C>
 std::basic_string<C> operator+(std::basic_string<C> a, const UiStr<C>& b) {
@@ -81,6 +98,10 @@ void Init(const std::wstring& chosen);
 
 // The language in use ("en" until Init chose another).
 const wchar_t* Current();
+
+// A name inside a sentence, "Undo {0}" with "Typing": lower case in English ("Undo typing"), as it
+// is in the other languages, whose nouns may keep their capitals ("Rückgängig: Eingabe", as Office).
+std::wstring InSentence(std::wstring_view name);
 
 // A shortcut's key names as the language's keyboards write them: "Ctrl+Shift+S" is "Strg+Umschalt+S"
 // in German. Only names joined by "+" change ("Bold (Ctrl+B)", "\tCtrl+Enter"); each comes from the

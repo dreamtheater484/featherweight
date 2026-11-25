@@ -62,8 +62,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     Keys read;
     Check(ReadKeys(again.data(), again.size(), read));
     Check(read.count == keys.count && read.seed == keys.seed && KeysCheck(read) == KeysCheck(keys));
-    Check(std::equal(read.hashes, read.hashes + read.count, keys.hashes));
-    Check(std::equal(read.places, read.places + read.count, keys.places));
+    Check(read.hashes == keys.hashes && read.places == keys.places);
   }
 
   std::vector<wchar_t> text;

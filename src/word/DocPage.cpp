@@ -151,9 +151,11 @@ class RowsPanel : public PanelContent {
         continue;
       }
       if (r.b) {
+        // Side by side: halves, or a number box beside a list takes only what a number needs.
         const float half = (right - cx - 6 * u) / 2;
-        place(r.a, cx, cx + half, y);
-        place(r.b, cx + half + 6 * u, right, y);
+        const float second = dynamic_cast<SpinBox*>(r.b) && !dynamic_cast<SpinBox*>(r.a) ? std::min(half, 72 * u) : half;
+        place(r.a, cx, right - second - 6 * u, y);
+        place(r.b, right - second, right, y);
       } else {
         const float w = dynamic_cast<SpinBox*>(r.a) ? std::min(right - cx, 120 * u) : right - cx;
         place(r.a, cx, cx + w, y);
@@ -169,7 +171,11 @@ class RowsPanel : public PanelContent {
     const float u = ui_;
     Refresh();
     for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 13 * u);
+    for (const auto& [text, rc] : labels_) {
+      // A label longer than its column (a longer language) wraps onto a second line in its row.
+      if (c.MeasureText(text, 13 * u) <= gfx::Width(rc)) c.Text(text, rc, p.textSecondary, 13 * u);
+      else c.TextWrapped(text, RectF(rc.left, rc.top - 3 * u, rc.right, rc.bottom + 3 * u), p.textSecondary, 13 * u, 2);
+    }
   }
 
  protected:
@@ -512,7 +518,7 @@ class DocPage::ParaPanel : public RowsPanel {
     onOff(keepLines_, T(L"Keep lines together"), &edit::ParaFormat::keepLines);
     onOff(breakBefore_, T(L"Page break before"), &edit::ParaFormat::pageBreakBefore);
 
-    rows_ = {{T(L"General")},
+    rows_ = {{T(L"General", L"heading")},
              {T(L"Alignment"), &align_},
              {T(L"Indents")},
              {T(L"Left, right"), &left_, &right_},

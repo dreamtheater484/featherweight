@@ -3,6 +3,7 @@
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
+#include <fpdf_javascript.h>
 #include <fpdf_save.h>
 #include <fpdf_signature.h>
 
@@ -123,6 +124,12 @@ void Document::InitLibrary() {
   config.m_v8EmbedderSlot = 0;
   FPDF_InitLibraryWithConfig(&config);
   g_libraryReady = true;
+}
+
+bool Document::ScriptEngineLoaded() {
+  HMODULE pdfium = GetModuleHandleW(L"pdfium.dll");
+  // Only V8's build exports it (updater::IsScriptEngine reads the same export from a file).
+  return pdfium && GetProcAddress(pdfium, "FPDF_GetRecommendedV8Flags") != nullptr;
 }
 
 bool Document::LibraryAvailable() {
@@ -258,8 +265,11 @@ void Document::InitForm(bool openActions) {
   form_ = FPDFDOC_InitFormFillEnvironment(doc_, env_.get());
   int type = FPDF_GetFormType(doc_);
   hasForm_ = type != FORMTYPE_NONE;
+  // f1-ship: form scripts and XFA need the optional script engine (PDFium with V8); NeedsScriptEngine says so.
+  scriptsWanted_ = type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND || FPDFDoc_GetJavaScriptActionCount(doc_) > 0;
 #ifdef PDF_ENABLE_XFA
   if (type == FORMTYPE_XFA_FULL || type == FORMTYPE_XFA_FOREGROUND) {
+    // Both PDFium builds have FPDF_LoadXFA; without the script engine it returns false and the AcroForm part shows.
     isXfa_ = FPDF_LoadXFA(doc_) != FALSE;
     if (isXfa_) RefreshPageSizes();
   }

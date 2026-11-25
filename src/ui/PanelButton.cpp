@@ -16,9 +16,18 @@ void PanelButton::Draw(Canvas& c) {
   c.FillRound(rc, 4 * u, bg);
   c.StrokeRound(rc, 4 * u, checked ? p.accentText : p.inputBorder, 1);
   const D2D1_COLOR_F fg = !enabled ? p.textDisabled : p.text;
-  const float w = c.MeasureText(text, textSize * u);
+  // Centred. A label longer than the button (a longer language: "Durchgestrichen") is drawn a little
+  // smaller, down to 10 DIPs; one that still doesn't fit gets the button's inside as its box, so the
+  // clipping check (gfx::WatchClipping) sees it.
+  float size = textSize * u;
+  float w = c.MeasureText(text, size);
+  const float room = rc.right - rc.left - 5 * u;
+  if (w > room && size > 10 * u) {
+    size = std::max(10 * u, std::floor(size * room / w * 2) / 2);
+    w = c.MeasureText(text, size);
+  }
   const float x = std::max(rc.left + 3 * u, std::round((rc.left + rc.right - w) / 2));
-  c.Text(text, RectF(x, rc.top, x + w + 2 * u, rc.bottom), fg, textSize * u);
+  c.Text(text, RectF(x, rc.top, std::min(x + w + 2 * u, rc.right - 2 * u), rc.bottom), fg, size);
   if (FocusVisible()) ctl::DrawFocusRing(c, rc, u);
 }
 

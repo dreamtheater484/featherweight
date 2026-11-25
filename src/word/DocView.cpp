@@ -1856,7 +1856,7 @@ CommandState DocView::QueryCommand(int cmd) {
   if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
     const std::u16string name = cmd == CmdUndo ? editor_->UndoName() : editor_->RedoName();
     s.label = Fmt(cmd == CmdUndo ? T(L"Undo {0}") : T(L"Redo {0}"),
-                  {fw::ToLower(std::wstring(name.begin(), name.end()))});
+                  {fw::lang::InSentence(std::wstring(name.begin(), name.end()))});
   }
   return s;
 }

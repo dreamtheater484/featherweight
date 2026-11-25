@@ -82,10 +82,12 @@ int PresentationView::ExportSlidePictures(const std::wstring& path, bool all, un
   int written = 0;
   for (size_t i = 0; i < SlideCount(); ++i)
     written += WriteSlidePng(*deck_, i, w, dir + L"\\Slide" + std::to_wstring(i + 1) + L".png") ? 1 : 0;
-  message = written == static_cast<int>(SlideCount())
-                ? Fmt(T(L"Exported {0} slides to the folder {1}"), {std::to_wstring(written), FileNameOf(dir)})
-                : Fmt(T(L"{0} slides couldn't be written to the folder {1}."),
-                      {std::to_wstring(SlideCount() - written), FileNameOf(dir)});
+  const size_t failed = SlideCount() - static_cast<size_t>(written);
+  const std::wstring folder = FileNameOf(dir);
+  if (failed == 0 && written == 1) message = Fmt(T(L"Exported 1 slide to the folder {0}"), {folder});
+  else if (failed == 0) message = Fmt(T(L"Exported {0} slides to the folder {1}"), {std::to_wstring(written), folder});
+  else if (failed == 1) message = Fmt(T(L"1 slide couldn't be written to the folder {0}."), {folder});
+  else message = Fmt(T(L"{0} slides couldn't be written to the folder {1}."), {std::to_wstring(failed), folder});
   return written;
 }
 

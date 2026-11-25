@@ -35,10 +35,10 @@ bool g_pseudo = false;
 
 // The key's place in the template, if it has a translation; else -1.
 int Find(const Table& t, uint32_t h) {
-  const uint32_t* end = t.keys.hashes + t.keys.count;
-  const uint32_t* it = std::lower_bound(t.keys.hashes, end, h);
+  const auto end = t.keys.hashes.end();
+  const auto it = std::lower_bound(t.keys.hashes.begin(), end, h);
   if (it == end || *it != h) return -1;
-  const uint16_t place = t.keys.places[it - t.keys.hashes];
+  const uint16_t place = t.keys.places[static_cast<size_t>(it - t.keys.hashes.begin())];
   return t.offsets[place] == kNone ? -1 : static_cast<int>(place);
 }
 
@@ -122,10 +122,16 @@ std::unordered_map<std::string, std::string>* g_pseudoUtf8 = nullptr;
 bool InTemplate(const wchar_t* context, const wchar_t* en) {
   if (!g_pseudoKeys.count) return true;  // a build without the keys: nothing to check against
   const uint32_t h = catalog::Hash(g_pseudoKeys.seed, context, en);
-  return std::binary_search(g_pseudoKeys.hashes, g_pseudoKeys.hashes + g_pseudoKeys.count, h);
+  return std::binary_search(g_pseudoKeys.hashes.begin(), g_pseudoKeys.hashes.end(), h);
 }
 
 const wchar_t* PseudoWide(const wchar_t* en, const wchar_t* context) {
+  std::wstring split;  // a table's key with its context (NC_): "chart\x04Bar"
+  if (const wchar_t* sep = context ? nullptr : wcschr(en, L'\x04')) {
+    split.assign(en, sep);
+    context = split.c_str();
+    en = sep + 1;
+  }
   AcquireSRWLockExclusive(&g_pseudoLock);
   if (!g_pseudoWide) g_pseudoWide = new std::unordered_map<std::wstring, std::wstring>;
   const std::wstring key = context ? std::wstring(context) + L'\x04' + en : std::wstring(en);
@@ -207,6 +213,13 @@ void Init(const std::wstring& chosen) {
 }
 
 const wchar_t* Current() { return g_current; }
+
+std::wstring InSentence(std::wstring_view name) {
+  std::wstring out(name);
+  if (!out.empty() && g_current[0] == L'e' && g_current[1] == L'n' && !g_current[2])
+    CharLowerBuffW(out.data(), static_cast<DWORD>(out.size()));
+  return out;
+}
 
 namespace {
 // A key's name in the language, or nullptr for a letter, a digit, F1 or a name that stays.
@@ -302,6 +315,26 @@ std::string Fmt(const char* pattern, std::initializer_list<std::string_view> arg
 }
 std::u16string Fmt(const char16_t* pattern, std::initializer_list<std::u16string_view> args) {
   return FormatWith(pattern, args);
+}
+
+namespace {
+template <class C>
+const C* Shown(const C* key, const C* t) {  // T()'s result, without a context it didn't translate
+  if (t != key) return t;
+  for (const C* p = key; *p; ++p)
+    if (*p == C(4)) return p + 1;
+  return key;
+}
+}  // namespace
+
+const wchar_t* TKey(const wchar_t* key) {
+  return key ? Shown(key, T(key)) : key;
+}
+const char16_t* TKey(const char16_t* key) {
+  return key ? Shown(key, T(key)) : key;
+}
+const char* TKey(const char* key) {
+  return key ? Shown(key, T(key)) : key;
 }
 
 const char16_t* T(const char16_t* en) {

@@ -40,7 +40,7 @@ std::vector<std::wstring> Folders() {
       if (fw::EqualsNoCase(o, f)) return;
     out.push_back(std::move(f));
   };
-  for (const wchar_t* app : {T(L"Word"), T(L"Excel"), L"PowerPoint"})
+  for (const wchar_t* app : {L"Word", L"Excel", L"PowerPoint"})  // lang: no (Office's registry keys)
     if (std::wstring f = OfficeOption(app); !f.empty() && IsFolder(f)) add(f);
   PWSTR docs = nullptr;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {

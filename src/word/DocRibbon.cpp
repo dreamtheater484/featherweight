@@ -222,7 +222,7 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
            {CmdPictureInline, CmdPictureSquare, CmdPictureTight, CmdPictureTopBottom, CmdPictureBehind, CmdPictureInFront});
     b.Menu(CmdPictureRotate, icon::Rotate, Size::Medium, T(L"Rotate"), L"AY", {CmdPictureRotate, 0, objectPanel});
   };
-  b.Tab(T(L"Layout"), L"P");
+  b.Tab(T(L"Layout", L"ribbon tab"), L"P");
   b.Group(T(L"Page Setup"), L"ZS", CmdPageSetup);
   b.Menu(CmdMarginsNormal, icon::Margins, Size::Large, T(L"Margins"), L"M",
          {CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate, CmdMarginsWide, 0, CmdPageSetup});
