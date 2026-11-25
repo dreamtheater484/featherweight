@@ -722,7 +722,7 @@ Check "lang.launch" timing "Launch to window in German no more than 5 ms slower 
 }
 
 # ===== PDF tools =====
-Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the torture run) reopens in PDFium, Windows.Data.Pdf and Word, and passes fwtool pdf-valid; Acrobat Reader if present" "All open without errors" {
+Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the torture run) reopens in PDFium (fwtool pdf-valid), Windows.Data.Pdf and Adobe Acrobat (a sample, our own instance)" "All open without errors" {
   $s = Join-Path $root "tests\pdf\pdf-readers.ps1"
   if (-not (Test-Path $s)) { return NotBuilt "f1-gate" "the PDF reader checks (tests\pdf\pdf-readers.ps1)" }
   Need-Build
@@ -732,7 +732,7 @@ Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the tor
   if (Test-Path (Join-Path $script:outDir "damage.pdf\signed")) { $inputs += Join-Path $script:outDir "damage.pdf\signed" }
   if (-not (Test-Path $inputs[0])) { return Failed "needs damage.pdf's outputs on this commit (run it first)" }
   $originals = Join-Path $script:outDir "damage.pdf\inputs.txt"
-  $code = Use-Office "pdf.readers" "WINWORD" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals) }
+  $code = Use-Office "pdf.readers" "Acrobat" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals) }
   if ($code -is [hashtable]) { return $code }
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "no summary (exit $code)" }

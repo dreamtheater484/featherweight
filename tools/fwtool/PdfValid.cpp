@@ -431,6 +431,7 @@ struct Result {
   std::vector<std::string> errors;
   Structure st;
   int version = 0, pages = 0;
+  bool needsPassword = false;  // opened only with one of --password's (a reader would ask for it)
   long long chars = 0;
   std::set<std::string> embedded, notEmbedded;
   std::vector<Signature> signatures;
@@ -481,6 +482,7 @@ Result Check(const std::filesystem::path& file, const std::wstring& password, bo
   FPDF_DOCUMENT doc = nullptr;
   for (const auto& pw : tries) {
     doc = FPDF_LoadMemDocument64(data.data(), data.size(), pw.empty() ? nullptr : pw.c_str());
+    if (doc) r.needsPassword = !pw.empty();
     if (doc || FPDF_GetLastError() != FPDF_ERR_PASSWORD) break;
   }
   if (!doc) {
@@ -605,7 +607,8 @@ int RunPdfValid(const Options& options) {
             ", \"version\": " + std::to_string(r.version) + ", \"pages\": " + std::to_string(r.pages) +
             ", \"chars\": " + std::to_string(r.chars) + ", \"xref\": " + Json(r.st.xref) +
             ", \"sections\": " + std::to_string(r.st.sections) + ", \"objects\": " + std::to_string(r.st.objects.size()) +
-            ", \"encrypted\": " + (r.st.encrypted ? "true" : "false") + ",\n     \"fonts\": " + JsonList(r.embedded) +
+            ", \"encrypted\": " + (r.st.encrypted ? "true" : "false") + ", \"needsPassword\": " + (r.needsPassword ? "true" : "false") +
+            ",\n     \"fonts\": " + JsonList(r.embedded) +
             ", \"fontsNotEmbedded\": " + JsonList(r.notEmbedded) + ",\n     \"signatures\": [";
     for (size_t k = 0; k < r.signatures.size(); ++k) {
       const auto& s = r.signatures[k];

@@ -450,6 +450,18 @@ class Work {
   std::string password_;
 };
 
+// Whether Insert takes this PDF's pages: the tools refuse a file whose permissions don't allow copying
+// from it (pdftools::OpenSource's NotAllowed).
+bool Insertable(const Doc& d) {
+#ifdef FW_HAVE_PDFTOOLS
+  pdftools::Source src;
+  return pdftools::OpenSource(d.bytes, d.password, src) == pdftools::SourceError::None;
+#else
+  (void)d;
+  return true;
+#endif
+}
+
 int AnnotsOn(FPDF_DOCUMENT doc, int index) {
   FPDF_PAGE page = FPDF_LoadPage(doc, index);
   if (!page) return -1;
@@ -538,10 +550,10 @@ int RunPdfTorture(const Options& options) {
     else if (d->sigs.empty()) skipped.push_back({f, "has no pages"});
     else docs.push_back(std::move(d));
   }
-  // Inserted whole, as Insert and Merge do: the small unprotected ones.
+  // Inserted whole, as Insert and Merge do: the small ones the tools take pages from.
   std::vector<const Doc*> donors;
   for (const auto& d : docs)
-    if (d->password.empty() && d->sigs.size() <= 12) donors.push_back(d.get());
+    if (d->password.empty() && d->sigs.size() <= 12 && Insertable(*d)) donors.push_back(d.get());
 
   const unsigned seed = options.seed ? options.seed : 1;
   const int edits = std::max(1, options.edits);
