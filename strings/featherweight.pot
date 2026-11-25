@@ -4300,6 +4300,11 @@ msgid "Fill"
 msgstr ""
 
 #: src/sheet/view/WorkbookRibbon.cpp
+msgctxt "verb"
+msgid "Fill"
+msgstr ""
+
+#: src/sheet/view/WorkbookRibbon.cpp
 msgid "Fill Color"
 msgstr ""
 
@@ -4831,7 +4836,12 @@ msgstr ""
 msgid "Function Library"
 msgstr ""
 
-#: src/sheet/view/WorkbookFormat.cpp src/word/DocPage.cpp
+#: src/sheet/view/WorkbookFormat.cpp
+msgid "General"
+msgstr ""
+
+#: src/word/DocPage.cpp
+msgctxt "heading"
 msgid "General"
 msgstr ""
 
@@ -5059,7 +5069,12 @@ msgstr ""
 msgid "Heading: "
 msgstr ""
 
-#: src/sheet/view/WorkbookPageSetup.cpp src/word/DocPanels.cpp
+#: src/word/DocPanels.cpp
+msgid "Headings"
+msgstr ""
+
+#: src/sheet/view/WorkbookPageSetup.cpp
+msgctxt "row and column"
 msgid "Headings"
 msgstr ""
 
@@ -5961,7 +5976,12 @@ msgstr ""
 msgid "Last year"
 msgstr ""
 
-#: src/slide/edit/SlideOps.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/word/DocPage.cpp src/word/DocPictures.cpp src/word/DocRibbon.cpp src/word/DocShapes.cpp
+#: src/slide/edit/SlideOps.cpp src/slide/view/PresentationRibbon.cpp src/slide/view/PresentationSlides.cpp src/word/DocPage.cpp src/word/DocPictures.cpp src/word/DocShapes.cpp
+msgid "Layout"
+msgstr ""
+
+#: src/word/DocRibbon.cpp
+msgctxt "ribbon tab"
 msgid "Layout"
 msgstr ""
 
@@ -8986,7 +9006,7 @@ msgid "Save as… (Ctrl+Shift+S)"
 msgstr ""
 
 #: src/App.cpp
-msgid "Save changes to “"
+msgid "Save changes to “{0}”?"
 msgstr ""
 
 #: src/pdf/NoteEditor.cpp
@@ -14589,6 +14609,10 @@ msgstr ""
 msgid "—"
 msgstr ""
 
+#: src/App.cpp
+msgid "“{0}” and its folder can’t be found."
+msgstr ""
+
 #: src/pdf/Document.cpp
 msgid "“{0}” couldn't be opened — it seems to be damaged or isn't a PDF."
 msgstr ""
@@ -14617,18 +14641,14 @@ msgstr ""
 msgid "“{0}” couldn't be read, or isn't a picture Featherweight adds."
 msgstr ""
 
+#: src/PasswordCard.cpp
+msgid "“{0}” is protected"
+msgstr ""
+
 #: src/pdf/Document.cpp
 msgid "“{0}” is too large to open (more than 4 GB)."
 msgstr ""
 
 #: src/pdf/Document.cpp
 msgid "“{0}” uses a kind of protection Featherweight doesn't support."
-msgstr ""
-
-#: src/App.cpp
-msgid "” and its folder can’t be found."
-msgstr ""
-
-#: src/PasswordCard.cpp
-msgid "” is protected"
 msgstr ""

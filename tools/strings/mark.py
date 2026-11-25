@@ -186,6 +186,9 @@ def classify(lit, r, code):
     # Already marked.
     if re.search(r'\b(T|N_)\(\s*$', before):
         return '', 'marked'
+    # A context, T(L"Layout", L"ribbon tab"): for translators, not shown.
+    if re.search(r'\bT\(\s*(L|u8|u)?"(?:[^"\\]|\\.)*"\s*,\s*$', before):
+        return '', 'context'
     # Joined with a macro's literal ("Version " FW_VERSION_WSTRING): left for a hand edit.
     if re.search(r'\b[A-Z_][A-Z0-9_]{2,}\s*$', before) or re.match(r'\s*[A-Z_][A-Z0-9_]{2,}\s*(L|u8|u|U)?"', lit.after):
         return '', 'joined with a macro'

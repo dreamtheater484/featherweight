@@ -372,7 +372,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       };
     }
     Toggle(gridlines_, T(L"Gridlines"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.gridLines = !p.gridLines; }); });
-    Toggle(headings_, T(L"Headings"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
+    Toggle(headings_, T(L"Headings", L"row and column"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
     Toggle(bw_, T(L"Black and white"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.blackAndWhite = !p.blackAndWhite; }); });
     Toggle(draft_, T(L"Draft quality"), [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.draft = !p.draft; }); });
     notes_.items = {L"(none)", T(L"At end of sheet"), T(L"As displayed on sheet")};

@@ -567,7 +567,7 @@ bool WorkbookView::RibbonCommandState(int cmd, CommandState& s) {
   };
   switch (cmd) {
     case CmdCellsFormatMenu: return set(T(L"Format"), grid);
-    case CmdFillMenu: return set(T(L"Fill"), cells);
+    case CmdFillMenu: return set(T(L"Fill", L"verb"), cells);
     case CmdClearMenu: return set(T(L"Clear"), cells);
     case CmdSortFilterMenu: return set(T(L"Sort & Filter"), cells);
     case CmdFindSelectMenu: return set(T(L"Find & Select"), grid);

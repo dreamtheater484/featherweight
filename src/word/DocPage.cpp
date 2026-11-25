@@ -518,7 +518,7 @@ class DocPage::ParaPanel : public RowsPanel {
     onOff(keepLines_, T(L"Keep lines together"), &edit::ParaFormat::keepLines);
     onOff(breakBefore_, T(L"Page break before"), &edit::ParaFormat::pageBreakBefore);
 
-    rows_ = {{T(L"General")},
+    rows_ = {{T(L"General", L"heading")},
              {T(L"Alignment"), &align_},
              {T(L"Indents")},
              {T(L"Left, right"), &left_, &right_},

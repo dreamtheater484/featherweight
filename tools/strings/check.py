@@ -74,21 +74,26 @@ def read_po(path):
 
 
 def access_keys(s):
-    """Positions of single & (&& is a literal ampersand)."""
+    """Positions of the & that mark an access key: before a letter or digit. && is a literal ampersand, and so
+    is one before a space or at the end ("Find & Select" on the ribbon, drawn as written)."""
     out, i = [], 0
     while i < len(s):
         if s[i] == '&':
             if i + 1 < len(s) and s[i + 1] == '&':
                 i += 2
                 continue
-            out.append(i)
+            if i + 1 < len(s) and not s[i + 1].isspace():
+                out.append(i)
         i += 1
     return out
 
 
 def problems_of(en, tr):
     out = []
-    if collections.Counter(PLACEHOLDER.findall(en)) != collections.Counter(PLACEHOLDER.findall(tr)):
+    # {0} always; printf's %d only in a string whose English has one (elsewhere "10 %" is just text).
+    printf = any(p.startswith('%') for p in PLACEHOLDER.findall(en))
+    kinds = (lambda t: [p for p in PLACEHOLDER.findall(t) if printf or p.startswith('{')])
+    if collections.Counter(kinds(en)) != collections.Counter(kinds(tr)):
         out.append('placeholders differ')
     en_tab, tr_tab = en.find('\t'), tr.find('\t')
     if (en_tab < 0) != (tr_tab < 0) or en_tab >= 0 and en[en_tab:] != tr[tr_tab:]:
