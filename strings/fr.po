@@ -4074,10 +4074,6 @@ msgstr "Exactement"
 msgid "Exactly %g pt"
 msgstr "Exactement %g pt"
 
-#: src/UserTemplates.cpp
-msgid "Excel"
-msgstr "Excel"
-
 #: src/sheet/view/WorkbookCommands.cpp
 msgid "Excel macro-enabled template"
 msgstr "Modèle Excel prenant en charge les macros"
@@ -13637,10 +13633,6 @@ msgstr "Avec"
 msgid "With Previous"
 msgstr "Avec la précédente"
 
-#: src/UserTemplates.cpp
-msgid "Word"
-msgstr "Word"
-
 #: src/word/DocRibbon.cpp
 msgid "Word\nCount"
 msgstr "Nombre\nde mots"
@@ -14716,6 +14708,12 @@ msgstr "« {0} » est trop volumineux pour être ouvert (plus de 4 Go)."
 #: src/pdf/Document.cpp
 msgid "“{0}” uses a kind of protection Featherweight doesn't support."
 msgstr "« {0} » utilise un type de protection que Featherweight ne prend pas en charge."
+
+#~ msgid "Excel"
+#~ msgstr "Excel"
+
+#~ msgid "Word"
+#~ msgstr "Word"
 
 #~ msgid "Click to set a {0}"
 #~ msgstr "Cliquez pour définir une {0}"

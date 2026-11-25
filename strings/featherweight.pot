@@ -4073,10 +4073,6 @@ msgstr ""
 msgid "Exactly %g pt"
 msgstr ""
 
-#: src/UserTemplates.cpp
-msgid "Excel"
-msgstr ""
-
 #: src/sheet/view/WorkbookCommands.cpp
 msgid "Excel macro-enabled template"
 msgstr ""
@@ -13634,10 +13630,6 @@ msgstr ""
 
 #: src/slide/view/PresentationAnim.cpp
 msgid "With Previous"
-msgstr ""
-
-#: src/UserTemplates.cpp
-msgid "Word"
 msgstr ""
 
 #: src/word/DocRibbon.cpp
