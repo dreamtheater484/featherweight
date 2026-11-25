@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstring>
 
+#include "core/Lang.h"
 #include "sheet/xlsx/Internal.h"
 
 namespace fw::sheet::edit::refs {
@@ -597,12 +598,12 @@ std::u16string CheckSheetXml(const detail::PartText& t) {
       "colBreaks", "customProperties", "cellWatches", "ignoredErrors", "drawing", "legacyDrawing",
       "legacyDrawingHF", "drawingHF", "picture", "oleObjects", "controls", "tableParts", "extLst",
       "AlternateContent"};
-  static constexpr std::pair<std::string_view, std::u16string_view> kBlocked[] = {
-      {"scenarios", u"scenarios"},
-      {"dataConsolidate", u"a data consolidation"},
-      {"customSheetViews", u"custom views"},
-      {"smartTags", u"smart tags"},
-      {"webPublishItems", u"items published to the web"}};
+  static constexpr std::pair<std::string_view, UiText16> kBlocked[] = {
+      {"scenarios", N_(u"scenarios")},
+      {"dataConsolidate", N_(u"a data consolidation")},
+      {"customSheetViews", N_(u"custom views")},
+      {"smartTags", N_(u"smart tags")},
+      {"webPublishItems", N_(u"items published to the web")}};
   static constexpr std::string_view kKnownExt[] = {"conditionalFormattings", "dataValidations", "sparklineGroups",
                                                    "slicerList", "protectedRanges", "ignoredErrors",
                                                    "webExtensions", "timelineRefs"};
@@ -611,15 +612,15 @@ std::u16string CheckSheetXml(const detail::PartText& t) {
       for (const auto& [name, what] : kBlocked)
         if (p.local == name) return std::u16string(what);
       if (std::find(std::begin(kKnown), std::end(kKnown), p.local) == std::end(kKnown))
-        return u"parts Featherweight doesn't know";
+        return T(u"parts Featherweight doesn't know");
       if (p.local != "extLst") continue;
       pugi::xml_document d;
-      if (!xlsx::ParseSlice(d, std::string_view(*seg).substr(p.begin, p.end - p.begin))) return u"parts it can't read";
+      if (!xlsx::ParseSlice(d, std::string_view(*seg).substr(p.begin, p.end - p.begin))) return T(u"parts it can't read");
       for (pugi::xml_node ext = d.document_element().first_child(); ext; ext = ext.next_sibling()) {
         if (ext.type() != pugi::node_element) continue;
         pugi::xml_node inner = FirstElement(ext);
         if (inner && std::find(std::begin(kKnownExt), std::end(kKnownExt), Local(inner)) == std::end(kKnownExt))
-          return u"an extension Featherweight doesn't know";
+          return T(u"an extension Featherweight doesn't know");
       }
     }
   return {};

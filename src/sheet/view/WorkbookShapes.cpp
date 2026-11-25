@@ -17,6 +17,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "draw/Images.h"
 #include "sheet/data/Shapes.h"
@@ -39,18 +40,18 @@ namespace {
 constexpr size_t kMaxPictureFile = 64u << 20;
 
 struct NamedColor {
-  const wchar_t* name;
+  UiText name;
   uint32_t rgb;
 };
 // Office's standard colors, with black, white and gray.
-constexpr NamedColor kColors[] = {{L"Black", 0x000000},       {L"White", 0xFFFFFF},      {L"Gray", 0x7F7F7F},
-                                  {L"Dark red", 0xC00000},    {L"Red", 0xFF0000},        {L"Orange", 0xFFC000},
-                                  {L"Yellow", 0xFFFF00},      {L"Light green", 0x92D050}, {L"Green", 0x00B050},
-                                  {L"Light blue", 0x00B0F0},  {L"Blue", 0x0070C0},       {L"Dark blue", 0x002060},
-                                  {L"Purple", 0x7030A0}};
+constexpr NamedColor kColors[] = {{N_(L"Black"), 0x000000},       {N_(L"White"), 0xFFFFFF},      {N_(L"Gray"), 0x7F7F7F},
+                                  {N_(L"Dark red"), 0xC00000},    {N_(L"Red"), 0xFF0000},        {N_(L"Orange"), 0xFFC000},
+                                  {N_(L"Yellow"), 0xFFFF00},      {N_(L"Light green"), 0x92D050}, {N_(L"Green"), 0x00B050},
+                                  {N_(L"Light blue"), 0x00B0F0},  {N_(L"Blue"), 0x0070C0},       {N_(L"Dark blue"), 0x002060},
+                                  {N_(L"Purple"), 0x7030A0}};
 // Excel's outline weights, in points.
 constexpr double kWeights[] = {0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6};
-constexpr const wchar_t* kWeightNames[] = {L"¼ pt", L"½ pt", L"¾ pt", L"1 pt", L"1½ pt", L"2¼ pt", L"3 pt", L"4½ pt", L"6 pt"};
+constexpr UiText kWeightNames[] = {N_(L"¼ pt"), N_(L"½ pt"), N_(L"¾ pt"), N_(L"1 pt"), N_(L"1½ pt"), N_(L"2¼ pt"), N_(L"3 pt"), N_(L"4½ pt"), N_(L"6 pt")};
 
 bool IsPictureFile(const std::wstring& path) {
   const size_t dot = path.find_last_of(L'.');
@@ -133,13 +134,13 @@ std::string DibToPng(const std::vector<uint8_t>& dib) {
 class WorkbookView::ShapePanel : public PanelContent {
  public:
   explicit ShapePanel(WorkbookView& view) : v_(view) {
-    fill_.label = L"Fill";
-    line_.label = L"Outline";
-    weight_.label = L"Outline weight";
-    fill_.items = {L"Automatic", L"No fill"};
-    line_.items = {L"Automatic", L"No line"};
-    for (const NamedColor& c : kColors) fill_.items.push_back(c.name), line_.items.push_back(c.name);
-    weight_.items = {L"Automatic"};
+    fill_.label = T(L"Fill");
+    line_.label = T(L"Outline");
+    weight_.label = T(L"Outline weight");
+    fill_.items = {T(L"Automatic"), T(L"No fill")};
+    line_.items = {T(L"Automatic"), T(L"No line")};
+    for (const NamedColor& c : kColors) fill_.items.emplace_back(c.name), line_.items.emplace_back(c.name);
+    weight_.items = {T(L"Automatic")};
     for (const wchar_t* w : kWeightNames) weight_.items.push_back(w);
     fill_.onChange = [this](int i) { Paint(data::kFormatFill, i); };
     line_.onChange = [this](int i) { Paint(data::kFormatLine, i); };
@@ -154,7 +155,7 @@ class WorkbookView::ShapePanel : public PanelContent {
     alt_.onCommit = [this](const std::wstring& t, int) { Apply(data::kFormatAltText, [&](ObjectFormat& f) { f.altText = WideToUtf8(t); }); };
   }
 
-  std::wstring Title() const override { return name_.empty() ? L"Format object" : L"Format " + name_; }
+  std::wstring Title() const override { return name_.empty() ? T(L"Format object") : Fmt(T(L"Format {0}"), {name_}); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -218,7 +219,7 @@ class WorkbookView::ShapePanel : public PanelContent {
     ObjectFormat f = data::ReadObjectFormat(anchor);
     change(f);
     const std::string xml = data::FormatObject(anchor, f, what);
-    const char16_t* step = what == data::kFormatAltText ? u"Alt Text" : what == data::kFormatText ? u"Edit Text" : u"Format Object";
+    const char16_t* step = what == data::kFormatAltText ? T(u"Alt Text") : what == data::kFormatText ? T(u"Edit Text") : T(u"Format Object");
     if (xml.empty() || v_.EditRefused(v_.Ed().SetObjectXml(sheet, v_.object_, xml, step))) return false;
     v_.host_.ViewInvalidate();
     Open();
@@ -235,11 +236,11 @@ class WorkbookView::ShapePanel : public PanelContent {
       c.rc = RectF(left, y, right, y + 30 * u);
       y += 42 * u;
     };
-    row(L"Fill", fill_);
-    row(L"Outline", line_);
-    row(L"Outline weight", weight_);
-    row(L"Text", textBox_);
-    row(L"Alt text", alt_);
+    row(T(L"Fill"), fill_);
+    row(T(L"Outline"), line_);
+    row(T(L"Outline weight"), weight_);
+    row(T(L"Text"), textBox_);
+    row(T(L"Alt text"), alt_);
     v_.host_.ViewInvalidate();
   }
 
@@ -276,7 +277,7 @@ bool WorkbookView::InsertPictureBytes(const std::string& bytes, const std::strin
   std::shared_ptr<draw::Image> image;
   if (data::PictureType(bytes, ext, type)) image = draw::Image::Open(std::vector<uint8_t>(bytes.begin(), bytes.end()));
   if (!image) {
-    host_.ViewMessage(BannerKind::Warning, L"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP.");
+    host_.ViewMessage(BannerKind::Warning, T(L"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP."));
     return false;
   }
   // Its own size: its pixels at the resolution it records (96 dpi when none), as Excel inserts it.
@@ -360,7 +361,8 @@ bool WorkbookView::InsertPictureFiles(const std::vector<std::wstring>& files) {
   for (const std::wstring& path : files) {
     std::string bytes;
     if (!IsPictureFile(path) || !util::ReadFileBytes(path, bytes, kMaxPictureFile)) {
-      host_.ViewMessage(BannerKind::Warning, L"“" + fw::FileNameOf(path) + L"” couldn't be read, or isn't a picture Featherweight adds.");
+      host_.ViewMessage(BannerKind::Warning, Fmt(T(L"“{0}” couldn't be read, or isn't a picture Featherweight adds."),
+                                                 {fw::FileNameOf(path)}));
       continue;
     }
     if (!InsertPictureBytes(bytes, "")) break;
@@ -372,10 +374,10 @@ bool WorkbookView::InsertPictureFiles(const std::vector<std::wstring>& files) {
 void WorkbookView::InsertPictureDialog() {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
-  COMDLG_FILTERSPEC filters[] = {{L"Pictures", L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib"}, {L"All files", L"*.*"}};
+  COMDLG_FILTERSPEC filters[] = {{T(L"Pictures"), L"*.png;*.jpg;*.jpeg;*.jpe;*.jfif;*.gif;*.bmp;*.dib"}, {T(L"All files"), L"*.*"}};
   dlg->SetFileTypes(2, filters);
-  dlg->SetTitle(L"Insert picture");
-  dlg->SetOkButtonLabel(L"Insert");
+  dlg->SetTitle(T(L"Insert picture"));
+  dlg->SetOkButtonLabel(T(L"Insert"));
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -443,8 +445,8 @@ void WorkbookView::ShowShapePanel() {
 
 bool WorkbookView::ShapesCommandState(int cmd, CommandState& s) {
   if (cmd < CmdObjectsBox || cmd > CmdFormatObject) return false;
-  static const wchar_t* const kNames[] = {L"Insert",     L"Pictures…", L"Rectangle", L"Rounded rectangle", L"Oval",
-                                          L"Line",       L"Arrow",     L"Text box",  L"Format object…"};
+  static const wchar_t* const kNames[] = {T(L"Insert"),     T(L"Pictures…"), T(L"Rectangle"), T(L"Rounded rectangle"), T(L"Oval"),
+                                          T(L"Line"),       T(L"Arrow"),     T(L"Text box"),  T(L"Format object…")};
   s.label = kNames[cmd - CmdObjectsBox];
   s.enabled = Ready() && !preview_ && !ChartSheet() && (Current().Kind() == SheetKind::Worksheet || !Current().PartName().empty());
   if (cmd == CmdFormatObject) s.enabled = s.enabled && SelectedObject().has_value();

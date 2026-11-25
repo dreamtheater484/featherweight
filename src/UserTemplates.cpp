@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "core/FileKinds.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 
 namespace usertemplates {
@@ -39,7 +40,7 @@ std::vector<std::wstring> Folders() {
       if (fw::EqualsNoCase(o, f)) return;
     out.push_back(std::move(f));
   };
-  for (const wchar_t* app : {L"Word", L"Excel", L"PowerPoint"})
+  for (const wchar_t* app : {T(L"Word"), T(L"Excel"), L"PowerPoint"})
     if (std::wstring f = OfficeOption(app); !f.empty() && IsFolder(f)) add(f);
   PWSTR docs = nullptr;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {

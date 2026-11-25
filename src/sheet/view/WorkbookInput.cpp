@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Theme.h"
@@ -624,7 +625,7 @@ std::wstring WorkbookView::TooltipAt(int x, int y) {
     if (!link->tooltip.empty()) return Utf8ToWide(link->tooltip);
     std::string target = link->target;
     if (!link->location.empty()) target += (target.empty() ? "" : "#") + link->location;
-    return Utf8ToWide(target) + L"\nClick to follow the link";
+    return Utf8ToWide(target) + T(L"\nClick to follow the link");
   }
   return {};
 }

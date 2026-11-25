@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/view/WorkbookView.h"
@@ -21,12 +22,12 @@ namespace {
 // Excel's standard colors, as its Tab Color menu offers them.
 struct TabColorName {
   uint32_t rgb;
-  const wchar_t* name;
+  UiText name;
 };
 constexpr TabColorName kTabColors[] = {
-    {0xC00000, L"Dark red"},    {0xFF0000, L"Red"},   {0xFFC000, L"Orange"}, {0xFFFF00, L"Yellow"},
-    {0x92D050, L"Light green"}, {0x00B050, L"Green"}, {0x00B0F0, L"Light blue"}, {0x0070C0, L"Blue"},
-    {0x002060, L"Dark blue"},   {0x7030A0, L"Purple"},
+    {0xC00000, N_(L"Dark red")},    {0xFF0000, N_(L"Red")},   {0xFFC000, N_(L"Orange")}, {0xFFFF00, N_(L"Yellow")},
+    {0x92D050, N_(L"Light green")}, {0x00B050, N_(L"Green")}, {0x00B0F0, N_(L"Light blue")}, {0x0070C0, N_(L"Blue")},
+    {0x002060, N_(L"Dark blue")},   {0x7030A0, N_(L"Purple")},
 };
 
 }  // namespace
@@ -64,41 +65,41 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     return true;
   }
   switch (cmd) {
-    case CmdInsertCells: s.label = L"Insert cells"; s.shortcut = L"Ctrl++"; s.enabled = cells; return true;
-    case CmdDeleteCells: s.label = L"Delete cells"; s.shortcut = L"Ctrl+-"; s.enabled = cells; return true;
-    case CmdClearContents: s.label = L"Clear contents"; s.shortcut = L"Delete"; s.enabled = cells; return true;
-    case CmdRowHeight: s.label = L"Row height"; s.enabled = cells; return true;
-    case CmdColumnWidth: s.label = L"Column width"; s.enabled = cells; return true;
-    case CmdHide: s.label = L"Hide rows or columns"; s.enabled = cells && (WholeRows() || WholeColumns()); return true;
-    case CmdUnhide: s.label = L"Unhide rows or columns"; s.enabled = cells && (WholeRows() || WholeColumns()); return true;
-    case CmdInsertSheet: s.label = L"Insert sheet"; s.shortcut = L"Shift+F11"; s.enabled = grid; return true;
-    case CmdDeleteSheet: s.label = L"Delete sheet"; s.enabled = grid && shown > 1; return true;
-    case CmdRenameSheet: s.label = L"Rename sheet"; s.enabled = grid; return true;
-    case CmdHideSheet: s.label = L"Hide sheet"; s.enabled = grid && shown > 1; return true;
-    case CmdMoveSheetLeft: s.label = L"Move sheet left"; s.enabled = grid && ShownNeighbour(-1) >= 0; return true;
-    case CmdMoveSheetRight: s.label = L"Move sheet right"; s.enabled = grid && ShownNeighbour(1) >= 0; return true;
-    case CmdGoTo: s.label = L"Go to"; s.shortcut = L"Ctrl+G"; s.enabled = cells; return true;
-    case CmdFillDown: s.label = L"Fill down"; s.shortcut = L"Ctrl+D"; s.enabled = cells; return true;
-    case CmdFillRight: s.label = L"Fill right"; s.shortcut = L"Ctrl+R"; s.enabled = cells; return true;
-    case CmdCut: s.label = L"Cut"; s.shortcut = L"Ctrl+X"; s.enabled = cells; return true;
-    case CmdPaste: s.label = L"Paste"; s.shortcut = L"Ctrl+V"; s.enabled = cells; return true;
-    case CmdPasteValues: s.label = L"Paste values"; s.shortcut = L"Ctrl+Shift+V"; s.enabled = cells; return true;
-    case CmdPasteFormulas: s.label = L"Paste formulas"; s.enabled = cells; return true;
-    case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
-    case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
+    case CmdInsertCells: s.label = T(L"Insert cells"); s.shortcut = L"Ctrl++"; s.enabled = cells; return true;
+    case CmdDeleteCells: s.label = T(L"Delete cells"); s.shortcut = L"Ctrl+-"; s.enabled = cells; return true;
+    case CmdClearContents: s.label = T(L"Clear contents"); s.shortcut = L"Delete"; s.enabled = cells; return true;
+    case CmdRowHeight: s.label = T(L"Row height"); s.enabled = cells; return true;
+    case CmdColumnWidth: s.label = T(L"Column width"); s.enabled = cells; return true;
+    case CmdHide: s.label = T(L"Hide rows or columns"); s.enabled = cells && (WholeRows() || WholeColumns()); return true;
+    case CmdUnhide: s.label = T(L"Unhide rows or columns"); s.enabled = cells && (WholeRows() || WholeColumns()); return true;
+    case CmdInsertSheet: s.label = T(L"Insert sheet"); s.shortcut = L"Shift+F11"; s.enabled = grid; return true;
+    case CmdDeleteSheet: s.label = T(L"Delete sheet"); s.enabled = grid && shown > 1; return true;
+    case CmdRenameSheet: s.label = T(L"Rename sheet"); s.enabled = grid; return true;
+    case CmdHideSheet: s.label = T(L"Hide sheet"); s.enabled = grid && shown > 1; return true;
+    case CmdMoveSheetLeft: s.label = T(L"Move sheet left"); s.enabled = grid && ShownNeighbour(-1) >= 0; return true;
+    case CmdMoveSheetRight: s.label = T(L"Move sheet right"); s.enabled = grid && ShownNeighbour(1) >= 0; return true;
+    case CmdGoTo: s.label = T(L"Go to"); s.shortcut = L"Ctrl+G"; s.enabled = cells; return true;
+    case CmdFillDown: s.label = T(L"Fill down"); s.shortcut = L"Ctrl+D"; s.enabled = cells; return true;
+    case CmdFillRight: s.label = T(L"Fill right"); s.shortcut = L"Ctrl+R"; s.enabled = cells; return true;
+    case CmdCut: s.label = T(L"Cut"); s.shortcut = L"Ctrl+X"; s.enabled = cells; return true;
+    case CmdPaste: s.label = T(L"Paste"); s.shortcut = L"Ctrl+V"; s.enabled = cells; return true;
+    case CmdPasteValues: s.label = T(L"Paste values"); s.shortcut = L"Ctrl+Shift+V"; s.enabled = cells; return true;
+    case CmdPasteFormulas: s.label = T(L"Paste formulas"); s.enabled = cells; return true;
+    case CmdPasteFormats: s.label = T(L"Paste formats"); s.enabled = cells; return true;
+    case CmdPasteTranspose: s.label = T(L"Paste transposed"); s.enabled = cells; return true;
     case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
-    case CmdAutoFitRowHeight: s.label = L"AutoFit row height"; s.enabled = cells; return true;
-    case CmdInsertShiftRight: s.label = L"Insert cells, shift right"; s.enabled = cells; return true;
-    case CmdInsertShiftDown: s.label = L"Insert cells, shift down"; s.enabled = cells; return true;
-    case CmdInsertRows: s.label = L"Insert entire rows"; s.enabled = cells; return true;
-    case CmdInsertColumns: s.label = L"Insert entire columns"; s.enabled = cells; return true;
-    case CmdDeleteShiftLeft: s.label = L"Delete cells, shift left"; s.enabled = cells; return true;
-    case CmdDeleteShiftUp: s.label = L"Delete cells, shift up"; s.enabled = cells; return true;
-    case CmdDeleteRows: s.label = L"Delete entire rows"; s.enabled = cells; return true;
-    case CmdDeleteColumns: s.label = L"Delete entire columns"; s.enabled = cells; return true;
+    case CmdAutoFitRowHeight: s.label = T(L"AutoFit row height"); s.enabled = cells; return true;
+    case CmdInsertShiftRight: s.label = T(L"Insert cells, shift right"); s.enabled = cells; return true;
+    case CmdInsertShiftDown: s.label = T(L"Insert cells, shift down"); s.enabled = cells; return true;
+    case CmdInsertRows: s.label = T(L"Insert entire rows"); s.enabled = cells; return true;
+    case CmdInsertColumns: s.label = T(L"Insert entire columns"); s.enabled = cells; return true;
+    case CmdDeleteShiftLeft: s.label = T(L"Delete cells, shift left"); s.enabled = cells; return true;
+    case CmdDeleteShiftUp: s.label = T(L"Delete cells, shift up"); s.enabled = cells; return true;
+    case CmdDeleteRows: s.label = T(L"Delete entire rows"); s.enabled = cells; return true;
+    case CmdDeleteColumns: s.label = T(L"Delete entire columns"); s.enabled = cells; return true;
     case CmdMergeCenter: {
       const Range sel = Selected();
-      s.label = L"Merge & Center";
+      s.label = T(L"Merge & Center");
       s.checked = cells && MergedIn(Range{active_.row, active_.col, active_.row, active_.col});
       s.enabled = cells && (s.checked || sel.firstRow != sel.lastRow || sel.firstCol != sel.lastCol);
       return true;
@@ -106,20 +107,20 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdMergeAcross:
     case CmdMergeCells: {
       const Range sel = Selected();
-      s.label = cmd == CmdMergeAcross ? L"Merge across" : L"Merge cells";
+      s.label = cmd == CmdMergeAcross ? T(L"Merge across") : T(L"Merge cells");
       s.enabled = cells && (sel.firstCol != sel.lastCol || (cmd == CmdMergeCells && sel.firstRow != sel.lastRow));
       return true;
     }
-    case CmdUnmerge: s.label = L"Unmerge cells"; s.enabled = cells && MergedIn(Selected()); return true;
-    case CmdFreezePanes: s.label = Frozen() ? L"Unfreeze panes" : L"Freeze panes"; s.enabled = cells; return true;
-    case CmdFreezeTopRow: s.label = L"Freeze top row"; s.enabled = cells; return true;
-    case CmdFreezeFirstColumn: s.label = L"Freeze first column"; s.enabled = cells; return true;
-    case CmdGroup: s.label = L"Group"; s.shortcut = L"Alt+Shift+Right"; s.enabled = cells; return true;
-    case CmdUngroup: s.label = L"Ungroup"; s.shortcut = L"Alt+Shift+Left"; s.enabled = cells; return true;
-    case CmdAutoFitColumnWidth: s.label = L"AutoFit column width"; s.enabled = cells; return true;
-    case CmdCalculateNow: s.label = L"Calculate now"; s.shortcut = L"F9"; s.enabled = Ready(); return true;
-    case CmdCalculateSheet: s.label = L"Calculate sheet"; s.shortcut = L"Shift+F9"; s.enabled = Ready() && !ChartSheet(); return true;
-    case CmdCalculateFull: s.label = L"Calculate everything"; s.shortcut = L"Ctrl+Alt+F9"; s.enabled = Ready(); return true;
+    case CmdUnmerge: s.label = T(L"Unmerge cells"); s.enabled = cells && MergedIn(Selected()); return true;
+    case CmdFreezePanes: s.label = Frozen() ? T(L"Unfreeze panes") : T(L"Freeze panes"); s.enabled = cells; return true;
+    case CmdFreezeTopRow: s.label = T(L"Freeze top row"); s.enabled = cells; return true;
+    case CmdFreezeFirstColumn: s.label = T(L"Freeze first column"); s.enabled = cells; return true;
+    case CmdGroup: s.label = T(L"Group"); s.shortcut = L"Alt+Shift+Right"; s.enabled = cells; return true;
+    case CmdUngroup: s.label = T(L"Ungroup"); s.shortcut = L"Alt+Shift+Left"; s.enabled = cells; return true;
+    case CmdAutoFitColumnWidth: s.label = T(L"AutoFit column width"); s.enabled = cells; return true;
+    case CmdCalculateNow: s.label = T(L"Calculate now"); s.shortcut = L"F9"; s.enabled = Ready(); return true;
+    case CmdCalculateSheet: s.label = T(L"Calculate sheet"); s.shortcut = L"Shift+F9"; s.enabled = Ready() && !ChartSheet(); return true;
+    case CmdCalculateFull: s.label = T(L"Calculate everything"); s.shortcut = L"Ctrl+Alt+F9"; s.enabled = Ready(); return true;
     default: return false;
   }
 }
@@ -182,7 +183,7 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdUnhide: {
       const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
       std::optional<edit::EditGroup> group;
-      if (!held.empty()) group.emplace(Ed(), cmd == CmdHide ? (rows ? u"Hide Rows" : u"Hide Columns") : (rows ? u"Unhide Rows" : u"Unhide Columns"));
+      if (!held.empty()) group.emplace(Ed(), cmd == CmdHide ? (rows ? T(u"Hide Rows") : T(u"Hide Columns")) : (rows ? T(u"Unhide Rows") : T(u"Unhide Columns")));
       edit::Result r = rows ? Ed().HideRows(sheet, sel.firstRow, sel.lastRow, cmd == CmdHide)
                             : Ed().HideColumns(sheet, sel.firstCol, sel.lastCol, cmd == CmdHide);
       if (r) r = KeepSizes(held);
@@ -258,9 +259,9 @@ bool WorkbookView::GridCommand(int cmd) {
 void WorkbookView::AppendTabColorMenu(HMENU m, const wchar_t* label) {
   HMENU colors = CreatePopupMenu();
   const Color current = Current().Props().tabColor;
-  menu::AppendItem(colors, CmdTabColor, L"No color", true, !current.IsSet(), true);
+  menu::AppendItem(colors, CmdTabColor, T(L"No color"), true, !current.IsSet(), true);
   for (size_t i = 0; i < std::size(kTabColors); ++i)
-    menu::AppendItem(colors, CmdTabColor + 1 + static_cast<UINT>(i), kTabColors[i].name, true,
+    menu::AppendItem(colors, CmdTabColor + 1 + static_cast<UINT>(i), std::wstring(kTabColors[i].name), true,
                      current.kind == Color::Kind::Rgb && (current.value & 0xFFFFFF) == kTabColors[i].rgb, true);
   menu::AppendSubmenu(m, colors, label);
 }
@@ -288,14 +289,14 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
   };
   if (!preview_ && gfx::Contains(tabs_, fx, fy)) {
     // The sheet's own commands, then every sheet to go to.
-    item(m, CmdInsertSheet, L"Insert sheet\tShift+F11");
-    item(m, CmdDeleteSheet, L"Delete");
-    item(m, CmdRenameSheet, L"Rename");
-    item(m, CmdMoveSheetLeft, L"Move left");
-    item(m, CmdMoveSheetRight, L"Move right");
-    AppendTabColorMenu(m, L"Tab color");
-    item(m, CmdHideSheet, L"Hide");
-    AppendUnhideSheetMenu(m, L"Unhide");
+    item(m, CmdInsertSheet, T(L"Insert sheet\tShift+F11"));
+    item(m, CmdDeleteSheet, T(L"Delete"));
+    item(m, CmdRenameSheet, T(L"Rename"));
+    item(m, CmdMoveSheetLeft, T(L"Move left"));
+    item(m, CmdMoveSheetRight, T(L"Move right"));
+    AppendTabColorMenu(m, T(L"Tab color"));
+    item(m, CmdHideSheet, T(L"Hide"));
+    AppendUnhideSheetMenu(m, T(L"Unhide"));
     AddReviewTabItems(m);
     AddPageSetupTabItems(m);  // s3-print
     AppendSeparator(m);
@@ -306,57 +307,57 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
   }
   if (!preview_ && !ChartSheet()) {
     const bool rows = WholeRows(), cols = WholeColumns();
-    item(m, CmdCut, L"Cut\tCtrl+X");
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    item(m, CmdPaste, L"Paste\tCtrl+V");
+    item(m, CmdCut, T(L"Cut\tCtrl+X"));
+    AppendItem(m, CmdCopy, T(L"Copy\tCtrl+C"));
+    item(m, CmdPaste, T(L"Paste\tCtrl+V"));
     HMENU special = CreatePopupMenu();
-    item(special, CmdPasteValues, L"Values\tCtrl+Shift+V");
-    item(special, CmdPasteFormulas, L"Formulas");
-    item(special, CmdPasteFormats, L"Formats");
-    item(special, CmdPasteTranspose, L"Transposed");
-    AppendSubmenu(m, special, L"Paste special");
+    item(special, CmdPasteValues, T(L"Values\tCtrl+Shift+V"));
+    item(special, CmdPasteFormulas, T(L"Formulas"));
+    item(special, CmdPasteFormats, T(L"Formats"));
+    item(special, CmdPasteTranspose, T(L"Transposed"));
+    AppendSubmenu(m, special, T(L"Paste special"));
     AddReviewCellItems(m);
     AddPageSetupCellItems(m);  // s3-print
     AppendSeparator(m);
     if (rows || cols) {
-      item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : L"Insert columns\tCtrl++");
-      item(m, CmdDeleteCells, rows ? L"Delete rows\tCtrl+-" : L"Delete columns\tCtrl+-");
+      item(m, CmdInsertCells, rows ? T(L"Insert rows\tCtrl++") : T(L"Insert columns\tCtrl++"));
+      item(m, CmdDeleteCells, rows ? T(L"Delete rows\tCtrl+-") : T(L"Delete columns\tCtrl+-"));
     } else {
       // Excel's Insert and Delete choices, as submenus.
       HMENU ins = CreatePopupMenu();
-      item(ins, CmdInsertShiftDown, L"Shift cells down\tCtrl++");
-      item(ins, CmdInsertShiftRight, L"Shift cells right");
-      item(ins, CmdInsertRows, L"Entire row");
-      item(ins, CmdInsertColumns, L"Entire column");
-      AppendSubmenu(m, ins, L"Insert");
+      item(ins, CmdInsertShiftDown, T(L"Shift cells down\tCtrl++"));
+      item(ins, CmdInsertShiftRight, T(L"Shift cells right"));
+      item(ins, CmdInsertRows, T(L"Entire row"));
+      item(ins, CmdInsertColumns, T(L"Entire column"));
+      AppendSubmenu(m, ins, T(L"Insert"));
       HMENU del = CreatePopupMenu();
-      item(del, CmdDeleteShiftUp, L"Shift cells up\tCtrl+-");
-      item(del, CmdDeleteShiftLeft, L"Shift cells left");
-      item(del, CmdDeleteRows, L"Entire row");
-      item(del, CmdDeleteColumns, L"Entire column");
-      AppendSubmenu(m, del, L"Delete");
+      item(del, CmdDeleteShiftUp, T(L"Shift cells up\tCtrl+-"));
+      item(del, CmdDeleteShiftLeft, T(L"Shift cells left"));
+      item(del, CmdDeleteRows, T(L"Entire row"));
+      item(del, CmdDeleteColumns, T(L"Entire column"));
+      AppendSubmenu(m, del, T(L"Delete"));
     }
-    item(m, CmdClearContents, L"Clear contents\tDelete");
+    item(m, CmdClearContents, T(L"Clear contents\tDelete"));
     const Range sel = Selected();
-    if (MergedIn(sel)) item(m, CmdUnmerge, L"Unmerge cells");
-    else if (sel.firstRow != sel.lastRow || sel.firstCol != sel.lastCol) item(m, CmdMergeCenter, L"Merge & Center");
-    item(m, CmdFormatCells, L"Format cells…\tCtrl+1");
+    if (MergedIn(sel)) item(m, CmdUnmerge, T(L"Unmerge cells"));
+    else if (sel.firstRow != sel.lastRow || sel.firstCol != sel.lastCol) item(m, CmdMergeCenter, T(L"Merge & Center"));
+    item(m, CmdFormatCells, T(L"Format cells…\tCtrl+1"));
     if (rows || cols) {
       AppendSeparator(m);
-      item(m, rows ? CmdRowHeight : CmdColumnWidth, rows ? L"Row height…" : L"Column width…");
-      item(m, CmdHide, L"Hide");
-      item(m, CmdUnhide, L"Unhide");
-      item(m, CmdGroup, L"Group\tAlt+Shift+Right");
-      item(m, CmdUngroup, L"Ungroup\tAlt+Shift+Left");
+      item(m, rows ? CmdRowHeight : CmdColumnWidth, rows ? T(L"Row height…") : T(L"Column width…"));
+      item(m, CmdHide, T(L"Hide"));
+      item(m, CmdUnhide, T(L"Unhide"));
+      item(m, CmdGroup, T(L"Group\tAlt+Shift+Right"));
+      item(m, CmdUngroup, T(L"Ungroup\tAlt+Shift+Left"));
     }
-    item(m, CmdFreezePanes, Frozen() ? L"Unfreeze panes" : L"Freeze panes");
+    item(m, CmdFreezePanes, Frozen() ? T(L"Unfreeze panes") : T(L"Freeze panes"));
     AppendSeparator(m);
-    AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
+    AppendItem(m, CmdSelectAll, T(L"Select all\tCtrl+A"));
     AppendSeparator(m);
   }
-  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-  AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
-  AppendItem(m, CmdPrintPreview, preview_ ? L"Close print preview\tEsc" : L"Print preview\tCtrl+F2");
+  AppendItem(m, CmdFind, T(L"Find…\tCtrl+F"));
+  AppendItem(m, CmdPrint, T(L"Print…\tCtrl+P"));
+  AppendItem(m, CmdPrintPreview, preview_ ? T(L"Close print preview\tEsc") : T(L"Print preview\tCtrl+F2"));
 }
 
 // ---------------------------------------------------------------------------
@@ -438,9 +439,9 @@ void WorkbookView::MergeSelection(int cmd) {
     });
     if (loses) break;
   }
-  if (loses && !host_.ViewConfirm(L"Merging cells only keeps the upper-left value and discards other values.", L"Merge"))
+  if (loses && !host_.ViewConfirm(T(L"Merging cells only keeps the upper-left value and discards other values."), T(L"Merge")))
     return;
-  edit::EditGroup group(Ed(), cmd == CmdMergeCenter ? u"Merge & Center" : u"Merge Cells");
+  edit::EditGroup group(Ed(), cmd == CmdMergeCenter ? T(u"Merge & Center") : T(u"Merge Cells"));
   edit::Result r;
   for (const Range& a : areas)
     if (r) r = Ed().Merge(sheet, a);
@@ -513,7 +514,7 @@ void WorkbookView::GroupSelection(bool in) {
   const Sheet& s = Current();
   const uint32_t first = cols ? sel.firstCol : sel.firstRow, last = cols ? sel.lastCol : sel.lastRow;
   auto level = [&](uint32_t i) { return cols ? s.Column(i).outlineLevel : s.Row(i).outlineLevel; };
-  edit::EditGroup group(Ed(), in ? u"Group" : u"Ungroup");
+  edit::EditGroup group(Ed(), in ? T(u"Group") : T(u"Ungroup"));
   edit::Result r;
   bool changed = false;
   // A run of rows (or columns) at one level goes one level in or out at a time.
@@ -530,7 +531,7 @@ void WorkbookView::GroupSelection(bool in) {
     i = j + 1;
   }
   if (EditRefused(r)) return;
-  if (!changed && !in) host_.ViewMessage(BannerKind::Info, cols ? L"These columns aren't grouped." : L"These rows aren't grouped.");
+  if (!changed && !in) host_.ViewMessage(BannerKind::Info, cols ? T(L"These columns aren't grouped.") : T(L"These rows aren't grouped."));
   group.done = changed;
 }
 

@@ -12,6 +12,7 @@
 #include <iterator>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Page.h"
@@ -55,17 +56,17 @@ float SnapStep() { return Unit() / (Metric() ? 8.f : 16.f); }
 
 std::wstring Length(float pt) {
   wchar_t s[32];
-  swprintf_s(s, Metric() ? L"%.2f cm" : L"%.2f″", pt / Unit());
+  swprintf_s(s, Metric() ? T(L"%.2f cm") : L"%.2f″", pt / Unit());
   return s;
 }
 
 const wchar_t* TabName(TabAlign a) {
   switch (a) {
-    case TabAlign::Center: return L"Center tab";
-    case TabAlign::End: return L"Right tab";
-    case TabAlign::Decimal: return L"Decimal tab";
-    case TabAlign::Bar: return L"Bar tab";
-    default: return L"Left tab";
+    case TabAlign::Center: return T(L"Center tab");
+    case TabAlign::End: return T(L"Right tab");
+    case TabAlign::Decimal: return T(L"Decimal tab");
+    case TabAlign::Bar: return T(L"Bar tab");
+    default: return T(L"Left tab");
   }
 }
 
@@ -755,22 +756,22 @@ std::wstring DocView::RulerTooltip(int x, int y) {
   const float o = r.Origin();
   switch (hit.part) {
     case RulerPart::Corner:
-      return std::wstring(TabName(rulerTab_)) + L": a click on the ruler sets one. Click here for another kind.";
-    case RulerPart::Strip: return std::wstring(L"Click to set a ") + fw::ToLower(std::wstring(TabName(rulerTab_)));
-    case RulerPart::FirstLine: return L"First line indent: " + Length(r.first - o);
-    case RulerPart::Hanging: return L"Hanging indent: " + Length(r.indent - o);
-    case RulerPart::LeftIndent: return L"Left indent: " + Length(r.indent - o);
-    case RulerPart::RightIndent: return L"Right indent: " + Length(r.right - o);
+      return Fmt(T(L"{0}: a click on the ruler sets one. Click here for another kind."), {TabName(rulerTab_)});
+    case RulerPart::Strip: return Fmt(T(L"Click to set a {0}"), {fw::ToLower(std::wstring(TabName(rulerTab_)))});
+    case RulerPart::FirstLine: return T(L"First line indent: ") + Length(r.first - o);
+    case RulerPart::Hanging: return T(L"Hanging indent: ") + Length(r.indent - o);
+    case RulerPart::LeftIndent: return T(L"Left indent: ") + Length(r.indent - o);
+    case RulerPart::RightIndent: return T(L"Right indent: ") + Length(r.right - o);
     case RulerPart::Tab:
-      return std::wstring(TabName(r.tabs[hit.index].align)) + L": " + Length(r.frameL + Pt(r.tabs[hit.index].pos) - o) +
-             L". Drag it off the ruler to remove it; right-click for its kind and leader.";
-    case RulerPart::MarginLeft: return L"Left margin: " + Length(r.marginL);
-    case RulerPart::MarginRight: return L"Right margin: " + Length(r.width - r.marginR);
-    case RulerPart::MarginTop: return L"Top margin: " + Length(r.marginT);
-    case RulerPart::MarginBottom: return L"Bottom margin: " + Length(r.height - r.marginB);
+      return Fmt(T(L"{0}: {1}. Drag it off the ruler to remove it; right-click for its kind and leader."),
+                 {TabName(r.tabs[hit.index].align), Length(r.frameL + Pt(r.tabs[hit.index].pos) - o)});
+    case RulerPart::MarginLeft: return T(L"Left margin: ") + Length(r.marginL);
+    case RulerPart::MarginRight: return T(L"Right margin: ") + Length(r.width - r.marginR);
+    case RulerPart::MarginTop: return T(L"Top margin: ") + Length(r.marginT);
+    case RulerPart::MarginBottom: return T(L"Bottom margin: ") + Length(r.height - r.marginB);
     case RulerPart::ColumnEnd:
-    case RulerPart::ColumnStart: return L"Column edge: drag to change the columns' widths and spacing";
-    case RulerPart::CellEdge: return L"Move table column";
+    case RulerPart::ColumnStart: return T(L"Column edge: drag to change the columns' widths and spacing");
+    case RulerPart::CellEdge: return T(L"Move table column");
     default: return {};
   }
 }
@@ -783,7 +784,7 @@ void DocView::FillRulerMenu(HMENU m, int x, int y) {
     stop = r.tabs[hit.index];
   styles_->FillTabMenu(m, stop);
   menu::AppendSeparator(m);
-  menu::AppendItem(m, CmdRuler, L"Ruler", true, true);
+  menu::AppendItem(m, CmdRuler, T(L"Ruler"), true, true);
 }
 
 HCURSOR DocView::RulerCursor(int x, int y) {

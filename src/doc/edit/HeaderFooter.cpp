@@ -1,5 +1,8 @@
 #include "doc/edit/HeaderFooter.h"
 
+#include <algorithm>
+
+#include "core/Lang.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Forms.h"
 #include "doc/edit/Inline.h"
@@ -33,7 +36,7 @@ bool CanChange(const Editor& editor, uint32_t section, std::u16string& why) {
     return false;
   }
   if (section >= editor.Doc().Sections().size()) {
-    why = u"There's no such section.";
+    why = T(u"There's no such section.");
     return false;
   }
   return true;
@@ -72,7 +75,7 @@ uint32_t NewOwn(Editor& editor, uint32_t section, bool footer, HdrFtrType type, 
                                                        " w:type=\"" + std::string(TypeName(type)) + "\" r:id=\"" + rid + "\"/>");
   if (ref == kNoElem) {
     te.Abort();
-    why = u"This section can't get a header or footer.";
+    why = T(u"This section can't get a header or footer.");
     return kNone;
   }
   if (copyOf == kNone) {
@@ -105,19 +108,19 @@ uint32_t EnsureHeaderFooter(Editor& editor, uint32_t section, bool footer, HdrFt
   if (!CanChange(editor, section, why)) return kNone;
   const Section& sec = editor.Doc().Sections()[section];
   if (const uint32_t s = (footer ? sec.footers : sec.headers)[static_cast<size_t>(type)]; s != kNone) return s;
-  return NewOwn(editor, section, footer, type, kNone, why, footer ? u"Footer" : u"Header");
+  return NewOwn(editor, section, footer, type, kNone, why, footer ? T(u"Footer") : T(u"Header"));
 }
 
 Result SetLinkToPrevious(Editor& editor, uint32_t section, bool footer, HdrFtrType type, bool link) {
   std::u16string why;
   if (!CanChange(editor, section, why)) return Fail(why);
-  if (section == 0) return Fail(u"The first section has no section before it.");
+  if (section == 0) return Fail(T(u"The first section has no section before it."));
   const Document& doc = editor.Doc();
   const ElemId ref = Reference(doc, section, footer, type);
   if (link) {
     if (ref == kNoElem) return {};
     TreeEdit te(editor);
-    te.Begin(u"Link to Previous");
+    te.Begin(T(u"Link to Previous"));
     te.RemoveElement(ref);
     te.Commit();
     return {};
@@ -125,7 +128,7 @@ Result SetLinkToPrevious(Editor& editor, uint32_t section, bool footer, HdrFtrTy
   if (ref != kNoElem) return {};
   const Section& prev = doc.Sections()[section - 1];
   const uint32_t shown = (footer ? prev.footers : prev.headers)[static_cast<size_t>(type)];
-  if (NewOwn(editor, section, footer, type, shown, why, u"Link to Previous") == kNone) return Fail(why);
+  if (NewOwn(editor, section, footer, type, shown, why, T(u"Link to Previous")) == kNone) return Fail(why);
   return {};
 }
 
@@ -138,11 +141,11 @@ Result SetDifferentFirstPage(Editor& editor, uint32_t section, bool on) {
   if (!CanChange(editor, section, why)) return Fail(why);
   if (DifferentFirstPage(editor.Doc(), section) == on) return {};
   TreeEdit te(editor);
-  te.Begin(u"Different First Page");
+  te.Begin(T(u"Different First Page"));
   const ElemId sp = SectPr(te, section);
   if (sp == kNoElem) {
     te.Abort();
-    return Fail(u"This section can't be changed.");
+    return Fail(T(u"This section can't be changed."));
   }
   if (on) {
     if (ElemId t = te.Child(sp, kTitlePg); t != kNoElem) te.RemoveAttr(t, names::kVal);
@@ -159,8 +162,8 @@ Result SetDifferentOddEven(Editor& editor, bool on) {
   if (editor.Doc().Settings().evenAndOddHeaders == on) return {};
   TreeEdit te(editor);
   const ElemId root = te.EnsurePart(PartKind::Settings);
-  if (root == kNoElem) return Fail(u"This document's settings can't be changed.");
-  te.Begin(u"Different Odd and Even Pages");
+  if (root == kNoElem) return Fail(T(u"This document's settings can't be changed."));
+  te.Begin(T(u"Different Odd and Even Pages"));
   if (on) {
     if (ElemId e = te.Child(root, kEvenOdd); e != kNoElem) te.RemoveAttr(e, names::kVal);
   } else {
@@ -175,15 +178,15 @@ Result SetPageNumbering(Editor& editor, uint32_t section, std::string_view forma
   if (!CanChange(editor, section, why)) return Fail(why);
   static constexpr std::string_view kFormats[] = {"decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter"};
   if (!format.empty() && std::find(std::begin(kFormats), std::end(kFormats), format) == std::end(kFormats))
-    return Fail(u"Featherweight doesn't know that number format.");
-  if (start && (*start < 0 || *start > 32767)) return Fail(u"Page numbers start at a number from 0 to 32767.");
+    return Fail(T(u"Featherweight doesn't know that number format."));
+  if (start && (*start < 0 || *start > 32767)) return Fail(T(u"Page numbers start at a number from 0 to 32767."));
   TreeEdit te(editor);
-  te.Begin(u"Page Numbers");
+  te.Begin(T(u"Page Numbers"));
   const ElemId sp = SectPr(te, section);
   const ElemId pn = sp == kNoElem ? kNoElem : te.Child(sp, kPgNumType);
   if (pn == kNoElem) {
     te.Abort();
-    return Fail(u"This section can't be changed.");
+    return Fail(T(u"This section can't be changed."));
   }
   if (format.empty() || format == "decimal") te.RemoveAttr(pn, kFmt);
   else te.SetAttr(pn, kFmt, format);
@@ -199,7 +202,7 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
   std::u16string why;
   if (!CanChange(editor, section, why)) return Fail(why);
   const Document& doc = editor.Doc();
-  editor.BeginGroup(u"Page Number");
+  editor.BeginGroup(T(u"Page Number"));
   const uint32_t story = EnsureHeaderFooter(editor, section, bottom, type, why);
   Result r = story == kNone ? Fail(why) : Result{};
   uint32_t para = kNone;
@@ -207,7 +210,7 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
     const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
     para = paras.empty() ? kNone : paras.back();
     if (para == kNone) {
-      r = Fail(u"This header or footer can't hold a page number.");
+      r = Fail(T(u"This header or footer can't hold a page number."));
     } else if (!(paras.size() == 1 && doc.Para(para).text.empty())) {
       r = editor.SplitParagraph({para, static_cast<uint32_t>(doc.Para(para).text.size())});
       para = r.caret.para;
@@ -218,10 +221,19 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
     r = std::move(next);
     if (r) at = r.caret;
   };
-  if (r && ofPages) step(editor.InsertText(at, u"Page "));
-  if (r) step(InsertField(editor, at, kPageField, u"1", u"Page Number"));
-  if (r && ofPages) step(editor.InsertText(at, u" of "));
-  if (r && ofPages) step(InsertField(editor, at, kPagesField, u"1", u"Page Number"));
+  // "Page {0} of {1}" whole, in the interface's language: its words as text, the page's field at {0}
+  // and the page count's at {1}.
+  const std::u16string_view pattern = ofPages ? T(u"Page {0} of {1}") : u"{0}";
+  for (size_t i = 0; r && i < pattern.size();) {
+    const size_t field = std::min(pattern.find(u"{0}", i), pattern.find(u"{1}", i));
+    if (field > i) {
+      step(editor.InsertText(at, pattern.substr(i, field - i)));
+      i = std::min(field, pattern.size());
+    } else {
+      step(InsertField(editor, at, pattern[i + 1] == u'1' ? kPagesField : kPageField, u"1", T(u"Page Number")));
+      i += 3;
+    }
+  }
   if (r) {
     TreeEdit te(editor, at);
     ParaFormat f;

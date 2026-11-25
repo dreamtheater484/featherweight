@@ -61,6 +61,7 @@ void Settings::LoadFrom(const std::wstring& path) {
   ruler = ini_.GetBool(kGeneral, L"Ruler", false);
   developerTab = ini_.GetBool(kGeneral, L"DeveloperTab", false);
   reviewer = ini_.Get(kGeneral, L"Reviewer");
+  language = ini_.Get(kGeneral, L"Language");
   ribbon = ini_.GetInt(kGeneral, L"Ribbon", -1);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
@@ -113,6 +114,7 @@ bool Settings::Save() {
   if (ruler || ini_.Has(kGeneral, L"Ruler")) ini_.SetBool(kGeneral, L"Ruler", ruler);
   if (developerTab || ini_.Has(kGeneral, L"DeveloperTab")) ini_.SetBool(kGeneral, L"DeveloperTab", developerTab);
   if (!reviewer.empty() || ini_.Has(kGeneral, L"Reviewer")) ini_.Set(kGeneral, L"Reviewer", reviewer);
+  if (!language.empty() || ini_.Has(kGeneral, L"Language")) ini_.Set(kGeneral, L"Language", language);
   if (ribbon >= 0) ini_.SetInt(kGeneral, L"Ribbon", ribbon);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);

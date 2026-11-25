@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "pkg/Package.h"
 #include "pkg/XmlDom.h"
@@ -92,7 +93,7 @@ Status UpdateCoreProperties(std::string_view xml, const std::string& author, int
   if (!st.Ok()) return st;
   pugi::xml_node root = dom.Root();
   if (!pkg::IsElement(root, kCp, "coreProperties"))
-    return Status::Fail(Status::Code::Damaged, "The document's properties aren't in the expected form.");
+    return Status::Fail(Status::Code::Damaged, T("The document's properties aren't in the expected form."));
   if (!author.empty()) SetText(root, kCp, "lastModifiedBy", "cp", author);
   pugi::xml_node modified = SetText(root, kDcTerms, "modified", "dcterms", W3cTime(now));
   // W3CDTF must be named, as Word does: xsi:type="dcterms:W3CDTF".
@@ -166,7 +167,7 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     const pkg::Snapshot& snapshot = package.GetSnapshot();
     out.resize(static_cast<size_t>(snapshot.Size()));
     if (!snapshot.ReadAt(0, out.data(), out.size()))
-      return Status::Fail(Status::Code::IoError, "The document's private copy couldn't be read.");
+      return Status::Fail(Status::Code::IoError, T("The document's private copy couldn't be read."));
     return Status{};
   }
 
@@ -184,7 +185,7 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     if (i >= doc.Parts().size()) continue;
     const Part& part = doc.Parts()[i];
     if (!part.writable || !part.Editable())
-      return Status::Fail(Status::Code::Unsupported, "Part of this document can't be saved by Featherweight.");
+      return Status::Fail(Status::Code::Unsupported, T("Part of this document can't be saved by Featherweight."));
     std::string& xml = xmls[k];
     Status st = WritePart(doc, i, xml);
     if (!st.Ok()) return st;
@@ -246,7 +247,7 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
 
   // Open what was written and check every part that was rewritten; the others are copies.
   auto again = pkg::Package::Open(pkg::Snapshot::FromBytes(sink.bytes), package.GetLimits(), st);
-  if (!again) return Status::Fail(Status::Code::Damaged, "The saved document didn't open again: " + st.message);
+  if (!again) return Status::Fail(Status::Code::Damaged, T("The saved document didn't open again: ") + st.message);
   std::vector<uint8_t> bytes;
   for (const auto& p : package.Parts()) {
     if (p.deleted) continue;
@@ -255,13 +256,13 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     const bool leftOut = std::any_of(leave.leaveOut.begin(), leave.leaveOut.end(),
                                      [&](const std::string& n) { return pkg::PartKey(n) == pkg::PartKey(p.name); });
     if (leftOut) {
-      if (again->FindPart(p.name)) return Status::Fail(Status::Code::Damaged, "The saved document kept a part it left out.");
+      if (again->FindPart(p.name)) return Status::Fail(Status::Code::Damaged, T("The saved document kept a part it left out."));
       continue;
     }
     if (!p.modified && replaced == leave.replace.end()) continue;
     const std::vector<uint8_t>& want = replaced != leave.replace.end() ? replaced->second : p.data;
     if (!(st = again->ReadPart(p.name, bytes)).Ok() || bytes != want)
-      return Status::Fail(Status::Code::Damaged, "The saved document didn't read back correctly.");
+      return Status::Fail(Status::Code::Damaged, T("The saved document didn't read back correctly."));
     if (package.IsXmlPart(p.name) && !(st = pkg::XmlPull::Check(AsText(bytes), package.GetLimits(), p.name)).Ok())
       return st;
   }

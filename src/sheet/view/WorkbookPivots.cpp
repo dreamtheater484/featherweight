@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "Commands.h"
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "pkg/Package.h"
 #include "sheet/edit/Edit.h"
@@ -24,9 +25,9 @@ namespace {
 
 // What a field does in the new pivot, in the panel's list's order.
 enum Role : int { kNone, kRows, kColumns, kFilters, kSum, kCount, kAverage };
-constexpr const wchar_t* kRoles[] = {L"—", L"Rows", L"Columns", L"Filters", L"Sum", L"Count", L"Average"};
+constexpr UiText kRoles[] = {L"—", N_(L"Rows"), N_(L"Columns"), N_(L"Filters"), N_(L"Sum"), N_(L"Count"), N_(L"Average")};
 constexpr size_t kMaxFields = 14;  // the panel's list; a wider source keeps its first ones
-constexpr const wchar_t* kNewSheet = L"New worksheet";  // the place: a new sheet, as Excel's default
+constexpr UiText kNewSheet = N_(L"New worksheet");  // the place: a new sheet, as Excel's default
 
 std::wstring Trim(std::wstring s) {
   while (!s.empty() && (s.back() == L' ' || s.back() == L'=')) s.pop_back();
@@ -56,7 +57,7 @@ class WorkbookView::PivotPanel : public PanelContent {
   explicit PivotPanel(WorkbookView& view) : v_(view) {
     source_.autoComplete = place_.autoComplete = false;
     source_.onCommit = [this](const std::wstring&, int) { ReadFields(); };
-    create_.text = L"Create PivotTable";
+    create_.text = T(L"Create PivotTable");
     create_.onInvoke = [this] { Create(); };
     for (Dropdown& d : roles_) {
       for (const wchar_t* r : kRoles) d.items.push_back(r);
@@ -64,7 +65,7 @@ class WorkbookView::PivotPanel : public PanelContent {
     }
   }
 
-  std::wstring Title() const override { return L"Create PivotTable"; }
+  std::wstring Title() const override { return T(L"Create PivotTable"); }
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     body_ = body;
@@ -92,8 +93,8 @@ class WorkbookView::PivotPanel : public PanelContent {
     } else {
       source_.SetText(Utf8ToWide(RangeName(r)));
     }
-    place_.items = {kNewSheet, Utf8ToWide(CellName(r.firstRow, std::min<uint32_t>(kMaxCols - 1, r.lastCol + 2)))};
-    place_.SetText(kNewSheet);
+    place_.items = {std::wstring(kNewSheet), Utf8ToWide(CellName(r.firstRow, std::min<uint32_t>(kMaxCols - 1, r.lastCol + 2)))};
+    place_.SetText(std::wstring(kNewSheet));
     ReadFields();
   }
 
@@ -115,7 +116,7 @@ class WorkbookView::PivotPanel : public PanelContent {
           std::swprintf(buf, 40, L"%.15g", v.number);
           name = buf;
         }
-        names_.push_back(name.empty() ? L"(no name)" : name);
+        names_.push_back(name.empty() ? T(L"(no name)") : name);
       }
     }
     for (Dropdown& d : roles_) d.selected = kNone;
@@ -139,14 +140,14 @@ class WorkbookView::PivotPanel : public PanelContent {
     edit::Editor::NewPivotTable p;
     Range r, at;
     if (!Source(p.sourceSheet, r, &p.table)) {
-      v_.host_.ViewMessage(BannerKind::Warning, L"Type the data's cells, such as A1:D20, or a table's name.");
+      v_.host_.ViewMessage(BannerKind::Warning, T(L"Type the data's cells, such as A1:D20, or a table's name."));
       return;
     }
     p.source = r;
     const bool newSheet = _wcsicmp(Trim(place_.Text()).c_str(), kNewSheet) == 0;
     if (!newSheet) {
       if (!ParsePlace(*v_.book_, v_.sheet_, place_.Text(), p.sheet, at)) {
-        v_.host_.ViewMessage(BannerKind::Warning, L"Type the cell for the PivotTable, such as H1 or Sheet2!A3, or choose New worksheet.");
+        v_.host_.ViewMessage(BannerKind::Warning, T(L"Type the cell for the PivotTable, such as H1 or Sheet2!A3, or choose New worksheet."));
         return;
       }
       p.at = {at.firstRow, at.firstCol};
@@ -190,16 +191,16 @@ class WorkbookView::PivotPanel : public PanelContent {
     float y = body_.top + 10 * u;
     labels_.clear();
     auto label = [&](std::wstring text, D2D1_RECT_F rc) { labels_.push_back({std::move(text), rc}); };
-    label(L"Where is the data? (cells or a table)", RectF(left, y, right, y + 16 * u));
+    label(T(L"Where is the data? (cells or a table)"), RectF(left, y, right, y + 16 * u));
     y += 20 * u;
     source_.rc = RectF(left, y, right, y + 30 * u);
     y += 40 * u;
-    label(L"Put the PivotTable at", RectF(left, y, right, y + 16 * u));
+    label(T(L"Put the PivotTable at"), RectF(left, y, right, y + 16 * u));
     y += 20 * u;
     place_.rc = RectF(left, y, right, y + 30 * u);
     y += 42 * u;
     if (!names_.empty()) {
-      label(L"Fields: rows, columns, filters and values", RectF(left, y, right, y + 16 * u));
+      label(T(L"Fields: rows, columns, filters and values"), RectF(left, y, right, y + 16 * u));
       y += 22 * u;
     }
     for (size_t i = 0; i < kMaxFields; ++i) {
@@ -239,12 +240,12 @@ bool WorkbookView::PivotsCommandState(int cmd, CommandState& s) {
       s.enabled = cells;
       return true;
     case CmdPivotRefresh:
-      s.label = L"Refresh PivotTable";
+      s.label = T(L"Refresh PivotTable");
       s.shortcut = L"Alt+F5";
       s.enabled = cells;
       return true;
     case CmdPivotRefreshAll:
-      s.label = L"Refresh all PivotTables";
+      s.label = T(L"Refresh all PivotTables");
       s.shortcut = L"Ctrl+Alt+F5";
       s.enabled = Ready() && !preview_;
       return true;

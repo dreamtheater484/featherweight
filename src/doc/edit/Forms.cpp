@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "core/Lang.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
@@ -30,7 +31,7 @@ constexpr uint32_t kDDList = Name("ddList"), kResult = Name("result"), kListEntr
 constexpr uint32_t kTextInput = Name("textInput"), kMaxLength = Name("maxLength");
 constexpr uint32_t kRStyle = Name("rStyle"), kRFonts = Name("rFonts");
 
-constexpr std::u16string_view kProtected = kFormsProtected;
+constexpr UiText16 kProtected = kFormsProtected;
 
 std::u16string U16(std::string_view s) { return ToUtf16(s); }
 
@@ -177,7 +178,7 @@ std::string PlaceholderStyle(Editor& ed, bool add) {
   TreeEdit te(ed);
   te.FormFill();
   if (te.EnsurePart(PartKind::Styles) == kNoElem) return {};
-  te.Begin(u"Style");
+  te.Begin(T(u"Style"));
   std::string id = EnsureStyle(te, "Placeholder Text");
   te.Commit();
   return te.Refused().empty() ? id : std::string();
@@ -203,7 +204,7 @@ Result Replace(Editor& ed, const ContentControl& c, std::u16string_view text, Ra
   const Pos start = to;
   if (auto in = ControlAt(ed.Doc(), {start.para, start.offset + (text.empty() ? 0u : 1u)}); !in || in->sdt != c.sdt) {
     r.ok = false;
-    r.message = u"This content control is empty, and its text can't be filled in yet.";
+    r.message = T(u"This content control is empty, and its text can't be filled in yet.");
     return r;
   }
   if (Before(from, to)) {
@@ -240,7 +241,7 @@ template <class Fn>
 Result Properties(Editor& ed, const ContentControl& c, const Fn& fn) {
   TreeEdit te(ed, c.content.from);
   te.FormFill();
-  te.Begin(u"Fill in");
+  te.Begin(T(u"Fill in"));
   te.Affects(c.content.from.para, c.content.to.para);
   fn(te);
   te.Commit();
@@ -252,9 +253,9 @@ Result Properties(Editor& ed, const ContentControl& c, const Fn& fn) {
 }
 
 std::u16string Why(const ContentControl& c) {
-  if (c.bound) return u"This content control takes its text from data in the document, which can't be changed here yet.";
-  if (c.contentLocked) return u"The text of this content control is locked.";
-  return u"This content control can't be filled in here.";
+  if (c.bound) return T(u"This content control takes its text from data in the document, which can't be changed here yet.");
+  if (c.contentLocked) return T(u"The text of this content control is locked.");
+  return T(u"This content control can't be filled in here.");
 }
 
 }  // namespace
@@ -362,15 +363,15 @@ bool InFillIn(const Document& doc, Pos from, Pos to, std::u16string* why, bool t
   };
   if (auto c = ControlAt(doc, from); c && Holds(c->content, to)) {
     if (c->Typable() || (!typing && c->Fillable())) return true;
-    if (c->kind == ControlKind::CheckBox && c->Fillable()) return say(u"Click the check box, or press Space, to tick it.");
-    if (c->kind == ControlKind::DropDown && c->Fillable()) return say(u"Choose an item from this list.");
+    if (c->kind == ControlKind::CheckBox && c->Fillable()) return say(T(u"Click the check box, or press Space, to tick it."));
+    if (c->kind == ControlKind::DropDown && c->Fillable()) return say(T(u"Choose an item from this list."));
     return say(Why(*c));
   }
   if (auto f = FormFieldAt(doc, from); f && Holds(f->result, from) && Holds(f->result, to)) {
     if (f->enabled && (f->kind == FormFieldKind::Text || !typing)) return true;
-    if (f->kind == FormFieldKind::CheckBox) return say(u"Click the check box, or press Space, to tick it.");
-    if (f->kind == FormFieldKind::DropDown) return say(u"Choose an item from this list.");
-    return say(u"This form field can't be filled in.");
+    if (f->kind == FormFieldKind::CheckBox) return say(T(u"Click the check box, or press Space, to tick it."));
+    if (f->kind == FormFieldKind::DropDown) return say(T(u"Choose an item from this list."));
+    return say(T(u"This form field can't be filled in."));
   }
   return say(kProtected);
 }
@@ -400,16 +401,16 @@ std::optional<Range> NextFillIn(const Document& doc, Pos at, bool back) {
 
 std::u16string_view DefaultPlaceholder(ControlKind kind) {
   switch (kind) {
-    case ControlKind::Date: return u"Click or tap to enter a date.";
+    case ControlKind::Date: return T(u"Click or tap to enter a date.");
     case ControlKind::DropDown:
-    case ControlKind::ComboBox: return u"Choose an item.";
-    default: return u"Click or tap here to enter text.";
+    case ControlKind::ComboBox: return T(u"Choose an item.");
+    default: return T(u"Click or tap here to enter text.");
   }
 }
 
 Result FillControl(Editor& ed, const ContentControl& c, std::u16string_view text) {
   if (!c.Fillable()) return Refused(Why(c));
-  return Group(ed, u"Fill in", [&]() -> Result {
+  return Group(ed, T(u"Fill in"), [&]() -> Result {
     Range made;
     Result r = Replace(ed, c, text, made);
     if (!r || !c.placeholder) return r;
@@ -431,7 +432,7 @@ Result FillControl(Editor& ed, const ContentControl& c, std::u16string_view text
 
 Result ShowPlaceholder(Editor& ed, const ContentControl& c) {
   if (!c.Fillable() || c.kind == ControlKind::CheckBox) return Refused(Why(c));
-  return Group(ed, u"Fill in", [&]() -> Result {
+  return Group(ed, T(u"Fill in"), [&]() -> Result {
     const std::string style = PlaceholderStyle(ed, true);
     Range made;
     Result r = Replace(ed, c, DefaultPlaceholder(c.kind), made);
@@ -451,7 +452,7 @@ Result ShowPlaceholder(Editor& ed, const ContentControl& c) {
 
 Result SetChecked(Editor& ed, const ContentControl& c, bool checked) {
   if (c.kind != ControlKind::CheckBox || !c.Fillable()) return Refused(Why(c));
-  return Group(ed, u"Check box", [&]() -> Result {
+  return Group(ed, T(u"Check box"), [&]() -> Result {
     const Document& doc = ed.Doc();
     Result p = Properties(ed, c, [&](TreeEdit& te) {
       const ElemId box = te.Path(Node(&doc.GetTree(), c.sdt).Child(kSdtPr).Id(), {kCheckbox, kW14Checked});
@@ -471,7 +472,7 @@ Result PickItem(Editor& ed, const ContentControl& c, size_t index) {
   // Its "Choose an item." entry (no value): the placeholder again, as in Word.
   if (c.items[index].value.empty() && c.items[index].text == DefaultPlaceholder(c.kind))
     return c.placeholder ? Result{true, {}, c.content.from} : ShowPlaceholder(ed, c);
-  return Group(ed, u"Choose an item", [&]() -> Result {
+  return Group(ed, T(u"Choose an item"), [&]() -> Result {
     const ListItem& item = c.items[index];
     Result r = FillControl(ed, c, item.text.empty() ? U16(item.value) : item.text);
     if (!r) return r;
@@ -489,7 +490,7 @@ Result PickItem(Editor& ed, const ContentControl& c, size_t index) {
 
 Result PickDate(Editor& ed, const ContentControl& c, const DateTime& date) {
   if (c.kind != ControlKind::Date) return Refused(Why(c));
-  return Group(ed, u"Date", [&]() -> Result {
+  return Group(ed, T(u"Date"), [&]() -> Result {
     Result r = FillControl(ed, c, FormatDateTime(date, c.dateFormat, false, c.dateLang));
     if (!r) return r;
     const Document& doc = ed.Doc();
@@ -503,10 +504,10 @@ Result PickDate(Editor& ed, const ContentControl& c, const DateTime& date) {
 }
 
 Result SetFormCheckBox(Editor& ed, const FormField& f, bool checked) {
-  if (f.kind != FormFieldKind::CheckBox || !f.enabled) return Refused(u"This form field can't be filled in.");
+  if (f.kind != FormFieldKind::CheckBox || !f.enabled) return Refused(T(u"This form field can't be filled in."));
   TreeEdit te(ed, f.start);
   te.FormFill();
-  te.Begin(u"Check box");
+  te.Begin(T(u"Check box"));
   te.Affects(f.start.para, f.start.para);
   const ElemId box = te.Path(f.begin, {kFFData, kCheckBox, kChecked});
   if (checked) te.RemoveAttr(box, kVal);
@@ -521,11 +522,11 @@ Result SetFormCheckBox(Editor& ed, const FormField& f, bool checked) {
 
 Result PickFormEntry(Editor& ed, const FormField& f, size_t index) {
   if (f.kind != FormFieldKind::DropDown || !f.enabled || index >= f.entries.size())
-    return Refused(u"This form field can't be filled in.");
-  return Group(ed, u"Choose an item", [&]() -> Result {
+    return Refused(T(u"This form field can't be filled in."));
+  return Group(ed, T(u"Choose an item"), [&]() -> Result {
     TreeEdit te(ed, f.start);
     te.FormFill();
-    te.Begin(u"Choose an item");
+    te.Begin(T(u"Choose an item"));
     te.Affects(f.start.para, f.end.para);
     te.SetAttr(te.Path(f.begin, {kFFData, kDDList, kResult}), kVal, std::to_string(index));
     te.Commit();
@@ -544,14 +545,14 @@ Result PickFormEntry(Editor& ed, const FormField& f, size_t index) {
 
 Result InsertControl(Editor& ed, Pos at, ControlKind kind, const std::vector<std::u16string>& items) {
   const Document& doc = ed.Doc();
-  if (at.para >= doc.Paragraphs().size()) return Refused(u"That place isn't in the document.");
-  if (kind == ControlKind::Picture || kind == ControlKind::Other) return Refused(u"That kind of content control can't be inserted.");
+  if (at.para >= doc.Paragraphs().size()) return Refused(T(u"That place isn't in the document."));
+  if (kind == ControlKind::Picture || kind == ControlKind::Other) return Refused(T(u"That kind of content control can't be inserted."));
   if (FormsProtected(doc)) return Refused(kProtected);
   // Not inside a link, field, content control or tracked change.
   for (const TextRun& r : doc.Runs(at.para))
     if (r.start < at.offset && at.offset < r.end && (r.hyperlink || r.fieldDepth > 0 || r.simpleField || r.contentControl || r.revision))
-      return Refused(u"A content control can't go here.");
-  if (ControlAt(doc, at) || FormFieldAt(doc, at)) return Refused(u"A content control can't go inside another, or in a form field.");
+      return Refused(T(u"A content control can't go here."));
+  if (ControlAt(doc, at) || FormFieldAt(doc, at)) return Refused(T(u"A content control can't go inside another, or in a form field."));
   // A new id: one more than the document's largest.
   int64_t id = 0;
   const Tree& tree = doc.GetTree();
@@ -561,23 +562,23 @@ Result InsertControl(Editor& ed, Pos at, ControlKind kind, const std::vector<std
   }
   const bool box = kind == ControlKind::CheckBox;
   const std::u16string text = box ? std::u16string(1, u'☐') : std::u16string(DefaultPlaceholder(kind));
-  return Group(ed, u"Content control", [&]() -> Result {
+  return Group(ed, T(u"Content control"), [&]() -> Result {
     const std::string style = box ? std::string() : PlaceholderStyle(ed, true);
     Result r = ed.InsertText(at, text);
     if (!r) return r;
     const uint32_t p = at.para, a = at.offset, b = at.offset + static_cast<uint32_t>(text.size());
     TreeEdit te(ed, at);
-    te.Begin(u"Content control");
+    te.Begin(T(u"Content control"));
     te.Local();
     if (!te.SplitRunAt(p, a) || !te.SplitRunAt(p, b)) {
       te.Abort();
-      return Refused(u"A content control can't go here.");
+      return Refused(T(u"A content control can't go here."));
     }
     const std::vector<ElemId> runs = RunsIn(doc, p, a, b);
     const ElemId sdt = runs.empty() ? kNoElem : te.Wrap(runs.front(), runs.back(), {kSdt, kSdtContent});
     if (sdt == kNoElem) {
       te.Abort();
-      return Refused(u"A content control can't go here.");
+      return Refused(T(u"A content control can't go here."));
     }
     const ElemId pr = te.Child(sdt, kSdtPr);
     te.SetAttr(te.Child(pr, kId), kVal, std::to_string(id + 1));

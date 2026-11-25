@@ -8,6 +8,7 @@
 #include <cstring>
 #include <map>
 
+#include "core/Lang.h"
 #include "doc/edit/ClipTable.h"
 #include "doc/model/Utf.h"
 
@@ -438,7 +439,7 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
   const Document& doc = ed.Doc();
   const bool same = clip.source != 0 && clip.source == target;
   if (ed.Compare(from, to) > 0) std::swap(from, to);
-  ed.BeginGroup(u"Paste");
+  ed.BeginGroup(T(u"Paste"));
   auto fail = [&](Result r) {
     ed.CancelGroup();  // inside a group, Undo would take the step before
     r.ok = false;
@@ -493,7 +494,7 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
   for (const auto& [run, len] : pieces[n - 1]) length += len;
   if (paras[n - 1] != end.para || (n == 1 ? caret.offset : 0) + length != end.offset) {
     Result r;
-    r.message = u"The pasted text didn't land where it should.";
+    r.message = T(u"The pasted text didn't land where it should.");
     return fail(r);
   }
 

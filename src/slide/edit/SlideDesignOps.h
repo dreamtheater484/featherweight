@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "core/Lang.h"
 #include "slide/edit/Edit.h"
 
 // Design operations of the presentation tab (P2, p2-slides), on top of the Editor: a built-in theme
@@ -11,7 +12,7 @@
 namespace fw::slide::edit {
 
 struct ThemeDesign {
-  std::u16string step = u"Theme";
+  std::u16string step = N_(u"Theme");
   std::string name;            // the theme's name (a:theme name); empty: kept
   std::string colorScheme;     // an a:clrScheme element declaring its prefixes; empty: kept
   std::string major, minor;    // the heading and body Latin typefaces; empty: kept

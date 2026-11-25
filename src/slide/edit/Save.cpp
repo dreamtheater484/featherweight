@@ -4,6 +4,7 @@
 #include <deque>
 #include <set>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/Journal.h"
 
@@ -67,7 +68,7 @@ pkg::Status PrepareSave(const Editor& editor, SavePlan& plan, FileFormat format)
   bool macros = format == FileFormat::Pptm || format == FileFormat::Ppsm || format == FileFormat::Potm;
   if (deck.HasMacros() && !macros) {
     return pkg::Status::Fail(pkg::Status::Code::Unsupported,
-                             "This presentation has macros, which this format can't keep. Save it as .pptm.");
+                             T("This presentation has macros, which this format can't keep. Save it as .pptm."));
   }
   plan = SavePlan{};
   plan.package = &deck.GetPackage();

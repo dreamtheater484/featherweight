@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 
+#include "core/Lang.h"
 #include "pkg/Package.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/PivotEdit.h"
@@ -60,7 +61,7 @@ struct Loaded {
 
 Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, int sheet, CellAddr cell) {
   const pkg::Package* package = book.GetPackage();
-  if (!package) return Result::Fail(u"There's no PivotTable here.");
+  if (!package) return Result::Fail(T(u"There's no PivotTable here."));
   // Every pivot of the workbook, read.
   std::vector<Loaded> tables;
   std::map<std::string, pivot::Cache> caches;
@@ -85,7 +86,7 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
   for (const std::string& part : chosen) {
     pivot::Cache c;
     c.part = part;
-    if (!pivot::ReadCache(Bytes(ed, part), c)) return Result::Fail(u"This PivotTable's data can't be read.");
+    if (!pivot::ReadCache(Bytes(ed, part), c)) return Result::Fail(T(u"This PivotTable's data can't be read."));
     if (const pkg::RelationshipSet* rels = package->RelationshipsOf(part))
       for (const pkg::Relationship& r : rels->items)
         if (!r.external && r.type.ends_with("/pivotCacheRecords") && package->FindPart(r.targetPart)) c.recordsPart = r.targetPart;
@@ -94,7 +95,7 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
     caches[part] = std::move(c);
   }
   if (which == Editor::PivotRefresh::OnLoad && caches.empty()) return Result{};
-  if (caches.empty()) return Result::Fail(u"There's no PivotTable here.");
+  if (caches.empty()) return Result::Fail(T(u"There's no PivotTable here."));
 
   // Refresh and lay out everything first: nothing changes unless every one of them can.
   struct Out {
@@ -106,7 +107,7 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
     std::vector<bool> axis(cache.fields.size(), false);
     for (Loaded& l : tables)
       if (l.place.cache == part) {
-        if (!l.table.why.empty()) return Result::Fail(u"This PivotTable uses features Featherweight keeps but doesn't refresh.");
+        if (!l.table.why.empty()) return Result::Fail(T(u"This PivotTable uses features Featherweight keeps but doesn't refresh."));
         for (size_t f = 0; f < l.table.fields.size() && f < axis.size(); ++f) {
           const pivot::Axis a = l.table.fields[f].axis;
           axis[f] = axis[f] || a == pivot::Axis::Row || a == pivot::Axis::Col || a == pivot::Axis::Page;
@@ -128,8 +129,8 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
     const size_t s = o.table->place.sheet;
     for (const Loaded& other : tables)
       if (&other != o.table && other.place.sheet == s && Overlaps(o.layout.area, other.before))
-        return Result::Fail(u"A PivotTable report cannot overlap another PivotTable report.");
-    if (!book.LoadSheet(s).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+        return Result::Fail(T(u"A PivotTable report cannot overlap another PivotTable report."));
+    if (!book.LoadSheet(s).Ok()) return Result::Fail(T(u"This sheet couldn't be read."));
     bool taken = false;
     book.GetSheet(s).ForEachCell(o.layout.area, [&](const CellInfo& c) {
       if (o.table->before.Contains(c.row, c.col) || c.value.type == ValueType::Empty) return true;
@@ -137,21 +138,21 @@ Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, i
       return false;
     });
     if (taken)
-      return Result::Fail(u"There's already data in the cells this PivotTable needs. Move it or the PivotTable, and refresh again.");
+      return Result::Fail(T(u"There's already data in the cells this PivotTable needs. Move it or the PivotTable, and refresh again."));
   }
 
-  EditGroup group(ed, which == Editor::PivotRefresh::AtCell ? u"Refresh" : u"Refresh All");
+  EditGroup group(ed, which == Editor::PivotRefresh::AtCell ? T(u"Refresh") : T(u"Refresh All"));
   const double now = NowSerial();
   for (auto& [part, cache] : caches) {
-    if (!ed.WritePart(part, pivot::WriteCache(Bytes(ed, part), cache, now))) return Result::Fail(u"The PivotTable couldn't be refreshed.");
+    if (!ed.WritePart(part, pivot::WriteCache(Bytes(ed, part), cache, now))) return Result::Fail(T(u"The PivotTable couldn't be refreshed."));
     if (!cache.recordsPart.empty() && !ed.WritePart(cache.recordsPart, pivot::WriteRecords(Bytes(ed, cache.recordsPart), cache)))
-      return Result::Fail(u"The PivotTable couldn't be refreshed.");
+      return Result::Fail(T(u"The PivotTable couldn't be refreshed."));
   }
   std::map<std::pair<uint32_t, uint8_t>, uint32_t> styles;  // (number format, indent) -> cell format
   for (Out& o : outs) {
     const int s = static_cast<int>(o.table->place.sheet);
     if (!ed.WritePart(o.table->place.table, pivot::WriteTable(Bytes(ed, o.table->place.table), o.table->table)))
-      return Result::Fail(u"The PivotTable couldn't be refreshed.");
+      return Result::Fail(T(u"The PivotTable couldn't be refreshed."));
     if (Result r = ed.ClearAll(s, o.table->before); !r) return r;
     std::vector<std::pair<CellAddr, CellInput>> cells;
     cells.reserve(o.layout.cells.size());

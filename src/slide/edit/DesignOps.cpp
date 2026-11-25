@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 
+#include "core/Lang.h"
 #include "slide/edit/EditInternal.h"
 #include "slide/edit/SlideCopy.h"
 
@@ -73,11 +74,11 @@ bool PutBackground(pugi::xml_node root, std::string_view xml) {
 }  // namespace
 
 Result Editor::SetSlideSize(draw::Size size, Scale scale) {
-  Call call(*this, u"Slide Size");
+  Call call(*this, T(u"Slide Size"));
   Impl& m = *impl_;
   long long cx = std::llround(size.width * kEmu), cy = std::llround(size.height * kEmu);
   if (cx < 914400 || cx > 51206400 || cy < 914400 || cy > 51206400) {
-    return call.End(Result::Fail(u"Slides are 1 to 56 inches wide and high."));
+    return call.End(Result::Fail(T(u"Slides are 1 to 56 inches wide and high.")));
   }
   std::string pres = m.PresentationPart();
   pugi::xml_node root = m.Edit(pres);
@@ -112,34 +113,34 @@ Result Editor::SetSlideSize(draw::Size size, Scale scale) {
 }
 
 Result Editor::SetBackground(const std::vector<size_t>& slides, std::string_view bgXml) {
-  Call call(*this, u"Format Background");
+  Call call(*this, T(u"Format Background"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
   if (Result r = m.CheckSlides(slides, list.size()); !r) return call.End(r);
   for (size_t i : slides) {
-    if (!PutBackground(m.Edit(list[i].part), bgXml)) return call.End(Result::Fail(u"That background can't be written."));
+    if (!PutBackground(m.Edit(list[i].part), bgXml)) return call.End(Result::Fail(T(u"That background can't be written.")));
   }
   return call.End({});
 }
 
 Result Editor::SetMasterBackground(size_t master, std::string_view bgXml) {
-  Call call(*this, u"Format Background");
+  Call call(*this, T(u"Format Background"));
   Impl& m = *impl_;
-  if (master >= deck_.Masters().size()) return call.End(Result::Fail(u"That slide master isn't in the presentation."));
+  if (master >= deck_.Masters().size()) return call.End(Result::Fail(T(u"That slide master isn't in the presentation.")));
   if (!PutBackground(m.Edit(deck_.Masters()[master]->part), bgXml)) {
-    return call.End(Result::Fail(u"That background can't be written."));
+    return call.End(Result::Fail(T(u"That background can't be written.")));
   }
   m.Full();
   return call.End({});
 }
 
 Result Editor::SetTheme(size_t master, std::string_view themeXml) {
-  Call call(*this, u"Theme");
+  Call call(*this, T(u"Theme"));
   Impl& m = *impl_;
-  if (master >= deck_.Masters().size()) return call.End(Result::Fail(u"That slide master isn't in the presentation."));
+  if (master >= deck_.Masters().size()) return call.End(Result::Fail(T(u"That slide master isn't in the presentation.")));
   const std::string& part = deck_.Masters()[master]->part;
   std::shared_ptr<pkg::XmlDom> dom = ParseDom(themeXml, deck_.GetPackage().GetLimits(), "theme");
-  if (!dom || LocalNameOf(dom->Root()) != "theme") return call.End(Result::Fail(u"That isn't a theme."));
+  if (!dom || LocalNameOf(dom->Root()) != "theme") return call.End(Result::Fail(T(u"That isn't a theme.")));
   std::string theme = TargetOfType(m.Rels(part), "theme");
   if (theme.empty()) {
     theme = m.NewName("/ppt/theme/theme", ".xml");
@@ -264,25 +265,25 @@ struct DesignCopy {
 
 Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& slides, size_t at, bool keepSourceDesign,
                             std::vector<uint32_t>* ids) {
-  Call call(*this, u"Reuse Slides");
+  Call call(*this, T(u"Reuse Slides"));
   Impl& m = *impl_;
   std::vector<Impl::SlideEntry> list = m.SlideList();
-  if (at > list.size()) return call.End(Result::Fail(u"That isn't a place in the presentation."));
-  if (deck_.Layouts().empty()) return call.End(Result::Fail(u"This presentation has no layouts to put slides on."));
+  if (at > list.size()) return call.End(Result::Fail(T(u"That isn't a place in the presentation.")));
+  if (deck_.Layouts().empty()) return call.End(Result::Fail(T(u"This presentation has no layouts to put slides on.")));
   if (ids) ids->clear();
   std::string pres = m.PresentationPart();
   size_t pos = at;
   DesignCopy design;
   for (size_t index : slides) {
     const Slide* s = source.GetSlide(index);
-    if (!s || index >= source.SlideCount()) return call.End(Result::Fail(u"That slide isn't in the other presentation."));
+    if (!s || index >= source.SlideCount()) return call.End(Result::Fail(T(u"That slide isn't in the other presentation.")));
     SlideCopier copier(m, &source);
     std::string part;
     if (keepSourceDesign) {
       // The source's layout, master and theme come along (once; the same master here is used again).
       copier.keepDesign = true;
       copier.layoutPart = s->layout ? design.Layout(m, copier, *s->layout) : std::string();
-      if (copier.layoutPart.empty()) return call.End(Result::Fail(u"The slide's design can't be copied, because a part of it can't be read."));
+      if (copier.layoutPart.empty()) return call.End(Result::Fail(T(u"The slide's design can't be copied, because a part of it can't be read.")));
       copier.masterPart.clear();
       part = copier.CopySlide(s->part);
       m.Full();
@@ -306,7 +307,7 @@ Result Editor::InsertSlides(Presentation& source, const std::vector<size_t>& sli
         MapPlaceholders(m.Edit(part), m.Root(target->part), part, m, bounds);
       }
     }
-    if (part.empty()) return call.End(Result::Fail(u"The slide can't be copied, because a part of it can't be read."));
+    if (part.empty()) return call.End(Result::Fail(T(u"The slide can't be copied, because a part of it can't be read.")));
     std::string rel = m.AddRel(pres, kRelSlide, part);
     pugi::xml_node root = m.Edit(pres);
     uint32_t newId = 0;

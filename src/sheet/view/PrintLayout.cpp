@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "text/Fonts.h"
 #include "text/LineLayout.h"
@@ -570,14 +571,14 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
     return lines.empty() ? 0.f : lines.front().contentRight;
   };
   // As Excel 2021 prints them: "Cell:" and "Comment:" in bold, right-aligned before the text.
-  const float labelW = std::max(measure(L"Cell:"), measure(L"Comment:"));
+  const float labelW = std::max(measure(T(L"Cell:")), measure(T(L"Comment:")));
   const text::Face* face = fonts.FaceFor(style.family, false, false);
   const float gap = face ? face->Advance(L' ', style.size) : style.size / 4;
   const float tx = x + labelW + gap, tw = std::max(1.f, width - labelW - gap);
   const float top = y;
-  put(L"Cell:", bold, x, labelW, true, y);
+  put(T(L"Cell:"), bold, x, labelW, true, y);
   y += pitch * put(Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1), style, tx, tw, false, y);
-  put(L"Comment:", bold, x, labelW, true, y);
+  put(T(L"Comment:"), bold, x, labelW, true, y);
   // A thread prints as the note Excel writes for older versions, when it has one.
   const std::wstring& text = note.legacyText.empty() ? note.text : note.legacyText;
   std::wstring line;

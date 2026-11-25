@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/calc/Entry.h"
 
 namespace fw::sheet::calc {
@@ -46,7 +47,7 @@ bool CallAt(std::wstring_view typed, size_t caret, const FormulaLocale& region, 
 struct FunctionHelp {
   const char* name;
   const char* args;
-  const char* about;
+  UiText8 about;  // f1-lang: translated as it's read
 };
 const FunctionHelp* FunctionHelpList(size_t& count);
 const FunctionHelp* FindFunctionHelp(std::string_view name);  // any case, _xlfn. ignored; null if none

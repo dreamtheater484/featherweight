@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <map>
 
+#include "core/Lang.h"
 #include "doc/model/Internal.h"
 
 namespace fw::doc::edit {
@@ -427,7 +428,7 @@ FormatState StateOf(const Document& doc, Range range) {
 
 void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
   if (!format.Any()) return;
-  ed.Begin(u"Format");
+  ed.Begin(T(u"Format"));
   ed.Local();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) { ApplyRunFormat(ed, ed.Doc(), para, rPr, format); });
   ed.Commit();
@@ -436,7 +437,7 @@ void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
 void FormatParagraphs(TreeEdit& ed, Range range, const ParaFormat& f) {
   if (!f.Any()) return;
   const Document& doc = ed.Doc();
-  ed.Begin(u"Paragraph");
+  ed.Begin(T(u"Paragraph"));
   ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
     WriteParaFormat(ed, ed.Child(doc.Para(p).elem, kPPr), f, doc.StylePara(p));
@@ -484,8 +485,8 @@ void ToggleRuns(TreeEdit& ed, Range range, Toggle what) {
     case Toggle::Superscript: f.vertAlign = s.superscript ? VertAlign::Baseline : VertAlign::Superscript; break;
     case Toggle::Subscript: f.vertAlign = s.subscript ? VertAlign::Baseline : VertAlign::Subscript; break;
   }
-  static constexpr const char16_t* kLabels[] = {u"Bold", u"Italic", u"Underline", u"Strikethrough", u"Superscript", u"Subscript"};
-  ed.Begin(kLabels[static_cast<int>(what)]);
+  static constexpr UiText16 kLabels[] = {N_(u"Bold"), N_(u"Italic"), N_(u"Underline"), N_(u"Strikethrough"), N_(u"Superscript"), N_(u"Subscript")};
+  ed.Begin(std::u16string(kLabels[static_cast<int>(what)]));
   ed.Local();
   FormatRuns(ed, range, f);
   ed.Commit();
@@ -508,7 +509,7 @@ HalfPoints NextFontSize(HalfPoints size, bool grow) {
 }
 
 void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint) {
-  ed.Begin(grow ? u"Grow font" : u"Shrink font");
+  ed.Begin(grow ? T(u"Grow font") : T(u"Shrink font"));
   ed.Local();
   const Document& doc = ed.Doc();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) {
@@ -524,7 +525,7 @@ void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint) {
 }
 
 void ClearRunFormatting(TreeEdit& ed, Range range) {
-  ed.Begin(u"Clear formatting");
+  ed.Begin(T(u"Clear formatting"));
   ed.Local();
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRStyle, kRPrChange}); });
   ed.Commit();
@@ -532,7 +533,7 @@ void ClearRunFormatting(TreeEdit& ed, Range range) {
 
 void ClearParaFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(u"Reset paragraph");
+  ed.Begin(T(u"Reset paragraph"));
   ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
     if (ElemId pPr = ed.Child(doc.Para(p).elem, kPPr, false); pPr != kNoElem)
@@ -543,7 +544,7 @@ void ClearParaFormatting(TreeEdit& ed, Range range) {
 
 void ClearAllFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(u"Clear all formatting");
+  ed.Begin(T(u"Clear all formatting"));
   ed.Local(true);  // its style and list go
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRPrChange}); });
   for (uint32_t p : ParagraphsOf(doc, range)) {
@@ -554,7 +555,7 @@ void ClearAllFormatting(TreeEdit& ed, Range range) {
 
 void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
   const Document& doc = ed.Doc();
-  ed.Begin(increase ? u"Increase indent" : u"Decrease indent");
+  ed.Begin(increase ? T(u"Increase indent") : T(u"Decrease indent"));
   ed.Local(true);  // a list item's level renumbers the items after it
   const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());
   for (uint32_t p : ParagraphsOf(doc, range)) {
@@ -583,7 +584,7 @@ void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove,
     return std::find_if(v.begin(), v.end(), [&](const TabStop& t) { return t.pos == pos; });
   };
   auto byPos = [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; };
-  ed.Begin(u"Tabs");
+  ed.Begin(T(u"Tabs"));
   ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
     std::vector<TabStop> had = doc.ResolvedPara(p).tabs, want = had;

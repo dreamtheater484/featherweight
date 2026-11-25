@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "core/Lang.h"
+
 namespace fw::pkg {
 namespace {
 
@@ -131,7 +133,7 @@ std::string_view QNameLocal(std::string_view qname) {
 }
 
 XmlPull::XmlPull(std::string_view xml, const Limits& limits, std::string_view label)
-    : limits_(limits), label_(label.empty() ? "This XML" : "Part " + std::string(label)) {
+    : limits_(limits), label_(label) {
   auto b = [&](size_t i) { return i < xml.size() ? static_cast<unsigned char>(xml[i]) : 0x100u; };
   bool utf16 = false, bigEndian = false;
   size_t skip = 0;
@@ -148,7 +150,7 @@ XmlPull::XmlPull(std::string_view xml, const Limits& limits, std::string_view la
   }
   if (utf16) {
     if (!Utf16ToUtf8(xml.substr(skip), bigEndian, owned_)) {
-      Damaged("its UTF-16 text is broken");
+      Damaged(T("its UTF-16 text is broken"));
       return;
     }
     src_ = owned_;
@@ -160,19 +162,24 @@ XmlPull::XmlPull(std::string_view xml, const Limits& limits, std::string_view la
   size_t bad = FindInvalidChar(src_);
   if (bad != std::string_view::npos) {
     pos_ = bad;
-    Damaged("it contains a character that isn't allowed in XML");
+    Damaged(T("it contains a character that isn't allowed in XML"));
   }
 }
 
-XmlPull::Event XmlPull::Fail(Status::Code code, std::string_view what) {
-  status_ = Status::Fail(code, label_ + std::string(what));
+XmlPull::Event XmlPull::Fail(Status::Code code, std::string_view message) {
+  status_ = Status::Fail(code, std::string(message));
   event_ = Event::Error;
   return event_;
 }
 
 XmlPull::Event XmlPull::Damaged(std::string_view why) {
   size_t line = 1 + static_cast<size_t>(std::count(src_.begin(), src_.begin() + std::min(pos_, src_.size()), '\n'));
-  return Fail(Status::Code::Damaged, " is damaged near line " + std::to_string(line) + ": " + std::string(why) + ".");
+  return Fail(Status::Code::Damaged,
+              Fmt(T("{0} is damaged near line {1}: {2}."), {Subject(), std::to_string(line), why}));
+}
+
+std::string XmlPull::Subject() const {
+  return label_.empty() ? std::string(T("This XML")) : Fmt(T("Part {0}"), {label_});
 }
 
 std::string_view XmlPull::Prefix() const { return QNamePrefix(qname_); }
@@ -288,7 +295,7 @@ XmlPull::Event XmlPull::Next() {
   }
   for (;;) {
     if (pos_ >= src_.size()) {
-      if (!stack_.empty() || !seenRoot_) return Damaged("it ends unexpectedly");
+      if (!stack_.empty() || !seenRoot_) return Damaged(T("it ends unexpectedly"));
       return event_ = Event::EndDocument;
     }
     if (src_[pos_] == '<') {
@@ -299,14 +306,15 @@ XmlPull::Event XmlPull::Next() {
     size_t end = std::min(src_.find('<', pos_), src_.size());
     std::string_view raw = src_.substr(pos_, end - pos_);
     if (stack_.empty()) {
-      if (!std::all_of(raw.begin(), raw.end(), IsSpace)) return Damaged("there is text outside the root element");
+      if (!std::all_of(raw.begin(), raw.end(), IsSpace)) return Damaged(T("there is text outside the root element"));
       pos_ = end;
       continue;
     }
     if (raw.size() > limits_.maxStringLength)
-      return Fail(Status::Code::TooLarge, " contains a piece of text longer than " + FormatBytes(limits_.maxStringLength) +
-                                              ", which is more than Featherweight allows.");
-    if (!Decode(raw, false, textBuf_, text_)) return Damaged("it uses an entity that isn't defined");
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} contains a piece of text longer than {1}, which is more than Featherweight allows."),
+                      {Subject(), FormatBytes(limits_.maxStringLength)}));
+    if (!Decode(raw, false, textBuf_, text_)) return Damaged(T("it uses an entity that isn't defined"));
     pos_ = end;
     return event_ = Event::Text;
   }
@@ -315,25 +323,26 @@ XmlPull::Event XmlPull::Next() {
 XmlPull::Event XmlPull::ParseMarkup() {
   std::string_view rest = src_.substr(pos_);
   auto tooLong = [&] {
-    return Fail(Status::Code::TooLarge, " contains a piece of text longer than " + FormatBytes(limits_.maxStringLength) +
-                                            ", which is more than Featherweight allows.");
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} contains a piece of text longer than {1}, which is more than Featherweight allows."),
+                    {Subject(), FormatBytes(limits_.maxStringLength)}));
   };
   if (rest.starts_with("<?")) {
     size_t end = rest.find("?>");
-    if (end == std::string_view::npos) return Damaged("a processing instruction isn't closed");
+    if (end == std::string_view::npos) return Damaged(T("a processing instruction isn't closed"));
     if (end > limits_.maxStringLength) return tooLong();
     size_t start = pos_;
     pos_ += 2;
     std::string_view target = ParseName();
-    if (target.empty()) return Damaged("a processing instruction has no name");
+    if (target.empty()) return Damaged(T("a processing instruction has no name"));
     std::string_view body = src_.substr(pos_, start + end - pos_);
     pos_ = start + end + 2;
     if (EqualsNoCaseAscii(target, "xml")) {
-      if (start != 0 || target != "xml") return Damaged("the XML declaration is in the wrong place");
+      if (start != 0 || target != "xml") return Damaged(T("the XML declaration is in the wrong place"));
       if (!ParseDeclaration(body)) return event_;
       return Event::EndDocument;  // handled; Next() reads on
     }
-    if (!body.empty() && !IsSpace(body.front())) return Damaged("a processing instruction is malformed");
+    if (!body.empty() && !IsSpace(body.front())) return Damaged(T("a processing instruction is malformed"));
     while (!body.empty() && IsSpace(body.front())) body.remove_prefix(1);
     qname_ = target;
     nsUri_ = {};
@@ -342,16 +351,16 @@ XmlPull::Event XmlPull::ParseMarkup() {
   }
   if (rest.starts_with("<!--")) {
     size_t end = rest.find("-->", 4);
-    if (end == std::string_view::npos) return Damaged("a comment isn't closed");
+    if (end == std::string_view::npos) return Damaged(T("a comment isn't closed"));
     if (end - 4 > limits_.maxStringLength) return tooLong();
     text_ = NormalizeEol(rest.substr(4, end - 4), textBuf_);  // comments have no entities
     pos_ += end + 3;
     return event_ = Event::Comment;
   }
   if (rest.starts_with("<![CDATA[")) {
-    if (stack_.empty()) return Damaged("there is text outside the root element");
+    if (stack_.empty()) return Damaged(T("there is text outside the root element"));
     size_t end = rest.find("]]>", 9);
-    if (end == std::string_view::npos) return Damaged("a CDATA section isn't closed");
+    if (end == std::string_view::npos) return Damaged(T("a CDATA section isn't closed"));
     if (end - 9 > limits_.maxStringLength) return tooLong();
     text_ = NormalizeEol(rest.substr(9, end - 9), textBuf_);
     pos_ += end + 3;
@@ -359,8 +368,9 @@ XmlPull::Event XmlPull::ParseMarkup() {
   }
   if (rest.starts_with("<!DOCTYPE") || rest.starts_with("<!doctype"))
     return Fail(Status::Code::Rejected,
-                " contains a document type definition (DTD). Office files never do, so Featherweight won't open it.");
-  if (rest.starts_with("<!")) return Damaged("it contains unexpected markup");
+                Fmt(T("{0} contains a document type definition (DTD). Office files never do, so Featherweight won't open it."),
+                    {Subject()}));
+  if (rest.starts_with("<!")) return Damaged(T("it contains unexpected markup"));
   if (rest.starts_with("</")) return ParseEndTag();
   return ParseStartTag();
 }
@@ -399,11 +409,11 @@ bool XmlPull::ParseDeclaration(std::string_view body) {
       known = known || EqualsNoCaseAscii(value, ok);
     if (!known) {
       Fail(Status::Code::Unsupported,
-           " uses the " + std::string(value) + " text encoding, which Office files don't use.");
+           Fmt(T("{0} uses the {1} text encoding, which Office files don't use."), {Subject(), value}));
       return false;
     }
   }
-  Damaged("the XML declaration is malformed");
+  Damaged(T("the XML declaration is malformed"));
   return false;
 }
 
@@ -411,9 +421,9 @@ XmlPull::Event XmlPull::ParseEndTag() {
   pos_ += 2;
   std::string_view name = ParseName();
   SkipSpace();
-  if (name.empty() || pos_ >= src_.size() || src_[pos_] != '>') return Damaged("an end tag is malformed");
+  if (name.empty() || pos_ >= src_.size() || src_[pos_] != '>') return Damaged(T("an end tag is malformed"));
   ++pos_;
-  if (stack_.empty() || stack_.back() != name) return Damaged("the tags don't match");
+  if (stack_.empty() || stack_.back() != name) return Damaged(T("the tags don't match"));
   qname_ = name;
   nsUri_ = *LookupNamespace(QNamePrefix(name));  // resolved when the element started
   attrs_.clear();
@@ -423,13 +433,14 @@ XmlPull::Event XmlPull::ParseEndTag() {
 }
 
 XmlPull::Event XmlPull::ParseStartTag() {
-  if (seenRoot_ && stack_.empty()) return Damaged("there is more than one root element");
+  if (seenRoot_ && stack_.empty()) return Damaged(T("there is more than one root element"));
   ++pos_;
   std::string_view name = ParseName();
-  if (!IsQName(name)) return Damaged("a tag is malformed");
+  if (!IsQName(name)) return Damaged(T("a tag is malformed"));
   if (name.size() > limits_.maxStringLength)
-    return Fail(Status::Code::TooLarge, " contains a name longer than " + FormatBytes(limits_.maxStringLength) +
-                                            ", which is more than Featherweight allows.");
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} contains a name longer than {1}, which is more than Featherweight allows."),
+                    {Subject(), FormatBytes(limits_.maxStringLength)}));
 
   // Raw attributes first; values are decoded once their number is known, so the decoded
   // strings never move while views into them exist.
@@ -438,9 +449,9 @@ XmlPull::Event XmlPull::ParseStartTag() {
   bool isEmpty = false;
   for (;;) {
     bool space = SkipSpace();
-    if (pos_ >= src_.size()) return Damaged("a tag isn't closed");
+    if (pos_ >= src_.size()) return Damaged(T("a tag isn't closed"));
     if (src_[pos_] == '/') {
-      if (pos_ + 1 >= src_.size() || src_[pos_ + 1] != '>') return Damaged("a tag is malformed");
+      if (pos_ + 1 >= src_.size() || src_[pos_ + 1] != '>') return Damaged(T("a tag is malformed"));
       pos_ += 2;
       isEmpty = true;
       break;
@@ -449,31 +460,34 @@ XmlPull::Event XmlPull::ParseStartTag() {
       ++pos_;
       break;
     }
-    if (!space) return Damaged("a tag is malformed");
+    if (!space) return Damaged(T("a tag is malformed"));
     std::string_view aname = ParseName();
-    if (!IsQName(aname)) return Damaged("an attribute is malformed");
+    if (!IsQName(aname)) return Damaged(T("an attribute is malformed"));
     SkipSpace();
-    if (pos_ >= src_.size() || src_[pos_] != '=') return Damaged("an attribute has no value");
+    if (pos_ >= src_.size() || src_[pos_] != '=') return Damaged(T("an attribute has no value"));
     ++pos_;
     SkipSpace();
-    if (pos_ >= src_.size() || (src_[pos_] != '"' && src_[pos_] != '\'')) return Damaged("an attribute value isn't quoted");
+    if (pos_ >= src_.size() || (src_[pos_] != '"' && src_[pos_] != '\'')) return Damaged(T("an attribute value isn't quoted"));
     char quote = src_[pos_++];
     size_t end = src_.find(quote, pos_);
-    if (end == std::string_view::npos) return Damaged("an attribute value isn't closed");
+    if (end == std::string_view::npos) return Damaged(T("an attribute value isn't closed"));
     std::string_view value = src_.substr(pos_, end - pos_);
     if (value.find('<') != std::string_view::npos) return Damaged("an attribute value contains '<'");
     if (value.size() > limits_.maxStringLength || aname.size() > limits_.maxStringLength)
-      return Fail(Status::Code::TooLarge, " contains an attribute longer than " + FormatBytes(limits_.maxStringLength) +
-                                              ", which is more than Featherweight allows.");
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} contains an attribute longer than {1}, which is more than Featherweight allows."),
+                      {Subject(), FormatBytes(limits_.maxStringLength)}));
     pos_ = end + 1;
     raws.push_back({aname, value});
     if (raws.size() > limits_.maxAttributes)
-      return Fail(Status::Code::TooLarge, " has an element with more than " + std::to_string(limits_.maxAttributes) +
-                                              " attributes, which is more than Featherweight allows.");
+      return Fail(Status::Code::TooLarge,
+                  Fmt(T("{0} has an element with more than {1} attributes, which is more than Featherweight allows."),
+                      {Subject(), std::to_string(limits_.maxAttributes)}));
   }
   if (stack_.size() + 1 > limits_.maxDepth)
-    return Fail(Status::Code::TooLarge, " is nested more than " + std::to_string(limits_.maxDepth) +
-                                            " levels deep, which is more than Featherweight allows.");
+    return Fail(Status::Code::TooLarge,
+                Fmt(T("{0} is nested more than {1} levels deep, which is more than Featherweight allows."),
+                    {Subject(), std::to_string(limits_.maxDepth)}));
 
   attrs_.clear();
   if (attrBuf_.size() < raws.size()) attrBuf_.resize(raws.size());
@@ -482,7 +496,7 @@ XmlPull::Event XmlPull::ParseStartTag() {
     a.qname = raws[i].name;
     a.prefix = QNamePrefix(a.qname);
     a.local = QNameLocal(a.qname);
-    if (!Decode(raws[i].value, true, attrBuf_[i], a.value)) return Damaged("it uses an entity that isn't defined");
+    if (!Decode(raws[i].value, true, attrBuf_[i], a.value)) return Damaged(T("it uses an entity that isn't defined"));
     attrs_.push_back(a);
   }
 
@@ -494,11 +508,11 @@ XmlPull::Event XmlPull::ParseStartTag() {
     if (!isDefault && a.prefix != "xmlns") continue;
     Binding bind;
     bind.prefix = isDefault ? std::string_view() : a.local;
-    if (!isDefault && a.value.empty()) return Damaged("a namespace prefix is undeclared");
+    if (!isDefault && a.value.empty()) return Damaged(T("a namespace prefix is undeclared"));
     // Reserved prefixes and namespace names (Namespaces in XML 1.0): xmlns is never declared,
     // xml is bound to its own namespace only, and nothing else is bound to either namespace.
     if (bind.prefix == "xmlns" || (bind.prefix == "xml") != (a.value == kXmlNamespace) || a.value == kXmlnsNamespace)
-      return Damaged("it misuses a reserved namespace prefix");
+      return Damaged(T("it misuses a reserved namespace prefix"));
     if (a.value.data() >= src_.data() && a.value.data() < src_.data() + src_.size()) {
       bind.uri = a.value;
     } else {
@@ -509,13 +523,13 @@ XmlPull::Event XmlPull::ParseStartTag() {
     bindings_.push_back(bind);
   }
   auto elementNs = LookupNamespace(QNamePrefix(name));
-  if (!elementNs) return Damaged("it uses an undeclared namespace prefix");
+  if (!elementNs) return Damaged(T("it uses an undeclared namespace prefix"));
   for (auto& a : attrs_) {
     if (a.qname == "xmlns" || a.prefix == "xmlns") {
       a.nsUri = kXmlnsNamespace;
     } else if (!a.prefix.empty()) {
       auto ns = LookupNamespace(a.prefix);
-      if (!ns) return Damaged("it uses an undeclared namespace prefix");
+      if (!ns) return Damaged(T("it uses an undeclared namespace prefix"));
       a.nsUri = *ns;
     }
   }
@@ -525,14 +539,14 @@ XmlPull::Event XmlPull::ParseStartTag() {
       for (size_t i = 0; i < attrs_.size(); ++i)
         for (size_t j = i + 1; j < attrs_.size(); ++j)
           if (attrs_[i].qname == attrs_[j].qname || (attrs_[i].local == attrs_[j].local && attrs_[i].nsUri == attrs_[j].nsUri))
-            return Damaged("an attribute appears twice");
+            return Damaged(T("an attribute appears twice"));
     } else {
       std::unordered_set<std::string> seen;
       for (const auto& a : attrs_) {
         std::string key(a.nsUri);
         key += '\0';
         key += a.local;
-        if (!seen.insert(std::move(key)).second) return Damaged("an attribute appears twice");
+        if (!seen.insert(std::move(key)).second) return Damaged(T("an attribute appears twice"));
       }
     }
   }

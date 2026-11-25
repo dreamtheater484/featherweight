@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cwctype>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/view/WorkbookView.h"
@@ -67,7 +68,7 @@ bool WorkbookView::FillCells(const Range& source, const Range& target, int dir, 
   const uint32_t n = vertical ? source.lastRow - source.firstRow + 1 : source.lastCol - source.firstCol + 1;
   const uint32_t m = vertical ? target.lastRow - target.firstRow + 1 : target.lastCol - target.firstCol + 1;
   if (uint64_t{m} * (lines1 - lines0 + 1) > 1000000) {
-    host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight fills at once.");
+    host_.ViewMessage(BannerKind::Warning, T(L"That's more cells than Featherweight fills at once."));
     return false;
   }
   // Weekday and month names, as the region writes them: the lists AutoFill continues.
@@ -214,7 +215,7 @@ void WorkbookView::FillDown(bool right) {
     if (source.lastRow == kMaxRows - 1) source.lastRow = target.lastRow;
     if (source.lastCol == kMaxCols - 1) source.lastCol = target.lastCol;
   }
-  FillCells(source, target, right ? 2 : 0, false, right ? u"Fill Right" : u"Fill Down");
+  FillCells(source, target, right ? 2 : 0, false, right ? T(u"Fill Right") : T(u"Fill Down"));
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +319,7 @@ bool WorkbookView::GridScriptOp(const std::wstring& op, const std::wstring& arg)
   const std::wstring f = L"=" + arg;
   const std::vector<calc::RefSpan> spans = calc::ReferenceSpans(f, Region());
   if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size() || !spans[0].sheet.empty()) {
-    host_.ViewMessage(BannerKind::Warning, L"fill: needs a range on this sheet, as B3:M3.");
+    host_.ViewMessage(BannerKind::Warning, T(L"fill: needs a range on this sheet, as B3:M3."));
     return true;
   }
   const calc::RefSpan& r = spans[0];
@@ -327,7 +328,7 @@ bool WorkbookView::GridScriptOp(const std::wstring& op, const std::wstring& arg)
   // As a drag ends: the selection grown along one side to the range (which must hold it).
   const Range sel = Selected();
   if (to.firstRow > sel.firstRow || to.firstCol > sel.firstCol || to.lastRow < sel.lastRow || to.lastCol < sel.lastCol) {
-    host_.ViewMessage(BannerKind::Warning, L"fill: the range must take in the selection.");
+    host_.ViewMessage(BannerKind::Warning, T(L"fill: the range must take in the selection."));
     return true;
   }
   fillTo_ = to;

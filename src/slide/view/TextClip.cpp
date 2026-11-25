@@ -9,6 +9,7 @@
 #include <functional>
 #include <sstream>
 
+#include "core/Lang.h"
 #include "core/Strings.h"
 #include "doc/edit/Clip.h"
 #include "draw/Xml.h"
@@ -326,7 +327,7 @@ bool Paste(TextSession& s, TextModel& model, const std::string& html, const std:
   if (!textOnly) {
     pugi::xml_document doc;
     bool own = false;
-    model.BeginGroup(u"Paste");
+    model.BeginGroup(T(u"Paste"));
     std::vector<pugi::xml_node> paras = OwnParagraphs(doc, html, s, model, own);
     if (!own) {
       std::optional<dedit::Clip> clip;
@@ -335,12 +336,12 @@ bool Paste(TextSession& s, TextModel& model, const std::string& html, const std:
       if (clip && !clip->Empty()) paras = ClipParagraphs(doc, *clip, s, model);
     }
     bool ok = false;
-    if (!paras.empty()) ok = s.ReplaceWithParagraphs(paras, u"Paste");
+    if (!paras.empty()) ok = s.ReplaceWithParagraphs(paras, T(u"Paste"));
     model.EndGroup();
     if (ok || !paras.empty()) return ok;
   }
   if (text.empty()) return false;
-  return s.ReplaceSelection(text, u"Paste");
+  return s.ReplaceSelection(text, T(u"Paste"));
 }
 
 }  // namespace fw::slide::view

@@ -6,6 +6,7 @@
 #include <cctype>
 #include <vector>
 
+#include "core/Lang.h"
 #include "sheet/numfmt/NumLocale.h"
 
 namespace fw::sheet::calc {
@@ -125,12 +126,12 @@ bool Convert(std::string_view s, const FormulaLocale& from, const FormulaLocale&
   return true;
 }
 
-const char* kProblem = "There's a problem with this formula.";
+const UiText8 kProblem = N_("There's a problem with this formula.");
 
 std::string MessageFor(const std::string& parser) {
-  if (parser == "too few arguments") return "You've entered too few arguments for this function.";
-  if (parser == "too many arguments") return "You've entered too many arguments for this function.";
-  return kProblem;
+  if (parser == "too few arguments") return T("You've entered too few arguments for this function.");
+  if (parser == "too many arguments") return T("You've entered too many arguments for this function.");
+  return std::string(kProblem);
 }
 
 }  // namespace
@@ -182,14 +183,14 @@ EnteredFormula EnterFormula(std::string_view typed, const FormulaLocale& region,
   // Nothing typed holds a NUL or another control character but tabs and line breaks.
   for (size_t k = 0; k < typed.size(); ++k) {
     const unsigned char c = static_cast<unsigned char>(typed[k]);
-    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return refuse(k, kProblem);
+    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return refuse(k, std::string(kProblem));
   }
   std::string text;
   size_t bad = 0;
   int open = 0;
-  if (!ToInvariant(typed, region, text, &bad, &open)) return refuse(bad, kProblem);
+  if (!ToInvariant(typed, region, text, &bad, &open)) return refuse(bad, std::string(kProblem));
   // Excel closes the function calls left open at the end; another open bracket is a problem.
-  if (open < 0) return refuse(typed.size(), kProblem);
+  if (open < 0) return refuse(typed.size(), std::string(kProblem));
   text.append(static_cast<size_t>(open), ')');
   ParseError error;
   CompileOptions typedAt = at;

@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 
+#include "core/Lang.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/DrawingEdit.h"
 #include "doc/edit/HeaderFooter.h"
@@ -93,7 +94,7 @@ bool Headers(Editor& editor, std::vector<std::pair<uint32_t, uint32_t>>& out, st
       if (std::none_of(out.begin(), out.end(), [&](const auto& h) { return h.first == story; })) out.emplace_back(story, s);
     }
   }
-  if (out.empty()) why = u"This document has no pages to put a watermark on.";
+  if (out.empty()) why = T(u"This document has no pages to put a watermark on.");
   return !out.empty();
 }
 
@@ -195,17 +196,17 @@ Result SetTextWatermark(Editor& editor, const TextWatermark& mark) {
   std::u16string text = mark.text;
   while (!text.empty() && (text.back() == u' ' || text.back() == u'\t')) text.pop_back();
   while (!text.empty() && (text.front() == u' ' || text.front() == u'\t')) text.erase(0, 1);
-  if (text.empty()) return Fail(u"Type the watermark's text.");
+  if (text.empty()) return Fail(T(u"Type the watermark's text."));
   const std::string utf8 = Utf8(text);
   std::string font = mark.font.empty() ? std::string("Calibri") : mark.font;
-  if (!XmlSafe(utf8) || !XmlSafe(font) || font.size() > 256 || utf8.size() > 4096) return Fail(u"That text can't be a watermark.");
+  if (!XmlSafe(utf8) || !XmlSafe(font) || font.size() > 256 || utf8.size() > 4096) return Fail(T(u"That text can't be a watermark."));
   // The shape the text takes, as wide as it is long: across the page's diagonal, or its width.
   const double aspect = mark.aspect > 0.1 && std::isfinite(mark.aspect) ? std::min(mark.aspect, 200.0)
                                                                         : std::max(1.0, 0.6 * static_cast<double>(text.size()));
-  return Place(editor, u"Watermark", [&](uint32_t story, uint32_t section, uint32_t n) {
+  return Place(editor, T(u"Watermark"), [&](uint32_t story, uint32_t section, uint32_t n) {
     const Document& doc = editor.Doc();
     const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
-    if (paras.empty()) return Fail(u"A header has no paragraph for the watermark.");
+    if (paras.empty()) return Fail(T(u"A header has no paragraph for the watermark."));
     const auto [aw, ah] = TextArea(doc, section);
     double w, h;
     if (mark.diagonal) {
@@ -229,7 +230,7 @@ Result SetTextWatermark(Editor& editor, const TextWatermark& mark) {
         Escape("font-family:\"" + font + "\";font-size:1pt") + "\" string=\"" + Escape(utf8) +
         "\"/><w10:wrap anchorx=\"margin\" anchory=\"margin\"/></v:shape>";
     Drawing info;
-    if (!HandleOf(xml, doc, info)) return Fail(u"That text can't be a watermark.");
+    if (!HandleOf(xml, doc, info)) return Fail(T(u"That text can't be a watermark."));
     return editor.InsertDrawing(Pos{paras[0], 0}, xml, info, true);
   });
 }
@@ -238,7 +239,7 @@ Result SetPictureWatermark(Editor& editor, const std::vector<uint8_t>& bytes, bo
   Document& doc = const_cast<Document&>(editor.Doc());
   std::string error;
   std::shared_ptr<draw::Image> image = draw::Image::Open(bytes, draw::ImageLimits::Default(), &error);
-  if (!image) return Fail(error.empty() ? u"This picture can't be read." : Utf16(error));
+  if (!image) return Fail(error.empty() ? T(u"This picture can't be read.") : Utf16(error));
   Media media;
   switch (image->Format()) {
     case draw::ImageFormat::Png: media = {bytes, "png", "image/png"}; break;
@@ -248,20 +249,20 @@ Result SetPictureWatermark(Editor& editor, const std::vector<uint8_t>& bytes, bo
     case draw::ImageFormat::Bmp: {
       std::shared_ptr<const draw::Bitmap> px = image->Pixels();
       std::vector<uint8_t> png = px ? EncodePng(*px) : std::vector<uint8_t>{};
-      if (png.empty()) return Fail(u"This picture can't be read.");
+      if (png.empty()) return Fail(T(u"This picture can't be read."));
       media = {std::move(png), "png", "image/png"};
       break;
     }
-    default: return Fail(u"A watermark picture is a PNG, JPEG, GIF, BMP or TIFF file.");
+    default: return Fail(T(u"A watermark picture is a PNG, JPEG, GIF, BMP or TIFF file."));
   }
   const draw::Size natural = image->NaturalSize();
   if (!(natural.width > 0 && natural.height > 0 && std::isfinite(natural.width) && std::isfinite(natural.height)))
-    return Fail(u"This picture has no size.");
-  return Place(editor, u"Watermark", [&](uint32_t story, uint32_t section, uint32_t n) {
+    return Fail(T(u"This picture has no size."));
+  return Place(editor, T(u"Watermark"), [&](uint32_t story, uint32_t section, uint32_t n) {
     const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
     const Part* part = PartOf(doc, doc.Stories()[story].part);
-    if (paras.empty() || !part) return Fail(u"A header has no paragraph for the watermark.");
-    if (Strict(*part)) return Fail(u"Pictures can't be added to documents saved as Strict Open XML yet.");
+    if (paras.empty() || !part) return Fail(T(u"A header has no paragraph for the watermark."));
+    if (Strict(*part)) return Fail(T(u"Pictures can't be added to documents saved as Strict Open XML yet."));
     // Its part and the header's relationship to it: one package step for each header.
     auto step = std::make_shared<PackageStep>();
     step->doc = &doc;
@@ -276,7 +277,7 @@ Result SetPictureWatermark(Editor& editor, const std::vector<uint8_t>& bytes, bo
                             "\" type=\"#_x0000_t75\" style=\"" + style + "\" o:allowincell=\"f\"><v:imagedata r:id=\"" + rid +
                             "\" o:title=\"\"" + (washout ? " gain=\"19661f\" blacklevel=\"22938f\"" : "") + "/></v:shape>";
     Drawing info;
-    if (!HandleOf(xml, doc, info)) return Fail(u"This picture can't be a watermark.");
+    if (!HandleOf(xml, doc, info)) return Fail(T(u"This picture can't be a watermark."));
     const Pos at{paras[0], 0};
     Result r = editor.InsertDrawing(at, xml, info, true);
     if (r && step->Any()) {
@@ -284,7 +285,7 @@ Result SetPictureWatermark(Editor& editor, const std::vector<uint8_t>& bytes, bo
       step->first = at.para;
       step->count = 1;
       step->Redo();
-      editor.RecordStep(u"Watermark", step, at);
+      editor.RecordStep(T(u"Watermark"), step, at);
     }
     return r;
   });
@@ -293,8 +294,8 @@ Result SetPictureWatermark(Editor& editor, const std::vector<uint8_t>& bytes, bo
 Result RemoveWatermark(Editor& editor) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
-  if (FirstWatermark(editor.Doc()) == kNone) return Fail(u"This document has no watermark.");
-  editor.BeginGroup(u"Remove watermark");
+  if (FirstWatermark(editor.Doc()) == kNone) return Fail(T(u"This document has no watermark."));
+  editor.BeginGroup(T(u"Remove watermark"));
   Result r = RemoveAll(editor);
   if (r) editor.EndGroup();
   else editor.CancelGroup();
