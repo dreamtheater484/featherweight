@@ -6,8 +6,14 @@
                   install accept it. CI only: runners are thrown away; the reference PC never gets a test
                   certificate in a store (docs/f1-plan.md, "Reference PC").
     -Verify files signtool verify /pa /all on each; fails on the first that doesn't pass.
+    -Unsigned files  each carries no signature at all (signtool verify /pa: "No signature found"; Windows:
+                  NotSigned): the unsigned set a release drafts until SignPath.
+    -Releasable dir  every program file and package in the folder, and the program files inside its portable
+                  zips, is signed by a publisher Windows trusts (SignPath) or not signed at all; any other
+                  signature fails, such as the test certificate's on a runner that doesn't trust it. The release
+                  job runs it before drafting.
 #>
-param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify)
+param([switch]$Make, [string[]]$Sign, [switch]$Trust, [string[]]$Verify, [string[]]$Unsigned, [string]$Releasable)
 $ErrorActionPreference = "Stop"
 $dir = Join-Path ($(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() })) "fw-test-signing"
 function SdkTool($name) {
@@ -68,4 +74,43 @@ if ($Verify) {
     else { Write-Host "verified: $(Split-Path -Leaf $f)" }
   }
   if ($bad) { throw "$bad files didn't verify" }
+}
+
+if ($Unsigned) {
+  $signtool = SdkTool "signtool.exe"
+  $bad = 0
+  foreach ($f in $Unsigned) {
+    $ErrorActionPreference = "Continue"  # signtool reports the missing signature on stderr
+    $out = (& $signtool verify /pa $f 2>&1 | Out-String)
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $status = (Get-AuthenticodeSignature $f).Status
+    if ($code -eq 0 -or $out -notmatch 'No signature found' -or "$status" -ne "NotSigned") {
+      Write-Host "::error::signed: $f ($status)"; $out | Out-Host; $bad++
+    } else { Write-Host "no signature: $(Split-Path -Leaf $f)" }
+  }
+  if ($bad) { throw "$bad files carry a signature" }
+  Write-Host "$($Unsigned.Count) files, none signed"
+  $global:LASTEXITCODE = 0  # signtool's "no signature" exit code is the expected answer, not the step's result
+}
+
+if ($Releasable) {
+  $Releasable = (Resolve-Path $Releasable).Path
+  $inside = Join-Path ([IO.Path]::GetTempPath()) "fw-releasable-$([Guid]::NewGuid().ToString('N'))"
+  foreach ($z in Get-ChildItem $Releasable -File -Filter "*-Portable*.zip") {
+    Expand-Archive $z.FullName (Join-Path $inside $z.BaseName)
+  }
+  $files = @(Get-ChildItem "$Releasable\*" -File -Include *.exe, *.dll, *.msi, *.msix)
+  if (Test-Path $inside) { $files += @(Get-ChildItem $inside -Recurse -File -Include *.exe, *.dll) }
+  if (-not $files.Count) { throw "no program files or packages in $Releasable" }
+  $bad = @()
+  foreach ($f in $files) {
+    $s = Get-AuthenticodeSignature $f.FullName
+    $who = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { "-" }
+    Write-Host ("{0,-14} {1}  ({2})" -f $s.Status, $f.FullName.Substring($f.FullName.IndexOf($f.Directory.Name)), $who)
+    if ("$($s.Status)" -ne "Valid" -and "$($s.Status)" -ne "NotSigned") { $bad += "$($f.Name) ($($s.Status))" }
+  }
+  Remove-Item -Recurse -Force $inside -ErrorAction SilentlyContinue
+  if ($bad.Count) { throw "$($bad.Count) files carry a signature Windows doesn't trust: $($bad -join ', ')" }
+  Write-Host "$($files.Count) files: each signed by a trusted publisher or not signed"
 }
