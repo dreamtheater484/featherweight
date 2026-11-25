@@ -10,6 +10,7 @@
 #include "draw/FontSubstitutes.h"
 #include "text/Fonts.h"
 #include "text/Hyphenation.h"
+#include "text/HyphenationData.h"
 #include "text/LineLayout.h"
 
 using namespace fw::text;
@@ -113,16 +114,22 @@ TEST(Hyphenation_OtherLanguages) {
   // Every shipped set loads and hyphenates a long word of its language.
   const std::pair<const wchar_t*, const wchar_t*> words[] = {
       {L"es", L"silabación"}, {L"it", L"sillabazione"}, {L"pt-BR", L"hifenização"}, {L"da", L"orddeling"},
-      {L"nb", L"orddeling"},  {L"nn-NO", L"orddeling"},   {L"en-GB", L"hyphenation"}};
+      {L"sv", L"avstavning"}, {L"nb", L"orddeling"},    {L"nn-NO", L"orddeling"},   {L"fi", L"tavutus"},
+      {L"en-GB", L"hyphenation"}};
   for (const auto& [tag, word] : words) {
     const Hyphenator* h = Hyphenator::For(tag);
     CHECK(h != nullptr);
     if (h) CHECK(!h->Points(word).empty());
   }
   CHECK(Hyphenator::For(L"pl-PL") == nullptr);
-  // Swedish and Finnish aren't shipped (F1): their patterns' licences ask for the files as they are.
-  CHECK(Hyphenator::For(L"sv-SE") == nullptr && Hyphenator::For(L"fi-FI") == nullptr);
-  CHECK(Hyphenator::Languages().size() == 10);
+  CHECK(Hyphenator::Languages().size() == 12);
+  // Swedish and Finnish are the TeX originals byte for byte (their licences): each inflates to the
+  // pinned file's size, with nothing added.
+  for (size_t i = 0; i < detail::kPatternBlobCount; ++i) {
+    const detail::PatternBlob& b = detail::kPatternBlobs[i];
+    if (std::string_view(b.id) == "sv") CHECK(b.rawSize == 31706);
+    if (std::string_view(b.id) == "fi") CHECK(b.rawSize == 4820);
+  }
 }
 
 TEST(Hyphenation_PatternText) {
@@ -132,6 +139,11 @@ TEST(Hyphenation_PatternText) {
   CHECK(h.Points(L"abab") == (std::vector<uint32_t>{1, 3}));  // a-ba-b: 1ba before each b... a1b after each a
   CHECK(h.Points(L"table") == (std::vector<uint32_t>{2}));
   CHECK(h.Points(L"abab", 2, 2).empty());
+  // TeX source, as hyph-sv.tex and hyph-fi.tex ship: comments, also after a pattern, and \patterns{}.
+  Hyphenator tex(L"tex", L"% title: test\n\\patterns{\n1ba % before each b\na1b\n}\n\\hyphenation{ta-ble}\n", 1, 1);
+  CHECK(tex.PatternCount() == 2);
+  CHECK(tex.Points(L"abab") == (std::vector<uint32_t>{1, 3}));
+  CHECK(tex.Points(L"table") == (std::vector<uint32_t>{2}));
 }
 
 // ---- Line breaking ---------------------------------------------------------------------------
@@ -449,10 +461,16 @@ TEST(Text_JustifySqueezesSpaces) {
   CHECK_NEAR(squeezed[0].CaretX(3), 2 * a + a - a / 5, 0.01);  // each space gives a fifth
   std::wstring two = L"aa aa aa aa aa aabb cc";  // over by 2: more than a quarter of 5 spaces
   CHECK(Texts(two, Lay(two, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aabb cc"}));
-  std::wstring last = L"aa aa aa aa aa aab";  // the last line isn't justified, so it can't shrink
-  CHECK(Texts(last, Lay(last, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab"}));
   ParagraphFormat start;
   CHECK(Texts(one, Lay(one, s, width, start)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab cc"}));
+  // A justified paragraph's last line is squeezed too, its spaces shrinking as a wrapped line's
+  // (Word: worldbank-guidance's "...included in the bid." and "...valve head isolation").
+  std::wstring last = L"aa aa aa aa aa aab";
+  auto lastLines = Lay(last, s, width, f);
+  CHECK(Texts(last, lastLines) == (std::vector<std::wstring>{L"aa aa aa aa aa aab"}));
+  CHECK(lastLines[0].ending == LineEnd::ParagraphEnd);
+  CHECK_NEAR(lastLines[0].contentRight, width, 0.01);
+  CHECK(Texts(last, Lay(last, s, width, start)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab"}));
 
   // The first part of a hyphenated word is squeezed in the same way.
   f.hyphenation.automatic = true;
@@ -462,6 +480,35 @@ TEST(Text_JustifySqueezesSpaces) {
   CHECK(TextOf(hyph, justified[0]) == L"a a a a a hyphen");
   CHECK(justified[0].hyphenated);
   CHECK(TextOf(hyph, Lay(hyph, s, 16 * a, start)[0]) == L"a a a a a hy");
+}
+
+TEST(Text_ListLabelKeepsItsText) {
+  // A list label is never broken, and the text after it stays on its line however narrow the line
+  // (Word: worldbank-guidance's "33.4" and the "o" after it on one line in a cell narrower than both).
+  TextStyle s = Style();
+  const float a = Advance(s);
+  std::wstring text = L"33.4\to";
+  Paragraph labelled = Para(text, s);
+  labelled.label = 5;
+  auto lines = Layout(TestFonts(), labelled, 2 * a);
+  CHECK(lines.size() == 1 && lines[0].ending == LineEnd::ParagraphEnd);
+  // The same text, not a label, breaks inside "33.4".
+  CHECK(Layout(TestFonts(), Para(text, s), 2 * a).size() > 1);
+}
+
+TEST(Text_ItalicWithoutTheScriptUsesTheFamilysOtherFace) {
+  // Times New Roman Italic has no Arabic: Word draws italic Arabic in Times New Roman's regular face
+  // (who-lqsi's front page), not in .notdef boxes.
+  TextStyle regular = Style(L"Times New Roman", 11);
+  TextStyle italic = regular;
+  italic.complexItalic = true;
+  std::wstring text = L"\u0627\u0644\u062A\u0648\u0642\u064A\u0639 \u0639\u0644\u0649";
+  auto r = Lay(text, regular, 1000);
+  auto i = Lay(text, italic, 1000);
+  CHECK(!r.empty() && !i.empty());
+  if (r.empty() || i.empty()) return;
+  CHECK_NEAR(i[0].contentRight - i[0].contentLeft, r[0].contentRight - r[0].contentLeft, 0.01);
+  CHECK(!i[0].pieces.empty() && FamilyOf(i[0].pieces[0]) == L"Times New Roman");
 }
 
 TEST(Text_DistributedSpreadsEveryLine) {

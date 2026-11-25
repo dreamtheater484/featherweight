@@ -512,8 +512,21 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
       scale = 1;
     } else if (font) {
       const Face* other = fonts.Get(font.Get());
-      if (other && _wcsicmp(other->Family().c_str(), base->Family().c_str()) != 0) face = other;
-      else scale = 1;
+      if (other && _wcsicmp(other->Family().c_str(), base->Family().c_str()) != 0) {
+        face = other;
+      } else {
+        scale = 1;
+        // The family's other face, when the asked-for one hasn't the characters: Word draws italic
+        // Arabic in Times New Roman with the regular face, Times New Roman Italic having no Arabic
+        // (who-lqsi's front page), where base would give .notdef boxes.
+        if (other && other != base) {
+          UINT32 cp = shape[pos];
+          if (IS_HIGH_SURROGATE(shape[pos]) && pos + 1 < end && IS_LOW_SURROGATE(shape[pos + 1]))
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (shape[pos + 1] - 0xDC00);
+          UINT16 glyph = 0;
+          if (SUCCEEDED(base->Get()->GetGlyphIndices(&cp, 1, &glyph)) && glyph == 0) face = other;
+        }
+      }
     }
     Segment seg;
     seg.start = pos;
@@ -771,23 +784,30 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
   float lastContent = 0, lastEnd = s0;
   uint32_t segFrom = a;  // where the text after the last tab starts
   auto end = [&](float c) { return SegmentStart(tab, c, beforeDecimal) + c; };
+  // A list label is never broken or left alone on its line: the first cluster after it is placed
+  // whatever the room (Word keeps worldbank-guidance's "33.4" and the "o" after it on one line in a
+  // cell narrower than both).
+  const uint32_t label = a == 0 ? std::min(p.label, n) : 0;
+  float labelContent = 0;
 
   for (uint32_t i = a; i < n; ++i) {
     const uint8_t k = kind[i];
+    if (i == label) labelContent = content;
     if (Mandatory(k)) return {i + 1, EndingOf(k), false};
     if (k == kTab) {
       float from = end(content);
       TabInfo t = NextTab(from, first);
       // Past the last stop that fits: the tab fills the line, and the text after it wraps.
-      if (t.isDefault && t.stop > s1 + kEpsilon) return {i + 1, LineEnd::Wrap, false};
+      if (t.isDefault && t.stop > s1 + kEpsilon && i >= label) return {i + 1, LineEnd::Wrap, false};
       tab = {true, s0, from, t.stop, t.align, t.leader};
       segFrom = i + 1;
       content = 0;
       beforeDecimal = -1;
       trailing = 0;
-      placed = true;
+      placed = i >= label;
       // Text aligned on a custom stop past the end of the line may reach that stop.
       limit = t.align != TabAlign::Start && !t.isDefault ? std::max(s1, t.stop) : s1;
+      if (i < label) continue;
       lastBreak = i + 1;
       lastHyphen = false;
       lastContent = 0;
@@ -797,7 +817,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
     if (Hangs(k)) {
       content += adv[i];
       trailing += adv[i];
-      if (CanBreakBefore(i + 1)) {
+      if (CanBreakBefore(i + 1) && i >= label) {
         lastBreak = i + 1;
         lastHyphen = false;
         lastContent = content;
@@ -820,14 +840,14 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
       beforeDecimal = content;
     if (placed && w > 0 && end(content + w) > limit + kEpsilon && end(content + w - SpacingAfter(i)) > limit + kEpsilon) {
       // The cluster at i doesn't fit. The word it's in: from the last break to the next one.
-      uint32_t ws = lastBreak ? lastBreak : a;
+      uint32_t ws = lastBreak ? lastBreak : std::max(a, label);
       uint32_t we = i + 1;
       while (we < n && kind[we] == kText && !CanBreakBefore(we)) ++we;
       if (lastBreak) {
         if (uint32_t e = Squeeze(segFrom, i, we, content, limit, lastEnd, tab, beforeDecimal))
-          return {e, LineEnd::Wrap, false};
+          return {e, e >= n ? LineEnd::ParagraphEnd : LineEnd::Wrap, false};
       }
-      if (uint32_t h = Hyphenate(segFrom, ws, we, lastBreak != 0, lastBreak ? lastContent : 0, lastBreak ? lastEnd : s0,
+      if (uint32_t h = Hyphenate(segFrom, ws, we, lastBreak != 0, lastBreak ? lastContent : labelContent, lastBreak ? lastEnd : s0,
                                  limit, tab, beforeDecimal))
         return {h, LineEnd::Wrap, true};
       if (lastBreak) return {lastBreak, LineEnd::Wrap, lastHyphen};
@@ -836,8 +856,8 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
     }
     content += w;
     trailing = 0;
-    placed = true;
-    if (CanBreakBefore(i + 1)) {
+    placed = i >= label;
+    if (CanBreakBefore(i + 1) && i >= label) {
       lastBreak = i + 1;
       lastHyphen = false;
       lastContent = content;
@@ -871,12 +891,14 @@ bool LineBreaker::Impl::Squeezes(uint32_t segFrom, uint32_t upTo, float over, fl
 uint32_t LineBreaker::Impl::Squeeze(uint32_t segFrom, uint32_t i, uint32_t we, float content, float limit,
                                     float lastEnd, const TabContext& tab, float beforeDecimal) {
   const uint32_t n = Size();
-  // Only a word that ends at a break ("locale-" before "specific" is squeezed in), and only on a
-  // line that will be justified: text must follow.
-  if (we >= n || (kind[we] != kSpace && !(kind[we] == kText && CanBreakBefore(we)))) return 0;
+  // Only a word that ends at a break ("locale-" before "specific" is squeezed in), on a line that
+  // will be justified, or the paragraph's last word: Word squeezes a justified paragraph's last line
+  // too (worldbank-guidance's "...included in the bid." and "...valve head isolation", F1). Not a
+  // word before a line break.
+  if (we < n && kind[we] != kSpace && !(kind[we] == kText && CanBreakBefore(we))) return 0;
   uint32_t e = we;
   while (e < n && Hangs(kind[e])) ++e;
-  if (e >= n || Mandatory(kind[e])) return 0;
+  if (e < n && Mandatory(kind[e])) return 0;
   float c = content - (we > i ? SpacingAfter(we - 1) : 0);
   for (uint32_t k = i; k < we; ++k) c += adv[k];
   return Squeezes(segFrom, we, SegmentStart(tab, c, beforeDecimal) + c - limit, limit, lastEnd) ? e : 0;
@@ -1063,8 +1085,10 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
   }
   const float free = s1 - alignedEnd;
   const uint32_t lastFrom = last.first < items.size() ? items[last.first].from : e;
+  // A last line wider than its box was squeezed in (Squeeze): its spaces shrink as a wrapped line's.
   bool justify = f.alignment == Alignment::Justify &&
-                 (fit.ending == LineEnd::Wrap || (fit.ending == LineEnd::LineBreak && f.expandLineBreaks));
+                 (fit.ending == LineEnd::Wrap || (fit.ending == LineEnd::LineBreak && f.expandLineBreaks) ||
+                  (fit.ending == LineEnd::ParagraphEnd && free < -kEpsilon));
   bool distribute = f.alignment == Alignment::Distribute;
   // A justified line can be wider than its box: FindBreak kept a word by squeezing the spaces.
   if (justify && std::fabs(free) > kEpsilon) {
