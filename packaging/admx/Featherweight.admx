@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Group Policy for Featherweight (f1-ship). Copy Featherweight.admx to %SystemRoot%\PolicyDefinitions (or the
+     domain's Central Store) and en-US\Featherweight.adml to its en-US folder. The policies write
+     HKLM\Software\Policies\Featherweight, which Featherweight reads once at start (src/Policy.cpp). -->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   revision="1.0" schemaVersion="1.0"
+                   xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="featherweight" namespace="Featherweight.Policies.Featherweight" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Featherweight_4_1" displayName="$(string.SUPPORTED_Featherweight_4_1)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Featherweight" displayName="$(string.Featherweight)" />
+  </categories>
+  <policies>
+    <policy name="DisableUpdates" class="Machine" displayName="$(string.DisableUpdates)"
+            explainText="$(string.DisableUpdates_Help)" key="Software\Policies\Featherweight" valueName="DisableUpdates">
+      <parentCategory ref="Featherweight" />
+      <supportedOn ref="SUPPORTED_Featherweight_4_1" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+    <policy name="UpdateChannel" class="Machine" displayName="$(string.UpdateChannel)"
+            explainText="$(string.UpdateChannel_Help)" presentation="$(presentation.UpdateChannel)"
+            key="Software\Policies\Featherweight">
+      <parentCategory ref="Featherweight" />
+      <supportedOn ref="SUPPORTED_Featherweight_4_1" />
+      <elements>
+        <enum id="UpdateChannel" valueName="UpdateChannel" required="true">
+          <item displayName="$(string.Channel_Stable)">
+            <value>
+              <string>stable</string>
+            </value>
+          </item>
+          <item displayName="$(string.Channel_Beta)">
+            <value>
+              <string>beta</string>
+            </value>
+          </item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Language" class="Machine" displayName="$(string.Language)" explainText="$(string.Language_Help)"
+            presentation="$(presentation.Language)" key="Software\Policies\Featherweight">
+      <parentCategory ref="Featherweight" />
+      <supportedOn ref="SUPPORTED_Featherweight_4_1" />
+      <elements>
+        <enum id="Language" valueName="Language" required="true">
+          <item displayName="$(string.Language_en)">
+            <value>
+              <string>en</string>
+            </value>
+          </item>
+          <item displayName="$(string.Language_nl)">
+            <value>
+              <string>nl</string>
+            </value>
+          </item>
+          <item displayName="$(string.Language_de)">
+            <value>
+              <string>de</string>
+            </value>
+          </item>
+          <item displayName="$(string.Language_fr)">
+            <value>
+              <string>fr</string>
+            </value>
+          </item>
+          <item displayName="$(string.Language_es)">
+            <value>
+              <string>es</string>
+            </value>
+          </item>
+        </enum>
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

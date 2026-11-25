@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "program-files" (f1-ship; Roy's step 1 pastes it into SignPath): the zip that
+     release.yml's package job uploads, with x64\ and arm64\ each holding Featherweight.exe, pdfium.dll (the standard
+     PDFium build) and pdfium-v8.dll (the form script engine). Every file is Authenticode-signed (SHA-256). -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <directory path="x64">
+      <pe-file path="Featherweight.exe" product-name="Featherweight">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="pdfium.dll">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="pdfium-v8.dll">
+        <authenticode-sign />
+      </pe-file>
+    </directory>
+    <directory path="arm64">
+      <pe-file path="Featherweight.exe" product-name="Featherweight">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="pdfium.dll">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="pdfium-v8.dll">
+        <authenticode-sign />
+      </pe-file>
+    </directory>
+  </zip-file>
+</artifact-configuration>

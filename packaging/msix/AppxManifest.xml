@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MSIX package's manifest (f1-ship); packaging\package.ps1 fills in the @...@ values. The package carries the
+     same files as the installer. Inside a package Featherweight's own updater is off (the Store updates it), and
+     these file types are offered in "Open with" and Default apps instead of the installer's registration. -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap rescap">
+  <Identity Name="@NAME@" Publisher="@PUBLISHER@" Version="@VERSION@" ProcessorArchitecture="@ARCH@" />
+  <Properties>
+    <DisplayName>Featherweight</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>A light, fast office suite: PDFs, documents, spreadsheets and presentations, with no account, no subscription and no telemetry.</Description>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="Featherweight" Executable="Featherweight.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Featherweight" Description="A light, fast office suite"
+                          BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pdf">
+            <uap:DisplayName>PDF document</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pdf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="document">
+            <uap:DisplayName>Document</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.docx</uap:FileType>
+              <uap:FileType>.docm</uap:FileType>
+              <uap:FileType>.dotx</uap:FileType>
+              <uap:FileType>.dotm</uap:FileType>
+              <uap:FileType>.doc</uap:FileType>
+              <uap:FileType>.odt</uap:FileType>
+              <uap:FileType>.ott</uap:FileType>
+              <uap:FileType>.rtf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="workbook">
+            <uap:DisplayName>Workbook</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.xlsx</uap:FileType>
+              <uap:FileType>.xlsm</uap:FileType>
+              <uap:FileType>.xltx</uap:FileType>
+              <uap:FileType>.xltm</uap:FileType>
+              <uap:FileType>.xls</uap:FileType>
+              <uap:FileType>.ods</uap:FileType>
+              <uap:FileType>.ots</uap:FileType>
+              <uap:FileType>.csv</uap:FileType>
+              <uap:FileType>.tsv</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="presentation">
+            <uap:DisplayName>Presentation</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pptx</uap:FileType>
+              <uap:FileType>.pptm</uap:FileType>
+              <uap:FileType>.potx</uap:FileType>
+              <uap:FileType>.potm</uap:FileType>
+              <uap:FileType>.ppsx</uap:FileType>
+              <uap:FileType>.ppt</uap:FileType>
+              <uap:FileType>.pps</uap:FileType>
+              <uap:FileType>.pot</uap:FileType>
+              <uap:FileType>.odp</uap:FileType>
+              <uap:FileType>.otp</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

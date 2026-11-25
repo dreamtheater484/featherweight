@@ -6,7 +6,7 @@ Microsoft, Windows, Office, Word, Excel and PowerPoint are trademarks of the Mic
 
 Featherweight ships no font files. It draws with the fonts installed on the PC and the fonts embedded in documents, within the embedding permissions those fonts set.
 
-Featherweight uses **PDFium** (https://pdfium.googlesource.com/pdfium/), built by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), chromium/8086. PDFium and the libraries it includes are distributed under the licenses below.
+Featherweight uses **PDFium** (https://pdfium.googlesource.com/pdfium/), built by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), chromium/8179. PDFium and the libraries it includes are distributed under the licenses below.
 
 
 ## pdfium-binaries

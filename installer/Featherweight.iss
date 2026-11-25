@@ -1,7 +1,9 @@
 ; Featherweight installer (Inno Setup 6).
-; Built by scripts\release.ps1:  ISCC.exe /DAppVersion=1.2.3 /DSourceDir=<staged files> installer\Featherweight.iss
+; Built by packaging\package.ps1:  ISCC.exe /DAppVersion=1.2.3 /DSourceDir=<staged files> /DArch=x64 installer\Featherweight.iss
 ;
 ; Zero friction: per-user install (no admin, no UAC), one "Install" click, and Featherweight opens when done.
+; Silent: Setup.exe /VERYSILENT (per user), or /VERYSILENT /ALLUSERS as an administrator (per machine, in
+; Program Files). Businesses can also use the MSI (packaging\wix).
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -11,6 +13,16 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "..\build\dist"
+#endif
+#ifndef Arch
+  #define Arch "x64"
+#endif
+#if Arch == "arm64"
+  #define ArchAllowed "arm64"
+  #define ArchSuffix "-arm64"
+#else
+  #define ArchAllowed "x64compatible"
+  #define ArchSuffix ""
 #endif
 
 [Setup]
@@ -25,15 +37,17 @@ AppPublisherURL=https://github.com/dreamtheater484/featherweight
 AppSupportURL=https://github.com/dreamtheater484/featherweight/issues
 AppUpdatesURL=https://github.com/dreamtheater484/featherweight/releases
 VersionInfoVersion={#AppVersion}
-DefaultDirName={localappdata}\Programs\Featherweight
+; {autopf} is %LOCALAPPDATA%\Programs per user (as before), Program Files per machine.
+DefaultDirName={autopf}\Featherweight
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableWelcomePage=yes
 DisableReadyMemo=yes
 DisableFinishedPage=yes
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequiredOverridesAllowed=commandline
+ArchitecturesAllowed={#ArchAllowed}
+ArchitecturesInstallIn64BitMode={#ArchAllowed}
 MinVersion=10.0.18362
 WizardStyle=modern
 WizardSizePercent=100
@@ -41,7 +55,7 @@ SetupIconFile=..\src\Featherweight.ico
 UninstallDisplayIcon={app}\Featherweight.exe
 UninstallDisplayName=Featherweight
 OutputDir={#OutputDir}
-OutputBaseFilename=Featherweight-{#AppVersion}-Setup
+OutputBaseFilename=Featherweight-{#AppVersion}-Setup{#ArchSuffix}
 Compression=lzma2/ultra64
 SolidCompression=yes
 CloseApplications=yes
@@ -69,7 +83,7 @@ Name: "{autoprograms}\Featherweight"; Filename: "{app}\Featherweight.exe"; Comme
 
 [Registry]
 ; Tells Featherweight it is the installed copy (settings go to %APPDATA%\Featherweight).
-Root: HKCU; Subkey: "Software\Featherweight"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Featherweight"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 
 [Run]
 Filename: "{app}\Featherweight.exe"; Parameters: "--register"; Flags: runhidden waituntilterminated
@@ -81,6 +95,8 @@ Filename: "{app}\Featherweight.exe"; Parameters: "--unregister"; Flags: runhidde
 [UninstallDelete]
 Type: files; Name: "{app}\*.old"
 Type: files; Name: "{app}\*.new"
+; The files the last update replaced, kept for one rollback (f1-ship).
+Type: filesandordirs; Name: "{app}\previous"
 
 [Code]
 // Settings are kept on uninstall unless the user asks to remove them.

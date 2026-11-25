@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Featherweight's per-machine MSI for business deployment (f1-ship), built by packaging\package.ps1 with WiX 5:
+       wix build Featherweight.wxs -arch x64 -d Version=4.1.0 -d SourceDir=<staged files> -d IconFile=<ico>
+     Installs into Program Files for every user, silently with msiexec /i Featherweight-x.y.z.msi /qn, and
+     uninstalls with msiexec /x. A copy in Program Files doesn't update itself (users can't write there): deploy new
+     versions as new MSIs, and turn the update check off with the "Turn off updates" policy (packaging\admx). -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Featherweight" Manufacturer="Featherweight" Version="$(Version)" Language="1033"
+           UpgradeCode="0836B732-9B6B-4CBE-87EE-10A7216C417A" Scope="perMachine" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Featherweight is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="Featherweight.ico" SourceFile="$(IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="Featherweight.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/dreamtheater484/featherweight" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/dreamtheater484/featherweight/issues" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Featherweight">
+        <Component Id="Program">
+          <File Id="FeatherweightExe" Source="$(SourceDir)\Featherweight.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="Engine">
+          <File Source="$(SourceDir)\pdfium.dll" KeyPath="yes" />
+        </Component>
+        <!-- One file per component: WiX generates a component's GUID only when its key path is its one file. -->
+        <Component Id="Licence">
+          <File Source="$(SourceDir)\LICENSE.txt" KeyPath="yes" />
+        </Component>
+        <Component Id="Notices">
+          <File Source="$(SourceDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
+        </Component>
+        <!-- "Open with" for every user: one ProgID per kind of file, as the installer's registration has them. -->
+        <Component Id="FileTypes">
+          <RegistryValue Root="HKLM" Key="Software\Featherweight" Name="MsiInstallDir" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+          <?foreach kind in PDF;Document;Workbook;Presentation?>
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.$(kind)\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]Featherweight.exe&quot; &quot;%1&quot;" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.$(kind)\Application" Name="ApplicationName" Type="string" Value="Featherweight" />
+          <?endforeach?>
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.PDF\DefaultIcon" Type="string" Value="[INSTALLFOLDER]Featherweight.exe,0" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.Document\DefaultIcon" Type="string" Value="[INSTALLFOLDER]Featherweight.exe,1" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.Workbook\DefaultIcon" Type="string" Value="[INSTALLFOLDER]Featherweight.exe,2" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Featherweight.Presentation\DefaultIcon" Type="string" Value="[INSTALLFOLDER]Featherweight.exe,3" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="Featherweight.PDF" Type="string" Value="" />
+          <?foreach ext in .docx;.docm;.dotx;.dotm;.doc;.odt;.ott;.rtf?>
+          <RegistryValue Root="HKLM" Key="Software\Classes\$(ext)\OpenWithProgids" Name="Featherweight.Document" Type="string" Value="" />
+          <?endforeach?>
+          <?foreach ext in .xlsx;.xlsm;.xltx;.xltm;.csv;.tsv;.xls;.ods;.ots?>
+          <RegistryValue Root="HKLM" Key="Software\Classes\$(ext)\OpenWithProgids" Name="Featherweight.Workbook" Type="string" Value="" />
+          <?endforeach?>
+          <?foreach ext in .pptx;.pptm;.potx;.potm;.ppsx;.ppt;.pps;.pot;.odp;.otp?>
+          <RegistryValue Root="HKLM" Key="Software\Classes\$(ext)\OpenWithProgids" Name="Featherweight.Presentation" Type="string" Value="" />
+          <?endforeach?>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenu">
+        <Shortcut Id="StartMenuShortcut" Name="Featherweight" Description="A light, fast office suite"
+                  Target="[INSTALLFOLDER]Featherweight.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="Software\Featherweight" Name="MsiStartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Featherweight">
+      <ComponentRef Id="Program" />
+      <ComponentRef Id="Engine" />
+      <ComponentRef Id="Licence" />
+      <ComponentRef Id="Notices" />
+      <ComponentRef Id="FileTypes" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+  </Package>
+</Wix>
