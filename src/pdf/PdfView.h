@@ -72,7 +72,7 @@ class PdfView : public PagedView, public DocumentHost {
   std::wstring TooltipAt(int x, int y) override;
   bool HasKeyFocus() const override;
 
-  int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
+  int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
@@ -115,6 +115,34 @@ class PdfView : public PagedView, public DocumentHost {
   void SaveNote(const NoteTarget& note, const std::wstring& text);
   // Window position of a note's icon (or of the spot where a new note goes).
   D2D1_POINT_2F NoteScreenPos(const NoteTarget& note);
+
+  // ---- Page tools (F1, f1-pdf: PdfPages.cpp) ----
+  // Why the page tools are off for this PDF (an XFA form, protected against changes), or empty.
+  std::wstring PageToolsBlocked() const;
+  // The pages a tool acts on: those selected in the Pages panel, or the current page.
+  std::vector<int> ToolPages() const;
+  bool RotatePages(const std::vector<int>& pages, int quarterTurns);
+  bool DeletePages(const std::vector<int>& pages);
+  // Moves `pages` to the gap before page `gap` (PageCount(): after the last).
+  bool MovePages(const std::vector<int>& pages, int gap);
+  // Asks for PDF files and inserts their pages before page `at` (PageCount(): at the end).
+  bool InsertPagesFromFiles(int at);
+  // Asks where, then writes `pages` as a new PDF.
+  bool ExtractPages(const std::vector<int>& pages);
+  // Asks for the name, then writes each part as a PDF of its own beside it.
+  bool SplitPages(const std::vector<std::vector<int>>& parts);
+  // The same without their dialogs (also the screen tests' --script pdftool:...).
+  bool InsertFiles(const std::vector<std::wstring>& paths, int at);
+  bool ExtractTo(const std::vector<int>& sortedPages, const std::wstring& path);
+  bool SplitTo(const std::vector<std::vector<int>>& parts, const std::wstring& path);
+  bool RunPageScript(const std::wstring& arg);
+  bool CanUndoPages() const { return !pageUndo_.empty(); }
+  bool CanRedoPages() const { return !pageRedo_.empty(); }
+  bool UndoPages();
+  bool RedoPages();
+  // The thumbnail for the Pages panel, asking for it when it isn't there yet.
+  ID2D1Bitmap* Thumbnail(int page, int priority);
+  int ViewRotation() const { return rotation_; }
 
   // ---- DocumentHost (PDFium callbacks) ----
   void OnFormInvalidate(int page, double l, double t, double r, double b) override;
@@ -224,4 +252,26 @@ class PdfView : public PagedView, public DocumentHost {
 
   ComPtr<ID2D1Effect> invertFx_;
   ID2D1DeviceContext* fxDc_ = nullptr;
+
+  // ---- Page tools (PdfPages.cpp) ----
+  class PagesPanel;
+  friend class PagesPanel;
+  // Before pages change: asks about breaking a signature, keeps the document for Undo and lets go
+  // of every page. False when the change shouldn't go ahead.
+  bool BeginPageChange();
+  // After: the pages, sizes, notes and the panel again; a failed change goes back to how it was.
+  void EndPageChange(bool ok, int focusPage);
+  // The document was replaced or its pages changed: everything the view holds of them goes.
+  void ForgetPages();
+  bool ChoosePdfToSave(const std::wstring& suggested, const std::wstring& title, std::wstring& path);
+  void TogglePagesPanel();
+  struct PageUndo {
+    std::string bytes;  // the document before (or, for Redo, after) the change
+    bool modified = false;
+  };
+  std::unique_ptr<PagesPanel> pagesPanel_;
+  std::vector<PageUndo> pageUndo_, pageRedo_;
+  std::string pageBefore_;  // between BeginPageChange and EndPageChange
+  bool pageBeforeModified_ = false;
+  bool signatureWarned_ = false;  // asked once whether to change a signed PDF
 };

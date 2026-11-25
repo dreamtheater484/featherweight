@@ -11,7 +11,10 @@
 #include "Commands.h"
 #include "Util.h"
 #include "core/Strings.h"
+#include "pdf/PagesPanel.h"
+#include "pdf/PdfText.h"
 #include "pdf/Print.h"
+#include "pdf/tools/PageOps.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -917,6 +920,10 @@ bool PdfView::Save(const std::wstring& path, std::wstring& error) {
   if (!Ready()) return false;
   bool ok = doc_->Save(path, error);
   if (ok) path_ = doc_->Path();
+  // Undo and Redo bring back a document that's no longer the file: a change to save.
+  if (ok)
+    for (auto* list : {&pageUndo_, &pageRedo_})
+      for (PageUndo& u : *list) u.modified = true;
   lastModified_ = doc_->Modified();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
@@ -946,6 +953,8 @@ void PdfView::OnFormInvalidate(int page, double l, double t, double r, double b)
 void PdfView::OnFormCursor(int type) { formCursor_ = type; }
 
 void PdfView::OnFormChanged() {
+  pageUndo_.clear();
+  pageRedo_.clear();
   if (doc_ && doc_->Modified() != lastModified_) {
     lastModified_ = doc_->Modified();
     host_.ViewStateChanged();
@@ -1023,6 +1032,9 @@ void PdfView::OnFormFocusChanged(int page, bool hasRect, const FS_RECTF& rect) {
 // Highlights and notes
 
 void PdfView::AnnotationsChanged(int page) {
+  // Page tools' Undo brings back the whole document as it was: not past an edit of another kind.
+  pageUndo_.clear();
+  pageRedo_.clear();
   cache_->InvalidatePage(page);
   RescanNotes(page);
   hoverNote_ = HoverNote{};
@@ -1348,6 +1360,8 @@ struct CommandName {
   const wchar_t* keys;
 };
 
+constexpr wchar_t kPagesGlyph = 0xE8A9;  // ViewAll: a grid of pages
+
 constexpr CommandName kCommandNames[] = {
     {CmdGoToPage, L"Go to page", L"Ctrl+G"},
     {CmdNextPage, L"Next page", L"Page Down"},
@@ -1401,8 +1415,56 @@ int PdfView::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
+int PdfView::ShortcutFor(UINT vk, UINT mods) const {
+  // Ctrl+Z and Ctrl+Y undo the page tools, unless a form field has the keys (its own undo).
+  if ((mods & (kModCtrl | kModAlt)) == kModCtrl && (vk == 'Z' || vk == 'Y') && doc_) {
+    int fp = -1;
+    if (!doc_->FocusedField(fp) && (vk == 'Z' ? CanUndoPages() : CanRedoPages())) return vk == 'Z' ? CmdUndo : CmdRedo;
+  }
+  return Shortcut(vk, mods);
+}
+
 CommandState PdfView::QueryCommand(int cmd) {
   CommandState s;
+  // The page tools (F1, f1-pdf).
+  const bool tools = Ready() && PageToolsBlocked().empty();
+  switch (cmd) {
+    case CmdPdfPagesPanel:
+      s = {Ready(), pagesPanel_ && host_.ViewShownPanel() == pagesPanel_.get()};
+      s.label = T(L"Pages");
+      return s;
+    case CmdPdfRotatePagesRight:
+    case CmdPdfRotatePagesLeft:
+      s = {tools, false};
+      s.label = cmd == CmdPdfRotatePagesRight ? T(L"Rotate pages clockwise") : T(L"Rotate pages counterclockwise");
+      return s;
+    case CmdPdfDeletePages:
+      s = {tools && static_cast<int>(ToolPages().size()) < PageCount(), false};
+      s.label = T(L"Delete pages");
+      return s;
+    case CmdPdfInsertPages:
+      s = {tools, false};
+      s.label = T(L"Insert pages from a PDF…");
+      return s;
+    case CmdPdfExtractPages:
+      s = {tools, false};
+      s.label = T(L"Extract pages…");
+      return s;
+    case CmdPdfSplitMenu:
+    case CmdPdfSplitEvery1:
+    case CmdPdfSplitEvery1 + 1:
+    case CmdPdfSplitEvery1 + 2:
+    case CmdPdfSplitEvery1 + 3:
+    case CmdPdfSplitSelected:
+      s = {tools && PageCount() > 1, false};
+      s.label = T(L"Split…");
+      return s;
+    case CmdUndo:
+    case CmdRedo:
+      s = {cmd == CmdUndo ? CanUndoPages() : CanRedoPages(), false};
+      s.visible = s.enabled;
+      return s;
+  }
   switch (cmd) {
     case CmdSave: s = {Modified(), false}; break;
     case CmdPrint: s = {Ready() && CanPrint(), false}; break;
@@ -1423,13 +1485,37 @@ CommandState PdfView::QueryCommand(int cmd) {
 }
 
 std::vector<int> PdfView::Commands() {
-  std::vector<int> ids;
+  std::vector<int> ids = {CmdPdfPagesPanel,   CmdPdfRotatePagesRight, CmdPdfRotatePagesLeft, CmdPdfDeletePages,
+                          CmdPdfInsertPages, CmdPdfExtractPages};
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   return ids;
 }
 
 bool PdfView::Execute(int cmd) {
   switch (cmd) {
+    // The page tools (F1, f1-pdf: PdfPages.cpp).
+    case CmdPdfPagesPanel: TogglePagesPanel(); return true;
+    case CmdPdfRotatePagesRight: RotatePages(ToolPages(), 1); return true;
+    case CmdPdfRotatePagesLeft: RotatePages(ToolPages(), -1); return true;
+    case CmdPdfDeletePages: DeletePages(ToolPages()); return true;
+    case CmdPdfInsertPages: {
+      // After the selected pages in the Pages panel; otherwise at the end, which is a merge.
+      const bool panel = pagesPanel_ && host_.ViewShownPanel() == pagesPanel_.get() && !pagesPanel_->Selection().empty();
+      InsertPagesFromFiles(panel ? pagesPanel_->Selection().back() + 1 : PageCount());
+      return true;
+    }
+    case CmdPdfExtractPages: ExtractPages(ToolPages()); return true;
+    case CmdPdfSplitEvery1:
+    case CmdPdfSplitEvery1 + 1:
+    case CmdPdfSplitEvery1 + 2:
+    case CmdPdfSplitEvery1 + 3: {
+      static constexpr int kEvery[] = {1, 2, 5, 10};
+      SplitPages(pdftools::SplitEvery(PageCount(), kEvery[cmd - CmdPdfSplitEvery1]));
+      return true;
+    }
+    case CmdPdfSplitSelected: SplitPages(pdftools::SplitAt(PageCount(), ToolPages())); return true;
+    case CmdUndo: UndoPages(); return true;
+    case CmdRedo: RedoPages(); return true;
     case CmdCopy: Copy(); return true;
     case CmdCut: FieldKey('X', kModCtrl); return true;
     case CmdPaste: FieldKey('V', kModCtrl); return true;
@@ -1470,7 +1556,14 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"" : L"This PDF doesn’t allow printing");
   print.enabled = CanPrint();
-  m.left = {save, saveAs, print};
+  ToolItem pages = item(CmdPdfPagesPanel, kPagesGlyph);
+  pages.tooltip = T(L"Pages: reorder, rotate, delete, insert, extract and split");
+  pages.toggle = true;
+  pages.checked = QueryCommand(CmdPdfPagesPanel).checked;
+  pages.sepBefore = true;
+  pages.priority = 4;
+  pages.menuLabel = T(L"Pages");
+  m.left = {save, saveAs, print, pages};
 
   m.pager = true;
   m.page = currentPage_;

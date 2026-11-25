@@ -2980,6 +2980,13 @@ void App::RunScript(const std::wstring& script) {
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
     } else if (op == L"highlight") {
       if (PdfView* v = ActivePdf()) v->HighlightSelection();
+    } else if (op == L"pdftool") {
+      // F1, f1-pdf: the PDF tab's page tools without their dialogs (PdfView::RunPageScript).
+      PdfView* v = ActivePdf();
+      if (!v || !v->RunPageScript(arg)) {
+        fwprintf(stderr, L"pdftool failed: %s\n", arg.c_str());
+        scriptFailed_ = true;
+      }
     } else if (op == L"dumpedit") {
       wchar_t buf[512] = {};
       GetWindowTextW(notes_.Edit(), buf, 512);
