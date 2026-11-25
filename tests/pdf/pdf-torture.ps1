@@ -6,11 +6,12 @@
 .DESCRIPTION
   1. The page-tools corpus (tests\pdf\make-pdf-corpus.py, made once into build\pdf-corpus), tests\pdfs,
      and every -ReferenceEvery'th PDF Office made in the private corpus (<Corpus>\reference).
-     Files a page tool must refuse (restricted, XFA) are left out: refusing is f1-pdf's to test.
+     Files a page tool must refuse (restricted, XFA) go in too, and a few scanned pages for OCR.
   2. fwtool pdf-torture: R rounds of N seeded operations per PDF (rotate, delete, move, insert pages of
-     another PDF, a drawn stamp, extract and split into new files), saved whole or incrementally,
+     another PDF, a drawn signature, OCR, extract and split into new files; with f1-pdf's test signer,
+     certificate signatures every third round), saved as the app saves,
      opened again and checked page by page; failures leave reproducers in <Out>\repro.
-  3. fwtool pdf-valid on every file written (<Out>\saved, <Out>\extracted): structure, PDFium, fonts.
+  3. fwtool pdf-valid on every file written (<Out>\saved, extracted, signed, refused): structure, PDFium, fonts.
   4. Saved without edits: each input opened in the app (-Exe) and saved with the script op saveas:,
      which goes through the PDF tab's own save; the file must be the same bytes.
   <Out>\summary.json and summary.md; exit 1 when anything failed. The outputs then go to
@@ -24,6 +25,8 @@ param(
   [string]$Out = "build\pdf-torture",
   [string]$Corpus = $(if ($env:FW_CORPUS) { $env:FW_CORPUS } else { "D:\Documents\Codex\FeatherweightCorpus" }),
   [string]$PdfCorpus = "build\pdf-corpus",
+  # The OCR scan set (tests\pdf\ocr-accuracy.ps1 makes it): a few of its scanned pages go in, for OCR.
+  [string]$Scans = "build\pdf-ocr\scans",
   [uint32]$Seed = 1,
   [int]$Edits = 30,
   [int]$Rounds = 3,
@@ -47,7 +50,8 @@ if (-not (Test-Path (Join-Path $PdfCorpus "manifest.json"))) {
   if ($LASTEXITCODE) { throw "make-pdf-corpus.py failed" }
 }
 $manifest = Get-Content (Join-Path $PdfCorpus "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-$inputs = @($manifest.files | Where-Object { $_.expect -notlike "refuse:*" } | ForEach-Object { Join-Path $PdfCorpus $_.file })
+# The ones the tools must refuse (XFA, restricted) go in too: the torture checks that every tool refuses.
+$inputs = @($manifest.files | ForEach-Object { Join-Path $PdfCorpus $_.file })
 $refused = @($manifest.files | Where-Object { $_.expect -like "refuse:*" } | ForEach-Object { "$($_.file) ($($_.expect))" })
 $inputs += @(Get-ChildItem (Join-Path $root "tests\pdfs") -Filter *.pdf | ForEach-Object FullName)
 $refDir = Join-Path $Corpus "reference"
@@ -55,22 +59,33 @@ if (Test-Path $refDir) {
   $refs = @(Get-ChildItem $refDir -Recurse -Filter *.pdf | Sort-Object FullName)
   for ($i = 0; $i -lt $refs.Count; $i += $ReferenceEvery) { $inputs += $refs[$i].FullName }
 }
+# Scanned pages, for OCR as an operation: a few of the OCR scan set (tests\pdf\ocr-accuracy.ps1 makes it).
+$scanNote = ""
+$Scans = Get-FullPath $Scans
+if (Test-Path $Scans) { $inputs += @(Get-ChildItem $Scans -Filter scan-*.pdf | Sort-Object Name | Select-Object -First 4 | ForEach-Object FullName) }
+else { $scanNote = "no scanned pages ($Scans isn't there: tests\pdf\ocr-accuracy.ps1 makes it)" }
+# Certificate signatures every third round: f1-pdf's test signer, loaded in memory only.
+$signArgs = @()
+$pfx = Join-Path $root "tests\pdfs\signing\test-signer.pfx"
+if (Test-Path $pfx) { $signArgs = @("--pfx", $pfx, "--pfx-password", "featherweight") }
 $passwords = (@($manifest.files | Where-Object { $_.password } | ForEach-Object password) + "secret" | Sort-Object -Unique) -join ","
 $list = Join-Path $Out "inputs.txt"
 [IO.File]::WriteAllLines($list, [string[]]$inputs, $utf8)
-"== $($inputs.Count) PDFs ($(@($manifest.files).Count - $refused.Count) made, $(@(Get-ChildItem (Join-Path $root 'tests\pdfs') -Filter *.pdf).Count) from tests\pdfs, the rest Office's); left out as refusals: $($refused -join ', ')"
+"== $($inputs.Count) PDFs ($(@($manifest.files).Count) made, of which refusals: $($refused -join ', '); $(@(Get-ChildItem (Join-Path $root 'tests\pdfs') -Filter *.pdf).Count) from tests\pdfs; scanned pages and Office's)$(if ($scanNote) { "; $scanNote" })"
 
 # 2. The torture.
 "== fwtool pdf-torture: seed $Seed, $Rounds rounds of $Edits operations"
 $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-& $Fwtool pdf-torture --seed $Seed --edits $Edits --rounds $Rounds --password $passwords --out $Out --json (Join-Path $Out "torture.json") --samples $list 2>&1 |
+& $Fwtool pdf-torture --seed $Seed --edits $Edits --rounds $Rounds --password $passwords @signArgs --out $Out --json (Join-Path $Out "torture.json") --samples $list 2>&1 |
   ForEach-Object { "$_" } | Tee-Object -FilePath (Join-Path $Out "torture.log") | Select-String -Pattern '^\[FAIL\]|^\d+ PDFs' | ForEach-Object { "   $_" }
 $tortureExit = $LASTEXITCODE
 $ErrorActionPreference = $prev
 $t = Get-Content (Join-Path $Out "torture.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 
 # 3. Every file written, through pdf-valid.
-$outputs = @(Get-ChildItem (Join-Path $Out "saved"), (Join-Path $Out "extracted") -Filter *.pdf -ErrorAction SilentlyContinue | ForEach-Object FullName)
+# The signed ones' trust root beside them, for pyHanko (tests\pdf\validate-signatures.py --dir <Out>\signed).
+if (Test-Path (Join-Path $Out "signed\signatures.json")) { Copy-Item (Join-Path $root "tests\pdfs\signing\test-signer.crt") (Join-Path $Out "signed\test-signer.crt") }
+$outputs = @(Get-ChildItem (Join-Path $Out "saved"), (Join-Path $Out "extracted"), (Join-Path $Out "signed"), (Join-Path $Out "refused") -Filter *.pdf -ErrorAction SilentlyContinue | ForEach-Object FullName)
 $outList = Join-Path $Out "outputs.txt"
 [IO.File]::WriteAllLines($outList, [string[]]$outputs, $utf8)
 "== fwtool pdf-valid on $($outputs.Count) files written"
@@ -115,17 +130,18 @@ $totals = [ordered]@{
   through = $t.through; files = $t.totals.files; skipped = $t.totals.skipped; operations = $t.totals.operations; failures = $t.totals.failures
   written = $t.totals.written; outputsValid = $outputs.Count - $invalid.Count; outputsInvalid = $invalid.Count
   uneditedThroughApp = $unedited.Count; uneditedIdentical = $uneditedSame; uneditedDiffer = $uneditedDiffer.Count; uneditedNotChecked = $uneditedErrors.Count
-  refusalsLeftOut = $refused.Count
+  refusalsChecked = $t.totals.refused; signed = $t.totals.signed; ocrPages = $t.totals.ocrPages; ocrWords = $t.totals.ocrWords
 }
 $pass = $tortureExit -eq 0 -and $t.totals.failures -eq 0 -and $invalid.Count -eq 0 -and $unedited.Count -gt 0 -and $uneditedDiffer.Count -eq 0
 $verdict = "$($t.totals.files) PDFs, $($t.totals.operations) operations, $($t.totals.failures) failures; $($outputs.Count - $invalid.Count) of $($outputs.Count) files written pass pdf-valid; " +
            "saved without edits through the app: $uneditedSame of $($unedited.Count) the same bytes$(if ($uneditedErrors.Count) { " ($($uneditedErrors.Count) not checked)" })" +
+           "; $($t.totals.refused) refusals checked, $($t.totals.signed) signed, OCR $($t.totals.ocrWords) words on $($t.totals.ocrPages) pages" +
            $(if ($t.through -eq "pdfium") { "; operations through PDFium directly until f1-pdf's page tools are in" })
 $summary = [ordered]@{ pass = $pass; verdict = $verdict; totals = $totals
   failures = @($t.files | Where-Object { $_.failures } | ForEach-Object { foreach ($x in $_.failures) { "$([IO.Path]::GetFileName($_.file)): $($x.category): $($x.message)" } } | Select-Object -First 200)
   invalidOutputs = @($invalid | ForEach-Object { "$([IO.Path]::GetFileName($_.file)): $($_.errors[0])" })
   uneditedDiffer = @($uneditedDiffer | ForEach-Object { $_.file }); uneditedNotChecked = @($uneditedErrors | ForEach-Object { "$($_.file): $($_.error)" })
-  refusalsLeftOut = $refused }
+  refusals = $refused }
 [IO.File]::WriteAllText((Join-Path $Out "summary.json"), (ConvertTo-Json $summary -Depth 6), $utf8)
 $md = @("# PDF torture", "", "$(if ($pass) { 'Passed' } else { 'Failed' }): $verdict.", "", "| | |", "|---|---|")
 foreach ($k in $totals.Keys) { $md += "| $k | $($totals[$k]) |" }

@@ -469,6 +469,7 @@ Check "damage.pdf" long "PDF torture: random page operations, OCR and a drawn si
   if (-not $s) { return Failed "no summary (exit $code; logs\damage.pdf.log)" }
   $n = [ordered]@{}
   foreach ($p in $s.totals.PSObject.Properties) { $n[$p.Name] = $p.Value }
+  if ($code -eq 0 -and $s.pass -and $s.totals.through -ne "featherweight") { return NotBuilt "f1-pdf" "the torture through the page tools (fwtool built without fwpdftools: $($s.verdict))" }
   if ($code -eq 0 -and $s.pass) { Passed $s.verdict $n } else { Failed $s.verdict $n }
 }
 
@@ -728,6 +729,7 @@ Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the tor
   $o = Join-Path $script:outDir "pdf.readers"
   # The torture run's files (saved and extracted), and the made corpus with its refusals.
   $inputs = @((Join-Path $script:outDir "damage.pdf\saved"), (Join-Path $script:outDir "damage.pdf\extracted"))
+  if (Test-Path (Join-Path $script:outDir "damage.pdf\signed")) { $inputs += Join-Path $script:outDir "damage.pdf\signed" }
   if (-not (Test-Path $inputs[0])) { return Failed "needs damage.pdf's outputs on this commit (run it first)" }
   $originals = Join-Path $script:outDir "damage.pdf\inputs.txt"
   $code = Use-Office "pdf.readers" "WINWORD" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals) }

@@ -23,6 +23,12 @@ target_compile_options(fwtool PRIVATE ${FW_COMPILE_OPTIONS})
 # PDFium reads Word's reference PDFs. As in the app, it's delay-loaded: only `lines` and `compare`
 # load it, and only the copy next to fwtool.exe.
 target_link_options(fwtool PRIVATE /DELAYLOAD:pdfium.dll)
+# F1 (f1-gate): pdf-torture through f1-pdf's page tools, OCR and signing once they're in the build
+# (src/pdf, added before tools/fwtool); without them it calls PDFium directly.
+if(TARGET fwpdftools)
+  target_link_libraries(fwtool PRIVATE fwpdftools)
+  target_compile_definitions(fwtool PRIVATE FW_HAVE_PDFTOOLS)
+endif()
 add_custom_command(TARGET fwtool POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FW_PDFIUM_DIR}/bin/pdfium.dll" "$<TARGET_FILE_DIR:fwtool>"
   COMMENT "Copying pdfium.dll for fwtool")

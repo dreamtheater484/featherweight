@@ -128,11 +128,15 @@ constexpr const char* kUsage =
     "      range and whether it covers the whole file. LIST names more PDFs, one per line. --out\n"
     "      writes each PDF's text, as PDFium reads it, to DIR\\<name>.txt (pages split by form feeds).\n"
     "  fwtool pdf-torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] [--password P,Q]\n"
-    "                     [--samples LIST] <pdf or folder>...\n"
+    "                     [--pfx FILE --pfx-password P] [--samples LIST] <pdf or folder>...\n"
     "      The page tools' never-damage test (F1, f1-gate): R rounds of N seeded random operations per PDF\n"
-    "      (rotate, delete, move, insert pages of another input, a drawn stamp, extract and split into new\n"
-    "      files), saved whole or incrementally, opened again and checked page by page (text, size,\n"
-    "      rotation, annotations) and by pdf-valid's structure check. DIR/saved, DIR/extracted, DIR/repro.\n"
+    "      (rotate, delete, move, insert another input, a drawn signature, OCR, extract and split into new\n"
+    "      files), through f1-pdf's tools when built with them, saved as the app saves, opened again and\n"
+    "      checked page by page (text, size, rotation, annotations) and by pdf-valid's structure check.\n"
+    "      PDFs the tools must refuse (XFA, protected): every tool refuses, a save is the file as it was.\n"
+    "      --pfx: every third round signed with it (in memory only), saved, changed and saved again; the\n"
+    "      signed revision must stay intact (DIR/signed, with signatures.json for pyHanko).\n"
+    "      DIR/saved, DIR/extracted, DIR/refused, DIR/signed, DIR/repro.\n"
     "  fwtool pdf-compare [--out DIR] [--json FILE] [--min-ssim S] <reference.pdf> <ours.pdf>\n"
     "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
     "      by SSIM; a page passes at >= 0.95, or at >= S (P2's save without edits: 0.99). --out writes\n"
@@ -379,6 +383,8 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
     else if (arg == L"--password" && i + 1 < argc) options.password = argv[++i];
+    else if (arg == L"--pfx" && i + 1 < argc) options.pfx = argv[++i];
+    else if (arg == L"--pfx-password" && i + 1 < argc) options.pfxPassword = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
     else if (arg == L"--pictures") options.pictures = true;

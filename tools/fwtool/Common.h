@@ -59,6 +59,8 @@ struct Options {
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt
+  std::filesystem::path pfx;        // pdf-torture: certificate signatures with this PFX (in memory only; F1)
+  std::wstring pfxPassword;         // its password
   std::vector<std::filesystem::path> inputs;
 };
 
