@@ -166,7 +166,8 @@ void DocView::BuildRibbon(RibbonModel& m, const ToolbarContext& ctx) {
     RibbonItem& styles = b.Add(format_ ? format_->StyleBox() : Greyed(ToolKind::Dropdown, CmdStyleBox), Size::Large, L"Styles", L"L");
     styles.tool.glyph = icon::FontCase;  // the gallery folded into one button (a narrow window)
     RibbonGallery g;
-    g.columns = 6;
+    g.columns = 7;  // five at its middle width (1366 px), where Word's first row also reaches Title (RF7)
+    g.popupColumns = 6;
     g.choiceWidth = 84;
     if (format_)
       g.drawChoice = [this](gfx::Canvas& c, const D2D1_RECT_F& r, int i, float ui) { format_->StylePreview(c, r, i, ui); };

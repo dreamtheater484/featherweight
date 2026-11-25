@@ -38,6 +38,9 @@ class Face {
   // `family`, `weight` and `style`: how DirectWrite's font fallback names the face.
   Face(Microsoft::WRL::ComPtr<IDWriteFontFace> face, std::wstring family,
        DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL);
+  // `base` standing in for a family that isn't installed (draw/FontSubstitutes.h): its glyphs
+  // `widthScale` as wide, and a line `height` ems tall (0: its own).
+  Face(const Face& base, float widthScale, float height);
 
   IDWriteFontFace* Get() const { return face_.Get(); }
   const std::wstring& Family() const { return family_; }
@@ -50,6 +53,8 @@ class Face {
   IDWriteFontFace* Plain() const;
   // The glyph's advance for one character at `size` points, without shaping; 0 if it's missing.
   float Advance(wchar_t c, float size) const;
+  // How much wider the layout draws its glyphs than designed: 1, except for a substitute.
+  float WidthScale() const { return widthScale_; }
 
  private:
   Microsoft::WRL::ComPtr<IDWriteFontFace> face_;
@@ -58,6 +63,7 @@ class Face {
   DWRITE_FONT_WEIGHT weight_;
   DWRITE_FONT_STYLE style_;
   float upem_ = 2048;
+  float widthScale_ = 1;
   // In design units, from the font's tables (see FontMetrics).
   float ascent_ = 0, descent_ = 0, lineGap_ = 0;
   float dwAscent_ = 0, dwDescent_ = 0, dwLineGap_ = 0;  // DirectWrite's
@@ -91,9 +97,6 @@ class Fonts {
   // PowerPoint draws them (un-country morocco's PDF); off: DirectWrite's alone.
   void SetPowerPointFallback(bool on);
   bool PowerPointFallback() const { return powerPointFallback_; }
-  // Office's cloud fonts as PowerPoint finds them: every face by its own family name too ("Open Sans
-  // Light" in Open Sans's folder, worldbank's PDF); off: as Word, only the folders' families.
-  void SetAllCloudFaces(bool on) { allCloudFaces_ = on; }
   ~Fonts();
   Fonts(const Fonts&) = delete;
   Fonts& operator=(const Fonts&) = delete;
@@ -152,10 +155,6 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteFontSet> win32_;
   bool win32Tried_ = false;
   Microsoft::WRL::ComPtr<IDWriteFontSet> Win32Family(const std::wstring& family);
-  // Office's cloud fonts (draw/CloudFonts.h), added to the collection the first time a family
-  // missing from it is one of them; false if it isn't, or they were added before.
-  bool AddCloudFonts(const std::wstring& name);
-  bool cloudAdded_ = false;
   // An installed face by its full name: its family, weight and slant.
   struct FaceName {
     std::wstring family;
@@ -165,8 +164,12 @@ class Fonts {
   bool FullName(const std::wstring& name, FaceName& out);
   std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
-  bool gdiFamilies_ = false, powerPointFallback_ = false, allCloudFaces_ = false;
+  bool gdiFamilies_ = false, powerPointFallback_ = false;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
+  // Lower-cased request -> the width scale and line height of its substitute, where they aren't 1
+  // and its own; and the faces made with them.
+  std::map<std::wstring, std::pair<float, float>, std::less<>> adjust_;
+  std::map<std::tuple<const Face*, float, float>, std::unique_ptr<Face>> adjusted_;
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
   std::vector<Substitution> substitutions_;
   std::wstring lastResort_;
