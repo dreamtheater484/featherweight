@@ -18,7 +18,7 @@ import cpplex  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 POT = os.path.join(ROOT, 'strings', 'featherweight.pot')
-SKIP = {'src/core/Lang.h', 'src/core/Lang.cpp', 'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h'}
+SKIP = {'src/core/Lang.h', 'src/ui/WidgetGallery.cpp', 'src/ui/WidgetGallery.h'}  # Lang.cpp: the key names
 CALL = re.compile(r'(?:\b|::)(T|N_)\(\s*$')
 TABLE = re.compile(r'\bUiText(8|16)?\b')
 TABLE_PREFIX = {None: ('L',), '8': ('', 'u8'), '16': ('u',)}  # the literals a UiText, UiText8, UiText16 takes

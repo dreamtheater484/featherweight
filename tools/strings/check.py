@@ -108,31 +108,42 @@ def problems_of(en, tr):
 
 
 def check(path, template):
-    """(problems, counts): problem lines, and {translated, missing, placeholderErrors, accessKeyErrors}."""
+    """(problems, counts): problem lines, and {translated, missing, placeholderErrors, accessKeyErrors, otherErrors,
+    untranslated: [English], fuzzy: [English]} (fuzzy: the English changed since it was translated)."""
+    import update  # noqa: E402 (it imports this module)
     try:
         rel = os.path.relpath(path, ROOT).replace('\\', '/')
     except ValueError:  # another drive
         rel = path
-    entries = read_po(path)
     seen, out = set(), []
-    counts = {'translated': 0, 'placeholderErrors': 0, 'accessKeyErrors': 0, 'otherErrors': 0}
-    for ctx, en, tr, line in entries:
+    counts = {'translated': 0, 'placeholderErrors': 0, 'accessKeyErrors': 0, 'otherErrors': 0,
+              'untranslated': [], 'fuzzy': []}
+    for e in update.read(path):
+        if e['obsolete']:
+            continue
+        ctx, en, tr = e['ctx'], e['id'], e['str']
         key = (ctx, en)
         if key not in template:
-            out.append(f'{rel}:{line}: not in the template: {en!r}')
+            out.append(f'{rel}: not in the template (run tools/strings/update.py): {en!r}')
             counts['otherErrors'] += 1
             continue
         seen.add(key)
         if not tr:
+            counts['untranslated'].append(en)
+            continue
+        if e['fuzzy']:
+            counts['fuzzy'].append(en)
             continue
         counts['translated'] += 1
         for p in problems_of(en, tr):
-            out.append(f'{rel}:{line}: {p}: {en!r} -> {tr!r}')
+            out.append(f'{rel}: {p}: {en!r} -> {tr!r}')
             kind = 'accessKeyErrors' if 'access key' in p else 'placeholderErrors' if p in (
                 'placeholders differ', 'the shortcut after the tab differs', 'a different number of line breaks') \
                 else 'otherErrors'
             counts[kind] += 1
-    counts['missing'] = len(template) - len(seen)
+    missing = [en for (ctx, en) in sorted(template, key=lambda k: (k[1], k[0] or '')) if (ctx, en) not in seen]
+    counts['missing'] = len(missing)
+    counts['untranslated'] += missing
     return out, counts
 
 
@@ -167,11 +178,13 @@ def main():
             if size is None or size > a.max_bytes:
                 out.append(f'{code}: compiled catalog {"missing" if size is None else f"{size} bytes, over {a.max_bytes}"}')
                 print(out[-1])
-        print(f'{code}: {counts["translated"]} of {len(template)} strings translated, {counts["missing"]} missing from the '
-              f'file, {len(out)} problems' + (f', {size} bytes compressed' if size is not None else ''))
+        print(f'{code}: {counts["translated"]} of {len(template)} strings translated, {len(counts["fuzzy"])} fuzzy '
+              f'(English changed), {len(counts["untranslated"])} untranslated ({counts["missing"]} missing from the file), '
+              f'{len(out)} problems' + (f', {size} bytes compressed' if size is not None else ''))
         languages[code] = {'strings': len(template), 'translated': counts['translated'],
                            'placeholderErrors': counts['placeholderErrors'], 'accessKeyErrors': counts['accessKeyErrors'],
-                           'otherErrors': counts['otherErrors'], 'compressedBytes': size}
+                           'otherErrors': counts['otherErrors'], 'compressedBytes': size,
+                           'untranslated': counts['untranslated'], 'fuzzy': counts['fuzzy']}
         failed |= bool(out)
     if not paths:
         print('no catalogs yet (strings/<code>.po)')
