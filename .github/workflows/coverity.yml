@@ -1,0 +1,77 @@
+name: coverity
+
+# Coverity Scan (F1, docs/f1-plan.md "External review"): a weekly static analysis of the shipped exe
+# by scan.coverity.com, free for open-source projects. It waits for Roy's step 6: the project
+# registered there, with its token and the account's email as the repository secrets
+# COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL. Until then the job only says it's waiting.
+# The project's name there is the variable COVERITY_PROJECT if set, else the repository's name.
+on:
+  schedule:
+    - cron: '41 2 * * 0'
+  push:
+    branches: [claude/f1-trust]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      COVERITY_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
+      COVERITY_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}
+      COVERITY_PROJECT: ${{ vars.COVERITY_PROJECT || github.repository }}
+    steps:
+      - name: Check for the token (Roy's step 6)
+        id: token
+        shell: pwsh
+        run: |
+          if ($env:COVERITY_TOKEN -and $env:COVERITY_EMAIL) { "ready=true" >> $env:GITHUB_OUTPUT }
+          else { "::notice::Coverity Scan is waiting for Roy's step 6 (the secrets COVERITY_SCAN_TOKEN and COVERITY_SCAN_EMAIL)." }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.ready
+        with:
+          persist-credentials: false
+
+      - name: Cache PDFium
+        if: steps.token.outputs.ready
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+
+      - name: Configure the shipped configuration
+        if: steps.token.outputs.ready
+        run: cmake -S . -B build-coverity -DFW_BUILD_TESTS=OFF -DFW_TEST_SCREENS=OFF
+
+      - name: Get Coverity's build tool
+        if: steps.token.outputs.ready
+        shell: pwsh
+        run: |
+          $form = @{ token = $env:COVERITY_TOKEN; project = $env:COVERITY_PROJECT }
+          Invoke-WebRequest -Method Post -Uri https://scan.coverity.com/download/cxx/win64 -Body $form -OutFile cov-analysis.zip
+          Expand-Archive cov-analysis.zip -DestinationPath cov-analysis
+          $covBuild = Get-ChildItem cov-analysis -Recurse -Filter cov-build.exe | Select-Object -First 1
+          if (-not $covBuild) { throw 'cov-build.exe not found in the download' }
+          Add-Content $env:GITHUB_PATH $covBuild.DirectoryName
+
+      - name: Build the exe under cov-build
+        if: steps.token.outputs.ready
+        run: cov-build --dir cov-int cmake --build build-coverity --config Release --target Featherweight --parallel
+
+      - name: Submit to Coverity Scan
+        if: steps.token.outputs.ready
+        shell: pwsh
+        run: |
+          Get-Content cov-int\build-log.txt -Tail 5
+          tar -czf featherweight.tgz cov-int
+          $project = [uri]::EscapeDataString($env:COVERITY_PROJECT)
+          curl.exe --fail --silent --show-error `
+            --form-string "token=$env:COVERITY_TOKEN" --form-string "email=$env:COVERITY_EMAIL" `
+            --form file=@featherweight.tgz --form-string "version=$env:GITHUB_SHA" `
+            --form-string "description=CI run $env:GITHUB_RUN_ID" `
+            "https://scan.coverity.com/builds?project=$project"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

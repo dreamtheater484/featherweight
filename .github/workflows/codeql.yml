@@ -1,0 +1,84 @@
+name: codeql
+
+# CodeQL code scanning of the shipped program (F1, docs/f1-plan.md "External review"): weekly, on
+# every release tag, and on pushes to main and the integration branch. The build is the shipped
+# configuration's exe, so the alerts are about code that ships. Results under third_party/ (miniz,
+# pugixml) and generated build files are left out before the upload: they're reported upstream.
+# The 4.1 gate requires no open alert of high or critical security severity.
+on:
+  push:
+    branches: [main, claude/f1-int, claude/f1-trust]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache PDFium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+
+      # Configured before CodeQL starts, so the PDFium download and CMake's own checks aren't traced.
+      - name: Configure the shipped configuration
+        run: cmake -S . -B build-codeql -DFW_BUILD_TESTS=OFF -DFW_TEST_SCREENS=OFF
+
+      - name: Start CodeQL
+        uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: Build the exe
+        run: cmake --build build-codeql --config Release --target Featherweight --parallel
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          category: /language:c-cpp
+          output: sarif
+          upload: never
+
+      - name: Leave out third-party and generated files
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem sarif -Filter *.sarif) {
+            $sarif = Get-Content $file.FullName -Raw | ConvertFrom-Json -Depth 100
+            foreach ($run in $sarif.runs) {
+              $before = @($run.results).Count
+              $run.results = @($run.results | Where-Object {
+                $uri = $_.locations[0].physicalLocation.artifactLocation.uri
+                -not ($uri -like 'third_party/*' -or $uri -like 'build-codeql/*')
+              })
+              "{0}: {1} results, {2} after leaving out third_party/ and build files" -f $file.Name, $before, $run.results.Count
+            }
+            $sarif | ConvertTo-Json -Depth 100 -Compress | Set-Content $file.FullName -Encoding utf8
+          }
+
+      - name: Upload the results
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: sarif
+          category: /language:c-cpp
