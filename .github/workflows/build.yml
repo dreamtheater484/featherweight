@@ -108,6 +108,14 @@ jobs:
             if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.png)) { throw "snapshot of $f failed ($($p.ExitCode))" }
           }
 
+      - name: Upload the program (for the Windows Server 2022 smoke test)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: program-x64
+          path: |
+            build/Release/Featherweight.exe
+            build/Release/pdfium.dll
+
       # The lightweight budgets (plan §11, tests/budgets/README.md), on the shipped configuration as
       # scripts/release.ps1 builds it: growth in size the ledger doesn't explain fails the build.
       # Timings are tracked, not gated: the runners are too noisy (the development PC gates them).
@@ -133,6 +141,34 @@ jobs:
           name: budgets
           path: budgets*.json
           if-no-files-found: ignore
+
+  # The build job's program on Windows Server 2022, the Windows 10 family (windows-latest is Server 2025): a PDF, a
+  # document, a workbook and a presentation opened off-screen. 4.0.0 crashed there on report.docx (f1-ship).
+  smoke-2022:
+    name: smoke (Windows Server 2022)
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: program-x64
+          path: program
+      - name: Open a PDF, a document, a workbook and a presentation
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($f in 'tests\pdfs\text.pdf', 'tests\office\layout\report.docx', 'tests\office\edge\extlst.xlsx',
+                         'tests\office\generated\layouts.pptx') {
+            Remove-Item smoke.png -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath program\Featherweight.exe -ArgumentList '--snapshot', 'smoke.png', $f -PassThru -Wait
+            $ok = $p.ExitCode -eq 0 -and (Test-Path smoke.png)
+            Write-Host ("{0}: {1}" -f $f, $(if ($ok) { 'ok' } else { "failed ($($p.ExitCode))" }))
+            if (-not $ok) { $bad += $f }
+          }
+          if ($bad) { throw "Failed on Windows Server 2022: $($bad -join ', ')" }
 
   # Windows on ARM (f1-ship): the same build and unit tests on GitHub's arm64 runner.
   build-arm64:

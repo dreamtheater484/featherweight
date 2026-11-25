@@ -6,11 +6,11 @@
 # copied beside the exe; FW_PDFIUM_COMPONENT also fetches the other and copies it as pdfium-v8.dll (release builds).
 # x64 and ARM64; the archives' SHA-256 are GitHub's asset digests, checked again on download.
 
-set(FW_PDFIUM_BUILD "8086")
-set(_fw_pdfium_sha256_standard_x64 "1fd8af952832dbb0eb16d9249f68fe09e5f5ebf7c3dd9f6066ea2720cc28487d")
-set(_fw_pdfium_sha256_v8_x64 "cb8f1e0e0c0dd74cbb17e8ec11d8969c4b95638fd3e66fd1c7e4a684d28a0d46")
-set(_fw_pdfium_sha256_standard_arm64 "1799b8034e6d64946fec0ae79f3edfc8ba58ccd80c70a46194803b1eba408344")
-set(_fw_pdfium_sha256_v8_arm64 "c4943e7d3b0052983d5a783879a27d7dd0ccfc9e3c9d247be5ebc06ece77f0b5")
+set(FW_PDFIUM_BUILD "8179")
+set(_fw_pdfium_sha256_standard_x64 "836a77c9053f624839c66010cddea7b675628a36b8831d2330178bb169d241b6")
+set(_fw_pdfium_sha256_v8_x64 "8bd8e16285ba19902216d97e185241bff686170fd9a41c1b184d987d22e86663")
+set(_fw_pdfium_sha256_standard_arm64 "9c659bf0cd9bdefcbf7ec0e4b1675c2961e0fdfd4ce097b411efd9742832fe06")
+set(_fw_pdfium_sha256_v8_arm64 "7bbc3bbf54e817fa0161fc3fe77878a024aef016a8ea2944c3cc500abf8a8b95")
 
 option(FW_PDFIUM_COMPONENT "Also fetch the PDFium build with form scripts, as the optional component pdfium-v8.dll" OFF)
 
