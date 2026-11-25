@@ -521,6 +521,7 @@ class DocView : public PagedView {
   double heldSince_ = 0;
   static constexpr double kHeldPagesMs = 100;
   bool noticesShown_ = false;
+  bool reviewOnOpen_ = false;  // comments: the Review pane opens with the document (RF2)
   // Words in the main story, for the status bar: counted in idle time by paragraph, and for the
   // paragraphs an edit replaces as it's made (DocProof.cpp).
   size_t words_ = 0;

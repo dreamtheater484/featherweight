@@ -629,8 +629,9 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     }
   }
 
-  // Character scaling (w:w) widens or narrows the glyphs and their placement.
-  seg.scale = style.scale > 0 ? style.scale : 1;
+  // Character scaling (w:w) widens or narrows the glyphs and their placement, and so does a
+  // substitute's width scale (draw/FontSubstitutes.h).
+  seg.scale = (style.scale > 0 ? style.scale : 1) * seg.face->WidthScale();
   if (seg.scale != 1) {
     for (float& a : seg.advances) a *= seg.scale;
     for (DWRITE_GLYPH_OFFSET& o : seg.offsets) o.advanceOffset *= seg.scale;

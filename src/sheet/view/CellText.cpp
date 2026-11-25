@@ -451,7 +451,7 @@ bool CellText::LayOutSimple(std::wstring_view s, const text::TextStyle& style, L
         DWRITE_FONT_METRICS fm{};
         t->face->Get()->GetMetrics(&fm);
         for (uint32_t i = 0; i < 224; ++i)
-          t->advance[i] = t->id[i] ? static_cast<float>(gm[i].advanceWidth) / fm.designUnitsPerEm : 0;
+          t->advance[i] = t->id[i] ? static_cast<float>(gm[i].advanceWidth) / fm.designUnitsPerEm * t->face->WidthScale() : 0;
       } else {
         t->face = nullptr;
       }
@@ -473,6 +473,7 @@ bool CellText::LayOutSimple(std::wstring_view s, const text::TextStyle& style, L
   }
   piece.face = g->face->Get();
   piece.emSize = style.size;
+  piece.scale = g->face->WidthScale();  // a substitute's (draw/FontSubstitutes.h)
   piece.width = x;
   piece.textEnd = static_cast<uint32_t>(s.size());
   const text::FontMetrics m = g->face->Metrics(style.size);

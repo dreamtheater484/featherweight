@@ -374,6 +374,11 @@ void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
   if (s && (s->type == StyleType::Paragraph || s->type == StyleType::Character)) {
     Unhide(ed, *s);
+    // Word's gallery: using a heading level shows the next one (Heading 3 once Heading 2 is used).
+    if (s->type == StyleType::Paragraph && s->name.size() == 9 && SameName(s->name.substr(0, 8), "heading ") &&
+        s->name[8] >= '1' && s->name[8] < '9')
+      if (const Style* below = FindByName(doc, std::string("heading ") + static_cast<char>(s->name[8] + 1)))
+        Unhide(ed, *below);
     std::vector<uint32_t> paras = ParagraphsOf(doc, range);
     auto len = paras.empty() ? 0u : static_cast<uint32_t>(doc.Para(paras.front()).text.size());
     bool partial = !range.Empty() && paras.size() == 1 && range.from.para == range.to.para &&

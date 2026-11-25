@@ -32,11 +32,11 @@ $Out = (Resolve-Path $Out).Path
 
 # The window the steps' coordinates are for: a client area of 1072x686 (--size 1100x700 where they
 # were written), light theme, with the ribbon (R1). At this width Home's Styles gallery shows two
-# styles, Normal and No Spacing; its More button (885,129) opens the grid, where Title ends the
-# first row. The Insert tab is at 139,55. The pages start 77 px lower than under the toolbar.
+# styles, Normal and No Spacing; its More button (885,129) opens the grid, where Title is fifth in
+# the first row (Heading 3 shows only once Heading 2 is used: RF7). The Insert tab is at 139,55. The pages start 77 px lower than under the toolbar.
 $styleNoSpacing = "click:835,110"
 $styleMore = "click:885,129"
-$styleTitle = "click:1021,115"
+$styleTitle = "click:937,115"
 $insertTab = "click:139,55"
 $dash = [string][char]0x2013  # the script stays ASCII: PowerShell 5.1 reads it as ANSI
 $dot = [string][char]0x00B7

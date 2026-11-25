@@ -419,6 +419,7 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
 
+  reviewOnOpen_ = !comments_.empty();
   Relayout(nullptr);
   return OpenResult::Ok;
 }
@@ -871,7 +872,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 // Background work
 
 bool DocView::HasIdleWork() const {
-  return Ready() && (!pagination_->Done() || !noticesShown_ || HasProofWork() || annotationsStale_ ||
+  return Ready() && (reviewOnOpen_ || !pagination_->Done() || !noticesShown_ || HasProofWork() || annotationsStale_ ||
                      (!placeholder_ && sizes_.size() < pagination_->PageCount()) ||
                      (format_ && DocFormat::FontsPending()));
 }
@@ -879,6 +880,12 @@ bool DocView::HasIdleWork() const {
 bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   if (!Ready()) return false;
   bool repaint = false;
+  if (reviewOnOpen_) {
+    // A document with comments opens with them in the Review pane, where Word shows them in the
+    // margin (RF2): once, when its tab is first shown (a tab's panel closes when it's switched to).
+    reviewOnOpen_ = false;
+    if (!host_.ViewShownPanel()) ExecuteD4(CmdReviewPane);
+  }
   if (!pagination_->Done()) {
     double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 12.0);
     pagination_->Continue(ms);

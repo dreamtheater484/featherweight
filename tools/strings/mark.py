@@ -50,6 +50,7 @@ EXCLUDE_FILES = {
     'src/pkg/Check.cpp', 'src/pkg/Derived.cpp', 'src/pkg/ReferenceRules.cpp', 'src/doc/model/Schema.cpp',
     'src/doc/proof/AutoCorrect.cpp', 'src/pkg/Recovery.cpp', 'src/sheet/numfmt/NumLocale.cpp',
     'src/chart/Draw.cpp', 'src/text/Fonts.cpp', 'src/doc/layout/Layout.cpp', 'src/core/LayoutDump.cpp',
+    'src/draw/FontSubstitutes.cpp', 'src/draw/FontSubstitutes.h',
     # Settings' keys and the registry's names (the language key is the catalog's own).
     'src/Settings.cpp', 'src/FileAssoc.cpp',
     # Content written into files or drawn as a file's content.

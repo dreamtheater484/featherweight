@@ -47,12 +47,19 @@ std::string ParaStyle(std::string_view id, std::string_view name, int priority, 
 
 std::string Heading(int level, int size, std::string_view color, int before) {
   const std::string sz = std::to_string(size);
-  return ParaStyle("Heading" + std::to_string(level), "heading " + std::to_string(level), 9,
+  std::string style = ParaStyle("Heading" + std::to_string(level), "heading " + std::to_string(level), 9,
                    "<w:keepNext/><w:keepLines/><w:spacing w:before=\"" + std::to_string(before) +
                        "\" w:after=\"0\"/><w:outlineLvl w:val=\"" + std::to_string(level - 1) + "\"/>",
                    Fonts("Calibri Light") + "<w:color w:val=\"" + std::string(color) + "\"/><w:sz w:val=\"" + sz +
                        "\"/><w:szCs w:val=\"" + sz + "\"/>",
                    true);
+  // As in Word's own template, a heading below level 2 stays out of the Styles gallery until the
+  // level above it is used (edit::ApplyStyle shows it then), so the gallery's first row reaches Title.
+  if (level > 2) {
+    const std::string at = "<w:uiPriority w:val=\"9\"/>";
+    style.insert(style.find(at) + at.size(), "<w:semiHidden/><w:unhideWhenUsed/>");
+  }
+  return style;
 }
 
 std::string Styles(const std::string& lang, bool placeholders) {
