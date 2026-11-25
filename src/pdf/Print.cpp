@@ -41,6 +41,39 @@ INT_PTR CALLBACK OptionsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM) {
   return FALSE;
 }
 
+}  // namespace
+
+#if FW_TEST_SCREENS
+std::vector<std::wstring> ClippedOptions(HWND parent) {
+  HWND dlg = CreateDialogParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_PRINT_OPTIONS), parent, OptionsProc, 0);
+  if (!dlg) return {L"the print options page couldn't be made"};
+  std::vector<std::wstring> out;
+  for (HWND c = GetWindow(dlg, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+    wchar_t text[512] = {};
+    if (!GetWindowTextW(c, text, 512)) continue;
+    RECT box{};
+    GetClientRect(c, &box);
+    HDC dc = GetDC(c);
+    HGDIOBJ old = SelectObject(dc, reinterpret_cast<HGDIOBJ>(SendMessageW(c, WM_GETFONT, 0, 0)));
+    RECT need{};
+    DrawTextW(dc, text, -1, &need, DT_CALCRECT | DT_SINGLELINE);  // & as Windows draws it
+    SelectObject(dc, old);
+    ReleaseDC(c, dc);
+    // A radio button's text starts after its circle and a gap.
+    wchar_t kind[16] = {};
+    GetClassNameW(c, kind, 16);
+    const int glyph = _wcsicmp(kind, L"Button") == 0 ? GetSystemMetrics(SM_CXMENUCHECK) + 2 * GetSystemMetrics(SM_CXEDGE) : 0;
+    const int room = box.right - box.left - glyph;
+    if (need.right > room)
+      out.push_back(L"\"" + std::wstring(text) + L"\" needs " + std::to_wstring(need.right) + L" px, has " + std::to_wstring(room));
+  }
+  DestroyWindow(dlg);
+  return out;
+}
+#endif
+
+namespace {
+
 struct MemWriter : FPDF_FILEWRITE {
   std::string data;
 };

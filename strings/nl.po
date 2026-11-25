@@ -3788,6 +3788,10 @@ msgid "Download failed."
 msgstr "Downloaden is mislukt."
 
 #: src/App.cpp
+msgid "Downloading the script engine…"
+msgstr "De script-engine downloaden…"
+
+#: src/App.cpp
 msgid "Downloading the update…"
 msgstr "De update downloaden…"
 
@@ -4294,6 +4298,10 @@ msgstr "Featherweight kan wijzigingen in de rijen en kolommen van een tabel nog 
 msgid "Featherweight can't write this document back exactly, so it's shown but can't be edited."
 msgstr "Featherweight kan dit document niet exact terugschrijven, dus het wordt weergegeven maar kan niet worden bewerkt."
 
+#: src/Updater.cpp
+msgid "Featherweight can’t change its own folder."
+msgstr "Featherweight kan zijn eigen map niet wijzigen."
+
 #: src/App.cpp
 msgid "Featherweight changes its language the next time it starts."
 msgstr "Featherweight gebruikt de nieuwe taal vanaf de volgende keer dat het start."
@@ -4377,6 +4385,14 @@ msgstr "Featherweight {0} is beschikbaar."
 #: src/App.cpp
 msgid "Featherweight {0} is ready. It will be used the next time you start Featherweight."
 msgstr "Featherweight {0} is klaar. Deze versie wordt gebruikt wanneer je Featherweight de volgende keer start."
+
+#: src/App.cpp
+msgid "Featherweight {0} will be used from the next start. Automatic updates turn off, so it stays; you can turn them on again in Options."
+msgstr "Featherweight {0} wordt gebruikt vanaf de volgende start. Automatische updates worden uitgeschakeld, zodat deze versie blijft; je kunt ze weer inschakelen in Opties."
+
+#: src/App.cpp
+msgid "Featherweight {0} will be used the next time you start Featherweight."
+msgstr "Featherweight {0} wordt gebruikt de volgende keer dat je Featherweight start."
 
 #: src/pdf/Document.cpp
 msgid "Featherweight's PDF engine (pdfium.dll) is missing. Please reinstall Featherweight."
@@ -4971,6 +4987,30 @@ msgstr "Algemeen"
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "General format"
 msgstr "Standaardnotatie"
+
+#: src/App.cpp src/AppShell.cpp
+msgid "Get beta versions"
+msgstr "Bètaversies ontvangen"
+
+#: src/AppShell.cpp
+msgid "Get the form script engine"
+msgstr "Script-engine voor formulieren ophalen"
+
+#: src/App.cpp
+msgid "Get the script engine"
+msgstr "Script-engine ophalen"
+
+#: src/AppShell.cpp
+msgid "Go back to the previous version"
+msgstr "Terug naar de vorige versie"
+
+#: src/App.cpp
+msgid "Go back to the previous version?"
+msgstr "Terug naar de vorige versie?"
+
+#: src/App.cpp
+msgid "Go back to version {0}"
+msgstr "Terug naar versie {0}"
 
 #: src/sheet/view/WorkbookPanels.h src/sheet/view/WorkbookSheetOps.cpp src/word/DocPanels.cpp
 msgid "Go to"
@@ -10800,6 +10840,10 @@ msgstr "De Fisher-transformatie."
 msgid "The ISO week number of a date."
 msgstr "Het ISO-weeknummer van een datum."
 
+#: src/App.cpp
+msgid "The Microsoft Store keeps Featherweight up to date."
+msgstr "De Microsoft Store houdt Featherweight up-to-date."
+
 #: src/pdf/Document.cpp
 msgid "The PDF couldn't be exported."
 msgstr "De PDF kon niet worden geëxporteerd."
@@ -11088,9 +11132,17 @@ msgstr "De dubbele faculteit van een getal."
 msgid "The download didn’t pass verification."
 msgstr "De download heeft de verificatie niet doorstaan."
 
+#: src/Updater.cpp
+msgid "The download isn’t the script engine."
+msgstr "De download is niet de script-engine."
+
 #: src/slide/edit/TimingOps.cpp
 msgid "The duration must be between 0.01 and 59 seconds."
 msgstr "De duur moet tussen 0,01 en 59 seconden liggen."
+
+#: src/Updater.cpp
+msgid "The earlier version couldn’t be put back."
+msgstr "De eerdere versie kon niet worden teruggezet."
 
 #: src/slide/edit/EditInternal.h
 msgid "The edit was interrupted."
@@ -11832,6 +11884,18 @@ msgstr "Het scherm is zwart"
 msgid "The screen is white"
 msgstr "Het scherm is wit"
 
+#: src/Updater.cpp
+msgid "The script engine couldn’t be installed."
+msgstr "De script-engine kon niet worden geïnstalleerd."
+
+#: src/App.cpp
+msgid "The script engine is installed. Restart Featherweight to run the forms’ scripts."
+msgstr "De script-engine is geïnstalleerd. Start Featherweight opnieuw om de scripts van de formulieren uit te voeren."
+
+#: src/App.cpp
+msgid "The script engine wasn’t installed: {0}"
+msgstr "De script-engine is niet geïnstalleerd: {0}"
+
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The secant of an angle in radians."
 msgstr "De secans van een hoek in radialen."
@@ -12111,6 +12175,14 @@ msgstr "De eenheidsmatrix van een bepaalde grootte."
 #: src/Updater.cpp
 msgid "The update couldn’t be installed."
 msgstr "De update kon niet worden geïnstalleerd."
+
+#: src/Updater.cpp
+msgid "The update was refused: the program isn’t the release’s version."
+msgstr "De update is geweigerd: het programma is niet de versie van de release."
+
+#: src/Updater.cpp
+msgid "The update was refused: {0}."
+msgstr "De update is geweigerd: {0}."
 
 #: src/sheet/calc/FunctionHelp.cpp
 msgid "The value FALSE."
@@ -12400,6 +12472,10 @@ msgstr "Er is niets om opnieuw uit te voeren."
 msgid "There's nothing to undo."
 msgstr "Er is niets om ongedaan te maken."
 
+#: src/Updater.cpp
+msgid "There’s no earlier version to go back to."
+msgstr "Er is geen eerdere versie om naar terug te gaan."
+
 #: src/doc/edit/Editor.cpp
 msgid "These cells can't be merged: their rows don't line up."
 msgstr "Deze cellen kunnen niet worden samengevoegd: hun rijen liggen niet op één lijn."
@@ -12535,6 +12611,10 @@ msgstr "Deze PDF is ondertekend. Als je hem wijzigt, wordt de handtekening ongel
 #: src/pdf/PdfSign.cpp
 msgid "This PDF's structure couldn't be read well enough to sign it."
 msgstr "De structuur van deze PDF kon niet goed genoeg worden gelezen om hem te ondertekenen."
+
+#: src/App.cpp
+msgid "This PDF’s form has scripts (calculations and checks) that need Featherweight’s optional script engine, a 30 MB download from GitHub."
+msgstr "Het formulier in deze PDF heeft scripts (berekeningen en controles) die de optionele script-engine van Featherweight nodig hebben, een download van 30 MB van GitHub."
 
 #: src/sheet/edit/Pivots.cpp src/sheet/pivot/PivotLayout.cpp
 msgid "This PivotTable uses features Featherweight keeps but doesn't refresh."
@@ -13144,6 +13224,14 @@ msgstr "De opties van deze overgang kunnen niet worden gewijzigd in Featherweigh
 msgid "This value doesn't match the data validation restrictions defined for this cell."
 msgstr "Deze waarde komt niet overeen met de beperkingen voor gegevensvalidatie die voor deze cel zijn gedefinieerd."
 
+#: src/Updater.cpp
+msgid "This version’s release has no script engine."
+msgstr "De release van deze versie heeft geen script-engine."
+
+#: src/Updater.cpp
+msgid "This version’s release wasn’t found."
+msgstr "De release van deze versie is niet gevonden."
+
 #: src/sheet/data/Rules.h
 msgid "This week"
 msgstr "Deze week"
@@ -13680,6 +13768,10 @@ msgstr "Inhoudsopgave bijwerken: alleen paginanummers"
 #: src/AppRibbon.cpp
 msgid "Updates"
 msgstr "Updates"
+
+#: src/App.cpp
+msgid "Updates are turned off by your organization."
+msgstr "Updates zijn uitgeschakeld door je organisatie."
 
 #: src/sheet/view/WorkbookFormat.cpp
 msgid "Use 1000 separator"
@@ -14617,6 +14709,22 @@ msgstr "de XML-declaratie staat op de verkeerde plek"
 msgid "the XML declaration is malformed"
 msgstr "de XML-declaratie is onjuist gevormd"
 
+#: src/Updater.cpp
+msgid "the download is signed by another publisher"
+msgstr "de download is ondertekend door een andere uitgever"
+
+#: src/Updater.cpp
+msgid "the download is signed for another product"
+msgstr "de download is ondertekend voor een ander product"
+
+#: src/Updater.cpp
+msgid "the download isn’t signed"
+msgstr "de download is niet ondertekend"
+
+#: src/Updater.cpp
+msgid "the download’s signature isn’t valid"
+msgstr "de handtekening van de download is niet geldig"
+
 #: src/pdf/Document.cpp
 msgid "the file no longer exists."
 msgstr "het bestand bestaat niet meer."
@@ -14692,6 +14800,10 @@ msgstr "{0} (pagina {1})"
 #: src/pdf/PdfPages.cpp
 msgid "{0} (pages {1})"
 msgstr "{0} (pagina's {1})"
+
+#: src/App.cpp
+msgid "{0} (set by your organization)"
+msgstr "{0} (ingesteld door je organisatie)"
 
 #: src/word/DocView.cpp
 msgid "{0} (shown in {1})"

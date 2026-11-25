@@ -14,6 +14,7 @@
 #include "core/Lang.h"
 #include "core/Strings.h"
 #include "pdf/PdfText.h"
+#include "pdf/Print.h"
 #include "pkg/Backups.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -628,7 +629,8 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
     return true;
   }
   if (op == L"clipcheck") {
-    // clipcheck (F1, f1-lang): the window drawn with each ribbon tab, then each File page section;
+    // clipcheck (F1, f1-lang): the window drawn with each ribbon tab, each launcher's and the PDF view's
+    // side panels, each File page section, and the print options page (a Windows dialog);
     // every label that doesn't fit its box is a problem. With the pseudo-language (--lang qps) only the
     // interface's own texts count (in its brackets): a file's name or a cell's text may be cut.
     std::vector<gfx::ClippedText> clipped;
@@ -657,6 +659,7 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
       Layout();
       look(name);
     }
+    if (tabNames.empty()) look(L"window");  // a PDF: its toolbar, no ribbon
     ribbon_.Select(was);
     Layout();
     // Each group's ↘ launcher that opens a side panel (Format Cells, Paragraph, Page Setup): the panel too.
@@ -678,7 +681,24 @@ bool App::RibbonScriptOp(const std::wstring& op, const std::wstring& arg) {
       ViewShowPanel(nullptr);
       ribbon_.Select(was);
       Layout();
+      // Side panels a command opens rather than a launcher (the PDF view has no ribbon).
+      const std::pair<int, const wchar_t*> panels[] = {{CmdPdfPagesPanel, T(L"Pages")}, {CmdPdfDrawSignature, T(L"Signature")}};
+      for (const auto& [cmd, name] : panels) {
+        if (!QueryCommand(cmd).enabled) continue;
+        ViewShowPanel(nullptr);
+        Execute(cmd);
+        if (!ViewShownPanel()) continue;
+        Layout();
+        look(name);
+      }
+      ViewShowPanel(nullptr);
+      Layout();
     }
+    // The print options page, a Windows dialog (resource.rc): each label against its control.
+    ++surfaces;
+    for (const std::wstring& what : print::ClippedOptions(hwnd_))
+      if (std::none_of(problems.begin(), problems.end(), [&](const auto& p) { return p.second == what; }))
+        problems.push_back({T(L"Page sizing"), what});
     if (ribbonShown_ && !presentation_) {
       OpenFilePage();
       for (int s = 0; s < ui::FilePage::kSectionCount; ++s) {
