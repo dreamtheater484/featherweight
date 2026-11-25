@@ -351,7 +351,8 @@ def incremental_fitz(src, path):
         doc.close()
 
 
-def encrypted(src, path, user, owner, permissions, method=fitz.PDF_ENCRYPT_AES_256):
+def encrypted(src, path, user, owner, permissions, method=None):
+    method = fitz.PDF_ENCRYPT_AES_256 if method is None else method
     doc = fitz.open(src)
     doc.save(path, encryption=method, user_pw=user, owner_pw=owner, permissions=permissions)
 
