@@ -818,3 +818,35 @@ TEST(F1PdfSignsAFileWithMillionsOfObjects) {
   CHECK(pdfsign::SignPdf(make(false), cert, d, refused) == pdfsign::Error::Unreadable);
   CertFreeCertificateContext(cert);
 }
+
+// fuzz_pdfpages (regressions/pdfpages/size-below-listed-objects.pdf): a trailer whose /Size is below
+// objects the file lists. The signature's objects go past every listed one; numbered from /Size they
+// replaced the page tree.
+TEST(F1PdfSignsPastAnUnderstatedSize) {
+  InitPdfium();
+  std::string pdf = ClassicPdf({"<</Type /Catalog /Pages 2 0 R>>", "<</Type /Pages /Kids [3 0 R] /Count 1>>",
+                                "<</Type /Page /Parent 2 0 R /MediaBox [0 0 200 200]>>"});
+  const size_t size = pdf.find("/Size 4");
+  CHECK(size != std::string::npos);
+  if (size == std::string::npos) return;
+  pdf.replace(size, 7, "/Size 2");
+  pdfobj::File f;
+  CHECK(f.Open(pdf));
+  CHECK_EQ(f.Size(), 4);
+  CHECK_EQ(f.FirstPage(), 3);
+  const CERT_CONTEXT* cert = TestSigner();
+  CHECK(cert != nullptr);
+  if (!cert) return;
+  pdfsign::Details d;
+  d.name = L"Featherweight test";
+  std::string signedPdf;
+  CHECK(pdfsign::SignPdf(pdf, cert, d, signedPdf) == pdfsign::Error::None);
+  CertFreeCertificateContext(cert);
+  pdfobj::File g;
+  CHECK(g.Open(signedPdf));
+  CHECK(g.Size() > 4);
+  CHECK_EQ(g.FirstPage(), 3);
+  const SigInfo info = Check(signedPdf);
+  CHECK_EQ(info.count, 1);
+  CHECK(info.verdict.kind == pdfsign::Verdict::Untrusted);
+}

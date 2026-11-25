@@ -348,7 +348,13 @@ bool File::Open(std::string_view bytes) {
   if (!ReadSection(lastXref_, 0)) return false;
   const Obj* size = trailer_.Get("Size");
   size_ = size ? static_cast<int>(std::clamp<long long>(size->Int(0), 0, kMaxObjects)) : 0;
-  return size_ > 0 && trailer_.Get("Root") && trailer_.Get("Root")->type == Obj::Ref;
+  if (size_ <= 0) return false;
+  // A /Size below a number the file lists (a writer's mistake): what's added goes past every listed
+  // object, or it would replace one still in use.
+  size_t listed = xref_.size();
+  while (listed > 0 && xref_[listed - 1].type == 0) --listed;
+  size_ = std::max(size_, static_cast<int>(listed));
+  return trailer_.Get("Root") && trailer_.Get("Root")->type == Obj::Ref;
 }
 
 File::Entry* File::Slot(long long num) {

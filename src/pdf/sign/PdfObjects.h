@@ -56,7 +56,9 @@ class File {
   const Obj& Trailer() const { return trailer_; }  // the newest trailer (or xref stream) dictionary
   size_t LastXref() const { return lastXref_; }
   bool LastXrefIsStream() const { return lastIsStream_; }
-  int Size() const { return size_; }  // the trailer's /Size: the next free object number
+  // The next free object number: the trailer's /Size, or past the highest number any section lists
+  // when /Size is less.
+  int Size() const { return size_; }
 
   // Object `num` as the newest revision has it, with its generation. False if it's free or unreadable.
   bool Get(int num, Obj& out, int* gen = nullptr);
