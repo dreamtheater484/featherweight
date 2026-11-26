@@ -356,6 +356,8 @@ class DocView : public PagedView {
   bool ExecuteD4(int cmd);
   std::optional<CommandState> QueryD4(int cmd);
   void FillD4Menu(HMENU m);
+  // RF2: the pane a document with comments opens with, shown at once.
+  void OpenReviewPane();
   // The tracked change after (or before) the caret, selected: in its story, then the next story.
   bool GoToChange(bool back);
   // Accepts or rejects the changes the selection touches (the one at the caret), then goes to the next.

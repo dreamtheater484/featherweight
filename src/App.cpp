@@ -2526,8 +2526,8 @@ void App::ViewStateChanged() {
   if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void App::ViewMessage(BannerKind kind, const std::wstring& text) {
-  banner_.Show(kind, text, {}, kind == BannerKind::Success ? 1400 : 5000);
+void App::ViewMessage(BannerKind kind, const std::wstring& text, bool animate) {
+  banner_.Show(kind, text, {}, kind == BannerKind::Success ? 1400 : 5000, nullptr, animate);
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

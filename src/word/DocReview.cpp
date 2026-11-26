@@ -244,6 +244,15 @@ void DocView::ReviewChange(bool accept) {
   GoToChange(false);  // as Word's Accept and Move to Next
 }
 
+void DocView::OpenReviewPane() {
+  // At once, not sliding in: it's part of the document's first screen, and each of the slide's
+  // frames laid the whole window out again while the pages were still being laid out (f1-gate's
+  // timings: long-300 ready 919 ms against 4.0's 667 where Windows' animations are on).
+  if (!Ready()) return;
+  if (!reviewPanel_) reviewPanel_ = std::make_unique<ReviewPanel>(*this);
+  host_.ViewShowPanel(reviewPanel_.get(), false);
+}
+
 void DocView::FillD4Menu(HMENU m) {
   if (!Editing()) return;
   using menu::AppendItem;

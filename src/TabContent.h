@@ -36,7 +36,7 @@ class ViewHost {
   virtual ~ViewHost() = default;
   virtual void ViewInvalidate() = 0;
   virtual void ViewStateChanged() = 0;  // page, zoom or modified state changed
-  virtual void ViewMessage(BannerKind kind, const std::wstring& text) = 0;
+  virtual void ViewMessage(BannerKind kind, const std::wstring& text, bool animate = true) = 0;
   virtual HWND ViewHwnd() = 0;
   virtual void ViewRequestPrint() = 0;
   virtual void ViewFocusTextBox(TextBox* box) = 0;
@@ -50,8 +50,9 @@ class ViewHost {
   virtual std::wstring ViewReviewer() { return {}; }
   virtual void ViewSetReviewer(const std::wstring& /*name*/) {}
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
-  // Opens a side panel with the tab's content in place of whatever was open (null closes it).
-  virtual void ViewShowPanel(PanelContent* content) = 0;
+  // Opens a side panel with the tab's content in place of whatever was open (null closes it),
+  // sliding in, or at once without `animate`.
+  virtual void ViewShowPanel(PanelContent* content, bool animate = true) = 0;
   // The content of the open side panel, or null.
   virtual PanelContent* ViewShownPanel() = 0;
   // The keyboard back to the page, from the toolbar or a side panel: after a panel's Insert table,

@@ -71,7 +71,7 @@ class App : public PdfHost, public DropHost {
   // ViewHost and PdfHost
   void ViewInvalidate() override;
   void ViewStateChanged() override;
-  void ViewMessage(BannerKind kind, const std::wstring& text) override;
+  void ViewMessage(BannerKind kind, const std::wstring& text, bool animate = true) override;
   void ViewSaved(TabContent* view, bool ok, const std::wstring& error) override;
   bool ViewConfirm(const std::wstring& text, const std::wstring& ok) override;
   HWND ViewHwnd() override { return hwnd_; }
@@ -90,7 +90,7 @@ class App : public PdfHost, public DropHost {
     settings_.Save();
   }
   void ViewPasswordAccepted(TabContent* view) override;
-  void ViewShowPanel(PanelContent* content) override;
+  void ViewShowPanel(PanelContent* content, bool animate = true) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }
   void ViewFocusPage() override;
   void ViewOpenNote(PdfView* view, const NoteTarget& note) override;

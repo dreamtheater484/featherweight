@@ -593,9 +593,11 @@ bool DocView::TakeNewPages(bool quiet) {
 
 void DocView::ShowNotices() {
   noticesShown_ = true;
+  // The banner a document opens with is there at once, without its entry animation, whose frames
+  // each drew the whole window again (f1-gate's light.timings: long-300 in Aptos, shown in Arial).
   // Someone else editing the file matters most: changes can only be saved as a copy.
   if (std::wstring inUse = file_.InUseMessage(); !inUse.empty()) {
-    host_.ViewMessage(BannerKind::Warning, inUse);
+    host_.ViewMessage(BannerKind::Warning, inUse, false);
     return;
   }
   // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
@@ -625,7 +627,7 @@ void DocView::ShowNotices() {
                     : T(L"Fonts in this document aren't installed: {0}. Lines may break differently than in Word."),
                 {list});
   }
-  if (!text.empty()) host_.ViewMessage(BannerKind::Info, text);
+  if (!text.empty()) host_.ViewMessage(BannerKind::Info, text, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -893,7 +895,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     // A document with comments opens with them in the Review pane, where Word shows them in the
     // margin (RF2): once, when its tab is first shown (a tab's panel closes when it's switched to).
     reviewOnOpen_ = false;
-    if (!host_.ViewShownPanel()) ExecuteD4(CmdReviewPane);
+    if (!host_.ViewShownPanel()) OpenReviewPane();
   }
   if (!pagination_->Done()) {
     double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 12.0);
