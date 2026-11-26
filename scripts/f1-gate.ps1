@@ -836,18 +836,35 @@ Check "pdf.readers" long "Every PDF output (page tools, OCR, signatures, the tor
   if (Test-Path (Join-Path $script:outDir "damage.pdf\signed")) { $inputs += Join-Path $script:outDir "damage.pdf\signed" }
   if (-not (Test-Path $inputs[0])) { return Failed "needs damage.pdf's outputs on this commit (run it first)" }
   $originals = Join-Path $script:outDir "damage.pdf\inputs.txt"
-  $code = Use-Office "pdf.readers" "Acrobat" { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals) }
+  # An Acrobat DC without a licence runs in Reader mode (SCAPackageLevel 1), whose class factory refuses the
+  # automation interface (AcroExch.PDDoc: E_NOINTERFACE). Then the outputs go through PDFium and
+  # Windows.Data.Pdf only, a Reader window of Roy's doesn't hold the run up, and pdf.acrobat waits for step 9.
+  $readerMode = (Get-ItemProperty "HKLM:\SOFTWARE\Adobe\Adobe Acrobat\DC\Installer" -ErrorAction SilentlyContinue).SCAPackageLevel -eq 1
+  $pa = @("-Fwtool", (Get-Fwtool), "-Out", $o, "-Paths", ($inputs -join ","), "-Originals", $originals)
+  if ($readerMode) { $pa += "-NoAcrobat"; Remove-Item (Join-Path $o "summary.json") -ErrorAction SilentlyContinue }
+  $code = Use-Office "pdf.readers" $(if ($readerMode) { "" } else { "Acrobat" }) { Invoke-Script "pdf.readers" "tests\pdf\pdf-readers.ps1" $pa }
   if ($code -is [hashtable]) { return $code }
   $r = Read-Json (Join-Path $o "summary.json")
   if (-not $r) { return Failed "no summary (exit $code)" }
   $n = [ordered]@{}
   foreach ($p in $r.totals.PSObject.Properties) { $n[$p.Name] = $p.Value }
-  if ($code -eq 0 -and $r.pass) { Passed $r.verdict $n } else { Failed $r.verdict $n }
+  if ($readerMode) {
+    $why = "Acrobat not used: Acrobat DC here runs in Reader mode (SCAPackageLevel 1), which refuses the automation interface (AcroExch: E_NOINTERFACE); pdf.acrobat waits for Roy's step 9"
+    $n.acrobatNote = $why
+    $v = $r.verdict -replace 'Acrobat not checked \(-NoAcrobat\)', $why
+    if (-not @($r.failures | Where-Object { $_ }).Count -and -not $r.totals.pdfiumFailed -and -not $r.totals.windowsFailed) { Passed $v $n } else { Failed $v $n }
+  }
+  elseif ($code -eq 0 -and $r.pass) { Passed $r.verdict $n } else { Failed $r.verdict $n }
 }
 Check "pdf.acrobat" quick "Adobe Acrobat (on the reference PC) opens the outputs too, in its own instance" "Opens without errors" {
   $acro = @("${env:ProgramFiles}\Adobe\Acrobat DC\Acrobat\Acrobat.exe", "${env:ProgramFiles(x86)}\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
             "${env:ProgramFiles}\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $acro) { return Failed "Acrobat isn't installed on this PC (the reference PC has Acrobat DC)" }
+  # Reader mode (Acrobat DC without a licence) has no automation interface: a licensed Acrobat is Roy's step 9.
+  if ((Get-ItemProperty "HKLM:\SOFTWARE\Adobe\Adobe Acrobat\DC\Installer" -ErrorAction SilentlyContinue).SCAPackageLevel -eq 1) {
+    return New-GateResult "waiting" ("waiting for Roy's step 9 (a licensed Acrobat on the reference PC): Acrobat DC here runs in Reader mode, " +
+      "which refuses the automation interface (AcroExch: E_NOINTERFACE); pdf.readers reopens every output in PDFium and Windows.Data.Pdf") $null 9
+  }
   $r = Read-Json (Join-Path $script:outDir "pdf.readers\summary.json")
   if ($r -and $null -ne $r.totals.acrobatFailed) { if ($r.totals.acrobatFailed) { Failed "$($r.totals.acrobatFailed) outputs fail in Acrobat" } else { Passed "all open in Acrobat" } }
   else { Failed "Acrobat is installed but pdf.readers didn't check it yet" }
