@@ -639,12 +639,14 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
         $read = { param($part) $e = $z.GetEntry($part); if (-not $e) { return "" }; $sr = New-Object IO.StreamReader($e.Open()); try { $sr.ReadToEnd() } finally { $sr.Close() } }
         $table = & $read "word/fontTable.xml"; $rels = & $read "word/_rels/fontTable.xml.rels"
         foreach ($m in [regex]::Matches($table, '<w:font w:name="([^"]+)"[^>]*?(?:/>|>(.*?)</w:font>)', 'Singleline')) {
+          $parts = @()
           foreach ($e in [regex]::Matches($m.Groups[2].Value, '<w:embed(?:Regular|Bold|Italic|BoldItalic)\b[^>]*\br:id="([^"]+)"')) {
             $t = [regex]::Match($rels, '<Relationship\b[^>]*\bId="' + [regex]::Escape($e.Groups[1].Value) + '"[^>]*>')
             $target = if ($t.Success -and $t.Value -match '\bTarget="([^"]+)"') { "word/" + ($Matches[1] -replace '^/?word/', '') } else { "" }
             $part = if ($target) { $z.GetEntry($target) } else { $null }
-            if ($part -and $part.Length -gt 0) { $names += ($m.Groups[1].Value -replace '\s', '').ToLowerInvariant(); break }
+            if ($part -and $part.Length -gt 0) { $parts += $target }
           }
+          if ($parts.Count) { $names += [pscustomobject]@{ key = ($m.Groups[1].Value -replace '\s', '').ToLowerInvariant(); family = $m.Groups[1].Value; parts = $parts } }
         }
       } finally { $z.Dispose() }
     } catch { }
@@ -661,7 +663,8 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
   $families = Get-CloudFamilies
   $hits = @(); $own = @()
   foreach ($f in @($v.files)) {
-    $mine = @($carried[[IO.Path]::GetFileNameWithoutExtension([string]$f.file).ToLowerInvariant()])
+    $src = [IO.Path]::GetFileNameWithoutExtension([string]$f.file).ToLowerInvariant()
+    $mine = @($carried[$src] | Where-Object { $_ })
     foreach ($font in @($f.fonts)) {
       $ps = $font -replace '^[A-Z]{6}\+', ''
       $name = $ps -replace '[-,](Bold|Italic|BoldItalic|Regular|Light|SemiBold|Black).*$', ''
@@ -669,15 +672,16 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
         if ($name -replace '\s', '' -ieq ($fam -replace '\s', '')) {
           # The document's own: a font it carries by this name, or by its family with only the style after it.
           $flat = ($ps -replace '[\s,-]', '').ToLowerInvariant()
-          $isOwn = @($mine | Where-Object { $_ -and ($flat -eq $_ -or $flat -match ('^' + [regex]::Escape($_) + '(bold|italic|bolditalic|oblique|boldoblique|regular)$')) }).Count
-          if ($isOwn) { $own += "$($f.file): $font" } else { $hits += "$($f.file): $font" }
+          $by = @($mine | Where-Object { $flat -eq $_.key }) + @($mine | Where-Object { $flat -match ('^' + [regex]::Escape($_.key) + '(bold|italic|bolditalic|oblique|boldoblique|regular)$') }) | Select-Object -First 1
+          if ($by) { $own += "$(Split-Path -Leaf $sources[$src]): $font = $($by.family) ($($by.parts -join ', '))" } else { $hits += "$($f.file): $font" }
         }
       }
     }
   }
   $n = [ordered]@{ pdfs = $pdfs.Count; fonts = (@($v.files) | ForEach-Object { @($_.fonts).Count } | Measure-Object -Sum).Sum; cloud = $hits.Count
-                   documentsOwn = $own.Count; documentsCarrying = @($carried.Values | Where-Object { @($_).Count }).Count }
-  if ($own.Count) { $n.firstOwn = $own[0] }
+                   documentsOwn = $own.Count; documentsCarrying = @($carried.Values | Where-Object { @($_ | Where-Object { $_ }).Count }).Count }
+  # Each one the documents carry, listed: document: the PDF's font = the font table's family (its parts).
+  if ($own.Count) { $n.own = $own -join "; " }
   $ownNote = if ($own.Count) { "; $($own.Count) of the documents' own fonts (word/fonts) not counted" } else { "" }
   if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings$ownNote" $n } else { Passed "none in $($pdfs.Count) PDFs$ownNote" $n }
 }
