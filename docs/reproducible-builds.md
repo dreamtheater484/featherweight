@@ -29,6 +29,10 @@ checks two runners on every build. The source folder can still show up in the bi
 paths, so check out into the same folder as the release build to be safe: `D:\a\featherweight\featherweight` on
 GitHub's runners.
 
+The compiler also uses the computer name in some symbol names (MSVC names anonymous namespaces from it, and those
+names reach the program's type information): the release builds see the name FWBUILD, because release.yml sets the
+registry's active computer name before building. To compare, build on a machine or VM named FWBUILD.
+
 ## Checking a release
 
 You need Windows, Git, CMake and the Visual Studio version the release was built with: release.yml runs on
