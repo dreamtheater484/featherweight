@@ -90,7 +90,7 @@ class App : public PdfHost, public DropHost {
     settings_.Save();
   }
   void ViewPasswordAccepted(TabContent* view) override;
-  void ViewShowPanel(PanelContent* content) override;
+  void ViewShowPanel(PanelContent* content, bool animate = true) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }
   void ViewFocusPage() override;
   void ViewOpenNote(PdfView* view, const NoteTarget& note) override;

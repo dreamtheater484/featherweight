@@ -256,13 +256,13 @@ void App::CloseCommandSearch() {
 // ---------------------------------------------------------------------------
 // Side panel and status bar
 
-void App::ViewShowPanel(PanelContent* content) {
+void App::ViewShowPanel(PanelContent* content, bool animate) {
   if (!content) {
     ClosePanel();
     return;
   }
   const bool hadKeys = panel_.HasKeyFocus();
-  panel_.Show(content);
+  panel_.Show(content, animate);
   if (hadKeys) panel_.FocusIn(true, false);
   KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);

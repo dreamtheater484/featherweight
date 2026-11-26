@@ -893,7 +893,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     // A document with comments opens with them in the Review pane, where Word shows them in the
     // margin (RF2): once, when its tab is first shown (a tab's panel closes when it's switched to).
     reviewOnOpen_ = false;
-    if (!host_.ViewShownPanel()) ExecuteD4(CmdReviewPane);
+    if (!host_.ViewShownPanel()) OpenReviewPane();
   }
   if (!pagination_->Done()) {
     double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 12.0);
