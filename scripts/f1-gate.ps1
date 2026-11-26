@@ -26,7 +26,11 @@
   A long check's result is kept in <Out>\results\<commit>\<check>.json. A result measured on an earlier
   commit still counts when only docs changed since (docs\, *.md, tests\budgets\ledger.json), the CI
   workflows, packaging\ but admx, or other checks' blocks in this script (each hunk inside one Check
-  block: that check runs again), and the report says which commit it's from. A run on a tree with uncommitted changes is marked "dirty": it
+  block: that check runs again), and the report says which commit it's from. Over a change to the app's
+  source alone (src\, and tests\unit\, which only fw_tests.exe compiles), a check that runs no
+  Featherweight.exe keeps its result when every binary it runs is byte-identical (build.shipped records
+  the hashes), and fidelity.print keeps its result when a fixed sample printed again equals the kept
+  run's (Roy, 2026-11-26). A run on a tree with uncommitted changes is marked "dirty": it
   counts for nothing, and its results aren't kept for reuse.
 
   Office (Word, Excel, PowerPoint): the open checks run in Roy's active session (at the console or
@@ -366,8 +370,18 @@ Check "build.shipped" long "The shipped configuration builds (release.ps1's: FW_
   if ($cache -notmatch 'FW_TEST_SCREENS:BOOL=OFF') { return Failed "FW_TEST_SCREENS isn't OFF in $Build" }
   $exe = Get-Item (Get-Exe)
   $pdfium = Get-Item (Join-Path $b "Release\pdfium.dll") -ErrorAction SilentlyContinue
+  # The binaries' SHA-256, for keeping results over a change to the app's source (the Reuse section).
+  $bins = [ordered]@{}
+  foreach ($p in "Release\Featherweight.exe", "Release\pdfium.dll", "tools\fwtool\Release\fwtool.exe", "tools\fwtool\Release\pdfium.dll") {
+    $f = Join-Path $b $p; if (Test-Path $f) { $bins[$p -replace '\\', '/'] = (Get-FileHash $f -Algorithm SHA256).Hash }
+  }
+  foreach ($p in "fwvalidate.exe", "fwvalidate.dll") { $f = Join-Path $root "build\validate\$p"; if (Test-Path $f) { $bins["validate/$p"] = (Get-FileHash $f -Algorithm SHA256).Hash } }
+  if (-not $dirty) {
+    $rd = Join-Path $script:outDir "results\$($script:head)"; New-Item -ItemType Directory -Force $rd | Out-Null
+    Write-Json (Join-Path $rd "binaries.json") ([ordered]@{ commit = $script:head; source = "build.shipped on this commit, $((Get-Date).ToString('s'))"; files = $bins })
+  }
   Passed "built" ([ordered]@{ exeBytes = $exe.Length; exeSha256 = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
-                              pdfiumBytes = $(if ($pdfium) { $pdfium.Length } else { $null }) })
+                              pdfiumBytes = $(if ($pdfium) { $pdfium.Length } else { $null }); fwtoolSha256 = $bins["tools/fwtool/Release/fwtool.exe"] })
 }
 Check "build.ctest" long "ctest on the shipped build (x64, locally)" "100 % of the tests pass" {
   Need-Build
@@ -397,6 +411,7 @@ function Test-Scorecard {
 Check "build.ci" ci "CI on this commit: build (with arm64's ctest), fuzz, CodeQL, Scorecard" "Every workflow and job succeeded" {
   if (-not $repoSlug) { return Failed "no GitHub remote" }
   if (-not @(Invoke-Git branch -r --contains $script:ciHead).Count) { return Failed "this commit isn't pushed" }
+  Use-CiOf @("build.yml", "codeql.yml") {
   $parts = [ordered]@{
     build = Test-Workflow "build.yml" @("^build", "fuzz", "arm64") "f1-ship" "the arm64 job"
     codeql = Test-Workflow "codeql.yml" @() "f1-trust" "CodeQL code scanning"
@@ -406,6 +421,7 @@ Check "build.ci" ci "CI on this commit: build (with arm64's ctest), fuzz, CodeQL
   foreach ($k in $parts.Keys) { $n[$k] = "$($parts[$k].status): $($parts[$k].detail)" }
   $bad = @($parts.Keys | Where-Object { $parts[$_].status -notin "passed", "later" })
   if ($bad.Count) { Failed ("not green: " + ($bad -join ", ")) $n } else { Passed "all green" $n }
+  }
 }
 Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 open high or critical alerts" {
   if (-not (Test-Path (Join-Path $root ".github\workflows\codeql.yml"))) { return NotBuilt "f1-trust" "CodeQL code scanning (.github\workflows\codeql.yml)" }
@@ -421,10 +437,10 @@ Check "build.codeql" ci "No open CodeQL alert of high or critical severity" "0 o
   if (-not $branch) { return Failed "this commit isn't on a pushed branch" }
   $ref = "refs/heads/$branch"
   # The alerts API answers "none open" for a branch CodeQL never analysed: the analysis of this commit (or of one
-  # with only docs changed since) must be there first.
+  # with only docs or this script changed since: CodeQL analyses the C++, not the gate) must be there first.
   try { $analyses = @(Gh-Json "repos/$repoSlug/code-scanning/analyses?ref=$ref&per_page=20") } catch { $analyses = @() }
   $a = @($analyses | Where-Object { $_.commit_sha -eq $script:ciHead }) | Select-Object -First 1
-  if (-not $a) { $a = @($analyses | Where-Object { $_.commit_sha -and (Test-OnlyDocsSince $_.commit_sha) }) | Select-Object -First 1 }
+  if (-not $a) { $a = @($analyses | Where-Object { $_.commit_sha -and (Test-OnlyDocsOrGateSince $_.commit_sha) }) | Select-Object -First 1 }
   if (-not $a) {
     $last = @($analyses) | Select-Object -First 1
     return Failed ("not run yet: no CodeQL analysis of this commit on $ref" + $(if ($last) { " (the latest is of $("$($last.commit_sha)".Substring(0, 8)))" } else { " (none at all; codeql.yml runs on pushes to main and claude/f1-int)" }))
@@ -882,7 +898,7 @@ Check "pdf.ocr" long "OCR on the generated scan set (English, 300 dpi): the text
   if ($r.percent -ge 95) { Passed "$($r.percent) % of $($r.words) words" $n } else { Failed "$($r.percent) % of $($r.words) words" $n }
 }
 Check "pdf.signatures" ci "Signatures through an independent validator (pyHanko on a CI runner): every signature valid, every change after signing caught" "All valid; all changes caught" {
-  $r = Test-Workflow "pdf-signatures.yml" @("pyhanko|signatures") "f1-gate" "the pyHanko validation on CI"
+  $r = Use-CiOf @("pdf-signatures.yml") { Test-Workflow "pdf-signatures.yml" @("pyhanko|signatures") "f1-gate" "the pyHanko validation on CI" }
   # Until the app signs, pyHanko sees only the samples made for it: the validator works, the row can't pass.
   if ($r.status -eq "passed" -and -not (Test-Path (Join-Path $root "src\pdf\sign"))) {
     return NotBuilt "f1-pdf" "certificate signing (src\pdf\sign): pyHanko checks the made samples only ($($r.detail))"
@@ -892,7 +908,7 @@ Check "pdf.signatures" ci "Signatures through an independent validator (pyHanko 
 
 # ===== Product basics =====
 Check "ship.release" ci "The release workflow's dry run: test-signed (or SignPath-signed after step 1), signtool verify /pa on every file" "The dry run succeeds; every file verifies" {
-  Test-Workflow "release.yml" @() "f1-ship" "the release workflow"
+  Use-CiOf @("release.yml") { Test-Workflow "release.yml" @() "f1-ship" "the release workflow" }
 }
 Check "ship.signpath" quick "SignPath signs the release (Roy's step 1)" "Signed by SignPath, or waiting for step 1" {
   $wf = Join-Path $root ".github\workflows\release.yml"
@@ -911,16 +927,17 @@ Check "ship.updater" long "The updater's tests (ctest, offline): unsigned and wr
   Passed "every kind tested and passing" $n
 }
 Check "ship.msix" ci "The MSIX through the Windows App Certification Kit; the Store waits for step 2" "WACK passes" {
-  $r = Test-Workflow "release.yml" @("(?i)msix|wack") "f1-ship" "the MSIX and its WACK run"
+  $r = Use-CiOf @("release.yml") { Test-Workflow "release.yml" @("(?i)msix|wack") "f1-ship" "the MSIX and its WACK run" }
   if ($r.status -eq "passed") { Waiting 2 "the MSIX passes WACK; the Store submission is Roy's" $r.numbers } else { $r }
 }
 Check "ship.install" ci "Silent per-machine install and uninstall of the MSI and the installer on a CI runner" "Both install and uninstall silently" {
-  Test-Workflow "release.yml" @("(?i)install") "f1-ship" "the silent install job"
+  Use-CiOf @("release.yml") { Test-Workflow "release.yml" @("(?i)install") "f1-ship" "the silent install job" }
 }
 Check "ship.manifests" ci "The winget, Chocolatey and Scoop manifests (release.yml's manifests artifact on this commit): this version, the run's own files and hashes" "All three made and consistent; Chocolatey and Scoop wait for step 3" {
   # Before the release the manifests are the release workflow's (from its SHA256SUMS.txt); release.ps1 -Publish
   # commits them under packaging\ from the published release's (f1-ship).
   if (-not (Test-Path (Join-Path $root ".github\workflows\release.yml"))) { return NotBuilt "f1-ship" "the release workflow (.github\workflows\release.yml)" }
+  Use-CiOf @("release.yml") {
   $cm = Get-Content (Join-Path $root "CMakeLists.txt") -Raw
   $ver = if ($cm -match 'project\(Featherweight VERSION (\d+\.\d+\.\d+)') { $Matches[1] } else { "" }
   $m = Get-RunArtifact "release.yml" "manifests"
@@ -945,6 +962,7 @@ Check "ship.manifests" ci "The winget, Chocolatey and Scoop manifests (release.y
   }
   if ($missing.Count) { return Failed ("manifests: " + ($missing -join ", ")) $n }
   Waiting 3 "the manifests are ready; Chocolatey and Scoop need Roy's account and OK" $n
+  }
 }
 Check "ship.admx" quick "The ADMX policies match what the app reads (HKLM\SOFTWARE\Policies\Featherweight)" "Every ADMX value is read by src\Policy.cpp and back" {
   $admx = @(Get-ChildItem (Join-Path $root "packaging\admx") -Filter *.admx -ErrorAction SilentlyContinue)
@@ -960,7 +978,7 @@ Check "ship.admx" quick "The ADMX policies match what the app reads (HKLM\SOFTWA
 
 # ===== External review =====
 Check "review.repro" ci "Two CI builds of the commit, without their signatures, are byte-identical" "Byte-identical" {
-  Test-Workflow "release.yml" @("(?i)reproduc") "f1-ship" "the reproducible-build comparison"
+  Use-CiOf @("release.yml") { Test-Workflow "release.yml" @("(?i)reproduc") "f1-ship" "the reproducible-build comparison" }
 }
 Check "review.defender" long "Microsoft Defender scans the release files clean" "No threat found" {
   Need-Build
@@ -1002,6 +1020,7 @@ Check "review.coverity" ci "Coverity Scan runs weekly (Roy's step 6)" "A success
 # ===== Lightweight =====
 Check "light.size" quick "Size (budgets.ps1 on the shipped build): the exe, and the default download" "Exe <= 4.0's + 1,024 KB (14,216,192 bytes); download <= 10 MB" {
   Need-Build
+  Use-CiOf @("release.yml") {
   $j = Join-Path $script:outDir "budgets.json"
   $code = Invoke-Script "light.size" "scripts\budgets.ps1" @("-Build", $Build, "-Json", $j)
   $b = Read-Json $j
@@ -1019,6 +1038,7 @@ Check "light.size" quick "Size (budgets.ps1 on the shipped build): the exe, and 
   if ($setup -and $dl -gt $downloadBudget) { $bad += "download $($n.downloadMB) MB (10 MB; f1-ship's V8-less PDFium)" }
   if ($code) { $bad += "budgets.ps1 failed (unrecorded growth?)" }
   if ($bad.Count) { Failed ($bad -join "; ") $n } else { Passed "exe +$($n.exeGrowthKB) KB, download $($n.downloadMB) MB" $n }
+  }
 }
 Check "light.timings" quick "Launch, memory and idle no worse than 4.0's; long-300.docx's worst key < 50 ms (the final timing run: budgets.ps1 -Timings -Runs 3 -Record)" "No worse than 4.0's; worst key < 50 ms" {
   # The ledger (tests\budgets\ledger.json): timings[] (scenarios: launch and each file) and typing[]
@@ -1028,8 +1048,8 @@ Check "light.timings" quick "Launch, memory and idle no worse than 4.0's; long-3
   $forHead = {
     param($list)
     $m = @($list | Where-Object { $_.machine -eq $machine -and $_.commit -and $script:head.StartsWith($_.commit) })
-    # An entry on an earlier commit counts when only docs changed since.
-    if (-not $m.Count) { $m = @($list | Where-Object { $_.machine -eq $machine -and $_.commit -and (Test-OnlyDocsSince $_.commit) }) }
+    # An entry on an earlier commit counts when only docs or this script changed since (the gate can't change the exe).
+    if (-not $m.Count) { $m = @($list | Where-Object { $_.machine -eq $machine -and $_.commit -and (Test-OnlyDocsOrGateSince $_.commit) }) }
     if ($m.Count) { $m[-1] } else { $null }
   }
   $e = & $forHead @($ledger.timings)
@@ -1164,6 +1184,49 @@ function Test-OnlyDocsSince([string]$from) {
   $script:docsOnly[$from] = $ok
   $ok
 }
+# Only docs or this script changed since $from: what neither CI nor the exe reads (no workflow runs the gate).
+$script:docsOrGate = @{}
+function Test-OnlyDocsOrGateSince([string]$from) {
+  if ($script:docsOrGate.ContainsKey($from)) { return $script:docsOrGate[$from] }
+  $ok = $false
+  & git merge-base --is-ancestor $from $script:head 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    $changed = @(Invoke-Git diff --name-only $from $script:head)
+    $ok = -not @($changed | Where-Object { $_ -notmatch '^docs/' -and $_ -notmatch '\.md$' -and $_ -ne 'tests/budgets/ledger.json' -and $_ -ne 'scripts/f1-gate.ps1' }).Count
+  }
+  $script:docsOrGate[$from] = $ok
+  $ok
+}
+# The CI-reading checks: when this commit's runs of $files haven't all finished, the runs of the nearest
+# ancestor (first parents) with only docs or this script changed since and those runs finished are read
+# instead, and the check's detail names that commit (the coordinator's decision, 2026-11-26). This commit
+# must be pushed; with -CiCommit (a trial) nothing changes. A finished run of this commit, failed or not, is
+# always the one read.
+function Use-CiOf([string[]]$files, [scriptblock]$body) {
+  $use = $script:ciHead
+  if (-not $CiCommit -and $repoSlug -and @(Invoke-Git branch -r --contains $script:head).Count) {
+    $done = { param($c) $runs = @((Gh-Json "repos/$repoSlug/actions/runs?head_sha=$c&per_page=100").workflow_runs)
+      -not @($files | Where-Object { $f = $_; -not @($runs | Where-Object { $_.path -like "*/$f" -and $_.status -eq "completed" }).Count }).Count }
+    try {
+      if (-not (& $done $script:ciHead)) {
+        foreach ($c in @(Invoke-Git rev-list --first-parent --max-count=30 "$($script:head)~1")) {
+          if (-not (Test-OnlyDocsOrGateSince $c)) { break }
+          if (& $done $c) { $use = $c; break }
+        }
+      }
+    } catch { $use = $script:ciHead }
+  }
+  if ($use -eq $script:ciHead) { return (& $body) }
+  $saved = @($script:ciHead, $script:runsCache, $script:workflowCache)
+  $script:ciHead = $use; $script:runsCache = $null; $script:workflowCache = @{}
+  try { $r = @(& $body) | Where-Object { $_ -is [hashtable] -and $_.ContainsKey("status") } | Select-Object -Last 1 }
+  finally { $script:ciHead = $saved[0]; $script:runsCache = $saved[1]; $script:workflowCache = $saved[2] }
+  if ($r) {
+    $r.detail = "$($r.detail) (the CI runs of $($use.Substring(0, 12)): only docs and the gate script changed since)"
+    if ($r.numbers -is [Collections.IDictionary]) { $r.numbers["ciCommit"] = $use }
+  }
+  $r
+}
 # A long result also holds over changes to the CI workflows and the packaging scripts: no long check
 # reads them (the quick and CI checks that do run on every commit anyway). packaging\admx is the
 # exception: ctest reads it (tests\unit\test_f1_ship.cpp).
@@ -1231,23 +1294,152 @@ function Get-ChangedChecks([string]$from) {
   $script:changedChecks[$from] = $res
   $res
 }
+# And over a change to the app's source alone (src/, and tests/unit/, which only fw_tests.exe compiles;
+# with the script's changes as above), for a check that runs no Featherweight.exe, when every binary it
+# runs is byte-identical in the two commits' builds (Roy, 2026-11-26). build.shipped records the builds'
+# SHA-256 in results\<commit>\binaries.json (fwvalidate: the torture scripts' build of tools\validate,
+# which isn't under src/). The checks and the binaries they run (fwtool with the pdfium.dll beside it):
+$fwtoolBins = @("tools/fwtool/Release/fwtool.exe", "tools/fwtool/Release/pdfium.dll")
+$tortureBins = $fwtoolBins + @("validate/fwvalidate.exe", "validate/fwvalidate.dll")
+$binaryChecks = @{
+  "damage.docs" = $tortureBins; "damage.workbooks" = $tortureBins; "damage.decks" = $tortureBins
+  "fidelity.word" = $fwtoolBins; "fidelity.cells" = $fwtoolBins; "legal.fileopen" = $fwtoolBins; "legal.pdffonts" = $fwtoolBins; "pdf.ocr" = $fwtoolBins
+}
+function Test-SourceFile([string]$file) { $file -match '^src/' -or $file -match '^tests/unit/' }
+function Get-Binaries([string]$sha) { Read-Json (Join-Path $script:outDir "results\$sha\binaries.json") }
+function Test-SameBinaries([string]$from, [string]$id) {
+  if (-not $binaryChecks.ContainsKey($id)) { return $false }
+  $a = Get-Binaries $from; $b = Get-Binaries $script:head
+  if (-not $a -or -not $b) { return $false }
+  foreach ($k in $binaryChecks[$id]) { $x = "$($a.files.$k)"; if (-not $x -or $x -ne "$($b.files.$k)") { return $false } }
+  $true
+}
 $script:longHolds = @{}
 function Test-LongResultsHold([string]$from, [string]$id) {
   if (-not $script:longHolds.ContainsKey($from)) {
-    $h = @{ all = $false; scriptOnly = $false }
+    $h = @{ all = $false; scriptOnly = $false; sourceOnly = $false; script = $false }
     & git merge-base --is-ancestor $from $script:head 2>$null
     if ($LASTEXITCODE -eq 0) {
       $rest = @(Invoke-Git diff --name-only $from $script:head | Where-Object { -not (Test-OnlyOutsideLongChecks $_) })
       $h.all = -not $rest.Count
-      $h.scriptOnly = $rest.Count -eq 1 -and $rest[0] -eq "scripts/f1-gate.ps1"
+      $h.script = $rest -contains "scripts/f1-gate.ps1"
+      $h.scriptOnly = $rest.Count -eq 1 -and $h.script
+      $src = @($rest | Where-Object { $_ -ne "scripts/f1-gate.ps1" })
+      $h.sourceOnly = $src.Count -gt 0 -and -not @($src | Where-Object { -not (Test-SourceFile $_) }).Count
     }
     $script:longHolds[$from] = $h
   }
   $h = $script:longHolds[$from]
   if ($h.all) { return $true }
-  if (-not $h.scriptOnly -or -not $id) { return $false }
-  $cc = Get-ChangedChecks $from
-  $cc.known -and $id -notin $cc.ids
+  if (-not $id -or -not ($h.scriptOnly -or $h.sourceOnly)) { return $false }
+  if ($h.script) { $cc = Get-ChangedChecks $from; if (-not $cc.known -or $id -in $cc.ids) { return $false } }
+  if ($h.scriptOnly) { return $true }
+  Test-SameBinaries $from $id
+}
+# fidelity.print runs the app, so over a source change its result can't hold by the binaries. Instead a
+# fixed sample is printed again: every 14th workbook by name in each of its three sets (the same sets,
+# through scripts\sheet-pages.ps1 unchanged, on a manifest of the sample), and each PDF is compared with
+# the kept run's PDF of the same workbook: the same bytes, or the same bytes but for the creation date
+# and the document ID, or else the same pdf-compare result against Excel's (the pages, the passing ones,
+# every page's scores). All equal: the kept result holds, and its detail names the sample. Any difference:
+# fidelity.print runs in full (Roy, 2026-11-26). It runs only in a call that would print (not -Quick,
+# fidelity.print selected but not named in -Checks, which always runs it in full), once this commit's
+# build.shipped has passed with the build that's there, and with the kept run's PDFs still in -Out.
+$spotEvery = 14
+function Invoke-PrintSpot {
+  $id = "fidelity.print"
+  $bs = Read-Json (Join-Path $script:outDir "results\$($script:head)\build.shipped.json")
+  if (-not $bs -or $bs.status -ne "passed" -or -not (Test-Path (Get-Exe)) -or (Get-FileHash (Get-Exe) -Algorithm SHA256).Hash -ne $bs.numbers.exeSha256) { return $null }
+  # The newest kept fidelity.print: it must have passed, over a source-only change, with its block unchanged.
+  $k = $null; $from = $null
+  foreach ($d in @(Get-ChildItem (Join-Path $script:outDir "results") -Directory | Sort-Object LastWriteTime -Descending)) {
+    $f = Join-Path $d.FullName "$id.json"
+    if ($d.Name -eq $script:head -or $d.Name -notmatch '^[0-9a-f]{40}$' -or -not (Test-Path $f)) { continue }
+    [void](Test-LongResultsHold $d.Name)
+    $h = $script:longHolds[$d.Name]
+    if (-not $h.sourceOnly) { continue }
+    if ($h.script) { $cc = Get-ChangedChecks $d.Name; if (-not $cc.known -or $id -in $cc.ids) { continue } }
+    $k = Read-Json $f; $from = $d.Name; break
+  }
+  if (-not $k -or $k.status -ne "passed") { return $null }
+  $sets = @(
+    @{ key = "printPublic"; ref = (Join-Path $root "tests\office\reference"); folders = "excel" },
+    @{ key = "printXlsx"; ref = (Join-Path $Corpus "reference"); folders = "xlsx" },
+    @{ key = "printXlsOds"; ref = (Join-Path $Corpus "reference"); folders = "xls,ods" })
+  $until = ([datetime]$k.measured).AddSeconds(120); $since = ([datetime]$k.measured).AddSeconds(-[double]$k.seconds - 120)
+  $latin = [Text.Encoding]::GetEncoding(28591)
+  $mask = { param($p) [regex]::Replace($latin.GetString([IO.File]::ReadAllBytes($p)), '(/(?:CreationDate|ModDate)\s*\()([^)]*)|(/ID\s*\[)([^\]]*)',
+    [Text.RegularExpressions.MatchEvaluator]{ param($m) if ($m.Groups[1].Success) { $m.Groups[1].Value + ('0' * $m.Groups[2].Length) } else { $m.Groups[3].Value + ('0' * $m.Groups[4].Length) } }) }
+  $sig = { param($c) if ($c) { "$($c.referencePages)|$($c.oursPages)|$($c.passing)|" + (@($c.pages | ForEach-Object { "$($_.page):$($_.ssim):$($_.inkSsim):$($_.ok)" }) -join ",") } }
+  Say "   a spot check against the run kept on $($from.Substring(0, 12)): every ${spotEvery}th workbook by name in each set"
+  $rows = @(); $t0 = Get-Date
+  foreach ($set in $sets) {
+    $keptDir = Join-Path $script:outDir "pr-$($set.key)"
+    $ks = Join-Path $keptDir "summary.json"
+    $w = if (Test-Path $ks) { (Get-Item $ks).LastWriteTime } else { $null }
+    if (-not $w -or $w -lt $since -or $w -gt $until) { Say "   spot check: $($set.key)'s PDFs in -Out aren't the kept run's; fidelity.print runs in full"; return $null }
+    $keptRows = @{}; foreach ($r in @((Read-Json $ks).files)) { $keptRows[$r.source] = $r }
+    $folders = @($set.folders -split ',')
+    $man = Get-Content (Join-Path $set.ref "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    $corpus = if ($man.corpus) { $man.corpus } else { Split-Path -Parent $set.ref }
+    $entries = @($man.files | Where-Object { $folders -contains ($_.source -split '/')[0] -and $_.pdf -and -not $_.error } | Sort-Object source)
+    $sample = @(for ($i = 0; $i -lt $entries.Count; $i += $spotEvery) { $entries[$i] })
+    $o = Join-Path $script:outDir "print-spot\$($set.key)"
+    if (Test-Path $o) { Remove-Item -Recurse -Force $o }
+    $ref = Join-Path $o "ref"
+    foreach ($e in $sample) {
+      $to = Join-Path $ref ($e.pdf -replace '/', '\'); New-Item -ItemType Directory -Force (Split-Path -Parent $to) | Out-Null
+      Copy-Item (Join-Path $set.ref ($e.pdf -replace '/', '\')) $to
+    }
+    Write-Json (Join-Path $ref "manifest.json") ([ordered]@{ corpus = $corpus; files = $sample })
+    [void](Invoke-Script $id "scripts\sheet-pages.ps1" @("-Reference", $ref, "-Folders", $set.folders, "-Featherweight", (Get-Exe), "-Fwtool", (Get-Fwtool), "-Out", (Join-Path $o "out"), "-MinPages", "0"))
+    $ss = Read-Json (Join-Path $o "out\summary.json")
+    foreach ($e in $sample) {
+      $name = $e.source -replace '[\\/:]', '_'
+      $new = @($ss.files | Where-Object { $_.source -eq $e.source }) | Select-Object -First 1
+      $old = $keptRows[$e.source]
+      $pa = Join-Path $o "out\pdf\$name.pdf"; $pb = Join-Path $keptDir "pdf\$name.pdf"
+      $how = if (-not $new -or -not $old) { "differs: no row $(if (-not $new) { 'now' } else { 'in the kept run' })" }
+        elseif ($new.error -or $old.error) { if ("$($new.error)" -eq "$($old.error)") { "the same error" } else { "differs: $(if ($new.error) { $new.error } else { 'it exports now' })" } }
+        elseif (-not (Test-Path $pa) -or -not (Test-Path $pb)) { "differs: a PDF is missing" }
+        elseif ((Get-FileHash $pa).Hash -eq (Get-FileHash $pb).Hash) { "bytes" }
+        elseif ((& $mask $pa) -eq (& $mask $pb)) { "bytes but the date and ID" }
+        else {
+          $ca = Read-Json (Join-Path $o "out\pdf\$name.compare.json"); $cb = Read-Json (Join-Path $keptDir "pdf\$name.compare.json")
+          if ($ca -and $cb -and (& $sig $ca) -eq (& $sig $cb)) { "score" } else { "differs: $(if ($ca) { "$($ca.passing) of $($ca.referencePages) pages" } else { 'no comparison' }) now, $(if ($cb) { "$($cb.passing) of $($cb.referencePages)" } else { 'none' }) kept" }
+        }
+      $rows += [pscustomobject]@{ set = $set.key; source = $e.source; how = $how }
+    }
+  }
+  $diff = @($rows | Where-Object { $_.how -like "differs*" })
+  $byHow = @($rows | Group-Object how | ForEach-Object { "$($_.Count) $($_.Name)" }) -join ", "
+  $perSet = @($rows | Group-Object set | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ", "
+  $spot = [ordered]@{ every = $spotEvery; workbooks = $rows.Count; sets = $perSet; equal = $rows.Count - $diff.Count; how = $byHow
+                      seconds = [math]::Round(((Get-Date) - $t0).TotalSeconds); on = $script:head; against = $from; list = Join-Path $script:outDir "print-spot\sample.json" }
+  Write-Json (Join-Path $script:outDir "print-spot\sample.json") ([ordered]@{ spot = $spot; rows = $rows })
+  if ($diff.Count -or -not $rows.Count) { Say "   spot check: $($diff.Count) of $($rows.Count) differ$(if ($diff.Count) { " (first: $($diff[0].source): $($diff[0].how))" }); fidelity.print runs in full"; return $null }
+  $res = [ordered]@{}; foreach ($p in $k.PSObject.Properties) { $res[$p.Name] = $p.Value }
+  $nums = [ordered]@{}; foreach ($p in $k.numbers.PSObject.Properties) { $nums[$p.Name] = $p.Value }
+  foreach ($p in $spot.Keys) { $nums["spot" + $p.Substring(0, 1).ToUpperInvariant() + $p.Substring(1)] = $spot[$p] }
+  $res.numbers = $nums
+  $res.detail = "$($k.detail); a spot check on $($script:head.Substring(0, 12)) printed every ${spotEvery}th workbook by name in each set again ($($rows.Count): $perSet), all equal to the run kept on $($from.Substring(0, 12)) ($byHow)"
+  if (-not $dirty) { $rd = Join-Path $script:outDir "results\$($script:head)"; New-Item -ItemType Directory -Force $rd | Out-Null; Write-Json (Join-Path $rd "$id.json") $res }
+  Say "   spot check: $($rows.Count) of $($rows.Count) equal ($byHow); fidelity.print's kept result holds"
+  [pscustomobject]$res
+}
+# The report's reason a kept result still holds.
+function Get-CarryReason([string]$from, [string]$id) {
+  if (Test-OnlyDocsSince $from) { return "only docs changed since" }
+  if (Test-LongResultsHold $from) { return "only docs, CI workflows and packaging scripts changed since" }
+  $h = $script:longHolds[$from]
+  $gate = $null
+  if ($h.script) { $cc = Get-ChangedChecks $from; $gate = "gate code this check doesn't run (" + $(if (@($cc.ids).Count) { "the checks " + ($cc.ids -join ", ") + "; " }) + "the help, reuse, -Verify and report sections)" }
+  if ($h.scriptOnly) { return "only docs, CI workflows, packaging scripts and $gate changed since" }
+  $what = "only docs, CI workflows, packaging scripts, $(if ($gate) { "$gate, " })and the app's source (src\, tests\unit\) changed since"
+  if ($id -eq "fidelity.print") { return "$what; the spot check that keeps it is in the detail" }
+  $a = Get-Binaries $from
+  $bins = @($binaryChecks[$id] | ForEach-Object { $x = "$($a.files.$_)"; "$(Split-Path -Leaf $_) $($x.Substring(0, [Math]::Min(16, $x.Length)))" }) -join ", "
+  "$what, and the binaries it runs are byte-identical ($bins)$(if ("$($a.source)" -notmatch '^build\.shipped') { "; $($from.Substring(0, 12))'s hashes: $($a.source)" })"
 }
 function Find-Kept([string]$id) {
   $dir = Join-Path $script:outDir "results"
@@ -1258,6 +1450,8 @@ function Find-Kept([string]$id) {
     $f = Join-Path $d.FullName "$id.json"
     if ((Test-Path $f) -and $d.Name -match '^[0-9a-f]{40}$' -and (Test-LongResultsHold $d.Name $id)) { return Read-Json $f }
   }
+  # fidelity.print over a source change: the spot check above, in a call that would print.
+  if ($id -eq "fidelity.print" -and -not $Quick -and $id -notin $Checks -and @($selected | Where-Object { $_.id -eq $id }).Count) { return Invoke-PrintSpot }
   $null
 }
 
@@ -1380,7 +1574,7 @@ foreach ($r in $rowsOut) {
   $md += @("", "## $($r.title): $($r.status)", "")
   foreach ($c in $r.checks) {
     $md += "- **$($c.status)** ``$($c.id)``: $($c.title). Pass: $($c.pass)."
-    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); only $(if (Test-OnlyDocsSince $c.carriedFrom) { 'docs' } elseif (Test-LongResultsHold $c.carriedFrom) { 'docs, CI workflows and packaging scripts' } else { 'docs, CI workflows, packaging scripts and gate code this check doesn''t run (' + $(if (@((Get-ChangedChecks $c.carriedFrom).ids).Count) { 'the checks ' + ((Get-ChangedChecks $c.carriedFrom).ids -join ', ') + '; ' }) + 'the help, reuse, -Verify and report sections)' }) changed since)" })"
+    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); $(Get-CarryReason $c.carriedFrom $c.id))" })"
     if ($c.numbers) {
       $pairs = @()
       $nums = $c.numbers
