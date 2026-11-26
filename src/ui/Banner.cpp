@@ -10,13 +10,14 @@
 using namespace gfx;
 
 void Banner::Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions, int autoHideMs,
-                  const void* owner) {
+                  const void* owner, bool animate) {
   owner_ = owner;
   kind_ = kind;
   text_ = text;
   actions_ = std::move(actions);
   visible_ = true;
-  show_.To(1, 180);
+  if (animate) show_.To(1, 180);
+  else show_.Snap(1);
   hideAt_ = autoHideMs > 0 ? anim::Now() + autoHideMs : 0;
 
   buttons_.clear();

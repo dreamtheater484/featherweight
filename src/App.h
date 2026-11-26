@@ -71,7 +71,7 @@ class App : public PdfHost, public DropHost {
   // ViewHost and PdfHost
   void ViewInvalidate() override;
   void ViewStateChanged() override;
-  void ViewMessage(BannerKind kind, const std::wstring& text) override;
+  void ViewMessage(BannerKind kind, const std::wstring& text, bool animate = true) override;
   void ViewSaved(TabContent* view, bool ok, const std::wstring& error) override;
   bool ViewConfirm(const std::wstring& text, const std::wstring& ok) override;
   HWND ViewHwnd() override { return hwnd_; }

@@ -22,8 +22,9 @@ class Banner {
   };
 
   // `owner`: what the message is about (a tab), for Owner().
+  // `animate`: slides and fades in; without, it's there in the next frame.
   void Show(BannerKind kind, const std::wstring& text, std::vector<Action> actions = {}, int autoHideMs = 0,
-            const void* owner = nullptr);
+            const void* owner = nullptr, bool animate = true);
   void Hide();
   // The owner of the message that is showing, or null.
   const void* Owner() const { return visible_ ? owner_ : nullptr; }

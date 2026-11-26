@@ -36,7 +36,7 @@ class ViewHost {
   virtual ~ViewHost() = default;
   virtual void ViewInvalidate() = 0;
   virtual void ViewStateChanged() = 0;  // page, zoom or modified state changed
-  virtual void ViewMessage(BannerKind kind, const std::wstring& text) = 0;
+  virtual void ViewMessage(BannerKind kind, const std::wstring& text, bool animate = true) = 0;
   virtual HWND ViewHwnd() = 0;
   virtual void ViewRequestPrint() = 0;
   virtual void ViewFocusTextBox(TextBox* box) = 0;
