@@ -24,8 +24,9 @@
     timing   the quiet-PC timings: run only with -Timings. The final timing run is the coordinator's
              (budgets.ps1 -Timings -Runs 3 -Record), which this gate reads from the ledger.
   A long check's result is kept in <Out>\results\<commit>\<check>.json. A result measured on an earlier
-  commit still counts when only docs changed since (docs\, *.md, tests\budgets\ledger.json), and the
-  report says which commit it's from. A run on a tree with uncommitted changes is marked "dirty": it
+  commit still counts when only docs changed since (docs\, *.md, tests\budgets\ledger.json), the CI
+  workflows, packaging\ but admx, or other checks' blocks in this script (each hunk inside one Check
+  block: that check runs again), and the report says which commit it's from. A run on a tree with uncommitted changes is marked "dirty": it
   counts for nothing, and its results aren't kept for reuse.
 
   Office (Word, Excel, PowerPoint): the open checks run in Roy's active session (at the console or
@@ -617,10 +618,38 @@ Check "legal.fileopen" long "No file under FontCache\4\CloudFonts opened or prob
   if ($hooked -ne $logs.Count) { return Failed "the hook was off in $($logs.Count - $hooked) of $($logs.Count) runs" $n }
   Passed "$paths paths in $($logs.Count) runs, none under the cloud-font folder" $n
 }
-Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the corpus" "0 PDFs with a cloud-font family embedded" {
+Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the corpus, besides the fonts a document carries" "0 PDFs with a cloud-font family embedded that the document doesn't carry itself" {
   Need-Build
   $o = Join-Path $script:outDir "legal.pdffonts"
-  $code = Invoke-Tool "legal.pdffonts" (Get-Fwtool) @("pdf-check", "--out", $o, (Join-Path $Corpus "docx"))
+  $docx = Join-Path $Corpus "docx"
+  $code = Invoke-Tool "legal.pdffonts" (Get-Fwtool) @("pdf-check", "--out", $o, $docx)
+  # The fonts a document carries (word/fonts, named by fontTable.xml's w:embedRegular/Bold/Italic/BoldItalic,
+  # the part there and not empty): the app uses those for families the PC lacks, as Word does, so their
+  # subsets in the PDF are the document's own, not Office's (the UW templates carry Open Sans, which is
+  # also a cloud family). Each PDF is pdf-check's <source name>.pdf; names only, the corpus has no two alike.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $sources = @{}
+  foreach ($s in @(Get-ChildItem $docx -Recurse -File -Include *.docx, *.docm, *.dotx, *.dotm -ErrorAction SilentlyContinue)) { $sources[$s.BaseName.ToLowerInvariant()] = $s.FullName }
+  $carried = @{}
+  foreach ($key in $sources.Keys) {
+    $names = @()
+    try {
+      $z = [IO.Compression.ZipFile]::OpenRead($sources[$key])
+      try {
+        $read = { param($part) $e = $z.GetEntry($part); if (-not $e) { return "" }; $sr = New-Object IO.StreamReader($e.Open()); try { $sr.ReadToEnd() } finally { $sr.Close() } }
+        $table = & $read "word/fontTable.xml"; $rels = & $read "word/_rels/fontTable.xml.rels"
+        foreach ($m in [regex]::Matches($table, '<w:font w:name="([^"]+)"[^>]*?(?:/>|>(.*?)</w:font>)', 'Singleline')) {
+          foreach ($e in [regex]::Matches($m.Groups[2].Value, '<w:embed(?:Regular|Bold|Italic|BoldItalic)\b[^>]*\br:id="([^"]+)"')) {
+            $t = [regex]::Match($rels, '<Relationship\b[^>]*\bId="' + [regex]::Escape($e.Groups[1].Value) + '"[^>]*>')
+            $target = if ($t.Success -and $t.Value -match '\bTarget="([^"]+)"') { "word/" + ($Matches[1] -replace '^/?word/', '') } else { "" }
+            $part = if ($target) { $z.GetEntry($target) } else { $null }
+            if ($part -and $part.Length -gt 0) { $names += ($m.Groups[1].Value -replace '\s', '').ToLowerInvariant(); break }
+          }
+        }
+      } finally { $z.Dispose() }
+    } catch { }
+    $carried[$key] = $names
+  }
   $pdfs = @(Get-ChildItem $o -Recurse -Filter *.pdf -ErrorAction SilentlyContinue)
   if (-not $pdfs.Count) { return Failed "pdf-check exported no PDF (exit $code)" }
   $list = Join-Path $o "pdfs.txt"
@@ -630,15 +659,27 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
   $v = Read-Json $j
   if (-not $v) { return NotBuilt "f1-gate" "fwtool pdf-valid (the fonts a PDF embeds)" }
   $families = Get-CloudFamilies
-  $hits = @()
+  $hits = @(); $own = @()
   foreach ($f in @($v.files)) {
+    $mine = @($carried[[IO.Path]::GetFileNameWithoutExtension([string]$f.file).ToLowerInvariant()])
     foreach ($font in @($f.fonts)) {
-      $name = ($font -replace '^[A-Z]{6}\+', '') -replace '[-,](Bold|Italic|BoldItalic|Regular|Light|SemiBold|Black).*$', ''
-      foreach ($fam in $families) { if ($name -replace '\s', '' -ieq ($fam -replace '\s', '')) { $hits += "$($f.file): $font" } }
+      $ps = $font -replace '^[A-Z]{6}\+', ''
+      $name = $ps -replace '[-,](Bold|Italic|BoldItalic|Regular|Light|SemiBold|Black).*$', ''
+      foreach ($fam in $families) {
+        if ($name -replace '\s', '' -ieq ($fam -replace '\s', '')) {
+          # The document's own: a font it carries by this name, or by its family with only the style after it.
+          $flat = ($ps -replace '[\s,-]', '').ToLowerInvariant()
+          $isOwn = @($mine | Where-Object { $_ -and ($flat -eq $_ -or $flat -match ('^' + [regex]::Escape($_) + '(bold|italic|bolditalic|oblique|boldoblique|regular)$')) }).Count
+          if ($isOwn) { $own += "$($f.file): $font" } else { $hits += "$($f.file): $font" }
+        }
+      }
     }
   }
-  $n = [ordered]@{ pdfs = $pdfs.Count; fonts = (@($v.files) | ForEach-Object { @($_.fonts).Count } | Measure-Object -Sum).Sum; cloud = $hits.Count }
-  if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings" $n } else { Passed "none in $($pdfs.Count) PDFs" $n }
+  $n = [ordered]@{ pdfs = $pdfs.Count; fonts = (@($v.files) | ForEach-Object { @($_.fonts).Count } | Measure-Object -Sum).Sum; cloud = $hits.Count
+                   documentsOwn = $own.Count; documentsCarrying = @($carried.Values | Where-Object { @($_).Count }).Count }
+  if ($own.Count) { $n.firstOwn = $own[0] }
+  $ownNote = if ($own.Count) { "; $($own.Count) of the documents' own fonts (word/fonts) not counted" } else { "" }
+  if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings$ownNote" $n } else { Passed "none in $($pdfs.Count) PDFs$ownNote" $n }
 }
 Check "legal.notices" quick "THIRD_PARTY_NOTICES matches the SBOM, and About shows it" "Every SBOM component in the notices and back; About shows the notices" {
   # No SBOM is committed (it would go stale): tools\sbom\make-sbom.ps1 writes it, and exits 1 when
@@ -841,7 +882,7 @@ Check "ship.updater" long "The updater's tests (ctest, offline): unsigned and wr
   $c = $script:resultsById["build.ctest"]
   if (-not $c -or -not $c.numbers.tests) { return Failed "needs build.ctest's results on this commit" }
   $names = @($c.numbers.tests)
-  $kinds = [ordered]@{ unsigned = "(?i)updater.*unsigned"; publisher = "(?i)updater.*publisher"; channel = "(?i)updater.*channel"; rollback = "(?i)updater.*rollback"; policy = "(?i)(updater|policy).*polic" }
+  $kinds = [ordered]@{ unsigned = "(?i)updater.*unsigned"; publisher = "(?i)updater.*publisher"; channel = "(?i)updater.*channel"; rollback = "(?i)updater.*rollback"; policy = "(?i)updater.*polic|policy" }
   $n = [ordered]@{}; $missing = @()
   foreach ($k in $kinds.Keys) { $m = @($names | Where-Object { $_ -match $kinds[$k] }); $n[$k] = $m.Count; if (-not $m.Count) { $missing += $k } }
   if ($missing.Count) { return NotBuilt "f1-ship" ("updater tests named for: " + ($missing -join ", ") + " (gate-contract.md)") }
@@ -1109,16 +1150,83 @@ function Test-OnlyOutsideLongChecks([string]$file) {
   $file -match '^docs/' -or $file -match '\.md$' -or $file -eq 'tests/budgets/ledger.json' -or
   $file -match '^\.github/workflows/' -or ($file -match '^packaging/' -and $file -notmatch '^packaging/admx/')
 }
-$script:longHolds = @{}
-function Test-LongResultsHold([string]$from) {
-  if ($script:longHolds.ContainsKey($from)) { return $script:longHolds[$from] }
-  $ok = $false
-  & git merge-base --is-ancestor $from $script:head 2>$null
-  if ($LASTEXITCODE -eq 0) {
-    $ok = -not @(Invoke-Git diff --name-only $from $script:head | Where-Object { -not (Test-OnlyOutsideLongChecks $_) }).Count
+# And over a change to this script that leaves the code a result came from alone: when every hunk of
+# its diff lies inside one Check "id" ... { ... } block (the same id before and after), or inside the
+# parts no check's result comes from, no helper changed and no check but those, so only the checks
+# whose blocks changed run again (f1-gate's decision, 2026-11-26). Those parts ("inert") are the help
+# at the top and the Reuse, -Verify and report sections: they choose what's reused, check a report and
+# write it, and no long check calls into them. A block is the Check line to the next "}" at column 0,
+# with every line between indented or empty. A hunk anywhere else (the parameters, the targets, the
+# helpers, the run, a block of another shape) holds nothing over the change.
+function Get-GateRegions([string[]]$lines) {
+  $regions = @(); $id = $null; $start = 0; $inert = 0
+  if ($lines.Count -and $lines[0] -match '^<#') {
+    for ($i = 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^#>') { $regions += [pscustomobject]@{ id = "(inert)"; from = 1; to = $i + 1 }; break } }
   }
-  $script:longHolds[$from] = $ok
-  $ok
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $l = $lines[$i].TrimEnd("`r")
+    if ($i -ge 1 -and $i + 1 -lt $lines.Count -and $lines[$i - 1] -match '^# -{20,}' -and $lines[$i + 1] -match '^# -{20,}' -and
+        $l -notmatch '^# -{20,}' -and $l -match '^# (\S.*)$') {
+      # A section's banner: its dashes line is line $i (1-based); the section before ends above it.
+      if ($inert) { $regions += [pscustomobject]@{ id = "(inert)"; from = $inert; to = $i - 1 } }
+      $inert = if ($Matches[1] -match '^(Reuse:|-Verify:|The report)') { $i } else { 0 }
+    }
+    if ($id) {
+      if ($l -eq '}') { $regions += [pscustomobject]@{ id = $id; from = $start; to = $i + 1 }; $id = $null }
+      elseif ($l -match '^\S') { $id = $null }
+      continue
+    }
+    if ($l -match '^Check "([^"]+)" .*\{\s*$') { $id = $Matches[1]; $start = $i + 1 }
+  }
+  if ($inert) { $regions += [pscustomobject]@{ id = "(inert)"; from = $inert; to = $lines.Count } }
+  $regions
+}
+$script:changedChecks = @{}
+# The ids of the checks whose blocks the script's diff since $from changed (inert parts aside), or
+# known = $false when it changed anything else.
+function Get-ChangedChecks([string]$from) {
+  if ($script:changedChecks.ContainsKey($from)) { return $script:changedChecks[$from] }
+  $path = "scripts/f1-gate.ps1"
+  $res = @{ known = $false; ids = @() }
+  $old = @(Invoke-Git show "${from}:$path"); $new = @(Invoke-Git show "$($script:head):$path")
+  $hunks = @(Invoke-Git diff -U0 $from $script:head -- $path | Where-Object { $_ -match '^@@ ' })
+  if ($old.Count -gt 1 -and $new.Count -gt 1 -and $hunks.Count) {
+    $ob = @(Get-GateRegions $old); $nb = @(Get-GateRegions $new)
+    $ids = @(); $ok = $true
+    foreach ($h in $hunks) {
+      if ($h -notmatch '^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@') { $ok = $false; break }
+      $a = [int]$Matches[1]; $b = if ($Matches[2]) { [int]$Matches[2] } else { 1 }
+      $c = [int]$Matches[3]; $d = if ($Matches[4]) { [int]$Matches[4] } else { 1 }
+      # The lines a hunk touches on each side; a pure insertion or deletion, the lines either side of it.
+      $at = @()
+      foreach ($x in $(if ($b) { $a, ($a + $b - 1) } else { $a, ($a + 1) })) { $at += @($ob | Where-Object { $x -ge $_.from -and $x -le $_.to } | ForEach-Object id) + @("") | Select-Object -First 1 }
+      foreach ($x in $(if ($d) { $c, ($c + $d - 1) } else { $c, ($c + 1) })) { $at += @($nb | Where-Object { $x -ge $_.from -and $x -le $_.to } | ForEach-Object id) + @("") | Select-Object -First 1 }
+      $one = @($at | Sort-Object -Unique)
+      if ($one.Count -ne 1 -or -not $one[0]) { $ok = $false; break }
+      if ($one[0] -ne "(inert)") { $ids += $one[0] }
+    }
+    if ($ok) { $res = @{ known = $true; ids = @($ids | Sort-Object -Unique) } }
+  }
+  $script:changedChecks[$from] = $res
+  $res
+}
+$script:longHolds = @{}
+function Test-LongResultsHold([string]$from, [string]$id) {
+  if (-not $script:longHolds.ContainsKey($from)) {
+    $h = @{ all = $false; scriptOnly = $false }
+    & git merge-base --is-ancestor $from $script:head 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      $rest = @(Invoke-Git diff --name-only $from $script:head | Where-Object { -not (Test-OnlyOutsideLongChecks $_) })
+      $h.all = -not $rest.Count
+      $h.scriptOnly = $rest.Count -eq 1 -and $rest[0] -eq "scripts/f1-gate.ps1"
+    }
+    $script:longHolds[$from] = $h
+  }
+  $h = $script:longHolds[$from]
+  if ($h.all) { return $true }
+  if (-not $h.scriptOnly -or -not $id) { return $false }
+  $cc = Get-ChangedChecks $from
+  $cc.known -and $id -notin $cc.ids
 }
 function Find-Kept([string]$id) {
   $dir = Join-Path $script:outDir "results"
@@ -1127,7 +1235,7 @@ function Find-Kept([string]$id) {
   if (Test-Path $mine) { return Read-Json $mine }
   foreach ($d in @(Get-ChildItem $dir -Directory | Sort-Object LastWriteTime -Descending)) {
     $f = Join-Path $d.FullName "$id.json"
-    if ((Test-Path $f) -and $d.Name -match '^[0-9a-f]{40}$' -and (Test-LongResultsHold $d.Name)) { return Read-Json $f }
+    if ((Test-Path $f) -and $d.Name -match '^[0-9a-f]{40}$' -and (Test-LongResultsHold $d.Name $id)) { return Read-Json $f }
   }
   $null
 }
@@ -1251,7 +1359,7 @@ foreach ($r in $rowsOut) {
   $md += @("", "## $($r.title): $($r.status)", "")
   foreach ($c in $r.checks) {
     $md += "- **$($c.status)** ``$($c.id)``: $($c.title). Pass: $($c.pass)."
-    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); only $(if (Test-OnlyDocsSince $c.carriedFrom) { 'docs' } else { 'docs, CI workflows and packaging scripts' }) changed since)" })"
+    $md += "  - $($c.detail)$(if ($c.carriedFrom) { " (measured on $($c.carriedFrom.Substring(0, 12)); only $(if (Test-OnlyDocsSince $c.carriedFrom) { 'docs' } elseif (Test-LongResultsHold $c.carriedFrom) { 'docs, CI workflows and packaging scripts' } else { 'docs, CI workflows, packaging scripts and gate code this check doesn''t run (' + $(if (@((Get-ChangedChecks $c.carriedFrom).ids).Count) { 'the checks ' + ((Get-ChangedChecks $c.carriedFrom).ids -join ', ') + '; ' }) + 'the help, reuse, -Verify and report sections)' }) changed since)" })"
     if ($c.numbers) {
       $pairs = @()
       $nums = $c.numbers
