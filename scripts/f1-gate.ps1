@@ -617,10 +617,38 @@ Check "legal.fileopen" long "No file under FontCache\4\CloudFonts opened or prob
   if ($hooked -ne $logs.Count) { return Failed "the hook was off in $($logs.Count - $hooked) of $($logs.Count) runs" $n }
   Passed "$paths paths in $($logs.Count) runs, none under the cloud-font folder" $n
 }
-Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the corpus" "0 PDFs with a cloud-font family embedded" {
+Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the corpus, besides the fonts a document carries" "0 PDFs with a cloud-font family embedded that the document doesn't carry itself" {
   Need-Build
   $o = Join-Path $script:outDir "legal.pdffonts"
-  $code = Invoke-Tool "legal.pdffonts" (Get-Fwtool) @("pdf-check", "--out", $o, (Join-Path $Corpus "docx"))
+  $docx = Join-Path $Corpus "docx"
+  $code = Invoke-Tool "legal.pdffonts" (Get-Fwtool) @("pdf-check", "--out", $o, $docx)
+  # The fonts a document carries (word/fonts, named by fontTable.xml's w:embedRegular/Bold/Italic/BoldItalic,
+  # the part there and not empty): the app uses those for families the PC lacks, as Word does, so their
+  # subsets in the PDF are the document's own, not Office's (the UW templates carry Open Sans, which is
+  # also a cloud family). Each PDF is pdf-check's <source name>.pdf; names only, the corpus has no two alike.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $sources = @{}
+  foreach ($s in @(Get-ChildItem $docx -Recurse -File -Include *.docx, *.docm, *.dotx, *.dotm -ErrorAction SilentlyContinue)) { $sources[$s.BaseName.ToLowerInvariant()] = $s.FullName }
+  $carried = @{}
+  foreach ($key in $sources.Keys) {
+    $names = @()
+    try {
+      $z = [IO.Compression.ZipFile]::OpenRead($sources[$key])
+      try {
+        $read = { param($part) $e = $z.GetEntry($part); if (-not $e) { return "" }; $sr = New-Object IO.StreamReader($e.Open()); try { $sr.ReadToEnd() } finally { $sr.Close() } }
+        $table = & $read "word/fontTable.xml"; $rels = & $read "word/_rels/fontTable.xml.rels"
+        foreach ($m in [regex]::Matches($table, '<w:font w:name="([^"]+)"[^>]*?(?:/>|>(.*?)</w:font>)', 'Singleline')) {
+          foreach ($e in [regex]::Matches($m.Groups[2].Value, '<w:embed(?:Regular|Bold|Italic|BoldItalic)\b[^>]*\br:id="([^"]+)"')) {
+            $t = [regex]::Match($rels, '<Relationship\b[^>]*\bId="' + [regex]::Escape($e.Groups[1].Value) + '"[^>]*>')
+            $target = if ($t.Success -and $t.Value -match '\bTarget="([^"]+)"') { "word/" + ($Matches[1] -replace '^/?word/', '') } else { "" }
+            $part = if ($target) { $z.GetEntry($target) } else { $null }
+            if ($part -and $part.Length -gt 0) { $names += ($m.Groups[1].Value -replace '\s', '').ToLowerInvariant(); break }
+          }
+        }
+      } finally { $z.Dispose() }
+    } catch { }
+    $carried[$key] = $names
+  }
   $pdfs = @(Get-ChildItem $o -Recurse -Filter *.pdf -ErrorAction SilentlyContinue)
   if (-not $pdfs.Count) { return Failed "pdf-check exported no PDF (exit $code)" }
   $list = Join-Path $o "pdfs.txt"
@@ -630,15 +658,27 @@ Check "legal.pdffonts" long "No cloud-font family embedded by Export PDF on the 
   $v = Read-Json $j
   if (-not $v) { return NotBuilt "f1-gate" "fwtool pdf-valid (the fonts a PDF embeds)" }
   $families = Get-CloudFamilies
-  $hits = @()
+  $hits = @(); $own = @()
   foreach ($f in @($v.files)) {
+    $mine = @($carried[[IO.Path]::GetFileNameWithoutExtension([string]$f.file).ToLowerInvariant()])
     foreach ($font in @($f.fonts)) {
-      $name = ($font -replace '^[A-Z]{6}\+', '') -replace '[-,](Bold|Italic|BoldItalic|Regular|Light|SemiBold|Black).*$', ''
-      foreach ($fam in $families) { if ($name -replace '\s', '' -ieq ($fam -replace '\s', '')) { $hits += "$($f.file): $font" } }
+      $ps = $font -replace '^[A-Z]{6}\+', ''
+      $name = $ps -replace '[-,](Bold|Italic|BoldItalic|Regular|Light|SemiBold|Black).*$', ''
+      foreach ($fam in $families) {
+        if ($name -replace '\s', '' -ieq ($fam -replace '\s', '')) {
+          # The document's own: a font it carries by this name, or by its family with only the style after it.
+          $flat = ($ps -replace '[\s,-]', '').ToLowerInvariant()
+          $isOwn = @($mine | Where-Object { $_ -and ($flat -eq $_ -or $flat -match ('^' + [regex]::Escape($_) + '(bold|italic|bolditalic|oblique|boldoblique|regular)$')) }).Count
+          if ($isOwn) { $own += "$($f.file): $font" } else { $hits += "$($f.file): $font" }
+        }
+      }
     }
   }
-  $n = [ordered]@{ pdfs = $pdfs.Count; fonts = (@($v.files) | ForEach-Object { @($_.fonts).Count } | Measure-Object -Sum).Sum; cloud = $hits.Count }
-  if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings" $n } else { Passed "none in $($pdfs.Count) PDFs" $n }
+  $n = [ordered]@{ pdfs = $pdfs.Count; fonts = (@($v.files) | ForEach-Object { @($_.fonts).Count } | Measure-Object -Sum).Sum; cloud = $hits.Count
+                   documentsOwn = $own.Count; documentsCarrying = @($carried.Values | Where-Object { @($_).Count }).Count }
+  if ($own.Count) { $n.firstOwn = $own[0] }
+  $ownNote = if ($own.Count) { "; $($own.Count) of the documents' own fonts (word/fonts) not counted" } else { "" }
+  if ($hits.Count) { $n.first = $hits[0]; Failed "$($hits.Count) cloud-font embeddings$ownNote" $n } else { Passed "none in $($pdfs.Count) PDFs$ownNote" $n }
 }
 Check "legal.notices" quick "THIRD_PARTY_NOTICES matches the SBOM, and About shows it" "Every SBOM component in the notices and back; About shows the notices" {
   # No SBOM is committed (it would go stale): tools\sbom\make-sbom.ps1 writes it, and exits 1 when
@@ -841,7 +881,7 @@ Check "ship.updater" long "The updater's tests (ctest, offline): unsigned and wr
   $c = $script:resultsById["build.ctest"]
   if (-not $c -or -not $c.numbers.tests) { return Failed "needs build.ctest's results on this commit" }
   $names = @($c.numbers.tests)
-  $kinds = [ordered]@{ unsigned = "(?i)updater.*unsigned"; publisher = "(?i)updater.*publisher"; channel = "(?i)updater.*channel"; rollback = "(?i)updater.*rollback"; policy = "(?i)(updater|policy).*polic" }
+  $kinds = [ordered]@{ unsigned = "(?i)updater.*unsigned"; publisher = "(?i)updater.*publisher"; channel = "(?i)updater.*channel"; rollback = "(?i)updater.*rollback"; policy = "(?i)updater.*polic|policy" }
   $n = [ordered]@{}; $missing = @()
   foreach ($k in $kinds.Keys) { $m = @($names | Where-Object { $_ -match $kinds[$k] }); $n[$k] = $m.Count; if (-not $m.Count) { $missing += $k } }
   if ($missing.Count) { return NotBuilt "f1-ship" ("updater tests named for: " + ($missing -join ", ") + " (gate-contract.md)") }
